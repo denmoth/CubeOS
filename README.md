@@ -34,3 +34,7 @@
 | [docs/dev/git-workflow.md](docs/dev/git-workflow.md) | Ветки, коммиты, релизы |
 
 Документы помечают непроверенные факты как **(проверить)**.
+
+## Лицензия
+
+MIT, см. [LICENSE](LICENSE).
