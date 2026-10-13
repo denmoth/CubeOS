@@ -32,6 +32,7 @@
 | [docs/09-open-questions.md](docs/09-open-questions.md) | Нерешённые вопросы |
 | [docs/10-roadmap.md](docs/10-roadmap.md) | Этапы разработки |
 | [docs/dev/git-workflow.md](docs/dev/git-workflow.md) | Ветки, коммиты, релизы |
+| [docs/dev/environment.md](docs/dev/environment.md) | Тестовый инстанс Minecraft, эмулятор CraftOS-PC |
 
 Документы помечают непроверенные факты как **(проверить)**.
 
