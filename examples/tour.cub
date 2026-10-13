@@ -1,0 +1,40 @@
+class Turtle:
+    def init(self, name):
+        self.name = name
+        self.fuel = 0
+
+    def refuel(self, amount=10):
+        self.fuel += amount
+        return self.fuel
+
+    def status(self):
+        return f"{self.name}: fuel {self.fuel}"
+
+t = Turtle("miner")
+t:refuel()
+t:refuel(5)
+print(t:status())
+
+items = ["coal", "iron", "gold"]
+for i, name in items:
+    print(i, name)
+
+for slot in range[1, 16]:
+    if slot % 2 == 0:
+        continue
+    print("odd slot", slot)
+
+config = {name: "base", size: nil}
+size = config.size ?? 100
+side = config?.side
+print(size, side)
+
+def read_file(path):
+    try:
+        h = fs.open(path, "r")
+        data = h.readAll()
+        h.close()
+        return data
+    except Error as e:
+        print("failed: " .. e.message)
+        return nil

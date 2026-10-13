@@ -1,0 +1,52 @@
+w, h = term.getSize()
+snake = [{x: 10, y: 5}, {x: 9, y: 5}, {x: 8, y: 5}]
+dir = {x: 1, y: 0}
+food = {x: 20, y: 8}
+score = 0
+alive = true
+math.randomseed(os.epoch("utc"))
+
+def place_food():
+    food = {x: math.random(1, w), y: math.random(2, h)}
+
+def draw():
+    term.clear()
+    for seg in snake:
+        term.setCursorPos(seg.x, seg.y)
+        term.write("O")
+    term.setCursorPos(food.x, food.y)
+    term.write("*")
+    term.setCursorPos(1, 1)
+    term.write(f"Score: {score}")
+
+def step():
+    head = {x: snake[1].x + dir.x, y: snake[1].y + dir.y}
+    if head.x < 1 or head.x > w or head.y < 2 or head.y > h:
+        alive = false
+        return
+    for seg in snake:
+        if seg.x == head.x and seg.y == head.y:
+            alive = false
+            return
+    table.insert(snake, 1, head)
+    if head.x == food.x and head.y == food.y:
+        score += 1
+        place_food()
+    else:
+        table.remove(snake)
+
+timer = os.startTimer(0.15)
+while alive:
+    event, p1 = os.pullEvent()
+    if event == "key":
+        if (p1 == keys.up or p1 == keys.w) and dir.y == 0: dir = {x: 0, y: -1}
+        elif (p1 == keys.down or p1 == keys.s) and dir.y == 0: dir = {x: 0, y: 1}
+        elif (p1 == keys.left or p1 == keys.a) and dir.x == 0: dir = {x: -1, y: 0}
+        elif (p1 == keys.right or p1 == keys.d) and dir.x == 0: dir = {x: 1, y: 0}
+    elif event == "timer" and p1 == timer:
+        step()
+        draw()
+        timer = os.startTimer(0.15)
+
+term.setCursorPos(1, h)
+print("Game over! Score: " .. score)
