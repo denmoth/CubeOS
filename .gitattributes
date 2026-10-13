@@ -7,3 +7,4 @@
 *.stp binary
 *.fnt binary
 *.img binary
+*.txt text eol=lf
