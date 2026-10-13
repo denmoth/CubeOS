@@ -1,0 +1,59 @@
+import t
+import crc32 as crc
+import sha256 as sha
+import base85 as b85
+eq = t.eq
+
+# ---- CRC32 (эталон: Python zlib.crc32)
+eq(crc.crc32(""), 0, "crc empty")
+eq(crc.crc32("a"), 3904355907, "crc a")
+eq(crc.crc32("hello"), 907060870, "crc hello")
+eq(crc.crc32("123456789"), 3421780262, "crc check value")
+eq(crc.crc32("The quick brown fox jumps over the lazy dog"), 1095738169, "crc fox")
+eq(crc.crc32("56789", crc.crc32("1234")), 3421780262, "crc incremental")
+
+# ---- SHA-256 (эталон: Python hashlib)
+eq(sha.hex(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "sha empty")
+eq(sha.hex("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "sha abc")
+eq(sha.hex("hello"), "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", "sha hello")
+eq(sha.hex("The quick brown fox jumps over the lazy dog"), "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592", "sha fox")
+eq(sha.hex(string.rep("a", 55)), "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318", "sha 55")
+eq(sha.hex(string.rep("a", 56)), "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a", "sha 56")
+eq(sha.hex(string.rep("a", 64)), "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb", "sha 64")
+eq(sha.hex(string.rep("a", 119)), "31eba51c313a5c08226adf18d4a359cfdfd8d2e816b13f4af952f7ea6584dcfb", "sha 119")
+eq(sha.hex(string.rep("a", 1000)), "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3", "sha 1000")
+eq(len(sha.digest("abc")), 32, "digest length")
+eq(sha.to_hex(sha.hmac("key", "The quick brown fox jumps over the lazy dog")), "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8", "hmac")
+eq(sha.to_hex(sha.hmac(string.rep("k", 100), "msg")), "bd56a1782c2830e8abc6ed866a57a1230661e650b84c62f7ee3accc5fa5af491", "hmac long key")
+eq(sha.to_hex(sha.pbkdf2("password", "salt", 1)), "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b", "pbkdf2 1")
+eq(sha.to_hex(sha.pbkdf2("password", "salt", 2)), "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43", "pbkdf2 2")
+eq(sha.to_hex(sha.pbkdf2("pass", "NaCl", 100)), "31624329e692f056fe24709434b0f4fc9003303b1d5eb66a7e7a4068a065d535", "pbkdf2 100")
+
+# ---- Base85 (Z85)
+eq(b85.encode("\x86\x4F\xD2\x6F\xB5\x59\xF7\x5B"), "0HelloWorld", "z85 spec vector")
+eq(b85.decode("0HelloWorld"), "\x86\x4F\xD2\x6F\xB5\x59\xF7\x5B", "z85 decode")
+eq(b85.decode(b85.encode("")), "", "empty roundtrip")
+for n in range[0, 12]:
+    s = string.sub("abcdefghijkl", 1, n)
+    eq(b85.decode(b85.encode(s)), s, "roundtrip " .. n)
+all_bytes = {}
+for i in range[0, 255]:
+    all_bytes[i + 1] = string.char(i)
+blob = table.concat(all_bytes)
+eq(b85.decode(b85.encode(blob)), blob, "all bytes")
+wrapped = b85.encode(blob, 40)
+eq(string.find(wrapped, "\n", 1, true) != nil, true, "wrap has newlines")
+eq(b85.decode(wrapped), blob, "wrapped roundtrip")
+eq(string.find(b85.encode(blob), "[\"'\\ ]") == nil, true, "no quotes or backslash")
+
+def err_of(f):
+    try:
+        f()
+    except Error as e:
+        return e.message
+    return nil
+
+eq(err_of(() => b85.decode("9ab")), "base85: bad padding marker", "bad marker")
+eq(err_of(() => b85.decode("0abcd")), "base85: bad length", "bad length")
+eq(err_of(() => b85.decode("0abc\"e")), "base85: invalid character '\"'", "bad char")
+print("done")

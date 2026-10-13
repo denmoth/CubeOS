@@ -1,0 +1,76 @@
+# base85: двоичные данные в ASCII (алфавит Z85, без кавычек и обратной косой черты). Накладные расходы 25%.
+#
+#   base85.encode(data, wrap=nil)  -> строка; первый символ хранит число добавленных нулевых байтов
+#   base85.decode(text)            -> данные; пробелы и переводы строк игнорируются
+
+ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?&<>()[]{}@%$#"
+
+def _build():
+    enc = []
+    dec = {}
+    for i in range[1, 85]:
+        let ch = string.sub(ALPHABET, i, i)
+        enc[i] = ch
+        dec[ch] = i - 1
+    return enc, dec
+
+enc_table, dec_table = _build()
+
+export def encode(data, wrap=nil):
+    n = len(data)
+    pad = (4 - n % 4) % 4
+    data = data .. string.rep("\0", pad)
+    out = []
+    count = 0
+    for i in range[1, len(data)] step 4:
+        a, b, c, d = string.byte(data, i, i + 3)
+        v = a * 16777216 + b * 65536 + c * 256 + d
+        e5 = v % 85
+        v = (v - e5) / 85
+        e4 = v % 85
+        v = (v - e4) / 85
+        e3 = v % 85
+        v = (v - e3) / 85
+        e2 = v % 85
+        e1 = (v - e2) / 85
+        count += 1
+        out[count] = enc_table[e1 + 1] .. enc_table[e2 + 1] .. enc_table[e3 + 1] .. enc_table[e4 + 1] .. enc_table[e5 + 1]
+    body = table.concat(out)
+    result = tostring(pad) .. body
+    if wrap != nil and wrap > 0:
+        lines = []
+        k = 0
+        for i in range[1, len(result)] step wrap:
+            k += 1
+            lines[k] = string.sub(result, i, i + wrap - 1)
+        result = table.concat(lines, "\n")
+    return result
+
+export def decode(text):
+    text = string.gsub(text, "%s+", "")
+    if len(text) == 0:
+        raise Error("base85: empty input")
+    pad = tonumber(string.sub(text, 1, 1))
+    if pad == nil or pad > 3:
+        raise Error("base85: bad padding marker")
+    body = string.sub(text, 2)
+    if len(body) % 5 != 0:
+        raise Error("base85: bad length")
+    out = []
+    count = 0
+    for i in range[1, len(body)] step 5:
+        v = 0
+        for k in range[0, 4]:
+            ch = string.sub(body, i + k, i + k)
+            digit = dec_table[ch]
+            if digit == nil:
+                raise Error("base85: invalid character '" .. ch .. "'")
+            v = v * 85 + digit
+        if v >= 4294967296:
+            raise Error("base85: value out of range")
+        count += 1
+        out[count] = string.char(math.floor(v / 16777216), math.floor(v / 65536) % 256, math.floor(v / 256) % 256, v % 256)
+    result = table.concat(out)
+    if pad > 0:
+        result = string.sub(result, 1, len(result) - pad)
+    return result

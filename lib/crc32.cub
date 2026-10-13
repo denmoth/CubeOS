@@ -1,0 +1,39 @@
+# crc32: контрольная сумма CRC-32 (IEEE 802.3, как в zip/gzip/png)
+#
+#   crc32.crc32("123456789")  -> 3421780262 (0xCBF43926)
+#   crc32.crc32(part2, crc32.crc32(part1))  -> сумма склеенных данных
+
+bxor = bit32.bxor
+band = bit32.band
+rshift = bit32.rshift
+
+def _build():
+    result = []
+    for i in range[0, 255]:
+        let c = i
+        for k in range[1, 8]:
+            if band(c, 1) == 1:
+                c = bxor(rshift(c, 1), 0xEDB88320)
+            else:
+                c = rshift(c, 1)
+        result[i + 1] = c
+    return result
+
+tbl = _build()
+
+export def crc32(s, prev=0):
+    let c = bxor(prev, 0xFFFFFFFF)
+    n = len(s)
+    i = 1
+    # по 4 байта за раз
+    while i + 3 <= n:
+        a, b, d, e = string.byte(s, i, i + 3)
+        c = bxor(tbl[band(bxor(c, a), 255) + 1], rshift(c, 8))
+        c = bxor(tbl[band(bxor(c, b), 255) + 1], rshift(c, 8))
+        c = bxor(tbl[band(bxor(c, d), 255) + 1], rshift(c, 8))
+        c = bxor(tbl[band(bxor(c, e), 255) + 1], rshift(c, 8))
+        i += 4
+    while i <= n:
+        c = bxor(tbl[band(bxor(c, string.byte(s, i)), 255) + 1], rshift(c, 8))
+        i += 1
+    return bxor(c, 0xFFFFFFFF)

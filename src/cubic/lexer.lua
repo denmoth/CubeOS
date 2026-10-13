@@ -42,6 +42,13 @@ local function decode(raw, file, line, col)
         if not hex then U.fail(file, line, col, "invalid \\u escape (use \\u{XXXX})") end
         out[#out + 1] = U.utf8(tonumber(hex, 16))
         i = i + 4 + #hex
+      elseif d:match("%d") then
+        -- десятичный код как в Lua: \0, \12, \255
+        local digits = raw:match("^%d%d?%d?", i + 1)
+        local code = tonumber(digits)
+        if code > 255 then U.fail(file, line, col, "decimal escape too large: \\" .. digits) end
+        out[#out + 1] = string.char(code)
+        i = i + 1 + #digits
       elseif d == "\n" then
         i = i + 2 -- продолжение строки
       elseif SIMPLE_ESC[d] then
