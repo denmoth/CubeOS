@@ -1,0 +1,3 @@
+#!strict
+p = {x: 1}
+print(p.y)

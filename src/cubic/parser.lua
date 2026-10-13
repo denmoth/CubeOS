@@ -8,7 +8,7 @@ local KEYWORDS = lexer.KEYWORDS
 local AUG_OPS = { ["+="] = "+", ["-="] = "-", ["*="] = "*", ["/="] = "/", ["//="] = "//", ["%="] = "%", ["**="] = "**", ["..="] = ".." }
 local CMP_OPS = U.set({ "==", "!=", "<", "<=", ">", ">=" })
 
-local function make(toks, file, src)
+local function make(toks, file, src, hdr)
   local i = 1
   local P = {}
 
@@ -681,6 +681,84 @@ local function make(toks, file, src)
     return node
   end
 
+  ---------------------------------------------------------------- типы
+
+  local parse_type
+
+  local function parse_type_primary()
+    local tok = peek()
+    if tok.t == "name" then
+      next_tok()
+      local name = tok.v
+      while peek().t == "." and not peek().sp do
+        next_tok()
+        name = name .. "." .. expect_name("a type name").v
+      end
+      if (name == "list" or name == "dict") and peek().t == "[" then
+        next_tok()
+        local args = { parse_type() }
+        while accept(",") do args[#args + 1] = parse_type() end
+        expect("]", "']' to close the type arguments")
+        return { tag = "TGen", name = name, args = args, line = tok.line }
+      elseif name == "fn" and peek().t == "(" then
+        next_tok()
+        local params = {}
+        while peek().t ~= ")" do
+          if peek().t == "name" and peek(1).t == ":" then
+            next_tok()
+            next_tok()
+          end
+          params[#params + 1] = parse_type()
+          if not accept(",") then break end
+        end
+        expect(")")
+        local ret
+        if accept("->") then ret = parse_type() end
+        return { tag = "TFn", params = params, ret = ret, line = tok.line }
+      end
+      return { tag = "TName", name = name, line = tok.line }
+    elseif tok.t == "nil" then
+      next_tok()
+      return { tag = "TName", name = "nil", line = tok.line }
+    elseif tok.t == "{" then
+      next_tok()
+      local fields = {}
+      while peek().t ~= "}" do
+        local n = peek()
+        if not is_name_like(n) then fail(n, "expected a field name in a record type") end
+        next_tok()
+        expect(":")
+        fields[#fields + 1] = { name = n.v, type = parse_type() }
+        if not accept(",") then break end
+      end
+      expect("}", "'}' to close the record type")
+      return { tag = "TRec", fields = fields, line = tok.line }
+    elseif tok.t == "(" then
+      next_tok()
+      local t = parse_type()
+      expect(")")
+      return t
+    end
+    fail(tok, "expected a type, got " .. describe(tok))
+  end
+
+  local function parse_type_opt()
+    local t = parse_type_primary()
+    while peek().t == "?" do
+      local q = next_tok()
+      t = { tag = "TOpt", inner = t, line = q.line }
+    end
+    return t
+  end
+
+  function parse_type()
+    local first = parse_type_opt()
+    if peek().t ~= "|" then return first end
+    local items = { first }
+    while accept("|") do items[#items + 1] = parse_type_opt() end
+    return { tag = "TUnion", items = items, line = first.line }
+  end
+
   ---------------------------------------------------------------- инструкции
 
   local function check_target(e)
@@ -692,35 +770,50 @@ local function make(toks, file, src)
 
   local function parse_params()
     expect("(")
-    local params, vararg = {}, nil
+    local params, vararg, vararg_type = {}, nil, nil
     while peek().t ~= ")" do
       if peek().t == "*" then
         next_tok()
         vararg = expect_name("a name after '*'").v
+        if accept(":") then vararg_type = parse_type() end
         if peek().t == "," then fail(peek(), "the *vararg parameter must be last") end
         break
       end
       local n = expect_name("a parameter name")
       local p = { name = n.v, line = n.line }
-      if peek().t == ":" then
-        fail(peek(), "type annotations are not supported yet")
+      if accept(":") then p.type = parse_type() end
+      if accept("=") then
+        if hdr and peek().t == "." then
+          -- в заголовках значение по умолчанию можно писать как `...`
+          while peek().t == "." do next_tok() end
+          p.optional = true
+        else
+          p.default = parse_expr()
+        end
       end
-      if accept("=") then p.default = parse_expr() end
       params[#params + 1] = p
       if not accept(",") then break end
     end
     expect(")", "')' to close the parameters")
-    if peek().t == "->" then fail(peek(), "return type annotations are not supported yet") end
-    return params, vararg
+    local ret
+    if accept("->") then ret = parse_type() end
+    return params, vararg, ret, vararg_type
   end
 
   local function parse_def(exported, decorators)
     local tok = expect("def")
     local n = expect_name("a function name")
-    local params, vararg = parse_params()
-    local body = parse_suite()
-    return { tag = "FuncDef", name = n.v, params = params, vararg = vararg, body = body, exported = exported,
-      decorators = decorators, line = tok.line }
+    local params, vararg, ret, vararg_type = parse_params()
+    local body
+    if hdr and peek().t ~= ":" then
+      -- в заголовках .cuh тела нет
+      body = {}
+      if peek().t == "newline" then next_tok() end
+    else
+      body = parse_suite()
+    end
+    return { tag = "FuncDef", name = n.v, params = params, vararg = vararg, vararg_type = vararg_type, ret = ret, body = body,
+      exported = exported, decorators = decorators, line = tok.line }
   end
 
   local function parse_class(exported, decorators)
@@ -919,15 +1012,30 @@ local function make(toks, file, src)
         end
         names[#names + 1] = expect_name("a variable name").v
       until not accept(",")
+      local ltype
+      if peek().t == ":" and #names == 1 then
+        next_tok()
+        ltype = parse_type()
+      end
       local values = {}
       if accept("=") then values = parse_exprlist() end
       if star and #values ~= 1 then fail(tok, "a starred let needs exactly one value (a list)") end
-      return { tag = "Let", names = names, star = star, values = values, exported = exported, line = tok.line }
+      return { tag = "Let", names = names, star = star, ltype = ltype, values = values, exported = exported, line = tok.line }
     elseif t == "const" or t == "override" then
       next_tok()
       local n = expect_name("a name")
+      local ctype
+      if accept(":") then ctype = parse_type() end
       expect("=")
-      return { tag = (t == "const") and "Const" or "Override", name = n.v, value = parse_expr(), exported = exported, line = tok.line }
+      return { tag = (t == "const") and "Const" or "Override", name = n.v, ctype = ctype, value = parse_expr(), exported = exported, line = tok.line }
+    elseif t == "name" and peek(1).t == ":" and not (is_name_like(peek(2)) and not peek(2).sp and peek(3).t == "(") then
+      -- объявление с типом: x: num = 5
+      next_tok()
+      next_tok()
+      local ty = parse_type()
+      local value
+      if accept("=") then value = parse_expr() end
+      return { tag = "AnnAssign", name = tok.v, type = ty, value = value, exported = exported, line = tok.line }
     end
 
     local first = parse_target_item()
@@ -997,7 +1105,7 @@ local function make(toks, file, src)
       if k == "class" then return parse_class(true) end
       if k == "import" or k == "let" or k == "const" or k == "name" then
         local s = parse_simple(true)
-        if s.tag ~= "Assign" and s.tag ~= "Let" and s.tag ~= "Const" and s.tag ~= "Import" then
+        if s.tag ~= "Assign" and s.tag ~= "Let" and s.tag ~= "Const" and s.tag ~= "Import" and s.tag ~= "AnnAssign" then
           fail(tok, "only definitions and assignments can be exported")
         end
         end_simple()
@@ -1010,6 +1118,26 @@ local function make(toks, file, src)
       fail(tok, "'" .. t .. "' without a matching statement")
     elseif t == "name" and tok.v == "match" and looks_like_match() then
       return parse_match()
+    elseif t == "name" and (tok.v == "strict" or tok.v == "loose") and peek(1).t == ":" and peek(2).t == "newline" and peek(3).t == "indent" then
+      next_tok()
+      return { tag = "ModeBlock", mode = tok.v, body = parse_suite(), line = tok.line }
+    elseif t == "name" and tok.v == "type" and peek(1).t == "name" and peek(2).t == "=" then
+      next_tok()
+      local n = next_tok()
+      next_tok()
+      local ty = parse_type()
+      end_simple()
+      return { tag = "TypeAlias", name = n.v, type = ty, line = tok.line }
+    elseif hdr and t == "name" and ((tok.v == "namespace" and peek(1).t == "name")
+        or (tok.v == "open" and peek(1).t == "name" and peek(1).v == "namespace" and peek(2).t == "name")) then
+      local open = false
+      if tok.v == "open" then
+        next_tok()
+        open = true
+      end
+      next_tok() -- namespace
+      local n = expect_name("a namespace name")
+      return { tag = "Namespace", name = n.v, open = open, body = parse_suite(), line = tok.line }
     end
     local s = parse_simple(false)
     end_simple()
@@ -1041,10 +1169,25 @@ local function make(toks, file, src)
     while peek().t ~= "eof" do
       body[#body + 1] = parse_statement()
     end
-    return { tag = "Module", body = body, line = 1, comments = toks.comments }
+    local directives = {}
+    for _, c in ipairs(toks.comments or {}) do
+      local mode = c.text:match("^!%s*(%a+)%s*$")
+      if mode == "strict" or mode == "loose" then
+        directives[#directives + 1] = { line = c.line, mode = mode }
+      end
+    end
+    return { tag = "Module", body = body, line = 1, comments = toks.comments, directives = directives }
   end
 
   return P
+end
+
+-- Разбор файла заголовков .cuh: тела функций не нужны, есть namespace
+function M.parse_header(src, file)
+  src = src:gsub("^\239\187\191", ""):gsub("\r\n?", "\n")
+  local toks = lexer.tokenize(src, file)
+  local P = make(toks, file, src, true)
+  return P.parse_program()
 end
 
 function M.parse(src, file)

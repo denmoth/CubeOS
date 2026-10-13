@@ -17,11 +17,57 @@ local parser = load_module("parser", U, lexer)
 local B = load_module("builtins", U)
 local codegen = load_module("codegen", U, B)
 local rt = load_module("rt")
+local checker = load_module("checker", U)
+
+local function read_file(path)
+  if fs and fs.open then
+    local f = fs.open(path, "rb")
+    if not f then return nil end
+    local s = f.readAll()
+    f.close()
+    return s
+  end
+  local f = io.open(path, "rb")
+  if not f then return nil end
+  local s = f:read("*a")
+  f:close()
+  return s
+end
 
 local C = {}
-C.VERSION = "0.2.0"
+C.VERSION = "0.3.0"
 C.rt = rt
 C.util = U
+
+local base_env
+
+local function copy_env(env)
+  local c = { vars = {}, types = {} }
+  for k, v in pairs(env.vars) do c.vars[k] = v end
+  for k, v in pairs(env.types) do c.types[k] = v end
+  return c
+end
+
+-- Окружение типов: встроенные заголовки + пользовательские (opts.headers = { {src=..., name=...}, ... })
+local function type_env(opts)
+  if not base_env then
+    base_env = checker.new_env()
+    for _, name in ipairs({ "lua", "cc" }) do
+      local src = read_file(root .. "/headers/" .. name .. ".cuh")
+      if src then
+        local hast = parser.parse_header(src, name .. ".cuh")
+        checker.check(hast, name .. ".cuh", base_env, true)
+      end
+    end
+  end
+  if not opts.headers or #opts.headers == 0 then return base_env end
+  local env = copy_env(base_env)
+  for _, h in ipairs(opts.headers) do
+    local hast = parser.parse_header(h.src, h.name or "header.cuh")
+    checker.check(hast, h.name or "header.cuh", env, true)
+  end
+  return env
+end
 
 -- Компилирует исходник Cubic в Lua.
 -- opts: minify (короткие имена, без отступов), keep_comments (переносит комментарии как --)
@@ -30,6 +76,9 @@ function C.compile(src, file, opts)
   file = file or "?"
   opts = opts or {}
   local ast = parser.parse(src, file)
+  if checker.needs_check(ast, opts) then
+    checker.check(ast, file, type_env(opts), false, opts)
+  end
   return codegen.generate(ast, file, opts)
 end
 

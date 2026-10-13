@@ -1,0 +1,4 @@
+#!strict
+def f(a: num, b: num) -> num:
+    return a
+f(1)

@@ -1,0 +1,3 @@
+#!strict
+def f(s: str?) -> str:
+    return s .. "x"

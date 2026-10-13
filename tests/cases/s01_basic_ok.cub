@@ -1,0 +1,46 @@
+#!strict
+x: num = 5
+name: str = "a"
+flag: bool = true
+items: list[num] = [1, 2, 3]
+total = 0
+for n in items:
+    total += n
+print(total, x + 1, name .. "!")
+
+def add(a: num, b: num) -> num:
+    return a + b
+
+print(add(2, 3))
+
+def greet(who: str, greeting: str? = nil) -> str:
+    if greeting == nil:
+        return "hello " .. who
+    return greeting .. " " .. who
+
+print(greet("bob"), greet("ann", "hi"))
+
+class Point:
+    x: num
+    y: num
+
+    def init(self, x: num, y: num):
+        self.x = x
+        self.y = y
+
+    def len2(self) -> num:
+        return self.x * self.x + self.y * self.y
+
+p = Point(3, 4)
+print(p:len2(), p.x)
+
+config = {name: "base", size: 10}
+print(config.name, config.size)
+print(math.floor(2.5) + 1)
+ok: bool = fs.exists("/rom")
+print(ok)
+scores: dict[str, num] = {a: 1}
+print(scores.a)
+def box(w: num, h: num = 2) -> str:
+    return w .. "x" .. h
+print(box(1, h=5))

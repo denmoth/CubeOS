@@ -1,0 +1,25 @@
+#!strict
+def f(s: str?) -> str:
+    if s == nil:
+        return "none"
+    return s .. "!"
+print(f(nil), f("a"))
+
+def g(v: num | str) -> str:
+    if type(v) == "number":
+        return "num " .. v
+    return "str " .. v
+print(g(1), g("x"))
+
+def h(p: {name: str}?) -> str:
+    if p:
+        return p.name
+    return "?"
+print(h({name: "z"}), h(nil))
+
+def k(v: num?) -> num:
+    if v != nil:
+        return v + 1
+    else:
+        return 0
+print(k(1), k(nil))

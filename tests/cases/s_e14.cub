@@ -1,0 +1,6 @@
+#!strict
+class A:
+    def m(self, n: num) -> num:
+        return n
+a = A()
+a:m("s")

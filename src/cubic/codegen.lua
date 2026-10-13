@@ -183,7 +183,7 @@ function M.generate(ast, file, opts)
           if t.tag == "Name" then add(t.name, s.line)
           elseif t.tag == "Starred" then add(t.name, s.line) end
         end
-      elseif tag == "FuncDef" or tag == "ClassDef" or tag == "Import" then
+      elseif tag == "FuncDef" or tag == "ClassDef" or tag == "Import" or tag == "AnnAssign" then
         add(s.name, s.line)
       elseif tag == "FromImport" then
         for _, n in ipairs(s.names) do add(n.alias, n.line) end
@@ -191,7 +191,7 @@ function M.generate(ast, file, opts)
         collect(s.body, names, seen)
         for _, e in ipairs(s.elifs) do collect(e.body, names, seen) end
         if s.orelse then collect(s.orelse, names, seen) end
-      elseif tag == "While" or tag == "ForRange" or tag == "ForIn" or tag == "With" then
+      elseif tag == "While" or tag == "ForRange" or tag == "ForIn" or tag == "With" or tag == "ModeBlock" then
         collect(s.body, names, seen)
       elseif tag == "Try" then
         collect(s.body, names, seen)
@@ -682,6 +682,19 @@ function M.generate(ast, file, opts)
 
   function S.Pass() end
 
+  function S.TypeAlias() end
+
+  function S.ModeBlock(s)
+    scoped_block(s.body)
+  end
+
+  function S.AnnAssign(s)
+    if s.value then
+      emit(target_code({ tag = "Name", name = s.name, line = s.line }) .. " = " .. expr(s.value))
+    end
+    if s.exported then record_export(s.name, s.line) end
+  end
+
   function S.ExprStmt(s)
     local e = s.e
     local tag = e.tag
@@ -960,6 +973,11 @@ function M.generate(ast, file, opts)
         local fname = m.targets[1].name
         local target = U.is_lua_name(fname) and (cname .. "." .. fname) or (cname .. "[" .. U.quote(fname) .. "]")
         emit(target .. " = " .. expr(m.values[1]))
+      elseif m.tag == "AnnAssign" then
+        if m.value then
+          local target = U.is_lua_name(m.name) and (cname .. "." .. m.name) or (cname .. "[" .. U.quote(m.name) .. "]")
+          emit(target .. " = " .. expr(m.value))
+        end
       elseif m.tag == "Pass" or (m.tag == "ExprStmt" and m.e.tag == "String") then
         -- ничего
       else

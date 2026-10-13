@@ -1,0 +1,6 @@
+#!strict
+class A:
+    def init(self):
+        self.x = 1
+a = A()
+print(a.y)

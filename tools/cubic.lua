@@ -1,5 +1,5 @@
 -- Консольная утилита Cubic. Запускается внутри CC / CraftOS-PC.
---   cubic compile <файл.cub> [вывод.lua] [--minify] [--keep-comments] [--map]
+--   cubic compile <файл.cub> [вывод.lua] [--minify] [--keep-comments] [--map] [--strict]
 --   cubic check   <файл.cub>
 --   cubic run     <файл.cub>
 -- В CraftOS-PC вывод `print` не попадает в stdout, поэтому весь вывод дополнительно пишется в файл
@@ -48,7 +48,7 @@ for _, a in ipairs(raw) do
 end
 local cmd, input, output = args[1], args[2], args[3]
 if not cmd or not input then
-  say("usage: cubic compile|check|run <file.cub> [out.lua] [--minify] [--keep-comments] [--map]")
+  say("usage: cubic compile|check|run <file.cub> [out.lua] [--minify] [--keep-comments] [--map] [--strict]")
   return finish(2)
 end
 
@@ -59,7 +59,7 @@ if not src then
 end
 
 local name = fs.getName(input)
-local opts = { minify = flags["minify"], keep_comments = flags["keep-comments"] }
+local opts = { minify = flags["minify"], keep_comments = flags["keep-comments"], strict = flags["strict"] }
 local lua, linemap, warnings = cubic.try_compile(src, name, opts)
 if not lua then
   say("error: " .. tostring(linemap))

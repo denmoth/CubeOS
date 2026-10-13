@@ -1,0 +1,2 @@
+#!strict
+xs: list[num] = [1, "a"]

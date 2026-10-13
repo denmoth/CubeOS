@@ -1,0 +1,7 @@
+x: num = 1
+strict:
+    y: num = 2
+    print(x + y)
+loose:
+    q = unknown_thing_nil
+print("done")

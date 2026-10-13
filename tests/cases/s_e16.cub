@@ -1,0 +1,4 @@
+x: num = 1
+strict:
+    a: num = 1
+    y: str = a

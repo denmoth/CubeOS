@@ -1,0 +1,2 @@
+#!strict
+fs.exists(5)

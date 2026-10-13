@@ -1,0 +1,10 @@
+x: num = 1
+#!strict
+w: num = 2
+print(x + w)
+#!loose
+z = nothing_defined_here
+q: num = "loose region does not check this"
+#!strict
+v: num = 3
+print(v)

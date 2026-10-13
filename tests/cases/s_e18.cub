@@ -1,0 +1,4 @@
+#!strict
+class A:
+    pass
+A(1)
