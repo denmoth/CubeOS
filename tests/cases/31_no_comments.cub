@@ -1,0 +1,3 @@
+# secret comment text
+x = 1  # another secret
+print(x)

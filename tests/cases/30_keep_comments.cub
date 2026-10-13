@@ -1,0 +1,10 @@
+# first comment
+x = 1  # trailing comment
+
+# section comment
+def f():
+    # inside function
+    return x
+
+print(f())
+# last comment

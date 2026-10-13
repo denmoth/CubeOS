@@ -180,6 +180,257 @@ function rt.iter2(e)
   error("cannot iterate over a " .. t, 2)
 end
 
+---------------------------------------------------------------- срезы, списки, словари
+
+function rt.slice(x, i, j, step)
+  local t = type(x)
+  local n
+  if t == "string" or t == "table" then n = #x else error("cannot slice a " .. t, 2) end
+  step = step or 1
+  if step == 0 then error("slice step cannot be zero", 2) end
+  if step > 0 then
+    i = i or 1
+    j = j or n
+  else
+    i = i or n
+    j = j or 1
+  end
+  if i < 0 then i = n + 1 + i end
+  if j < 0 then j = n + 1 + j end
+  if step > 0 then
+    if i < 1 then i = 1 end
+    if j > n then j = n end
+  else
+    if i > n then i = n end
+    if j < 1 then j = 1 end
+  end
+  if t == "string" then
+    if step == 1 then return x:sub(i, j) end
+    local parts, c = {}, 0
+    for k = i, j, step do
+      c = c + 1
+      parts[c] = x:sub(k, k)
+    end
+    return table.concat(parts)
+  end
+  local out, c = {}, 0
+  for k = i, j, step do
+    c = c + 1
+    out[c] = x[k]
+  end
+  return out
+end
+
+function rt.cat(...)
+  local out, c = {}, 0
+  for a = 1, select("#", ...) do
+    local t = (select(a, ...))
+    for k = 1, #t do
+      c = c + 1
+      out[c] = t[k]
+    end
+  end
+  return out
+end
+
+function rt.merge(...)
+  local out = {}
+  for a = 1, select("#", ...) do
+    for k, v in next, (select(a, ...)) do out[k] = v end
+  end
+  return out
+end
+
+function rt.unpack_list(t)
+  return unpack(t, 1, #t)
+end
+
+---------------------------------------------------------------- именованные аргументы
+
+local sigs = setmetatable({}, { __mode = "k" })
+local sig_cache = {}
+
+function rt.sig(fn, names)
+  sigs[fn] = names
+  return fn
+end
+
+local function sig_list(s)
+  local l = sig_cache[s]
+  if not l then
+    l = {}
+    for name in s:gmatch("[^,]+") do l[#l + 1] = name end
+    sig_cache[s] = l
+  end
+  return l
+end
+
+local function bind(names, skip, kw, nargs, args)
+  local maxn = nargs
+  for k, v in next, kw do
+    local idx
+    for p = 1, #names do
+      if names[p] == k then idx = p break end
+    end
+    if not idx then error("unexpected keyword argument '" .. tostring(k) .. "'", 3) end
+    idx = idx - skip
+    if idx < 1 then error("cannot pass '" .. tostring(k) .. "' by keyword", 3) end
+    if idx <= nargs then error("argument '" .. tostring(k) .. "' was given twice", 3) end
+    args[idx] = v
+    if idx > maxn then maxn = idx end
+  end
+  return maxn
+end
+
+function rt.kcall(fn, kw, ...)
+  local s = sigs[fn]
+  local skip = 0
+  if not s and type(fn) == "table" then
+    local init = fn.init
+    s = init and sigs[init]
+    skip = 1
+  end
+  if not s then error("this function does not accept keyword arguments", 2) end
+  local args = { ... }
+  local maxn = bind(sig_list(s), skip, kw, select("#", ...), args)
+  return fn(unpack(args, 1, maxn))
+end
+
+function rt.kcallm(obj, name, kw, ...)
+  local fn = obj[name]
+  local s = sigs[fn]
+  if not s then error("method '" .. tostring(name) .. "' does not accept keyword arguments", 2) end
+  local args = { obj, ... }
+  local maxn = bind(sig_list(s), 0, kw, select("#", ...) + 1, args)
+  return fn(unpack(args, 1, maxn))
+end
+
+---------------------------------------------------------------- with, match
+
+function rt.release(v)
+  if type(v) == "table" then
+    local ex = v.__exit
+    if ex then return ex(v) end
+    local c = v.close
+    if c then return c(v) end
+  end
+end
+
+function rt.match_attr(obj, cls, i)
+  local args = cls.__match_args
+  if not args then
+    error("class " .. tostring(cls.__name) .. " has no __match_args for positional patterns", 0)
+  end
+  return obj[args[i]]
+end
+
+---------------------------------------------------------------- форматирование f-строк
+
+local fmt_cache = {}
+
+local function parse_spec(spec)
+  local s = spec
+  local P = {}
+  local f, a, r = s:match("^(.)([<>^=])(.*)$")
+  if f then
+    P.fill, P.align, s = f, a, r
+  else
+    a, r = s:match("^([<>^=])(.*)$")
+    if a then P.align, s = a, r end
+  end
+  local sign, r2 = s:match("^([+%- ]?)(.*)$")
+  P.sign, s = sign, r2
+  local zero, r3 = s:match("^(0?)(.*)$")
+  P.zero, s = (zero == "0"), r3
+  local width, r4 = s:match("^(%d*)(.*)$")
+  P.width, s = tonumber(width), r4
+  local comma, r5 = s:match("^([,_]?)(.*)$")
+  P.comma, s = comma, r5
+  local prec, r6 = s:match("^%.(%d+)(.*)$")
+  if prec then
+    P.prec, s = tonumber(prec), r6
+  end
+  if #s > 1 then error("invalid format specifier '" .. spec .. "'", 0) end
+  P.type = s
+  return P
+end
+
+local function group_thousands(str, sep)
+  local int, rest = str:match("^(%-?%d+)(.*)$")
+  if not int then return str end
+  local sign = ""
+  if int:sub(1, 1) == "-" then
+    sign, int = "-", int:sub(2)
+  end
+  local out = int:reverse():gsub("(%d%d%d)", "%1" .. sep):reverse()
+  if out:sub(1, #sep) == sep then out = out:sub(#sep + 1) end
+  return sign .. out .. rest
+end
+
+function rt.fmt(v, spec)
+  local P = fmt_cache[spec]
+  if not P then
+    P = parse_spec(spec)
+    fmt_cache[spec] = P
+  end
+  local typ = P.type
+  local str
+  local numeric = type(v) == "number"
+  if typ == "d" then
+    if not numeric or v ~= math.floor(v) then error("format 'd' needs an integer, got " .. tostring(v), 0) end
+    str = string.format("%d", v)
+  elseif typ == "f" or typ == "F" then
+    if not numeric then error("format 'f' needs a number", 0) end
+    str = string.format("%." .. (P.prec or 6) .. "f", v)
+  elseif typ == "e" or typ == "E" or typ == "g" or typ == "G" then
+    if not numeric then error("format '" .. typ .. "' needs a number", 0) end
+    str = string.format("%" .. (P.prec and ("." .. P.prec) or "") .. typ, v)
+  elseif typ == "x" or typ == "X" or typ == "o" then
+    if not numeric then error("format '" .. typ .. "' needs a number", 0) end
+    str = string.format("%" .. typ, v)
+  elseif typ == "b" then
+    if not numeric then error("format 'b' needs a number", 0) end
+    local n, bits = math.floor(v), {}
+    if n == 0 then bits[1] = "0" end
+    while n > 0 do
+      table.insert(bits, 1, tostring(n % 2))
+      n = math.floor(n / 2)
+    end
+    str = table.concat(bits)
+  elseif typ == "%" then
+    str = string.format("%." .. (P.prec or 6) .. "f", v * 100) .. "%"
+  else
+    if numeric and P.prec then
+      str = string.format("%." .. P.prec .. "g", v)
+    else
+      str = tostring(v)
+      if P.prec and not numeric then str = str:sub(1, P.prec) end
+    end
+  end
+  if numeric then
+    if P.sign == "+" and v >= 0 then str = "+" .. str
+    elseif P.sign == " " and v >= 0 then str = " " .. str end
+    if P.comma ~= "" then str = group_thousands(str, P.comma == "_" and "_" or ",") end
+  end
+  if P.width and #str < P.width then
+    local pad = P.width - #str
+    local fill = P.fill or (P.zero and "0" or " ")
+    local align = P.align or (P.zero and "=") or (numeric and ">" or "<")
+    if align == "=" then
+      local sg, body = str:match("^([+%- ]?)(.*)$")
+      str = sg .. fill:rep(pad) .. body
+    elseif align == ">" then
+      str = fill:rep(pad) .. str
+    elseif align == "<" then
+      str = str .. fill:rep(pad)
+    else
+      local left = math.floor(pad / 2)
+      str = fill:rep(left) .. str .. fill:rep(pad - left)
+    end
+  end
+  return str
+end
+
 ---------------------------------------------------------------- прочее
 
 function rt.nvl(a, b)

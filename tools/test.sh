@@ -8,7 +8,7 @@ DATA=$(cygpath -w "$EMU")/data
 mkdir -p build
 rm -f build/test-result.txt
 FILTER="${1:-}"
-"$EMU/CraftOS-PC_console.exe" --headless -d "$DATA" --mount-rw "/repo=$ROOT_WIN" \
+timeout 120 "$EMU/CraftOS-PC_console.exe" --headless -d "$DATA" --mount-rw "/repo=$ROOT_WIN" \
   --exec "local f = loadfile('/repo/tests/run.lua'); f('$FILTER')" >/dev/null 2>&1 || true
 if [ -f build/test-result.txt ]; then
   cat build/test-result.txt

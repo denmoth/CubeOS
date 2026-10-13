@@ -1,0 +1,21 @@
+def box(w, h=2, d=3):
+    return f"{w}x{h}x{d}"
+
+print(box(1))
+print(box(1, d=9))
+print(box(h=5, w=4))
+print(box(1, 2, d=7))
+
+class Cfg:
+    def init(self, name, size=10, verbose=false):
+        self.name = name
+        self.size = size
+        self.verbose = verbose
+
+    def describe(self, prefix="", suffix=""):
+        return prefix .. self.name .. ":" .. self.size .. suffix
+
+c = Cfg("main", size=20)
+print(c.size, c.verbose)
+print(c:describe(suffix="!"))
+print(c:describe("<", suffix=">"))

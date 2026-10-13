@@ -9,12 +9,12 @@ local M = {}
 M.KEYWORDS = U.set({
   "and", "or", "not", "if", "elif", "else", "while", "for", "in", "def", "return", "break",
   "continue", "pass", "class", "import", "from", "as", "export", "try", "except", "finally",
-  "raise", "lua", "let", "const", "override", "is", "true", "false", "nil",
+  "raise", "lua", "let", "const", "override", "is", "true", "false", "nil", "with",
 })
 
 local OPS3 = U.set({ "**=", "//=", "..=" })
 local OPS2 = U.set({ "==", "!=", "<=", ">=", "=>", "??", "?.", "+=", "-=", "*=", "/=", "%=", "**", "//", "..", "->" })
-local OPS1 = U.set({ "+", "-", "*", "/", "%", "(", ")", "[", "]", "{", "}", ",", ":", ".", "=", "<", ">", "@", "$" })
+local OPS1 = U.set({ "+", "-", "*", "/", "%", "(", ")", "[", "]", "{", "}", ",", ":", ".", "=", "<", ">", "@", "$", "|" })
 
 local SIMPLE_ESC = { n = "\n", t = "\t", r = "\r", a = "\a", b = "\b", f = "\f", v = "\v", ["0"] = "\0",
   ["\\"] = "\\", ['"'] = '"', ["'"] = "'" }
@@ -95,8 +95,29 @@ local function split_fstring(raw, file, line, col)
         if depth ~= 0 then U.fail(file, cur_line, col, "unterminated { in f-string") end
         local src = raw:sub(i + 1, j - 1)
         if src:find("\\", 1, true) then U.fail(file, cur_line, col, "backslash is not allowed inside f-string expressions") end
+        -- спецификация формата: первый ':' вне скобок и кавычек
+        local spec
+        do
+          local d, q = 0, nil
+          for k = 1, #src do
+            local ch = src:sub(k, k)
+            if q then
+              if ch == q then q = nil end
+            elseif ch == '"' or ch == "'" then
+              q = ch
+            elseif ch == "(" or ch == "[" or ch == "{" then
+              d = d + 1
+            elseif ch == ")" or ch == "]" or ch == "}" then
+              d = d - 1
+            elseif ch == ":" and d == 0 then
+              spec = src:sub(k + 1)
+              src = src:sub(1, k - 1)
+              break
+            end
+          end
+        end
         if src:match("^%s*$") then U.fail(file, cur_line, col, "empty expression in f-string") end
-        parts[#parts + 1] = { kind = "expr", src = src, line = cur_line }
+        parts[#parts + 1] = { kind = "expr", src = src, line = cur_line, spec = spec }
         for _ in src:gmatch("\n") do cur_line = cur_line + 1 end
         i = j + 1
       end
@@ -122,6 +143,8 @@ function M.tokenize(src, file, opts)
   src = src:gsub("^\239\187\191", ""):gsub("\r\n?", "\n")
   local len = #src
   local toks = {}
+  local comments = {}
+  toks.comments = comments
   local indents = { 0 }
   local pos, line, ls = 1, opts.first_line or 1, 1
   local depth = 0
@@ -194,6 +217,7 @@ function M.tokenize(src, file, opts)
         ls = pos
       elseif c == "#" then
         local nl = src:find("\n", p, true)
+        comments[#comments + 1] = { line = line, text = src:sub(p + 1, (nl or (len + 1)) - 1) }
         if nl then
           pos = nl + 1
           line = line + 1
@@ -275,6 +299,7 @@ function M.tokenize(src, file, opts)
         end
       elseif c == "#" then
         local nl = src:find("\n", pos, true)
+        comments[#comments + 1] = { line = line, text = src:sub(pos + 1, (nl or (len + 1)) - 1) }
         pos = nl or (len + 1)
         sp = true
       elseif c == "\\" then

@@ -1,0 +1,55 @@
+class Point:
+    def init(self, x, y):
+        self.x = x
+        self.y = y
+
+class Color:
+    RED = 1
+    BLUE = 2
+
+def describe(v):
+    match v:
+        case 0:
+            return "zero"
+        case 1 | 2 | 3:
+            return "small"
+        case "hello":
+            return "greeting"
+        case true:
+            return "yes"
+        case nil:
+            return "nothing"
+        case [x, y]:
+            return f"pair {x},{y}"
+        case [first, *rest]:
+            return f"list {first} + {len(rest)}"
+        case {kind: "circle", r: radius}:
+            return f"circle {radius}"
+        case Point(x=px, y=0):
+            return f"on x axis at {px}"
+        case n if type(n) == "number" and n > 100:
+            return "huge"
+        case _:
+            return "other"
+
+print(describe(0))
+print(describe(2))
+print(describe("hello"))
+print(describe(true))
+print(describe(nil))
+print(describe([5, 6]))
+print(describe([1, 2, 3]))
+print(describe({kind: "circle", r: 9}))
+print(describe(Point(4, 0)))
+print(describe(500))
+print(describe(50))
+print(describe("zzz"))
+print(describe(Point(1, 1)))
+
+match 2:
+    case Color.RED: print("red")
+    case Color.BLUE: print("blue")
+
+match [1, [2, 3]]:
+    case [a, [b, c]]:
+        print(a + b + c)

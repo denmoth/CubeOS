@@ -10,16 +10,61 @@ local function mangle(name)
   return name
 end
 
+-- Собирает все идентификаторы из сырого Lua-кода
+local function lua_idents(code, set)
+  for id in code:gmatch("[%a_][%w_]*") do set[id] = true end
+end
+
+-- Обход AST: имена (Name) и идентификаторы в lua-вставках
+local function scan_names(node, names, raw)
+  if type(node) ~= "table" then return end
+  if node.tag == "Name" then names[node.name] = true end
+  if node.tag == "LuaBlock" or node.tag == "LuaExpr" then lua_idents(node.code, raw) end
+  for k, v in pairs(node) do
+    if type(v) == "table" and k ~= "comments" then scan_names(v, names, raw) end
+  end
+end
+
+local SHORT_FIRST = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+local SHORT_REST = SHORT_FIRST .. "0123456789"
+
 function M.generate(ast, file, opts)
   opts = opts or {}
+  local minify = opts.minify
   local out, lmap = {}, {}
   local level = 0
   local curline = 1
   local warnings = {}
   local scope = nil
   local ctx = {}
+  local class_stack = {}
   local idseq = 0
   local exports = {}
+
+  -- минификация: уникальные короткие имена для всех переменных модуля
+  local avoid, keep = {}, {}
+  local short_n = 0
+  if minify then
+    scan_names(ast, avoid, keep)
+    for k in pairs(keep) do avoid[k] = true end
+  end
+
+  local function short_name()
+    while true do
+      short_n = short_n + 1
+      local n = short_n - 1
+      local first = n % #SHORT_FIRST
+      local s = SHORT_FIRST:sub(first + 1, first + 1)
+      n = math.floor(n / #SHORT_FIRST)
+      while n > 0 do
+        n = n - 1
+        local r = n % #SHORT_REST
+        s = s .. SHORT_REST:sub(r + 1, r + 1)
+        n = math.floor(n / #SHORT_REST)
+      end
+      if not avoid[s] and not RESERVED[s] then return s end
+    end
+  end
 
   local function fail(line, msg)
     U.fail(file, line or curline, 1, msg)
@@ -30,8 +75,26 @@ function M.generate(ast, file, opts)
   end
 
   local function emit(s)
-    out[#out + 1] = string.rep("  ", level) .. s
+    if minify then
+      out[#out + 1] = s
+    else
+      out[#out + 1] = string.rep("  ", level) .. s
+    end
     lmap[#lmap + 1] = curline
+  end
+
+  -- комментарии (--keep-comments)
+  local comments = (opts.keep_comments and ast.comments) or {}
+  local cidx = 1
+  local function flush_comments(upto)
+    while cidx <= #comments and comments[cidx].line <= upto do
+      local c = comments[cidx]
+      local save = curline
+      curline = c.line
+      emit("--" .. c.text)
+      curline = save
+      cidx = cidx + 1
+    end
   end
 
   local function nextid()
@@ -69,13 +132,40 @@ function M.generate(ast, file, opts)
     end
   end
 
+  -- объявляет переменную в текущей области, возвращает её имя в Lua
   local function declare(name, kind, line)
     check_name(name, line)
-    scope.names[name] = { kind = kind }
+    local lname
+    if minify and not keep[name] then
+      lname = short_name()
+    else
+      lname = mangle(name)
+    end
+    scope.names[name] = { kind = kind, lname = lname }
+    return lname
+  end
+
+  local function lname_of(name)
+    local info = lookup(name)
+    return info and info.lname or mangle(name)
   end
 
   local function protected_error(name, line)
     fail(line, "cannot assign to builtin '" .. name .. "' (use 'override " .. name .. " = ...' to replace it deliberately)")
+  end
+
+  local function pattern_names(p, add)
+    local tag = p.tag
+    if tag == "PCapture" then add(p.name, p.line)
+    elseif tag == "POr" then for _, a in ipairs(p.alts) do pattern_names(a, add) end
+    elseif tag == "PList" then
+      for _, it in ipairs(p.items) do pattern_names(it, add) end
+      if p.star_name and p.star_name ~= "_" then add(p.star_name, p.line) end
+    elseif tag == "PDict" then for _, e in ipairs(p.entries) do pattern_names(e.pat, add) end
+    elseif tag == "PClass" then
+      for _, a in ipairs(p.args) do pattern_names(a, add) end
+      for _, kw in ipairs(p.kwargs) do pattern_names(kw.pat, add) end
+    end
   end
 
   -- собирает имена, которые инструкции объявляют на уровне функции (как переменные Python)
@@ -90,7 +180,8 @@ function M.generate(ast, file, opts)
       local tag = s.tag
       if tag == "Assign" then
         for _, t in ipairs(s.targets) do
-          if t.tag == "Name" then add(t.name, s.line) end
+          if t.tag == "Name" then add(t.name, s.line)
+          elseif t.tag == "Starred" then add(t.name, s.line) end
         end
       elseif tag == "FuncDef" or tag == "ClassDef" or tag == "Import" then
         add(s.name, s.line)
@@ -100,12 +191,17 @@ function M.generate(ast, file, opts)
         collect(s.body, names, seen)
         for _, e in ipairs(s.elifs) do collect(e.body, names, seen) end
         if s.orelse then collect(s.orelse, names, seen) end
-      elseif tag == "While" or tag == "ForRange" or tag == "ForIn" then
+      elseif tag == "While" or tag == "ForRange" or tag == "ForIn" or tag == "With" then
         collect(s.body, names, seen)
       elseif tag == "Try" then
         collect(s.body, names, seen)
         for _, h in ipairs(s.handlers) do collect(h.body, names, seen) end
         if s.finally then collect(s.finally, names, seen) end
+      elseif tag == "Match" then
+        for _, c in ipairs(s.cases) do
+          pattern_names(c.pattern, add)
+          collect(c.body, names, seen)
+        end
       end
     end
   end
@@ -120,8 +216,7 @@ function M.generate(ast, file, opts)
       if not scope.names[name] and not lookup_from(scope.parent, name) then
         if B.PROTECTED[name] then protected_error(name, n.line) end
         if B.SHADOW_WARN[name] then warn(n.line, "'" .. name .. "' hides the CC global of the same name in this scope") end
-        declare(name, "local", n.line)
-        decl[#decl + 1] = mangle(name)
+        decl[#decl + 1] = declare(name, "local", n.line)
       end
     end
     if #decl > 180 then
@@ -133,7 +228,12 @@ function M.generate(ast, file, opts)
   local function ref(name, line)
     check_name(name, line)
     local info = lookup(name)
-    if info then return mangle(name) end
+    if info then return info.lname end
+    if name == "super" then
+      local cls = class_stack[#class_stack]
+      if not cls then fail(line, "'super' can only be used inside a class") end
+      return cls .. ".__base"
+    end
     if B.MAP[name] then return B.MAP[name] end
     if RESERVED[name] then
       fail(line, "'" .. name .. "' is a reserved word in Lua and cannot be used as a global name")
@@ -146,8 +246,8 @@ function M.generate(ast, file, opts)
   local E = {}
   local expr, block, stmt
 
-  local SAFE_TRUTHY = U.set({ "Number", "String", "FString", "List", "Dict", "Lambda" })
-  local NEEDS_PAREN = U.set({ "Number", "String", "FString", "List", "Dict", "Lambda", "Bool", "Nil", "Binary", "Unary", "Ternary", "LuaExpr" })
+  local SAFE_TRUTHY = U.set({ "Number", "String", "FString", "List", "Dict", "Lambda", "ListComp", "DictComp" })
+  local NEEDS_PAREN = U.set({ "Number", "String", "FString", "List", "Dict", "Lambda", "Bool", "Nil", "Binary", "Unary", "Ternary", "LuaExpr", "ListComp", "DictComp" })
 
   local function base_expr(node)
     local code = expr(node)
@@ -172,6 +272,36 @@ function M.generate(ast, file, opts)
     return E[node.tag](node)
   end
 
+  -- знак шага: (динамический код | nil, знак | nil)
+  local function sign_code(step_node)
+    if not step_node then return "1", 1 end
+    if step_node.tag == "Number" then
+      return nil, (tonumber(step_node.v) or 1) >= 0 and 1 or -1
+    elseif step_node.tag == "Unary" and step_node.op == "-" and step_node.e.tag == "Number" then
+      return nil, -1
+    end
+    return "(" .. expr(step_node) .. " > 0 and 1 or -1)", nil
+  end
+
+  -- сдвиг границы для исключающих скобок: dir > 0 прибавляет знак шага, dir < 0 вычитает
+  local function adjust_bound(code, dir, step_node)
+    local dyn, sign = sign_code(step_node)
+    local op = dir > 0 and " + " or " - "
+    if dyn then return "(" .. code .. ")" .. op .. dyn end
+    if sign == 1 then return "(" .. code .. ")" .. op .. "1" end
+    return "(" .. code .. ")" .. (dir > 0 and " - 1" or " + 1")
+  end
+
+  -- границы диапазона/среза: возвращает lo, hi, step (строки Lua или nil)
+  local function bounds(node)
+    local lo = node.lo and expr(node.lo) or nil
+    local hi = node.hi and expr(node.hi) or nil
+    local step = node.step and expr(node.step) or nil
+    if lo and not node.lo_incl then lo = adjust_bound(lo, 1, node.step) end
+    if hi and not node.hi_incl then hi = adjust_bound(hi, -1, node.step) end
+    return lo, hi, step
+  end
+
   function E.Number(n) return n.v end
   function E.String(n) return U.quote(n.v) end
   function E.Bool(n) return n.v and "true" or "false" end
@@ -185,6 +315,8 @@ function M.generate(ast, file, opts)
     for _, p in ipairs(n.parts) do
       if p.kind == "str" then
         parts[#parts + 1] = U.quote(p.v)
+      elseif p.spec then
+        parts[#parts + 1] = "__rt.fmt(" .. expr(p.node) .. ", " .. U.quote(p.spec) .. ")"
       elseif p.node.tag == "String" then
         parts[#parts + 1] = U.quote(p.node.v)
       else
@@ -197,38 +329,87 @@ function M.generate(ast, file, opts)
   end
 
   function E.List(n)
-    local items = {}
-    for k, it in ipairs(n.items) do
-      local code = expr(it)
-      if k == #n.items and (it.tag == "Call" or it.tag == "Method" or it.tag == "LuaExpr") then
-        code = "(" .. code .. ")"
-      end
-      items[k] = code
+    local has_spread = false
+    for _, it in ipairs(n.items) do
+      if it.tag == "Spread" then has_spread = true end
     end
-    return "{" .. table.concat(items, ", ") .. "}"
+    if not has_spread then
+      local items = {}
+      for k, it in ipairs(n.items) do
+        local code = expr(it)
+        if k == #n.items and (it.tag == "Call" or it.tag == "Method" or it.tag == "LuaExpr") then
+          code = "(" .. code .. ")"
+        end
+        items[k] = code
+      end
+      return "{" .. table.concat(items, ", ") .. "}"
+    end
+    local pieces, run = {}, {}
+    local function flush()
+      if #run > 0 then
+        pieces[#pieces + 1] = "{" .. table.concat(run, ", ") .. "}"
+        run = {}
+      end
+    end
+    for _, it in ipairs(n.items) do
+      if it.tag == "Spread" then
+        flush()
+        pieces[#pieces + 1] = expr(it.e)
+      else
+        run[#run + 1] = "(" .. expr(it) .. ")"
+      end
+    end
+    flush()
+    return "__rt.cat(" .. table.concat(pieces, ", ") .. ")"
+  end
+
+  local function dict_entry(en)
+    local v = expr(en.value)
+    if en.kind == "name" or en.kind == "str" then
+      if U.is_lua_name(en.key) then return en.key .. " = " .. v end
+      return "[" .. U.quote(en.key) .. "] = " .. v
+    elseif en.kind == "num" then
+      return "[" .. en.key .. "] = " .. v
+    end
+    return "[" .. expr(en.key) .. "] = " .. v
   end
 
   function E.Dict(n)
-    local items = {}
+    local has_spread = false
     for _, en in ipairs(n.entries) do
-      local v = expr(en.value)
-      if en.kind == "name" or en.kind == "str" then
-        if U.is_lua_name(en.key) then
-          items[#items + 1] = en.key .. " = " .. v
-        else
-          items[#items + 1] = "[" .. U.quote(en.key) .. "] = " .. v
-        end
-      elseif en.kind == "num" then
-        items[#items + 1] = "[" .. en.key .. "] = " .. v
-      else
-        items[#items + 1] = "[" .. expr(en.key) .. "] = " .. v
+      if en.kind == "spread" then has_spread = true end
+    end
+    if not has_spread then
+      local items = {}
+      for _, en in ipairs(n.entries) do items[#items + 1] = dict_entry(en) end
+      return "{" .. table.concat(items, ", ") .. "}"
+    end
+    local pieces, run = {}, {}
+    local function flush()
+      if #run > 0 then
+        pieces[#pieces + 1] = "{" .. table.concat(run, ", ") .. "}"
+        run = {}
       end
     end
-    return "{" .. table.concat(items, ", ") .. "}"
+    for _, en in ipairs(n.entries) do
+      if en.kind == "spread" then
+        flush()
+        pieces[#pieces + 1] = expr(en.value)
+      else
+        run[#run + 1] = dict_entry(en)
+      end
+    end
+    flush()
+    return "__rt.merge(" .. table.concat(pieces, ", ") .. ")"
   end
 
   function E.Index(n)
     return base_expr(n.obj) .. "[" .. expr(n.idx) .. "]"
+  end
+
+  function E.Slice(n)
+    local lo, hi, step = bounds(n)
+    return "__rt.slice(" .. expr(n.obj) .. ", " .. (lo or "nil") .. ", " .. (hi or "nil") .. ", " .. (step or "nil") .. ")"
   end
 
   function E.Attr(n)
@@ -238,15 +419,47 @@ function M.generate(ast, file, opts)
     return attr_access(base_expr(n.obj), n.name)
   end
 
+  local function call_args(args)
+    local r = {}
+    for k, a in ipairs(args) do
+      if a.tag == "Spread" then
+        r[k] = "__rt.unpack_list(" .. expr(a.e) .. ")"
+      else
+        r[k] = expr(a)
+      end
+    end
+    return r
+  end
+
+  local function kw_table(kwargs)
+    local items = {}
+    for _, kw in ipairs(kwargs) do
+      items[#items + 1] = "[" .. U.quote(kw.name) .. "] = " .. expr(kw.value)
+    end
+    return "{" .. table.concat(items, ", ") .. "}"
+  end
+
   function E.Call(n)
-    return base_expr(n.fn) .. "(" .. table.concat(exprs(n.args), ", ") .. ")"
+    local args = call_args(n.args)
+    if n.kwargs then
+      local all = { kw_table(n.kwargs) }
+      for _, a in ipairs(args) do all[#all + 1] = a end
+      return "__rt.kcall(" .. expr(n.fn) .. ", " .. table.concat(all, ", ") .. ")"
+    end
+    return base_expr(n.fn) .. "(" .. table.concat(args, ", ") .. ")"
   end
 
   function E.Method(n)
     if RESERVED[n.name] then
       fail(n.line, "method name '" .. n.name .. "' is a Lua keyword and cannot be called with ':'")
     end
-    return base_expr(n.obj) .. ":" .. n.name .. "(" .. table.concat(exprs(n.args), ", ") .. ")"
+    local args = call_args(n.args)
+    if n.kwargs then
+      local all = { expr(n.obj), U.quote(n.name), kw_table(n.kwargs) }
+      for _, a in ipairs(args) do all[#all + 1] = a end
+      return "__rt.kcallm(" .. table.concat(all, ", ") .. ")"
+    end
+    return base_expr(n.obj) .. ":" .. n.name .. "(" .. table.concat(args, ", ") .. ")"
   end
 
   function E.Unary(n)
@@ -279,7 +492,6 @@ function M.generate(ast, file, opts)
     elseif op == "**" then
       return "(" .. l .. " ^ " .. r .. ")"
     end
-    -- + - * / % .. < <= > >=
     return "(" .. l .. " " .. op .. " " .. r .. ")"
   end
 
@@ -295,17 +507,62 @@ function M.generate(ast, file, opts)
     push_scope(true)
     local plist = {}
     for k, p in ipairs(n.params) do
-      declare(p, "param", n.line)
-      plist[k] = mangle(p)
+      plist[k] = declare(p, "param", n.line)
     end
     local body = expr(n.body)
     pop_scope()
     return "(function(" .. table.concat(plist, ", ") .. ") return " .. body .. " end)"
   end
 
+  -- генераторы: возвращает IIFE-строку
+  local function comprehension(clauses, init, body_fn)
+    push_scope(true)
+    local head, closers, pops = {}, 0, 0
+    for _, c in ipairs(clauses) do
+      if c.kind == "for" then
+        local it = c.iter
+        local header
+        if it.tag == "Range" then
+          local lo, hi, step = bounds(it)
+          push_scope(false)
+          pops = pops + 1
+          local v = declare(c.vars[1], "local", c.line)
+          header = "for " .. v .. " = " .. lo .. ", " .. hi .. (step and (", " .. step) or "") .. " do "
+        else
+          local src = expr(it)
+          push_scope(false)
+          pops = pops + 1
+          local vars = {}
+          for k, name in ipairs(c.vars) do vars[k] = declare(name, "local", c.line) end
+          header = "for " .. table.concat(vars, ", ") .. " in " .. ((#vars == 1) and "__rt.iter1(" or "__rt.iter2(") .. src .. ") do "
+        end
+        head[#head + 1] = header
+        closers = closers + 1
+      else
+        head[#head + 1] = "if " .. expr(c.cond) .. " then "
+        closers = closers + 1
+      end
+    end
+    local body = body_fn()
+    for _ = 1, pops do pop_scope() end
+    pop_scope()
+    return "(function() " .. init .. table.concat(head) .. body .. string.rep("end ", closers) .. "return __r end)()"
+  end
+
+  function E.ListComp(n)
+    return comprehension(n.clauses, "local __r, __n = {}, 0 ", function()
+      return "__n = __n + 1 __r[__n] = (" .. expr(n.elem) .. ") "
+    end)
+  end
+
+  function E.DictComp(n)
+    return comprehension(n.clauses, "local __r = {} ", function()
+      return "__r[" .. expr(n.key) .. "] = " .. expr(n.value) .. " "
+    end)
+  end
+
   ---------------------------------------------------------------- управление потоком
 
-  -- Ищет цель break/continue; возвращает (цель, список пересечённых замыканий try)
   local function find_loop(what, line)
     local crossed = {}
     for k = #ctx, 1, -1 do
@@ -324,7 +581,7 @@ function M.generate(ast, file, opts)
   end
 
   local function emit_break(line)
-    local target, crossed = find_loop("break", line)
+    local _, crossed = find_loop("break", line)
     if #crossed == 0 then
       emit("do break end")
     else
@@ -344,7 +601,6 @@ function M.generate(ast, file, opts)
     end
   end
 
-  -- values_code: строка со списком значений; packed_code: имя упакованной таблицы (взаимоисключающие)
   local function emit_return(values_code, packed_code, line)
     local crossed
     for k = #ctx, 1, -1 do
@@ -395,6 +651,7 @@ function M.generate(ast, file, opts)
 
   function stmt(s)
     curline = s.line or curline
+    if opts.keep_comments then flush_comments(curline) end
     S[s.tag](s)
   end
 
@@ -415,7 +672,7 @@ function M.generate(ast, file, opts)
       if info.kind == "const" then
         fail(t.line, "cannot assign to constant '" .. t.name .. "'")
       end
-      return mangle(t.name)
+      return info.lname
     elseif t.tag == "Index" then
       return base_expr(t.obj) .. "[" .. expr(t.idx) .. "]"
     else
@@ -437,10 +694,49 @@ function M.generate(ast, file, opts)
     end
   end
 
+  -- распаковка списка в цели: targets_codes[i] (строка или nil для пропуска), star: индекс или nil
+  local function emit_unpack(target_codes, star, rhs_code)
+    local id = nextid()
+    local t = "__t" .. id
+    local n = #target_codes
+    emit("do local " .. t .. " = " .. rhs_code)
+    for k = 1, n do
+      local code = target_codes[k]
+      if star and k == star then
+        local after = n - star
+        emit("  " .. code .. " = __rt.slice(" .. t .. ", " .. star .. ", #" .. t .. " - " .. after .. ")")
+      elseif star and k > star then
+        emit("  " .. code .. " = " .. t .. "[#" .. t .. " - " .. (n - k) .. "]")
+      else
+        emit("  " .. code .. " = " .. t .. "[" .. k .. "]")
+      end
+    end
+    emit("end")
+  end
+
   function S.Assign(s)
-    local lhs, rhs = {}, exprs(s.values)
-    for k, t in ipairs(s.targets) do lhs[k] = target_code(t) end
-    emit(table.concat(lhs, ", ") .. " = " .. table.concat(rhs, ", "))
+    local star
+    for k, t in ipairs(s.targets) do
+      if t.tag == "Starred" then star = k end
+    end
+    local single = s.values[1]
+    local unpack_list = star ~= nil or (#s.targets >= 2 and #s.values == 1 and single.tag ~= "Call" and single.tag ~= "Method" and single.tag ~= "LuaExpr")
+    if unpack_list then
+      local rhs = expr(single)
+      local codes = {}
+      for k, t in ipairs(s.targets) do
+        if t.tag == "Starred" then
+          codes[k] = target_code({ tag = "Name", name = t.name, line = t.line })
+        else
+          codes[k] = target_code(t)
+        end
+      end
+      emit_unpack(codes, star, rhs)
+    else
+      local lhs, rhs = {}, exprs(s.values)
+      for k, t in ipairs(s.targets) do lhs[k] = target_code(t) end
+      emit(table.concat(lhs, ", ") .. " = " .. table.concat(rhs, ", "))
+    end
     if s.exported then
       for _, t in ipairs(s.targets) do
         if t.tag == "Name" then record_export(t.name, s.line) end
@@ -463,7 +759,6 @@ function M.generate(ast, file, opts)
       local name = target_code(t)
       emit(name .. " = " .. binop_code(s.op, name, expr(s.value)))
     elseif t.obj.tag == "Name" and (t.tag == "Attr" or t.idx.tag == "Number" or t.idx.tag == "String" or t.idx.tag == "Name") then
-      -- объект и ключ простые, двойное вычисление безопасно
       local target = target_code(t)
       emit(target .. " = " .. binop_code(s.op, target, expr(s.value)))
     else
@@ -482,10 +777,12 @@ function M.generate(ast, file, opts)
     for k, name in ipairs(names) do
       if B.PROTECTED[name] and s.tag ~= "Override" then protected_error(name, s.line) end
       if B.SHADOW_WARN[name] and s.tag ~= "Override" then warn(s.line, "'" .. name .. "' hides the CC global of the same name in this scope") end
-      declare(name, kind, s.line)
-      decl[k] = mangle(name)
+      decl[k] = declare(name, kind, s.line)
     end
-    if #codes > 0 then
+    if s.star then
+      emit("local " .. table.concat(decl, ", "))
+      emit_unpack(decl, s.star, codes[1])
+    elseif #codes > 0 then
       emit("local " .. table.concat(decl, ", ") .. " = " .. table.concat(codes, ", "))
     else
       emit("local " .. table.concat(decl, ", "))
@@ -538,7 +835,7 @@ function M.generate(ast, file, opts)
     emit("end")
   end
 
-  local function loop_body(s, label_holder)
+  local function loop_body()
     local label = "__cont" .. nextid()
     local lc = { kind = "loop", label = label, cont_used = false }
     ctx[#ctx + 1] = lc
@@ -557,41 +854,18 @@ function M.generate(ast, file, opts)
 
   function S.While(s)
     emit("while " .. expr(s.cond) .. " do")
-    local lc = loop_body(s)
+    local lc = loop_body()
     scoped_block(s.body)
     end_loop(lc)
   end
 
-  local function sign_code(step_node)
-    if not step_node then return "1", 1 end
-    local n = step_node
-    if n.tag == "Number" then
-      return nil, (tonumber(n.v) or 1) >= 0 and 1 or -1
-    elseif n.tag == "Unary" and n.op == "-" and n.e.tag == "Number" then
-      return nil, -1
-    end
-    return "(" .. expr(step_node) .. " > 0 and 1 or -1)", nil
-  end
-
   function S.ForRange(s)
-    local r = s.range
-    local lo, hi = expr(r.lo), expr(r.hi)
-    local step = r.step and expr(r.step)
-    local dyn, sign = sign_code(r.step)
-    local function adjust(code, dir)
-      -- dir: +1 прибавить знак шага, -1 вычесть знак шага
-      local op = dir > 0 and " + " or " - "
-      if dyn then return "(" .. code .. ")" .. op .. dyn end
-      if sign == 1 or dyn == "1" then return "(" .. code .. ")" .. op .. "1" end
-      return "(" .. code .. ")" .. (dir > 0 and " - 1" or " + 1")
-    end
-    if not r.lo_incl then lo = adjust(lo, 1) end
-    if not r.hi_incl then hi = adjust(hi, -1) end
+    local lo, hi, step = bounds(s.range)
     push_scope(false)
     if B.PROTECTED[s.var] or B.SHADOW_WARN[s.var] then warn(s.line, "loop variable '" .. s.var .. "' shadows a builtin") end
-    declare(s.var, "local", s.line)
-    emit("for " .. mangle(s.var) .. " = " .. lo .. ", " .. hi .. (step and (", " .. step) or "") .. " do")
-    local lc = loop_body(s)
+    local v = declare(s.var, "local", s.line)
+    emit("for " .. v .. " = " .. lo .. ", " .. hi .. (step and (", " .. step) or "") .. " do")
+    local lc = loop_body()
     level = level + 1
     block(s.body)
     level = level - 1
@@ -605,12 +879,11 @@ function M.generate(ast, file, opts)
     local vars = {}
     for k, v in ipairs(s.vars) do
       if B.PROTECTED[v] or B.SHADOW_WARN[v] then warn(s.line, "loop variable '" .. v .. "' shadows a builtin") end
-      declare(v, "local", s.line)
-      vars[k] = mangle(v)
+      vars[k] = declare(v, "local", s.line)
     end
     local it = (#s.vars == 1) and "__rt.iter1(" or "__rt.iter2("
     emit("for " .. table.concat(vars, ", ") .. " in " .. it .. src .. ") do")
-    local lc = loop_body(s)
+    local lc = loop_body()
     level = level + 1
     block(s.body)
     level = level - 1
@@ -618,14 +891,15 @@ function M.generate(ast, file, opts)
     pop_scope()
   end
 
-  -- тело функции: params, vararg, body; header: текст перед "(" (например "name = function")
-  local function function_body(header, params, vararg, body, line)
+  -- тело функции. header: текст до "(" ("name = __rt.sig(function"); sig: строка имён параметров или nil
+  local function function_body(header, params, vararg, body, line, sig)
     local plist = {}
     push_scope(true)
+    local sig_names = {}
     for k, p in ipairs(params) do
       if B.PROTECTED[p.name] or B.SHADOW_WARN[p.name] then warn(p.line, "parameter '" .. p.name .. "' shadows a builtin") end
-      declare(p.name, "param", p.line)
-      plist[k] = mangle(p.name)
+      plist[k] = declare(p.name, "param", p.line)
+      sig_names[k] = p.name
     end
     if vararg then
       declare(vararg, "param", line)
@@ -636,36 +910,52 @@ function M.generate(ast, file, opts)
     ctx[#ctx + 1] = { kind = "func" }
     for _, p in ipairs(params) do
       if p.default then
-        local n = mangle(p.name)
+        local n = lname_of(p.name)
         emit("if " .. n .. " == nil then " .. n .. " = " .. expr(p.default) .. " end")
       end
     end
-    if vararg then emit("local " .. mangle(vararg) .. " = {...}") end
+    if vararg then emit("local " .. lname_of(vararg) .. " = {...}") end
     hoist(body)
     block(body)
     ctx[#ctx] = nil
     level = level - 1
     pop_scope()
-    emit("end")
+    if sig then
+      emit("end, " .. U.quote(table.concat(sig_names, ",")) .. ")")
+    else
+      emit("end")
+    end
+  end
+
+  local function apply_decorators(decorators, target)
+    if not decorators then return end
+    for k = #decorators, 1, -1 do
+      emit(target .. " = " .. expr(decorators[k]) .. "(" .. target .. ")")
+    end
   end
 
   function S.FuncDef(s)
     local info = lookup(s.name)
     if info and info.kind == "const" then fail(s.line, "cannot redefine constant '" .. s.name .. "'") end
-    function_body(mangle(s.name) .. " = function", s.params, s.vararg, s.body, s.line)
+    local target = lname_of(s.name)
+    function_body(target .. " = __rt.sig(function", s.params, s.vararg, s.body, s.line, true)
+    apply_decorators(s.decorators, target)
     if s.exported then record_export(s.name, s.line) end
   end
 
   function S.ClassDef(s)
     local info = lookup(s.name)
     if info and info.kind == "const" then fail(s.line, "cannot redefine constant '" .. s.name .. "'") end
-    local cname = mangle(s.name)
+    local cname = lname_of(s.name)
     emit(cname .. " = __rt.class(" .. U.quote(s.name) .. ", " .. (s.base and expr(s.base) or "nil") .. ")")
+    class_stack[#class_stack + 1] = cname
     for _, m in ipairs(s.body) do
       curline = m.line or curline
+      if opts.keep_comments then flush_comments(curline) end
       if m.tag == "FuncDef" then
         local target = U.is_lua_name(m.name) and (cname .. "." .. m.name) or (cname .. "[" .. U.quote(m.name) .. "]")
-        function_body(target .. " = function", m.params, m.vararg, m.body, m.line)
+        function_body(target .. " = __rt.sig(function", m.params, m.vararg, m.body, m.line, true)
+        apply_decorators(m.decorators, target)
       elseif m.tag == "Assign" and #m.targets == 1 and m.targets[1].tag == "Name" and #m.values == 1 then
         local fname = m.targets[1].name
         local target = U.is_lua_name(fname) and (cname .. "." .. fname) or (cname .. "[" .. U.quote(fname) .. "]")
@@ -676,11 +966,13 @@ function M.generate(ast, file, opts)
         fail(m.line, "only methods (def) and simple fields (name = value) are allowed in a class body")
       end
     end
+    class_stack[#class_stack] = nil
+    apply_decorators(s.decorators, cname)
     if s.exported then record_export(s.name, s.line) end
   end
 
   function S.Import(s)
-    emit(mangle(s.name) .. " = __import(" .. U.quote(s.path) .. ")")
+    emit(lname_of(s.name) .. " = __import(" .. U.quote(s.path) .. ")")
     if s.exported then record_export(s.name, s.line) end
   end
 
@@ -691,7 +983,7 @@ function M.generate(ast, file, opts)
     for _, n in ipairs(s.names) do
       local info = lookup(n.alias)
       if info and info.kind == "const" then fail(n.line, "cannot assign to constant '" .. n.alias .. "'") end
-      emit("  " .. mangle(n.alias) .. " = " .. attr_access(m, n.name))
+      emit("  " .. lname_of(n.alias) .. " = " .. attr_access(m, n.name))
     end
     emit("end")
   end
@@ -732,8 +1024,8 @@ function M.generate(ast, file, opts)
           push_scope(false)
           level = level + 1
           if h.name then
-            declare(h.name, "local", h.line)
-            emit("local " .. mangle(h.name) .. " = __e")
+            local v = declare(h.name, "local", h.line)
+            emit("local " .. v .. " = __e")
           end
           block(h.body)
           level = level - 1
@@ -752,8 +1044,8 @@ function M.generate(ast, file, opts)
         push_scope(false)
         level = level + 1
         if bare.name then
-          declare(bare.name, "local", bare.line)
-          emit("local " .. mangle(bare.name) .. " = __e")
+          local v = declare(bare.name, "local", bare.line)
+          emit("local " .. v .. " = __e")
         end
         block(bare.body)
         level = level - 1
@@ -800,18 +1092,134 @@ function M.generate(ast, file, opts)
     emit("end")
   end
 
+  function S.With(s)
+    emit("do")
+    push_scope(false)
+    level = level + 1
+    local code = expr(s.expr)
+    local v = declare(s.name, "local", s.line)
+    emit("local " .. v .. " = " .. code)
+    S.Try({ tag = "Try", body = s.body, handlers = {}, finally = { { tag = "Release", name = s.name, line = s.line } }, line = s.line })
+    level = level - 1
+    pop_scope()
+    emit("end")
+  end
+
+  function S.Release(s)
+    emit("__rt.release(" .. lname_of(s.name) .. ")")
+  end
+
+  ---------------------------------------------------------------- match
+
+  local function pat_check(p, path, caps)
+    local tag = p.tag
+    if tag == "PWild" then
+      return "true"
+    elseif tag == "PLit" then
+      return path .. " == " .. expr(p.node)
+    elseif tag == "PValue" then
+      return path .. " == " .. expr(p.expr)
+    elseif tag == "PCapture" then
+      if p.name ~= "_" then caps[#caps + 1] = { name = p.name, path = path } end
+      return "true"
+    elseif tag == "POr" then
+      local parts = {}
+      for _, alt in ipairs(p.alts) do
+        local sub = {}
+        parts[#parts + 1] = "(" .. pat_check(alt, path, sub) .. ")"
+        if #sub > 0 then fail(p.line, "captures are not allowed inside or-patterns ('|')") end
+      end
+      return "(" .. table.concat(parts, " or ") .. ")"
+    elseif tag == "PList" then
+      local n = #p.items
+      local conds = { '__type(' .. path .. ') == "table"' }
+      if p.star then
+        conds[#conds + 1] = "#" .. path .. " >= " .. n
+      else
+        conds[#conds + 1] = "#" .. path .. " == " .. n
+      end
+      for k, item in ipairs(p.items) do
+        local idx
+        if p.star and k >= p.star then
+          idx = "#" .. path .. " - " .. (n - k)
+        else
+          idx = tostring(k)
+        end
+        conds[#conds + 1] = pat_check(item, path .. "[" .. idx .. "]", caps)
+      end
+      if p.star_name and p.star_name ~= "_" then
+        caps[#caps + 1] = { name = p.star_name, path = "__rt.slice(" .. path .. ", " .. p.star .. ", #" .. path .. " - " .. (n - p.star + 1) .. ")" }
+      end
+      return table.concat(conds, " and ")
+    elseif tag == "PDict" then
+      local conds = { '__type(' .. path .. ') == "table"' }
+      for _, e in ipairs(p.entries) do
+        local kp
+        if e.key.kind == "str" then kp = attr_access(path, e.key.v) else kp = path .. "[" .. e.key.v .. "]" end
+        conds[#conds + 1] = kp .. " ~= nil"
+        conds[#conds + 1] = pat_check(e.pat, kp, caps)
+      end
+      return table.concat(conds, " and ")
+    elseif tag == "PClass" then
+      local cls = expr(p.cls)
+      local conds = { "__rt.isinstance(" .. path .. ", " .. cls .. ")" }
+      for i, a in ipairs(p.args) do
+        conds[#conds + 1] = pat_check(a, "__rt.match_attr(" .. path .. ", " .. cls .. ", " .. i .. ")", caps)
+      end
+      for _, kw in ipairs(p.kwargs) do
+        conds[#conds + 1] = pat_check(kw.pat, attr_access(path, kw.name), caps)
+      end
+      return table.concat(conds, " and ")
+    end
+    fail(p.line, "internal: unknown pattern " .. tostring(tag))
+  end
+
+  function S.Match(s)
+    local id = nextid()
+    local sv, dv = "__s" .. id, "__d" .. id
+    emit("do local " .. sv .. ", " .. dv .. " = " .. expr(s.subject) .. ", false")
+    level = level + 1
+    for _, c in ipairs(s.cases) do
+      curline = c.line
+      local caps = {}
+      local cond = pat_check(c.pattern, sv, caps)
+      emit("if not " .. dv .. " and " .. cond .. " then")
+      level = level + 1
+      push_scope(false)
+      for _, cap in ipairs(caps) do
+        emit(target_code({ tag = "Name", name = cap.name, line = c.line }) .. " = " .. cap.path)
+      end
+      if c.guard then
+        emit("if " .. expr(c.guard) .. " then")
+        level = level + 1
+      end
+      emit(dv .. " = true")
+      block(c.body)
+      if c.guard then
+        level = level - 1
+        emit("end")
+      end
+      pop_scope()
+      level = level - 1
+      emit("end")
+    end
+    level = level - 1
+    emit("end")
+  end
+
   ---------------------------------------------------------------- модуль
 
   curline = 1
   emit("local __rt, __import = ...")
-  emit("local __floor, __tostring, __tonumber, __error = math.floor, tostring, tonumber, error")
+  emit("local __floor, __tostring, __tonumber, __error, __type = math.floor, tostring, tonumber, error, type")
   emit("local __exports = {}")
   push_scope(true)
   ctx[#ctx + 1] = { kind = "module" }
   hoist(ast.body)
   block(ast.body)
+  if opts.keep_comments then flush_comments(math.huge) end
   for _, name in ipairs(exports) do
-    emit("__exports[" .. U.quote(name) .. "] = " .. mangle(name))
+    emit("__exports[" .. U.quote(name) .. "] = " .. lname_of(name))
   end
   emit("return __exports")
 

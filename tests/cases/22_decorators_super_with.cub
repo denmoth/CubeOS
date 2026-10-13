@@ -1,0 +1,74 @@
+def twice(fn):
+    def wrapper(x):
+        return fn(fn(x))
+    return wrapper
+
+@twice
+def inc(x):
+    return x + 1
+
+print(inc(1))
+
+def tag(label):
+    def deco(fn):
+        def wrapper(x):
+            return label .. ":" .. fn(x)
+        return wrapper
+    return deco
+
+@tag("A")
+@tag("B")
+def name(x):
+    return x
+
+print(name("n"))
+
+class Base:
+    def init(self, v):
+        self.v = v
+
+    def show(self):
+        return "base " .. self.v
+
+class Child(Base):
+    def init(self, v, w):
+        super.init(self, v)
+        self.w = w
+
+    def show(self):
+        return "child " .. super.show(self) .. " " .. self.w
+
+print(Child(1, 2):show())
+
+class Res:
+    def init(self, name, log):
+        self.name = name
+        self.log = log
+        table.insert(log, "open " .. name)
+
+    def close(self):
+        table.insert(self.log, "close " .. self.name)
+
+log = []
+with Res("a", log) as r:
+    table.insert(log, "using " .. r.name)
+print(table.concat(log, ","))
+
+def early():
+    with Res("b", log) as r2:
+        return "early"
+
+print(early(), log[len(log)])
+
+try:
+    with Res("c", log) as r3:
+        raise "boom"
+except Error as e:
+    print("caught", e.message, log[len(log)])
+
+for i in range[1, 2]:
+    with Res("loop" .. i, log) as r4:
+        if i == 1:
+            continue
+        table.insert(log, "second")
+print(log[len(log) - 1], log[len(log)])

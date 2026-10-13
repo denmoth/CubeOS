@@ -64,7 +64,7 @@ local function make(toks, file, src)
     return tok.t == "name" or KEYWORDS[tok.t] ~= nil
   end
 
-  local parse_expr, parse_block_stmts, parse_statement, parse_suite, parse_simple
+  local parse_expr, parse_coalesce, parse_statement, parse_suite, parse_simple, parse_range
 
   ---------------------------------------------------------------- выражения
 
@@ -78,24 +78,32 @@ local function make(toks, file, src)
 
   local function parse_args()
     -- '(' уже прочитана
-    local args = {}
+    local args, kwargs = {}, nil
     while peek().t ~= ")" do
       local tok = peek()
       if tok.t == "name" and peek(1).t == "=" then
-        fail(tok, "keyword arguments are not supported yet")
+        next_tok()
+        next_tok()
+        kwargs = kwargs or {}
+        kwargs[#kwargs + 1] = { name = tok.v, value = parse_expr(), line = tok.line }
+      elseif tok.t == "*" then
+        next_tok()
+        if kwargs then fail(tok, "unpacking (*args) cannot follow keyword arguments") end
+        args[#args + 1] = { tag = "Spread", e = parse_expr(), line = tok.line }
+        if peek().t == "," and peek(1).t ~= ")" then
+          fail(peek(), "the *args unpacking must be the last argument")
+        end
+      else
+        if kwargs then fail(tok, "positional argument follows keyword argument") end
+        args[#args + 1] = parse_expr()
       end
-      if tok.t == "*" then
-        fail(tok, "argument unpacking (*args) is not supported yet")
-      end
-      args[#args + 1] = parse_expr()
       if not accept(",") then break end
     end
     expect(")", "')' to close the argument list")
-    return args
+    return args, kwargs
   end
 
   local function is_paren_lambda()
-    -- peek() это '('; ищем парную ')' и проверяем '=>'
     local depth, j = 0, i
     while true do
       local t = toks[j]
@@ -132,20 +140,70 @@ local function make(toks, file, src)
         local Q = make(sub, file, part.src)
         local node = Q.parse_expr()
         Q.expect_eof()
-        parts[#parts + 1] = { kind = "expr", node = node }
+        parts[#parts + 1] = { kind = "expr", node = node, spec = part.spec }
       end
     end
     return { tag = "FString", parts = parts, line = tok.line }
   end
 
+  -- Цель for: имена и итерируемое. in_comp: итерируемое без тернарного оператора.
+  local function parse_for_head(in_comp)
+    local vars = { expect_name("a loop variable").v }
+    if accept(",") then vars[2] = expect_name("a loop variable").v end
+    expect("in")
+    local itok = peek()
+    local iter
+    if itok.t == "name" and itok.v == "range" and (peek(1).t == "[" or peek(1).t == "(") then
+      iter = parse_range(itok)
+      if #vars ~= 1 then fail(itok, "a range loop has exactly one variable") end
+    elseif in_comp then
+      iter = parse_coalesce()
+    else
+      iter = parse_expr()
+    end
+    return vars, iter
+  end
+
+  local function parse_comp_clauses()
+    local clauses = {}
+    while peek().t == "for" or peek().t == "if" do
+      local tok = next_tok()
+      if tok.t == "for" then
+        local vars, iter = parse_for_head(true)
+        clauses[#clauses + 1] = { kind = "for", vars = vars, iter = iter, line = tok.line }
+      else
+        clauses[#clauses + 1] = { kind = "if", cond = parse_coalesce(), line = tok.line }
+      end
+    end
+    return clauses
+  end
+
   local function parse_list(tok)
     local items = {}
     while peek().t ~= "]" do
-      items[#items + 1] = parse_expr()
+      local st = peek()
+      if st.t == "*" then
+        next_tok()
+        items[#items + 1] = { tag = "Spread", e = parse_expr(), line = st.line }
+      else
+        items[#items + 1] = parse_expr()
+        if #items == 1 and peek().t == "for" then
+          local clauses = parse_comp_clauses()
+          expect("]", "']' to close the list comprehension")
+          return { tag = "ListComp", elem = items[1], clauses = clauses, line = tok.line }
+        end
+      end
       if not accept(",") then break end
     end
     expect("]", "']' to close the list")
     return { tag = "List", items = items, line = tok.line }
+  end
+
+  local function entry_key_expr(entry, line)
+    if entry.kind == "expr" then return entry.key end
+    if entry.kind == "name" then return { tag = "Name", name = entry.key, line = line } end
+    if entry.kind == "str" then return { tag = "String", v = entry.key, line = line } end
+    return { tag = "Number", v = entry.key, line = line }
   end
 
   local function parse_dict(tok)
@@ -153,7 +211,10 @@ local function make(toks, file, src)
     while peek().t ~= "}" do
       local k = peek()
       local entry
-      if k.t == "[" then
+      if k.t == "**" then
+        next_tok()
+        entry = { kind = "spread", value = parse_expr() }
+      elseif k.t == "[" then
         next_tok()
         local ke = parse_expr()
         expect("]")
@@ -175,6 +236,11 @@ local function make(toks, file, src)
         fail(k, "dict keys must be a name, a string/number literal or [expression]")
       end
       entries[#entries + 1] = entry
+      if #entries == 1 and peek().t == "for" and entry.kind ~= "spread" then
+        local clauses = parse_comp_clauses()
+        expect("}", "'}' to close the dict comprehension")
+        return { tag = "DictComp", key = entry_key_expr(entry, k.line), value = entry.value, clauses = clauses, line = tok.line }
+      end
       if not accept(",") then break end
     end
     expect("}", "'}' to close the dict")
@@ -237,6 +303,31 @@ local function make(toks, file, src)
     fail(tok, "unexpected " .. describe(tok))
   end
 
+  local function parse_subscript(obj, tok)
+    local first = peek()
+    if first.t == "name" and first.v == "range" and (peek(1).t == "[" or peek(1).t == "(") then
+      local r = parse_range(first)
+      expect("]", "']' to close the slice")
+      return { tag = "Slice", obj = obj, lo = r.lo, hi = r.hi, lo_incl = r.lo_incl, hi_incl = r.hi_incl, step = r.step, line = tok.line }
+    end
+    local lo
+    if first.t ~= ":" then
+      lo = parse_expr()
+      if peek().t ~= ":" then
+        expect("]", "']'")
+        return { tag = "Index", obj = obj, idx = lo, line = tok.line }
+      end
+    end
+    expect(":")
+    local hi, step
+    if peek().t ~= "]" and peek().t ~= ":" then hi = parse_expr() end
+    if accept(":") then
+      if peek().t ~= "]" then step = parse_expr() end
+    end
+    expect("]", "']' to close the slice")
+    return { tag = "Slice", obj = obj, lo = lo, hi = hi, step = step, lo_incl = true, hi_incl = true, line = tok.line }
+  end
+
   local function parse_postfix()
     local e = parse_primary()
     while true do
@@ -244,15 +335,11 @@ local function make(toks, file, src)
       local t = tok.t
       if t == "(" then
         next_tok()
-        e = { tag = "Call", fn = e, args = parse_args(), line = tok.line }
+        local args, kwargs = parse_args()
+        e = { tag = "Call", fn = e, args = args, kwargs = kwargs, line = tok.line }
       elseif t == "[" then
         next_tok()
-        local idx = parse_expr()
-        if peek().t == ":" then
-          fail(peek(), "slices are not supported yet")
-        end
-        expect("]", "']'")
-        e = { tag = "Index", obj = e, idx = idx, line = tok.line }
+        e = parse_subscript(e, tok)
       elseif t == "." then
         next_tok()
         local n = peek()
@@ -269,7 +356,8 @@ local function make(toks, file, src)
         next_tok()
         local n = next_tok()
         next_tok() -- (
-        e = { tag = "Method", obj = e, name = n.v, args = parse_args(), line = tok.line }
+        local args, kwargs = parse_args()
+        e = { tag = "Method", obj = e, name = n.v, args = args, kwargs = kwargs, line = tok.line }
       else
         break
       end
@@ -395,7 +483,7 @@ local function make(toks, file, src)
     return l
   end
 
-  local function parse_coalesce()
+  function parse_coalesce()
     local l = parse_or()
     while peek().t == "??" do
       local tok = next_tok()
@@ -423,11 +511,181 @@ local function make(toks, file, src)
     if tok.t ~= "eof" then fail(tok, "unexpected " .. describe(tok) .. " in expression") end
   end
 
+  function parse_range(tok)
+    -- peek() это имя range, дальше '[' или '('
+    next_tok()
+    local open = next_tok().t
+    local lo = parse_expr()
+    if peek().t ~= "," then
+      fail(peek(), "range needs two bounds, e.g. range[1, 5] or range[0, n)")
+    end
+    next_tok()
+    local hi = parse_expr()
+    local close = peek()
+    if close.t ~= "]" and close.t ~= ")" then
+      fail(close, "expected ']' or ')' to close the range, got " .. describe(close))
+    end
+    next_tok()
+    local step
+    if peek().t == "name" and peek().v == "step" then
+      next_tok()
+      step = parse_expr()
+    end
+    return { tag = "Range", lo = lo, hi = hi, lo_incl = (open == "["), hi_incl = (close.t == "]"), step = step, line = tok.line }
+  end
+
+  ---------------------------------------------------------------- паттерны (match)
+
+  local parse_pattern
+
+  local function parse_pattern_atom()
+    local tok = peek()
+    local t = tok.t
+    if t == "number" then
+      next_tok()
+      return { tag = "PLit", node = { tag = "Number", v = tok.v, line = tok.line }, line = tok.line }
+    elseif t == "-" and peek(1).t == "number" then
+      next_tok()
+      local n = next_tok()
+      return { tag = "PLit", node = { tag = "Unary", op = "-", e = { tag = "Number", v = n.v, line = n.line }, line = tok.line }, line = tok.line }
+    elseif t == "string" then
+      next_tok()
+      return { tag = "PLit", node = { tag = "String", v = tok.v, line = tok.line }, line = tok.line }
+    elseif t == "true" or t == "false" then
+      next_tok()
+      return { tag = "PLit", node = { tag = "Bool", v = (t == "true"), line = tok.line }, line = tok.line }
+    elseif t == "nil" then
+      next_tok()
+      return { tag = "PLit", node = { tag = "Nil", line = tok.line }, line = tok.line }
+    elseif t == "name" then
+      next_tok()
+      if tok.v == "_" and peek().t ~= "(" and peek().t ~= "." then
+        return { tag = "PWild", line = tok.line }
+      end
+      local e = { tag = "Name", name = tok.v, line = tok.line }
+      local dotted = false
+      while peek().t == "." do
+        next_tok()
+        local n = peek()
+        if not is_name_like(n) then fail(n, "expected a name after '.'") end
+        next_tok()
+        e = { tag = "Attr", obj = e, name = n.v, line = n.line }
+        dotted = true
+      end
+      if peek().t == "(" then
+        next_tok()
+        local node = { tag = "PClass", cls = e, args = {}, kwargs = {}, line = tok.line }
+        while peek().t ~= ")" do
+          if peek().t == "name" and peek(1).t == "=" then
+            local kn = next_tok()
+            next_tok()
+            node.kwargs[#node.kwargs + 1] = { name = kn.v, pat = parse_pattern() }
+          else
+            node.args[#node.args + 1] = parse_pattern()
+          end
+          if not accept(",") then break end
+        end
+        expect(")", "')' to close the class pattern")
+        return node
+      elseif dotted then
+        return { tag = "PValue", expr = e, line = tok.line }
+      end
+      return { tag = "PCapture", name = tok.v, line = tok.line }
+    elseif t == "[" then
+      next_tok()
+      local node = { tag = "PList", items = {}, line = tok.line }
+      while peek().t ~= "]" do
+        if peek().t == "*" then
+          next_tok()
+          local n = expect_name("a name after '*'")
+          if node.star then fail(n, "only one *rest is allowed in a list pattern") end
+          node.star = #node.items + 1
+          node.star_name = n.v
+        else
+          node.items[#node.items + 1] = parse_pattern()
+        end
+        if not accept(",") then break end
+      end
+      expect("]", "']' to close the list pattern")
+      return node
+    elseif t == "{" then
+      next_tok()
+      local node = { tag = "PDict", entries = {}, line = tok.line }
+      while peek().t ~= "}" do
+        local k = peek()
+        local key
+        if (is_name_like(k) or k.t == "string") and peek(1).t == ":" then
+          key = { kind = "str", v = k.v }
+        elseif k.t == "number" and peek(1).t == ":" then
+          key = { kind = "num", v = k.v }
+        else
+          fail(k, "dict pattern keys must be a name, a string or a number")
+        end
+        next_tok()
+        next_tok()
+        node.entries[#node.entries + 1] = { key = key, pat = parse_pattern() }
+        if not accept(",") then break end
+      end
+      expect("}", "'}' to close the dict pattern")
+      return node
+    elseif t == "(" then
+      next_tok()
+      local p = parse_pattern()
+      expect(")")
+      return p
+    end
+    fail(tok, "unexpected " .. describe(tok) .. " in a pattern")
+  end
+
+  function parse_pattern()
+    local first = parse_pattern_atom()
+    if peek().t ~= "|" then return first end
+    local alts = { first }
+    while accept("|") do alts[#alts + 1] = parse_pattern_atom() end
+    return { tag = "POr", alts = alts, line = first.line }
+  end
+
+  local function looks_like_match()
+    local tok = peek()
+    if tok.t ~= "name" or tok.v ~= "match" then return false end
+    local j, depth = i + 1, 0
+    while toks[j] and toks[j].t ~= "newline" and toks[j].t ~= "eof" do
+      local t = toks[j].t
+      if t == "(" or t == "[" or t == "{" then depth = depth + 1
+      elseif t == ")" or t == "]" or t == "}" then depth = depth - 1 end
+      j = j + 1
+    end
+    return j - 1 > i and toks[j - 1].t == ":" and toks[j + 1] ~= nil and toks[j + 1].t == "indent"
+      and toks[j + 2] ~= nil and toks[j + 2].t == "name" and toks[j + 2].v == "case"
+  end
+
+  local function parse_match()
+    local tok = next_tok() -- match
+    local subject = parse_expr()
+    expect(":")
+    expect("newline")
+    expect("indent")
+    local node = { tag = "Match", subject = subject, cases = {}, line = tok.line }
+    while peek().t == "name" and peek().v == "case" do
+      local ct = next_tok()
+      local pat = parse_pattern()
+      local guard
+      if accept("if") then guard = parse_expr() end
+      node.cases[#node.cases + 1] = { pattern = pat, guard = guard, body = parse_suite(), line = ct.line }
+    end
+    if #node.cases == 0 then fail(peek(), "match needs at least one case") end
+    if peek().t ~= "dedent" and peek().t ~= "eof" then
+      fail(peek(), "expected 'case', got " .. describe(peek()))
+    end
+    if peek().t == "dedent" then next_tok() end
+    return node
+  end
+
   ---------------------------------------------------------------- инструкции
 
   local function check_target(e)
     local tag = e.tag
-    if tag == "Name" or tag == "Index" then return end
+    if tag == "Name" or tag == "Index" or tag == "Starred" then return end
     if tag == "Attr" and not e.opt then return end
     U.fail(file, e.line, 1, "cannot assign to this expression")
   end
@@ -456,15 +714,16 @@ local function make(toks, file, src)
     return params, vararg
   end
 
-  local function parse_def(exported)
+  local function parse_def(exported, decorators)
     local tok = expect("def")
     local n = expect_name("a function name")
     local params, vararg = parse_params()
     local body = parse_suite()
-    return { tag = "FuncDef", name = n.v, params = params, vararg = vararg, body = body, exported = exported, line = tok.line }
+    return { tag = "FuncDef", name = n.v, params = params, vararg = vararg, body = body, exported = exported,
+      decorators = decorators, line = tok.line }
   end
 
-  local function parse_class(exported)
+  local function parse_class(exported, decorators)
     local tok = expect("class")
     local n = expect_name("a class name")
     local base
@@ -473,7 +732,7 @@ local function make(toks, file, src)
       expect(")")
     end
     local body = parse_suite()
-    return { tag = "ClassDef", name = n.v, base = base, body = body, exported = exported, line = tok.line }
+    return { tag = "ClassDef", name = n.v, base = base, body = body, exported = exported, decorators = decorators, line = tok.line }
   end
 
   local function parse_if()
@@ -498,45 +757,25 @@ local function make(toks, file, src)
     return { tag = "While", cond = cond, body = parse_suite(), line = tok.line }
   end
 
-  local function parse_range(tok)
-    -- peek() это имя range, дальше '[' или '('
-    next_tok()
-    local open = next_tok().t -- "[" или "("
-    local lo = parse_expr()
-    if peek().t ~= "," then
-      fail(peek(), "range needs two bounds, e.g. range[1, 5] or range[0, n)")
-    end
-    next_tok()
-    local hi = parse_expr()
-    local close = peek()
-    if close.t ~= "]" and close.t ~= ")" then
-      fail(close, "expected ']' or ')' to close the range, got " .. describe(close))
-    end
-    next_tok()
-    local step
-    if peek().t == "name" and peek().v == "step" then
-      next_tok()
-      step = parse_expr()
-    end
-    return { tag = "Range", lo = lo, hi = hi, lo_incl = (open == "["), hi_incl = (close.t == "]"), step = step, line = tok.line }
-  end
-
   local function parse_for()
     local tok = expect("for")
-    local vars = { expect_name("a loop variable").v }
-    if accept(",") then vars[2] = expect_name("a loop variable").v end
-    expect("in")
+    local vars, iter = parse_for_head(false)
     local node
-    local itok = peek()
-    if itok.t == "name" and itok.v == "range" and (peek(1).t == "[" or peek(1).t == "(") then
-      local r = parse_range(itok)
-      if #vars ~= 1 then fail(itok, "a range loop has exactly one variable") end
-      node = { tag = "ForRange", var = vars[1], range = r, line = tok.line }
+    if iter.tag == "Range" then
+      node = { tag = "ForRange", var = vars[1], range = iter, line = tok.line }
     else
-      node = { tag = "ForIn", vars = vars, iter = parse_expr(), line = tok.line }
+      node = { tag = "ForIn", vars = vars, iter = iter, line = tok.line }
     end
     node.body = parse_suite()
     return node
+  end
+
+  local function parse_with()
+    local tok = expect("with")
+    local e = parse_expr()
+    expect("as", "'as <name>' in a with statement")
+    local n = expect_name("a variable name")
+    return { tag = "With", expr = e, name = n.v, body = parse_suite(), line = tok.line }
   end
 
   local function parse_try()
@@ -632,6 +871,15 @@ local function make(toks, file, src)
     return { tag = "FromImport", path = text, kind = kind, names = names, line = tok.line }
   end
 
+  local function parse_target_item()
+    if peek().t == "*" then
+      local st = next_tok()
+      local n = expect_name("a name after '*'")
+      return { tag = "Starred", name = n.v, line = st.line }
+    end
+    return parse_expr()
+  end
+
   function parse_simple(exported)
     local tok = peek()
     local t = tok.t
@@ -663,11 +911,18 @@ local function make(toks, file, src)
       return { tag = "LuaBlock", code = tok.v, line = tok.line }
     elseif t == "let" then
       next_tok()
-      local names = { expect_name("a variable name").v }
-      while accept(",") do names[#names + 1] = expect_name("a variable name").v end
+      local names, star = {}, nil
+      repeat
+        if accept("*") then
+          if star then fail(peek(), "only one *rest is allowed") end
+          star = #names + 1
+        end
+        names[#names + 1] = expect_name("a variable name").v
+      until not accept(",")
       local values = {}
       if accept("=") then values = parse_exprlist() end
-      return { tag = "Let", names = names, values = values, exported = exported, line = tok.line }
+      if star and #values ~= 1 then fail(tok, "a starred let needs exactly one value (a list)") end
+      return { tag = "Let", names = names, star = star, values = values, exported = exported, line = tok.line }
     elseif t == "const" or t == "override" then
       next_tok()
       local n = expect_name("a name")
@@ -675,16 +930,24 @@ local function make(toks, file, src)
       return { tag = (t == "const") and "Const" or "Override", name = n.v, value = parse_expr(), exported = exported, line = tok.line }
     end
 
-    local first = parse_expr()
+    local first = parse_target_item()
     local nt = peek().t
     if nt == "," or nt == "=" then
       local targets = { first }
-      while accept(",") do targets[#targets + 1] = parse_expr() end
+      while accept(",") do targets[#targets + 1] = parse_target_item() end
       expect("=", "'=' in assignment")
-      for _, tg in ipairs(targets) do check_target(tg) end
+      local stars = 0
+      for _, tg in ipairs(targets) do
+        check_target(tg)
+        if tg.tag == "Starred" then stars = stars + 1 end
+      end
+      if stars > 1 then fail(tok, "only one *rest is allowed in an assignment") end
       local values = parse_exprlist()
       if peek().t == "=" then fail(peek(), "chained assignment is not supported") end
+      if stars == 1 and #values ~= 1 then fail(tok, "a starred assignment needs exactly one value (a list)") end
       return { tag = "Assign", targets = targets, values = values, exported = exported, line = tok.line }
+    elseif first.tag == "Starred" then
+      fail(tok, "a starred name can only appear in an assignment")
     elseif AUG_OPS[nt] then
       local optok = next_tok()
       check_target(first)
@@ -709,9 +972,24 @@ local function make(toks, file, src)
     if t == "if" then return parse_if()
     elseif t == "while" then return parse_while()
     elseif t == "for" then return parse_for()
+    elseif t == "with" then return parse_with()
     elseif t == "def" then return parse_def(false)
     elseif t == "class" then return parse_class(false)
     elseif t == "try" then return parse_try()
+    elseif t == "@" then
+      local decorators = {}
+      while peek().t == "@" do
+        next_tok()
+        decorators[#decorators + 1] = parse_expr()
+        if peek().t ~= "newline" then fail(peek(), "expected end of line after a decorator") end
+        next_tok()
+      end
+      local exported = false
+      if accept("export") then exported = true end
+      local k = peek().t
+      if k == "def" then return parse_def(exported, decorators) end
+      if k == "class" then return parse_class(exported, decorators) end
+      fail(peek(), "a decorator must be followed by def or class")
     elseif t == "export" then
       next_tok()
       local k = peek().t
@@ -730,6 +1008,8 @@ local function make(toks, file, src)
       fail(tok, "unexpected indent")
     elseif t == "elif" or t == "else" or t == "except" or t == "finally" then
       fail(tok, "'" .. t .. "' without a matching statement")
+    elseif t == "name" and tok.v == "match" and looks_like_match() then
+      return parse_match()
     end
     local s = parse_simple(false)
     end_simple()
@@ -761,7 +1041,7 @@ local function make(toks, file, src)
     while peek().t ~= "eof" do
       body[#body + 1] = parse_statement()
     end
-    return { tag = "Module", body = body, line = 1 }
+    return { tag = "Module", body = body, line = 1, comments = toks.comments }
   end
 
   return P

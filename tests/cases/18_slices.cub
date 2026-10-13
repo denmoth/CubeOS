@@ -1,0 +1,15 @@
+def show(t): return table.concat(t, ",")
+xs = [10, 20, 30, 40, 50]
+print(show(xs[2:4]))
+print(show(xs[:2]))
+print(show(xs[4:]))
+print(show(xs[:]))
+print(show(xs[-2:]))
+print(show(xs[1:5:2]))
+print(show(xs[range[2, 4)]))
+print(show(xs[range(1, 5)]))
+print(show(xs[5:1:-2]))
+s = "hello world"
+print(s[1:5], s[7:], s[-5:])
+print(s[1:11:2])
+print(show(xs[10:20]))

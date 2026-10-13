@@ -1,0 +1,7 @@
+3
+A:B:n
+child base 1 2
+open a,using a,close a
+early	close b
+caught	boom	close c
+second	close loop2

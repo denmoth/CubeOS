@@ -1,0 +1,11 @@
+def calculate_total(first_value, second_value):
+    running_sum = first_value + second_value
+    return running_sum
+
+long_variable_name = calculate_total(1, 2)
+print(long_variable_name)
+total = 0
+items = [1, 2]
+lua:
+    for i = 1, #items do total = total + items[i] end
+print(total)
