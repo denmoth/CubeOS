@@ -1,0 +1,11 @@
+# сборка
+/build/
+/dist/
+*.map
+*.tmp
+
+# редакторы / ОС
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

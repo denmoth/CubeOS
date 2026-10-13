@@ -1,0 +1,9 @@
+* text=auto eol=lf
+*.lua text eol=lf
+*.cub text eol=lf
+*.md text eol=lf
+*.json5 text eol=lf
+*.cpk binary
+*.stp binary
+*.fnt binary
+*.img binary
