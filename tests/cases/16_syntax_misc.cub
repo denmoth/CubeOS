@@ -1,0 +1,51 @@
+# комментарий в начале
+a, b = 1, 2
+a, b = b, a
+print(a, b)
+
+long_value = 1 + \
+    2 + \
+    3
+print(long_value)
+
+data = {
+    name: "multi",
+    items: [
+        1,
+        2,
+        3,
+    ],
+    nested: {
+        deep: true,
+    },
+}
+print(data.name, len(data.items), data.nested.deep)
+
+def one_liner(x): return x * 2
+print(one_liner(4))
+
+if true: print("inline if")
+
+result = (
+    10 +
+    20
+)
+print(result)
+
+pairs_list = [[1, 2], [3, 4]]
+print(pairs_list[2][1])
+
+print(0xFF, 1_000, 1.5e2, .5)
+
+def noop():
+    pass
+
+print(noop() == nil)
+
+class Empty:
+    pass
+
+e = Empty()
+print(e != nil)
+
+# финальный комментарий без перевода строки

@@ -1,0 +1,39 @@
+for i in range[1, 3]:
+    for j in range[1, 3]:
+        if j == 2:
+            continue
+        if i == 3:
+            break
+        print(i, j)
+
+for ch in "abc":
+    print(ch)
+
+words = 0
+for w in ["a", "b", "c"]:
+    if w == "b":
+        continue
+    words += 1
+print(words)
+
+total = 0
+i = 0
+while i < 10:
+    i += 1
+    if i % 2 == 0:
+        continue
+    for k in range[1, 2]:
+        if k == 2:
+            break
+        total += i
+print(total)
+
+n = 0
+while true:
+    n += 1
+    for z in range[1, 3]:
+        if z == 2:
+            break
+    if n == 3:
+        break
+print(n)

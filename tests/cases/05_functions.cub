@@ -1,0 +1,26 @@
+def add(a, b):
+    return a + b
+
+def greet(name, greeting="Hello"):
+    return f"{greeting}, {name}!"
+
+def total(*nums):
+    s = 0
+    for n in nums:
+        s += n
+    return s
+
+def fact(n):
+    if n <= 1:
+        return 1
+    return n * fact(n - 1)
+
+print(add(2, 3))
+print(greet("Ann"))
+print(greet("Bob", "Hi"))
+print(total(1, 2, 3, 4))
+print(fact(5))
+double = x => x * 2
+print(double(21))
+sum2 = (a, b) => a + b
+print(sum2(3, 4))

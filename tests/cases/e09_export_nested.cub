@@ -1,0 +1,3 @@
+def f():
+    export def g():
+        pass

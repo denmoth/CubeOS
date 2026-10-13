@@ -1,0 +1,6 @@
+ui
+ui.widgets
+./utils
+../shared/net
+$apps/snake/core
+nil	nil

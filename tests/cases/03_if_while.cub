@@ -1,0 +1,22 @@
+x = 3
+if x > 5:
+    print("big")
+elif x > 2:
+    print("mid")
+else:
+    print("small")
+
+i = 0
+while i < 3:
+    i += 1
+    if i == 2:
+        continue
+    print("i", i)
+
+n = 0
+while true:
+    n += 1
+    if n >= 4:
+        break
+print("n", n)
+if x == 3: print("one-liner")

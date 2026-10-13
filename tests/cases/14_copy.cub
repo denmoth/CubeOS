@@ -1,0 +1,30 @@
+orig = {name: "a", tags: ["x", "y"]}
+alias = orig
+shallow = copy(orig)
+deep = deepcopy(orig)
+
+orig.name = "changed"
+orig.tags[1] = "CHANGED"
+
+print(alias.name)
+print(shallow.name, shallow.tags[1])
+print(deep.name, deep.tags[1])
+
+loop = {v: 1}
+loop.self = loop
+cl = deepcopy(loop)
+print(cl.self == cl, cl != loop)
+
+class P:
+    def init(self, x):
+        self.x = x
+    def get(self):
+        return self.x
+
+p = P(5)
+q = deepcopy(p)
+q.x = 6
+print(p:get(), q:get(), isinstance(q, P))
+
+print(str(12), num("34") + 1, str(nil))
+print(copy(5), copy("s"))

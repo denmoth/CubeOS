@@ -1,0 +1,54 @@
+x = 1
+
+def outer():
+    x = 100      # меняет внешнюю x (как в Lua)
+    def inner():
+        y = 5
+        return y
+    return inner()
+
+print(outer(), x)
+
+def shadow():
+    let x = 7    # новая локальная переменная
+    return x
+
+print(shadow(), x)
+
+def counter():
+    n = 0
+    def inc():
+        n += 1
+        return n
+    return inc
+
+c = counter()
+c()
+c()
+print(c())
+
+if true:
+    z = 42
+print(z)
+
+const LIMIT = 10
+print(LIMIT)
+
+def uses_global_later():
+    return later
+later = "defined later"
+print(uses_global_later())
+
+fns = []
+for i in range[1, 3]:
+    fns[i] = () => i
+print(fns[1](), fns[2](), fns[3]())
+
+let w = 1
+if true:
+    let w = 2
+    print(w)
+print(w)
+
+override print = print
+print("override ok")

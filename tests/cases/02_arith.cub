@@ -1,0 +1,25 @@
+print(7 // 2, 7 % 3, 2 ** 10, 7 / 2)
+print(-7 // 2)
+print(1 + 2 * 3, (1 + 2) * 3)
+print(-2 ** 2)
+a = 10
+a += 5
+a -= 3
+a *= 2
+a //= 5
+print(a)
+s = "ab"
+s ..= "cd"
+print(s)
+print("x" .. 1 .. 2)
+
+# aug-assign targets
+t = {n: 1, [2]: 5}
+t.n += 4
+t[2] *= 3
+k = 2
+t[k] -= 1
+lst = [1, 2]
+function_idx = () => 1
+lst[function_idx()] += 10
+print(t.n, t[2], lst[1])

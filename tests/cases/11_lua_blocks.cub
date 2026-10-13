@@ -1,0 +1,27 @@
+total = 0
+items = [1, 2, 3]
+
+lua:
+    for i = 1, #items do
+      total = total + items[i] * 10
+    end
+    local function helper(x) return x + 1 end
+    total = helper(total)
+
+print(total)
+
+x = lua("2 ^ 5")
+print(x)
+
+def f(n):
+    result = 0
+    lua:
+        for i = 1, n do result = result + i end
+    return result
+
+print(f(4))
+
+lua:
+    -- комментарий и `end` внутри блока не мешают
+    local s = "end"
+print("after block")

@@ -1,0 +1,18 @@
+result	fine
+done	0
+file error	no file
+done	1
+other error	other
+done	2
+generic	true
+done	3
+generic	true
+done	4
+cleanup
+from try
+3
+count	4
+outer caught	inner
+first	rethrown
+second	rethrown
+caught by bare except

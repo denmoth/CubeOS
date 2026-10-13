@@ -1,0 +1,82 @@
+class FileError(Error):
+    pass
+
+class OtherError(Error):
+    pass
+
+def risky(kind):
+    if kind == 1:
+        raise FileError("no file")
+    elif kind == 2:
+        raise OtherError("other")
+    elif kind == 3:
+        raise "plain string"
+    elif kind == 4:
+        local_nil = nil
+        return local_nil.x
+    return "fine"
+
+for k in range[0, 4]:
+    try:
+        print("result", risky(k))
+    except FileError as e:
+        print("file error", e.message)
+    except OtherError as e:
+        print("other error", e.message)
+    except Error as e:
+        print("generic", isinstance(e, Error))
+    finally:
+        print("done", k)
+
+def with_return():
+    try:
+        return "from try"
+    finally:
+        print("cleanup")
+
+print(with_return())
+
+def find_first(items):
+    for x in items:
+        try:
+            if x > 2:
+                return x
+        except Error:
+            pass
+    return nil
+
+print(find_first([1, 2, 3, 4]))
+
+count = 0
+for i in range[1, 5]:
+    try:
+        if i == 2:
+            continue
+        if i == 4:
+            break
+        count += i
+    finally:
+        pass
+print("count", count)
+
+try:
+    try:
+        raise OtherError("inner")
+    except FileError:
+        print("wrong handler")
+except OtherError as e:
+    print("outer caught", e.message)
+
+try:
+    try:
+        raise OtherError("rethrown")
+    except OtherError as e:
+        print("first", e.message)
+        raise
+except Error as e:
+    print("second", e.message)
+
+try:
+    raise FileError("bare")
+except:
+    print("caught by bare except")

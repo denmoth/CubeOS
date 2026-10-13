@@ -1,0 +1,22 @@
+xs = [10, 20, 30]
+print(xs[1], xs[3], len(xs))
+xs[2] = 99
+print(xs[2])
+d = {name: "Ann", age: 30, "two words": 1, [1 + 1]: "two"}
+print(d.name, d.age, d["two words"], d[2])
+print(len(d))
+total = 0
+for x in xs:
+    total += x
+print(total)
+for i, x in xs:
+    print(i, x)
+keys = 0
+for k, v in d:
+    keys += 1
+print(keys)
+print(3 in [1, 2, 3], 5 in [1, 2, 3], "name" in d, "zzz" in d)
+print("ell" in "hello", "xyz" in "hello", 4 not in [1, 2, 3])
+print(len("hello"), len([]), len({}))
+nested = {inner: {a: 1}}
+print(nested.inner.a)

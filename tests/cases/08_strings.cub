@@ -1,0 +1,15 @@
+name = "World"
+n = 3
+print(f"Hello, {name}! n*2={n * 2}")
+print(f"{{braces}} {n}")
+print(f"{'x'}")
+s = """multi
+line"""
+print(s)
+print("tab\there", "q\"uote", 'single')
+print("\x41\u{42}")
+print(("abc"):upper())
+print(("a,b"):find(",", 1, true))
+t = "abc"
+print(t:len(), t:sub(2, 3))
+print(r"raw\n")

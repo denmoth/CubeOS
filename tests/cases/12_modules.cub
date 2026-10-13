@@ -1,0 +1,25 @@
+import ui
+import ui.widgets
+import ./utils
+import ../shared/net as netlib
+import $apps/snake/core as snake
+from tools.math import add, mul as times
+
+export def public_fn():
+    return "public"
+
+export const VERSION = "1.0.0"
+export answer = 42
+
+class Hidden:
+    pass
+
+export class Shown:
+    pass
+
+print(ui.path)
+print(widgets.path)
+print(utils.path)
+print(netlib.path)
+print(snake.path)
+print(add, times)

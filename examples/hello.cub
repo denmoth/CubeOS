@@ -1,0 +1,17 @@
+# Пример программы на Cubic
+class Counter:
+    def init(self, start):
+        self.value = start
+
+    def inc(self):
+        self.value += 1
+        return self.value
+
+c = Counter(10)
+c:inc()
+print(f"counter = {c.value}")
+
+for i in range[1, 3]:
+    print(f"{i} squared is {i ** 2}")
+
+keys = 1

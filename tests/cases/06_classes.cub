@@ -1,0 +1,28 @@
+class Animal:
+    def init(self, name):
+        self.name = name
+
+    def speak(self):
+        return self.name .. " makes a sound"
+
+    def __tostring(self):
+        return "Animal(" .. self.name .. ")"
+
+class Dog(Animal):
+    sound = "woof"
+
+    def init(self, name, tricks):
+        Animal.init(self, name)
+        self.tricks = tricks
+
+    def speak(self):
+        return self.name .. " says " .. self.sound
+
+a = Animal("Generic")
+d = Dog("Rex", 3)
+print(a:speak())
+print(d:speak())
+print(d.tricks)
+print(tostring(a))
+print(tostring(d))
+print(isinstance(d, Animal), isinstance(d, Dog), isinstance(a, Dog), isinstance(5, Dog))

@@ -1,0 +1,22 @@
+end = 5
+local = 6
+function_ = 7
+then = end + local
+print(then)
+
+obj = {end: 1, repeat: 2, until: 3}
+print(obj.end, obj.repeat, obj.until)
+
+class K:
+    def init(self):
+        self.end = "e"
+    def goto(self):
+        return 1
+
+k = K()
+print(k.end)
+print(k["goto"](k))
+
+def uses(do, elseif):
+    return do + elseif
+print(uses(1, 2))
