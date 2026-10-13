@@ -10,12 +10,12 @@
 
 Компилятор написан на Lua. Работает на ПК (для разработки) и на самом компьютере CC. Результат кешируется, пересборка при изменении исходника.
 
-## Реализация 0.1.0
+## Реализация 0.3.0
 
-Код в `src/cubic`: `lexer.lua`, `parser.lua`, `codegen.lua`, `rt.lua` (рантайм), `builtins.lua`, `init.lua` (загрузчик). Компилятор работает на Lua 5.1/5.2 без внешних зависимостей, поэтому запускается и в CraftOS-PC, и в игре.
+Код в `src/cubic`: `lexer.lua`, `parser.lua`, `checker.lua` (типы), `codegen.lua`, `rt.lua` (рантайм), `builtins.lua`, `headers/*.cuh`, `init.lua` (загрузчик). Компилятор работает на Lua 5.1/5.2 без внешних зависимостей, поэтому запускается и в CraftOS-PC, и в игре.
 
-Консоль (на ПК через CraftOS-PC): `tools/cubic.sh compile|check|run файл.cub [вывод.lua]`.
-Тесты: `tools/test.sh [фильтр]`, наборы в `tests/cases` (`.cub` + `.out`, `.err`, `.rterr` или `.exports`).
+Консоль (на ПК через CraftOS-PC): `tools/cubic.sh compile|check|run файл.cub [вывод.lua] [--minify] [--keep-comments] [--map] [--strict]`.
+Тесты: `tools/test.sh [фильтр]`, наборы в `tests/cases` (`.cub` + `.out`, `.err`, `.rterr`, `.exports`, `.opts`, `.luahas`, `.luahasnot`). Каждый обычный тест прогоняется ещё раз с `--minify`.
 
 ## Флаги
 

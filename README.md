@@ -23,7 +23,8 @@
 | [docs/02-filesystem.md](docs/02-filesystem.md) | VFS, симлинки, шорткаты `$`, структура каталогов |
 | [docs/03-file-formats.md](docs/03-file-formats.md) | Расширения, JSON5, `.cpk`, `.stp` |
 | [docs/spec/language-cubic.md](docs/spec/language-cubic.md) | Замысел языка Cubic |
-| [docs/spec/grammar.md](docs/spec/grammar.md) | Грамматика и семантика Cubic 0.1.0 (реализовано) |
+| [docs/spec/grammar.md](docs/spec/grammar.md) | Грамматика и семантика Cubic 0.3.0 (реализовано) |
+| [docs/spec/types.md](docs/spec/types.md) | Типы, режим strict, заголовки `.cuh` |
 | [docs/spec/toolchain.md](docs/spec/toolchain.md) | Компилятор, флаги, модули, минификация |
 | [docs/04-ui-graphics-fonts.md](docs/04-ui-graphics-fonts.md) | Режимы UI, графика, шрифты, темы, i18n |
 | [docs/05-packages-store-cloud.md](docs/05-packages-store-cloud.md) | Пакеты, магазин, облако, Pastebin/Gist/rednet |
