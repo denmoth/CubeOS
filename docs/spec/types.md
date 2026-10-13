@@ -78,6 +78,41 @@ open namespace fs:                 # open: неизвестные члены р�
 - `*rest: T` в параметрах это переменное число аргументов.
 - Встроенные заголовки лежат в `src/cubic/headers`: `lua.cuh` (стандартная библиотека Lua и расширения CC для `os`) и `cc.cuh` (`term`, `fs`, `peripheral`, `rednet`, `redstone`, `colors`, `textutils`, `shell`, `http`, `turtle` и другие). Покрытие частичное: недостающее добавляется в файлы или подключается через `opts.headers` (пользовательские `.cuh` для аддонов).
 
+## Периферия по имени типа
+
+В `cc.cuh` описаны типы периферии CC: Tweaked (`Monitor`, `Speaker`, `Modem`, `Drive`, `Printer`, `Inventory`, `FluidStorage`, `EnergyStorage` и другие). Вызов `peripheral.find("monitor")` с литералом получает тип `Monitor?` (подсказки и проверка методов); `peripheral.wrap("top")` возвращает `any` (тип по имени стороны неизвестен), но можно аннотировать: `m: Monitor = peripheral.wrap("top")`.
+
+## Аддоны
+
+Заголовки аддонов лежат в `src/cubic/headers/mods/<id>.cuh` и подключаются только когда мод указан:
+
+- на ПК: флаг `--mods=advancedperipherals` или поле `mods` в `cubic.json5` проекта;
+- в ОС: по журналу известной периферии (ОС знает, какие аддоны видела на этой машине; будет добавлено вместе с ядром).
+
+Сейчас есть `advancedperipherals.cuh` (chatBox, playerDetector, environmentDetector, inventoryManager, geoScanner, meBridge, rsBridge, redstoneIntegrator, blockReader, energyDetector; по документации 0.7). Классы аддонов объявлены как `open class`: описанные методы проверяются, неописанные считаются `any`, поэтому новые версии мода не ломают строгий код. Тип периферии по имени (`peripheral.find("chatBox")`) задаётся блоком `namespace peripheral_types:` в заголовке.
+
+## Проект и свои заголовки
+
+Файл `cubic.json5` рядом с кодом (ищется вверх по каталогам) настраивает проверку для всего проекта:
+
+```json5
+{
+  mods: ["advancedperipherals"],     // заголовки аддонов
+  headers: ["api/farm.cuh"],          // свои описания API (игра, чужая библиотека)
+  strict: true,                       // весь проект под strict
+}
+```
+
+Своё API (например, функции игры, поверх которой работает код) описывается обычным `.cuh`:
+
+```
+namespace farm:
+    def move(direction: str) -> bool
+    def get_position() -> {x: num, y: num}
+```
+
+Ошибки вроде `farm.move(5)` или `farm.teleport()` ловятся при компиляции с номерами строк. Тем же `.cuh` будет пользоваться плагин VS Code (подсказки и автодополнение); сам плагин пока не написан.
+
 ## Ограничения
 
 - Нет обобщённых (generic) пользовательских типов и перегрузок.

@@ -67,8 +67,47 @@ end
 
 local name = fs.getName(input)
 local opts = { minify = flags["minify"], keep_comments = flags["keep-comments"], strict = flags["strict"] }
-if type(flags["mods"]) == "string" then
+
+-- файл проекта cubic.json5 (ищется вверх от каталога исходника):
+--   { mods: ["advancedperipherals"], headers: ["api/game.cuh"], strict: true, minify: false }
+local function find_project_file(start_dir)
+  local dir = start_dir
+  while true do
+    local candidate = fs.combine(dir, "cubic.json5")
+    if fs.exists(candidate) then return candidate, dir end
+    if dir == "" or dir == "/" or dir == ".." then return nil end
+    dir = fs.getDir(dir)
+  end
+end
+
+local project_file, project_dir = find_project_file(fs.getDir(input))
+if project_file then
+  local loader = cubic.new_loader({ roots = { ROOT .. "/lib" } })
+  local json5 = loader.import("json5")
+  local ok, cfg = pcall(json5.parse, read(project_file))
+  if not ok then
+    say("error: " .. project_file .. ": " .. tostring(cfg))
+    return finish(1)
+  end
+  say("project: " .. project_file)
+  if cfg.strict and opts.strict == nil then opts.strict = true end
+  if cfg.minify and opts.minify == nil then opts.minify = true end
   opts.mods = {}
+  for _, id in ipairs(cfg.mods or {}) do opts.mods[#opts.mods + 1] = id end
+  opts.headers = {}
+  for _, rel in ipairs(cfg.headers or {}) do
+    local path = fs.combine(project_dir, rel)
+    local text = read(path)
+    if not text then
+      say("error: header not found: " .. path)
+      return finish(1)
+    end
+    opts.headers[#opts.headers + 1] = { src = text, name = rel }
+  end
+end
+
+if type(flags["mods"]) == "string" then
+  opts.mods = opts.mods or {}
   for id in flags["mods"]:gmatch("[^,]+") do opts.mods[#opts.mods + 1] = id end
 end
 local lua, linemap, warnings = cubic.try_compile(src, name, opts)

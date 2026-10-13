@@ -1,0 +1,6 @@
+// Файл проекта Cubic: какие моды и заголовки подключать при проверке типов
+{
+  mods: ["advancedperipherals"],
+  headers: ["api/farm.cuh"],
+  strict: true,
+}

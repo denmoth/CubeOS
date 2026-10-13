@@ -25,6 +25,7 @@
 | [docs/spec/language-cubic.md](docs/spec/language-cubic.md) | Замысел языка Cubic |
 | [docs/spec/grammar.md](docs/spec/grammar.md) | Грамматика и семантика Cubic 0.3.0 (реализовано) |
 | [docs/spec/types.md](docs/spec/types.md) | Типы, режим strict, заголовки `.cuh` |
+| [docs/spec/stdlib.md](docs/spec/stdlib.md) | Стандартные и базовые библиотеки (`lib/`), загрузчик модулей |
 | [docs/spec/toolchain.md](docs/spec/toolchain.md) | Компилятор, флаги, модули, минификация |
 | [docs/04-ui-graphics-fonts.md](docs/04-ui-graphics-fonts.md) | Режимы UI, графика, шрифты, темы, i18n |
 | [docs/05-packages-store-cloud.md](docs/05-packages-store-cloud.md) | Пакеты, магазин, облако, Pastebin/Gist/rednet |

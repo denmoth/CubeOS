@@ -1,0 +1,7 @@
+pos = farm.get_position()
+print(pos.x + pos.y)
+farm.move("north")
+farm.plant("wheat")
+chat = peripheral.find("chatBox")
+if chat != nil:
+    chat.sendMessage("harvest done")
