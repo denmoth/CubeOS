@@ -5,7 +5,7 @@ local unpack = table.unpack or unpack
 local setmetatable, getmetatable, type, pairs, ipairs, next, select, pcall, error, rawget, rawset, tostring =
   setmetatable, getmetatable, type, pairs, ipairs, next, select, pcall, error, rawget, rawset, tostring
 
-rt.VERSION = "0.1.0"
+rt.VERSION = "0.3.0"
 
 -- Маркеры управления потоком для try
 rt.RET = {}
