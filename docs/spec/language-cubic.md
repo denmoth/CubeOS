@@ -124,10 +124,10 @@ raise MyError("текст")
 ## Модули и импорты
 
 ```
-import ui                       # по пути поиска (/cube/lib, внутри cpk)
+import ui                       # по пути поиска ($sys/libs, внутри cpk)
 import ./utils                  # относительно файла
 import ../shared/net
-import /cube/lib/json           # полный путь
+import /cubeos/sys/libs/json    # полный путь
 import $apps/snake/core as s    # через шорткат
 ```
 
@@ -138,6 +138,10 @@ import $apps/snake/core as s    # через шорткат
 - Своим классам компилятор сам подставляет `:` для методов.
 - Для объектов Lua/CC по умолчанию `a.b()` остаётся точкой (периферия CC так и работает).
 - Явный Lua-стиль `obj:method()` допускается.
+
+## Заголовки типов
+
+Описания типов внешних API лежат в файлах `.cuh` (аналог `.d.ts`). Подробности в [../03-file-formats.md](../03-file-formats.md).
 
 ## Нативные вставки Lua
 

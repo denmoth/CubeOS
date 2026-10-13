@@ -33,7 +33,7 @@
 
 ## Логирование
 
-Уровни DEBUG/INFO/WARN/ERROR/FATAL, файл `/cube/log`, просмотр в диспетчере.
+Уровни DEBUG/INFO/WARN/ERROR/FATAL, каталог `/cubeos/var/log`, просмотр в диспетчере.
 
 ## Настройки
 

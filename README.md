@@ -31,6 +31,8 @@
 | [docs/08-decisions-log.md](docs/08-decisions-log.md) | Журнал принятых решений |
 | [docs/09-open-questions.md](docs/09-open-questions.md) | Нерешённые вопросы |
 | [docs/10-roadmap.md](docs/10-roadmap.md) | Этапы разработки |
+| [docs/11-platform.md](docs/11-platform.md) | Дистрибутивы, DE, версии ОС, режим совместимости |
+| [docs/12-permissions-capabilities.md](docs/12-permissions-capabilities.md) | Права, безопасность, возможности (caps) |
 | [docs/dev/git-workflow.md](docs/dev/git-workflow.md) | Ветки, коммиты, релизы |
 | [docs/dev/environment.md](docs/dev/environment.md) | Тестовый инстанс Minecraft, эмулятор CraftOS-PC |
 
