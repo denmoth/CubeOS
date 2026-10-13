@@ -1,0 +1,163 @@
+# lzfast: быстрое сжатие в духе LZ4 (метод 1 для .cpk). Формат:
+#   4 байта длины исходных данных (little endian)
+#   последовательности: токен (старшая тетрада: длина литералов, младшая: длина совпадения - 4),
+#   расширения длин (байты 255..), литералы, смещение (2 байта), расширение длины совпадения.
+#   Последняя последовательность содержит только литералы.
+
+unpack_fn = table.unpack or unpack
+
+def _le32(n):
+    return string.char(n % 256, math.floor(n / 256) % 256, math.floor(n / 65536) % 256, math.floor(n / 16777216) % 256)
+
+# число одинаковых байтов начиная с позиций a и b (b > a), не дальше позиции limit
+def _extend(s, a, b, limit):
+    count = 0
+    while b + 7 <= limit and string.sub(s, a, a + 7) == string.sub(s, b, b + 7):
+        a += 8
+        b += 8
+        count += 8
+    while b <= limit and string.byte(s, a) == string.byte(s, b):
+        a += 1
+        b += 1
+        count += 1
+    return count
+
+def _put_length(parts, count, extra):
+    # extra: остаток длины после 15; пишет байты расширения
+    while extra >= 255:
+        count += 1
+        parts[count] = "\xFF"
+        extra -= 255
+    count += 1
+    parts[count] = string.char(extra)
+    return count
+
+def _emit(parts, count, s, anchor, stop, match_len, offset):
+    lit_len = stop - anchor
+    token_hi = lit_len
+    if token_hi > 15:
+        token_hi = 15
+    token_lo = 0
+    if match_len != nil:
+        token_lo = match_len - 4
+        if token_lo > 15:
+            token_lo = 15
+    count += 1
+    parts[count] = string.char(token_hi * 16 + token_lo)
+    if lit_len >= 15:
+        count = _put_length(parts, count, lit_len - 15)
+    if lit_len > 0:
+        count += 1
+        parts[count] = string.sub(s, anchor, stop - 1)
+    if match_len != nil:
+        count += 1
+        parts[count] = string.char(offset % 256, math.floor(offset / 256))
+        if match_len - 4 >= 15:
+            count = _put_length(parts, count, match_len - 4 - 15)
+    return count
+
+export def compress(s):
+    n = len(s)
+    parts = [_le32(n)]
+    count = 1
+    if n == 0:
+        return parts[1]
+    head = {}
+    i = 1
+    anchor = 1
+    while i + 3 <= n:
+        key = string.sub(s, i, i + 3)
+        cand = head[key]
+        head[key] = i
+        if cand != nil and i - cand <= 65535:
+            mlen = 4 + _extend(s, cand + 4, i + 4, n)
+            count = _emit(parts, count, s, anchor, i, mlen, i - cand)
+            # запоминаем несколько позиций внутри совпадения
+            last = i + mlen - 1
+            p = i + 1
+            while p <= last and p + 3 <= n and p <= i + 16:
+                head[string.sub(s, p, p + 3)] = p
+                p += 1
+            i += mlen
+            anchor = i
+        else:
+            i += 1
+    count = _emit(parts, count, s, anchor, n + 1, nil, 0)
+    return table.concat(parts)
+
+export def decompress(data):
+    if len(data) < 4:
+        raise Error("lzfast: data too short")
+    a, b, c, d = string.byte(data, 1, 4)
+    total = a + b * 256 + c * 65536 + d * 16777216
+    if total == 0:
+        return ""
+    out = []
+    n = 0
+    pos = 5
+    size = len(data)
+    while n < total:
+        token = string.byte(data, pos)
+        if token == nil:
+            raise Error("lzfast: truncated data")
+        pos += 1
+        lit_len = math.floor(token / 16)
+        if lit_len == 15:
+            while true:
+                x = string.byte(data, pos)
+                if x == nil:
+                    raise Error("lzfast: truncated data")
+                pos += 1
+                lit_len += x
+                if x != 255:
+                    break
+        # литералы порциями, чтобы не превысить предел распаковки
+        stop = pos + lit_len
+        if stop - 1 > size:
+            raise Error("lzfast: truncated literals")
+        while pos < stop:
+            chunk_end = pos + 3999
+            if chunk_end > stop - 1:
+                chunk_end = stop - 1
+            bytes_list = lua("{string.byte(data, pos, chunk_end)}")
+            for k in range[1, chunk_end - pos + 1]:
+                out[n + k] = bytes_list[k]
+            n += chunk_end - pos + 1
+            pos = chunk_end + 1
+        if n >= total:
+            break
+        lo = string.byte(data, pos)
+        hi = string.byte(data, pos + 1)
+        if hi == nil:
+            raise Error("lzfast: truncated offset")
+        pos += 2
+        offset = lo + hi * 256
+        if offset == 0 or offset > n:
+            raise Error("lzfast: bad offset")
+        match_len = token % 16 + 4
+        if token % 16 == 15:
+            while true:
+                x = string.byte(data, pos)
+                if x == nil:
+                    raise Error("lzfast: truncated data")
+                pos += 1
+                match_len += x
+                if x != 255:
+                    break
+        for k in range[1, match_len]:
+            out[n + k] = out[n + k - offset]
+        n += match_len
+    if n != total:
+        raise Error("lzfast: size mismatch")
+    # байты в строку порциями
+    pieces = []
+    count = 0
+    i = 1
+    while i <= n:
+        j = i + 3999
+        if j > n:
+            j = n
+        count += 1
+        pieces[count] = string.char(unpack_fn(out, i, j))
+        i = j + 1
+    return table.concat(pieces)

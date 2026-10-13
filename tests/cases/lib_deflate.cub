@@ -1,0 +1,101 @@
+import t
+import deflate as df
+import lzfast as lz
+eq = t.eq
+
+def unhex(h):
+    out = []
+    n = 0
+    for i in range[1, len(h)] step 2:
+        n += 1
+        out[n] = string.char(tonumber(string.sub(h, i, i + 1), 16))
+    return table.concat(out)
+
+def to_hex(s):
+    return (string.gsub(s, ".", (c) => string.format("%02x", string.byte(c))))
+
+def read_lines(path):
+    h = fs.open(path, "r")
+    lines = []
+    line = h.readLine()
+    while line != nil:
+        lines[len(lines) + 1] = line
+        line = h.readLine()
+    h.close()
+    return lines
+
+# ---- распаковка данных, сжатых настоящим zlib (Python)
+bad = 0
+total = 0
+for line in read_lines("/repo/tests/data/deflate_vectors.txt"):
+    name, raw_hex, comp_hex = string.match(line, "^([^|]*)|([^|]*)|([^|]*)$")
+    total += 1
+    got = df.inflate(unhex(comp_hex))
+    if got != unhex(raw_hex):
+        print("FAIL inflate " .. name)
+        bad += 1
+eq(total, 36, "vector count")
+eq(bad, 0, "inflate vectors")
+
+# ---- свои данные для проверок сжатия
+words = ["the", "quick", "brown", "fox", "cube", "os", "turtle", "monitor", "disk"]
+parts = []
+seed = 7
+for i in range[1, 3000]:
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    parts[i] = words[seed % 9 + 1] .. (seed % 7 == 0 and "\n" or " ")
+text = table.concat(parts)
+noise = []
+for i in range[1, 4000]:
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    noise[i] = string.char(math.floor(seed / 65536) % 256)
+noise_text = table.concat(noise)
+bytes_all = []
+for i in range[0, 255]:
+    bytes_all[i + 1] = string.char(i)
+all_text = table.concat(bytes_all)
+
+samples = {
+    ["empty"]: "",
+    ["one"]: "a",
+    ["short"]: "hello hello hello hello",
+    ["text"]: text,
+    ["noise"]: noise_text,
+    ["zeros"]: string.rep("\0", 5000),
+    ["allbytes"]: all_text .. all_text,
+    ["repeat"]: string.rep("abcabcabd", 500),
+    ["mixed"]: text .. noise_text .. text,
+}
+
+out_lines = []
+for name in ["empty", "one", "short", "text", "noise", "zeros", "allbytes", "repeat", "mixed"]:
+    raw = samples[name]
+    packed = df.deflate(raw)
+    back = df.inflate(packed)
+    eq(back == raw, true, "deflate roundtrip " .. name)
+    fast = lz.compress(raw)
+    eq(lz.decompress(fast) == raw, true, "lzfast roundtrip " .. name)
+    out_lines[len(out_lines) + 1] = name .. "|" .. to_hex(raw) .. "|" .. to_hex(packed)
+    if name == "text" or name == "repeat" or name == "zeros":
+        eq(len(packed) < len(raw) / 2, true, "deflate shrinks " .. name)
+        eq(len(fast) < len(raw) / 2, true, "lzfast shrinks " .. name)
+
+# выгружаем сжатое для проверки Python-ом (tools/verify_deflate.py)
+h = fs.open("/repo/build/deflate_samples.txt", "w")
+h.write(table.concat(out_lines, "\n") .. "\n")
+h.close()
+
+eq(len(df.deflate("hello hello hello hello")) < 16, true, "fixed block for tiny input")
+
+# ---- ошибки в данных
+def err_of(f):
+    try:
+        f()
+    except Error as e:
+        return e.message
+    return nil
+
+eq(err_of(() => df.inflate("\xFF\xFF\xFF")) != nil, true, "garbage rejected")
+eq(err_of(() => df.inflate("")) != nil, true, "empty rejected")
+eq(err_of(() => lz.decompress("abc")) != nil, true, "lzfast short rejected")
+print("done")

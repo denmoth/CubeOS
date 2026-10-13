@@ -1,0 +1,696 @@
+# deflate: сжатие и распаковка по RFC 1951 (сырой DEFLATE, совместимо с zlib/gzip/zip).
+# Метод 2 для .cpk и .cbx. Формат совпадает с Python zlib.compress(data)[2:-4], поэтому ПК-утилиты читают его без своих кодеков.
+#
+#   deflate.inflate(data)            -> строка (исключение Error при повреждённых данных)
+#   deflate.deflate(data, chain=32)  -> сырой поток DEFLATE (динамический Хаффман, ленивое сопоставление)
+
+bxor = bit32.bxor
+band = bit32.band
+bor = bit32.bor
+lshift = bit32.lshift
+rshift = bit32.rshift
+unpack_fn = table.unpack or unpack
+
+LBASE = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258]
+LEXT = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0]
+DBASE = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577]
+DEXT = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13]
+CL_ORDER = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
+
+# ================================================================ распаковка
+
+def _bits(st, need):
+    val = st.bitbuf
+    cnt = st.bitcnt
+    while cnt < need:
+        byte = string.byte(st.src, st.pos)
+        if byte == nil:
+            raise Error("inflate: unexpected end of data")
+        st.pos += 1
+        val = val + lshift(byte, cnt)
+        cnt += 8
+    st.bitbuf = rshift(val, need)
+    st.bitcnt = cnt - need
+    return band(val, lshift(1, need) - 1)
+
+# таблица кода Хаффмана по длинам: {count, symbol}
+def _construct(lengths, n):
+    counts = []
+    for i in range[0, 15]:
+        counts[i] = 0
+    for sym in range[1, n]:
+        counts[lengths[sym]] += 1
+    left = 1
+    for bl in range[1, 15]:
+        left = left * 2 - counts[bl]
+        if left < 0:
+            raise Error("inflate: over-subscribed Huffman code")
+    offs = []
+    offs[1] = 0
+    for bl in range[1, 14]:
+        offs[bl + 1] = offs[bl] + counts[bl]
+    symbol = []
+    for sym in range[1, n]:
+        l = lengths[sym]
+        if l != 0:
+            offs[l] += 1
+            symbol[offs[l]] = sym - 1
+    return {count: counts, symbol: symbol, incomplete: left > 0}
+
+def _decode(st, h):
+    src = st.src
+    pos = st.pos
+    bb = st.bitbuf
+    bc = st.bitcnt
+    code = 0
+    first = 0
+    index = 0
+    counts = h.count
+    for nbits in range[1, 15]:
+        if bc == 0:
+            byte = string.byte(src, pos)
+            if byte == nil:
+                raise Error("inflate: unexpected end of data")
+            pos += 1
+            bb = byte
+            bc = 8
+        code = code + band(bb, 1)
+        bb = rshift(bb, 1)
+        bc -= 1
+        cnt = counts[nbits]
+        if code - cnt < first:
+            st.pos = pos
+            st.bitbuf = bb
+            st.bitcnt = bc
+            return h.symbol[index + (code - first) + 1]
+        index += cnt
+        first = (first + cnt) * 2
+        code = code * 2
+    raise Error("inflate: invalid Huffman code")
+
+fixed_lit = nil
+fixed_dist = nil
+
+def _fixed_tables():
+    if fixed_lit == nil:
+        lengths = []
+        for i in range[1, 144]:
+            lengths[i] = 8
+        for i in range[145, 256]:
+            lengths[i] = 9
+        for i in range[257, 280]:
+            lengths[i] = 7
+        for i in range[281, 288]:
+            lengths[i] = 8
+        fixed_lit = _construct(lengths, 288)
+        dl = []
+        for i in range[1, 30]:
+            dl[i] = 5
+        fixed_dist = _construct(dl, 30)
+    return fixed_lit, fixed_dist
+
+def _codes(st, lit, dist):
+    out = st.out
+    n = st.n
+    while true:
+        sym = _decode(st, lit)
+        if sym < 256:
+            n += 1
+            out[n] = sym
+        elif sym == 256:
+            break
+        else:
+            sym -= 257
+            if sym >= 29:
+                raise Error("inflate: invalid length symbol")
+            length = LBASE[sym + 1] + _bits(st, LEXT[sym + 1])
+            dsym = _decode(st, dist)
+            if dsym >= 30:
+                raise Error("inflate: invalid distance symbol")
+            d = DBASE[dsym + 1] + _bits(st, DEXT[dsym + 1])
+            if d > n:
+                raise Error("inflate: distance too far back")
+            for k in range[1, length]:
+                out[n + k] = out[n + k - d]
+            n += length
+    st.n = n
+
+def _stored(st):
+    st.bitbuf = 0
+    st.bitcnt = 0
+    src = st.src
+    p = st.pos
+    b1, b2, b3, b4 = string.byte(src, p, p + 3)
+    if b4 == nil:
+        raise Error("inflate: unexpected end of data")
+    length = b1 + b2 * 256
+    if bxor(length, b3 + b4 * 256) != 65535:
+        raise Error("inflate: stored block length check failed")
+    p += 4
+    if p + length - 1 > len(src):
+        raise Error("inflate: unexpected end of data")
+    out = st.out
+    n = st.n
+    q = p
+    while q < p + length:
+        e = q + 3999
+        if e > p + length - 1:
+            e = p + length - 1
+        chunk = lua("{string.byte(src, q, e)}")
+        for k in range[1, e - q + 1]:
+            out[n + k] = chunk[k]
+        n += e - q + 1
+        q = e + 1
+    st.n = n
+    st.pos = p + length
+
+def _dynamic(st):
+    nlen = _bits(st, 5) + 257
+    ndist = _bits(st, 5) + 1
+    ncode = _bits(st, 4) + 4
+    if nlen > 286 or ndist > 30:
+        raise Error("inflate: bad dynamic block counts")
+    lengths = []
+    for i in range[1, 19]:
+        lengths[i] = 0
+    for i in range[1, ncode]:
+        lengths[CL_ORDER[i] + 1] = _bits(st, 3)
+    lencode = _construct(lengths, 19)
+    if lencode.incomplete:
+        raise Error("inflate: incomplete code length code")
+    index = 0
+    all_lengths = []
+    while index < nlen + ndist:
+        sym = _decode(st, lencode)
+        if sym < 16:
+            index += 1
+            all_lengths[index] = sym
+        else:
+            prev = 0
+            rep = 0
+            if sym == 16:
+                if index == 0:
+                    raise Error("inflate: repeat with no previous length")
+                prev = all_lengths[index]
+                rep = 3 + _bits(st, 2)
+            elif sym == 17:
+                rep = 3 + _bits(st, 3)
+            else:
+                rep = 11 + _bits(st, 7)
+            if index + rep > nlen + ndist:
+                raise Error("inflate: too many code lengths")
+            for k in range[1, rep]:
+                index += 1
+                all_lengths[index] = prev
+    if all_lengths[257] == 0:
+        raise Error("inflate: missing end-of-block code")
+    lit_lengths = []
+    for i in range[1, nlen]:
+        lit_lengths[i] = all_lengths[i]
+    dist_lengths = []
+    for i in range[1, ndist]:
+        dist_lengths[i] = all_lengths[nlen + i]
+    lit = _construct(lit_lengths, nlen)
+    dist = _construct(dist_lengths, ndist)
+    if lit.incomplete and nlen != lit.count[0] + lit.count[1]:
+        raise Error("inflate: incomplete literal/length code")
+    if dist.incomplete and ndist != dist.count[0] + dist.count[1]:
+        raise Error("inflate: incomplete distance code")
+    _codes(st, lit, dist)
+
+def _bytes_to_string(out, n):
+    pieces = []
+    count = 0
+    i = 1
+    while i <= n:
+        j = i + 3999
+        if j > n:
+            j = n
+        count += 1
+        pieces[count] = string.char(unpack_fn(out, i, j))
+        i = j + 1
+    return table.concat(pieces)
+
+export def inflate(data, start=1):
+    st = {src: data, pos: start, bitbuf: 0, bitcnt: 0, out: [], n: 0}
+    while true:
+        final = _bits(st, 1)
+        kind = _bits(st, 2)
+        if kind == 0:
+            _stored(st)
+        elif kind == 1:
+            lit, dist = _fixed_tables()
+            _codes(st, lit, dist)
+        elif kind == 2:
+            _dynamic(st)
+        else:
+            raise Error("inflate: invalid block type")
+        if final == 1:
+            break
+    return _bytes_to_string(st.out, st.n), st.pos
+
+# ================================================================ сжатие
+
+# --- построение кодов Хаффмана
+
+# длины кодов (с ограничением max_len) по частотам freq[1..n]; неиспользуемые символы получают 0
+def _huffman_lengths(freq, n, max_len):
+    used = []
+    for i in range[1, n]:
+        if freq[i] > 0:
+            used[len(used) + 1] = i
+    lengths = []
+    for i in range[1, n]:
+        lengths[i] = 0
+    if len(used) == 0:
+        lengths[1] = 1
+        lengths[2] = 1
+        return lengths
+    if len(used) == 1:
+        lengths[used[1]] = 1
+        other = used[1] == 1 and 2 or 1
+        lengths[other] = 1
+        return lengths
+    work = []
+    for i in range[1, n]:
+        work[i] = freq[i]
+    while true:
+        # двухочередной алгоритм Хаффмана
+        leaves = []
+        for k, sym in used:
+            leaves[k] = {w: work[sym], sym: sym}
+        table.sort(leaves, (a, b) => a.w < b.w or (a.w == b.w and a.sym < b.sym))
+        nodes = []
+        li = 1
+        ni = 1
+        total_leaves = len(leaves)
+        remaining = total_leaves
+        while remaining > 1:
+            picks = []
+            for p in range[1, 2]:
+                if li <= total_leaves and (nodes[ni] == nil or leaves[li].w <= nodes[ni].w):
+                    picks[p] = leaves[li]
+                    li += 1
+                else:
+                    picks[p] = nodes[ni]
+                    ni += 1
+            nodes[len(nodes) + 1] = {w: picks[1].w + picks[2].w, l: picks[1], r: picks[2]}
+            remaining -= 1
+        root = nodes[len(nodes)]
+        # глубины обходом без рекурсии
+        stack = [{node: root, depth: 0}]
+        depths = {}
+        maxd = 0
+        while len(stack) > 0:
+            item = stack[len(stack)]
+            stack[len(stack)] = nil
+            node = item.node
+            if node.sym != nil:
+                depths[node.sym] = item.depth
+                if item.depth > maxd:
+                    maxd = item.depth
+            else:
+                stack[len(stack) + 1] = {node: node.l, depth: item.depth + 1}
+                stack[len(stack) + 1] = {node: node.r, depth: item.depth + 1}
+        if maxd <= max_len:
+            for sym in used:
+                lengths[sym] = depths[sym]
+            return lengths
+        # слишком длинные коды: сглаживаем частоты и повторяем
+        for sym in used:
+            work[sym] = (work[sym] + 1) // 2 + 1
+
+# канонические коды: возвращает codes (число, MSB-первым, уже в обратном порядке бит для записи LSB-первым)
+def _canonical(lengths, n):
+    counts = []
+    for i in range[0, 15]:
+        counts[i] = 0
+    for sym in range[1, n]:
+        counts[lengths[sym]] += 1
+    counts[0] = 0
+    next_code = []
+    code = 0
+    for bl in range[1, 15]:
+        code = (code + counts[bl - 1]) * 2
+        next_code[bl] = code
+    codes = []
+    for sym in range[1, n]:
+        l = lengths[sym]
+        if l != 0:
+            c = next_code[l]
+            next_code[l] = c + 1
+            # разворот бит
+            r = 0
+            for k in range[1, l]:
+                r = r * 2 + band(c, 1)
+                c = rshift(c, 1)
+            codes[sym] = r
+        else:
+            codes[sym] = 0
+    return codes
+
+# --- запись битов
+
+def _put(w, value, nbits):
+    if nbits == 0:
+        return
+    buf = w.buf + lshift(value, w.cnt)
+    cnt = w.cnt + nbits
+    out = w.out
+    n = w.n
+    while cnt >= 8:
+        n += 1
+        out[n] = band(buf, 255)
+        buf = rshift(buf, 8)
+        cnt -= 8
+    w.buf = buf
+    w.cnt = cnt
+    w.n = n
+
+def _finish_bits(w):
+    if w.cnt > 0:
+        w.n += 1
+        w.out[w.n] = band(w.buf, 255)
+        w.buf = 0
+        w.cnt = 0
+
+# --- LZ77
+
+len_sym = nil
+len_extra_bits = nil
+len_extra_val = nil
+
+def _build_len_tables():
+    if len_sym != nil:
+        return
+    len_sym = []
+    len_extra_bits = []
+    len_extra_val = []
+    for l in range[3, 257]:
+        idx = 0
+        for k in range[0, 27]:
+            if LBASE[k + 1] <= l:
+                idx = k
+        len_sym[l] = 257 + idx
+        len_extra_bits[l] = LEXT[idx + 1]
+        len_extra_val[l] = l - LBASE[idx + 1]
+    len_sym[258] = 285
+    len_extra_bits[258] = 0
+    len_extra_val[258] = 0
+
+def _dist_code(d):
+    lo = 0
+    hi = 29
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if DBASE[mid + 1] <= d:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+def _match_len(s, a, b, limit):
+    count = 0
+    while b + 7 <= limit and count + 8 <= 258 and string.sub(s, a, a + 7) == string.sub(s, b, b + 7):
+        a += 8
+        b += 8
+        count += 8
+    while b <= limit and count < 258 and string.byte(s, a) == string.byte(s, b):
+        a += 1
+        b += 1
+        count += 1
+    return count
+
+# возвращает массивы: tok_a (литерал 0..255 или длина), tok_d (0 для литерала, иначе расстояние)
+def _lz77(s, chain):
+    n = len(s)
+    tok_a = []
+    tok_d = []
+    t = 0
+    head = {}
+    prev = {}
+    i = 1
+    pending_len = 0
+    pending_dist = 0
+    # ленивое сопоставление: решение откладывается на один символ
+    while i <= n:
+        best_len = 0
+        best_dist = 0
+        if i + 2 <= n:
+            key = string.sub(s, i, i + 2)
+            cand = head[key]
+            steps = 0
+            limit = i + 257
+            if limit > n:
+                limit = n
+            while cand != nil and steps < chain and i - cand <= 32768:
+                ml = _match_len(s, cand, i, limit)
+                if ml > best_len:
+                    best_len = ml
+                    best_dist = i - cand
+                    if ml >= 258:
+                        break
+                cand = prev[cand]
+                steps += 1
+            prev[i] = head[key]
+            head[key] = i
+        if best_len < 3:
+            if pending_len > 0:
+                t += 1
+                tok_a[t] = pending_len
+                tok_d[t] = pending_dist
+                # позиции внутри совпадения записываем в таблицы
+                for p in range[i + 1, i + pending_len - 2]:
+                    if p + 2 <= n:
+                        k2 = string.sub(s, p, p + 2)
+                        prev[p] = head[k2]
+                        head[k2] = p
+                i = i - 1 + pending_len
+                pending_len = 0
+            else:
+                t += 1
+                tok_a[t] = string.byte(s, i)
+                tok_d[t] = 0
+                i += 1
+        else:
+            if pending_len > 0:
+                if best_len > pending_len:
+                    # лучше взять совпадение с этой позиции; предыдущий символ уходит литералом
+                    t += 1
+                    tok_a[t] = string.byte(s, i - 1)
+                    tok_d[t] = 0
+                    pending_len = best_len
+                    pending_dist = best_dist
+                    i += 1
+                else:
+                    t += 1
+                    tok_a[t] = pending_len
+                    tok_d[t] = pending_dist
+                    for p in range[i + 1, i + pending_len - 2]:
+                        if p + 2 <= n:
+                            k2 = string.sub(s, p, p + 2)
+                            prev[p] = head[k2]
+                            head[k2] = p
+                    i = i - 1 + pending_len
+                    pending_len = 0
+            else:
+                pending_len = best_len
+                pending_dist = best_dist
+                i += 1
+    if pending_len > 0:
+        t += 1
+        tok_a[t] = pending_len
+        tok_d[t] = pending_dist
+    return tok_a, tok_d, t
+
+# --- блоки
+
+def _write_tokens(w, tok_a, tok_d, t, lit_codes, lit_lens, dist_codes, dist_lens):
+    for k in range[1, t]:
+        d = tok_d[k]
+        if d == 0:
+            sym = tok_a[k] + 1
+            _put(w, lit_codes[sym], lit_lens[sym])
+        else:
+            l = tok_a[k]
+            sym = len_sym[l] + 1
+            _put(w, lit_codes[sym], lit_lens[sym])
+            _put(w, len_extra_val[l], len_extra_bits[l])
+            dc = _dist_code(d)
+            _put(w, dist_codes[dc + 1], dist_lens[dc + 1])
+            _put(w, d - DBASE[dc + 1], DEXT[dc + 1])
+    _put(w, lit_codes[257], lit_lens[257])
+
+def _stored_block(w, data, final):
+    _put(w, final, 1)
+    _put(w, 0, 2)
+    _finish_bits(w)
+    n = len(data)
+    pos = 1
+    out = w.out
+    cnt = w.n
+    # блок stored не больше 65535 байт: вызывающий код режет данные
+    cnt += 1
+    out[cnt] = n % 256
+    cnt += 1
+    out[cnt] = math.floor(n / 256)
+    cnt += 1
+    out[cnt] = band(bxor(n, 65535), 255)
+    cnt += 1
+    out[cnt] = rshift(bxor(n, 65535), 8)
+    while pos <= n:
+        e = pos + 3999
+        if e > n:
+            e = n
+        chunk = lua("{string.byte(data, pos, e)}")
+        for k in range[1, e - pos + 1]:
+            out[cnt + k] = chunk[k]
+        cnt += e - pos + 1
+        pos = e + 1
+    w.n = cnt
+
+export def deflate(data, chain=32):
+    n = len(data)
+    w = {buf: 0, cnt: 0, out: [], n: 0}
+    if n == 0:
+        _put(w, 1, 1)
+        _put(w, 1, 2)
+        _put(w, 0, 7)
+        _finish_bits(w)
+        return _bytes_to_string(w.out, w.n)
+    _build_len_tables()
+    tok_a, tok_d, t = _lz77(data, chain)
+    # частоты
+    lit_freq = []
+    for i in range[1, 286]:
+        lit_freq[i] = 0
+    dist_freq = []
+    for i in range[1, 30]:
+        dist_freq[i] = 0
+    extra_bits = 0
+    for k in range[1, t]:
+        if tok_d[k] == 0:
+            lit_freq[tok_a[k] + 1] += 1
+        else:
+            l = tok_a[k]
+            lit_freq[len_sym[l] + 1] += 1
+            dc = _dist_code(tok_d[k])
+            dist_freq[dc + 1] += 1
+            extra_bits += len_extra_bits[l] + DEXT[dc + 1]
+    lit_freq[257] += 1
+    lit_lens = _huffman_lengths(lit_freq, 286, 15)
+    dist_lens = _huffman_lengths(dist_freq, 30, 15)
+    # заголовок динамического блока
+    hlit = 286
+    while hlit > 257 and lit_lens[hlit] == 0:
+        hlit -= 1
+    hdist = 30
+    while hdist > 1 and dist_lens[hdist] == 0:
+        hdist -= 1
+    seq = []
+    sn = 0
+    for i in range[1, hlit]:
+        sn += 1
+        seq[sn] = lit_lens[i]
+    for i in range[1, hdist]:
+        sn += 1
+        seq[sn] = dist_lens[i]
+    # RLE длин кодов
+    rle = []
+    rn = 0
+    i = 1
+    while i <= sn:
+        v = seq[i]
+        run = 1
+        while i + run <= sn and seq[i + run] == v:
+            run += 1
+        if v == 0 and run >= 3:
+            take = run
+            if take > 138:
+                take = 138
+            rn += 1
+            if take >= 11:
+                rle[rn] = {sym: 18, bits: 7, val: take - 11}
+            else:
+                rle[rn] = {sym: 17, bits: 3, val: take - 3}
+            i += take
+        elif v != 0 and run >= 4:
+            rn += 1
+            rle[rn] = {sym: v, bits: 0, val: 0}
+            i += 1
+            rest = run - 1
+            while rest >= 3:
+                take = rest
+                if take > 6:
+                    take = 6
+                rn += 1
+                rle[rn] = {sym: 16, bits: 2, val: take - 3}
+                rest -= take
+                i += take
+        else:
+            rn += 1
+            rle[rn] = {sym: v, bits: 0, val: 0}
+            i += 1
+    cl_freq = []
+    for q in range[1, 19]:
+        cl_freq[q] = 0
+    for q in range[1, rn]:
+        cl_freq[rle[q].sym + 1] += 1
+    cl_lens = _huffman_lengths(cl_freq, 19, 7)
+    hclen = 19
+    while hclen > 4 and cl_lens[CL_ORDER[hclen] + 1] == 0:
+        hclen -= 1
+    # оценка размера
+    dyn_bits = 3 + 5 + 5 + 4 + hclen * 3 + extra_bits
+    for q in range[1, rn]:
+        dyn_bits += cl_lens[rle[q].sym + 1] + rle[q].bits
+    for q in range[1, 286]:
+        dyn_bits += lit_freq[q] * lit_lens[q]
+    for q in range[1, 30]:
+        dyn_bits += dist_freq[q] * dist_lens[q]
+    stored_bits = (n + 5) * 8 + 8
+    # размер при фиксированных кодах Хаффмана
+    fl = []
+    for q in range[1, 288]:
+        if q <= 144:
+            fl[q] = 8
+        elif q <= 256:
+            fl[q] = 9
+        elif q <= 280:
+            fl[q] = 7
+        else:
+            fl[q] = 8
+    fixed_bits = 3 + extra_bits
+    for q in range[1, 286]:
+        fixed_bits += lit_freq[q] * fl[q]
+    for q in range[1, 30]:
+        fixed_bits += dist_freq[q] * 5
+    if stored_bits <= dyn_bits and stored_bits <= fixed_bits and n <= 65535:
+        _stored_block(w, data, 1)
+        return _bytes_to_string(w.out, w.n)
+    if fixed_bits <= dyn_bits:
+        fd = []
+        for q in range[1, 30]:
+            fd[q] = 5
+        _put(w, 1, 1)
+        _put(w, 1, 2)
+        _write_tokens(w, tok_a, tok_d, t, _canonical(fl, 288), fl, _canonical(fd, 30), fd)
+        _finish_bits(w)
+        return _bytes_to_string(w.out, w.n)
+    lit_codes = _canonical(lit_lens, 286)
+    dist_codes = _canonical(dist_lens, 30)
+    cl_codes = _canonical(cl_lens, 19)
+    _put(w, 1, 1)
+    _put(w, 2, 2)
+    _put(w, hlit - 257, 5)
+    _put(w, hdist - 1, 5)
+    _put(w, hclen - 4, 4)
+    for q in range[1, hclen]:
+        _put(w, cl_lens[CL_ORDER[q] + 1], 3)
+    for q in range[1, rn]:
+        item = rle[q]
+        _put(w, cl_codes[item.sym + 1], cl_lens[item.sym + 1])
+        _put(w, item.val, item.bits)
+    _write_tokens(w, tok_a, tok_d, t, lit_codes, lit_lens, dist_codes, dist_lens)
+    _finish_bits(w)
+    return _bytes_to_string(w.out, w.n)

@@ -1,0 +1,39 @@
+import t
+import compress as cz
+eq = t.eq
+
+words = ["alpha", "beta", "gamma", "delta"]
+parts = []
+for i in range[1, 800]:
+    parts[i] = words[i % 4 + 1] .. " "
+text = table.concat(parts)
+noise = []
+seed = 99
+for i in range[1, 300]:
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    noise[i] = string.char(math.floor(seed / 65536) % 256)
+noise_text = table.concat(noise)
+
+for mode in ["store", "fast", "strong", "auto"]:
+    for sample in ["", "x", text, noise_text, text .. noise_text]:
+        block = cz.pack(sample, mode)
+        eq(cz.unpack(block) == sample, true, "roundtrip " .. mode .. " " .. len(sample))
+        eq(cz.original_size(block), len(sample), "size " .. mode)
+
+eq(cz.method_of(cz.pack(text, "fast")), 1, "fast method id")
+eq(cz.method_of(cz.pack(text, "strong")), 2, "strong method id")
+eq(cz.method_of(cz.pack(noise_text, "auto")), 0, "incompressible stays stored")
+eq(len(cz.pack(text, "auto")) < len(text) / 4, true, "auto shrinks text")
+
+def err_of(f):
+    try:
+        f()
+    except Error as e:
+        return e.message
+    return nil
+
+eq(err_of(() => cz.unpack("ab")), "compress: block too short", "short block")
+bad = cz.pack("hello", "store")
+bad = string.sub(bad, 1, 1) .. "\x09\0\0\0" .. string.sub(bad, 6)
+eq(err_of(() => cz.unpack(bad)), "compress: size mismatch (expected 9, got 5)", "size mismatch")
+print("done")
