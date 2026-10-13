@@ -53,7 +53,17 @@ local function run_case(name, label, force)
   local luahasnot = lines_of(read(base .. ".luahasnot"))
 
   local opts = {}
-  for _, o in ipairs(lines_of(read(base .. ".opts"))) do opts[o] = true end
+  for _, o in ipairs(lines_of(read(base .. ".opts"))) do
+    local k, v = o:match("^([%w_]+)=(.*)$")
+    if k == "mods" then
+      opts.mods = {}
+      for id in v:gmatch("[^,]+") do opts.mods[#opts.mods + 1] = id end
+    elseif k then
+      opts[k] = v
+    else
+      opts[o] = true
+    end
+  end
   for k, v in pairs(force or {}) do opts[k] = v end
 
   local buf = {}

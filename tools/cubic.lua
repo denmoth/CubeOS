@@ -1,5 +1,5 @@
 -- Консольная утилита Cubic. Запускается внутри CC / CraftOS-PC.
---   cubic compile <файл.cub> [вывод.lua] [--minify] [--keep-comments] [--map] [--strict]
+--   cubic compile <файл.cub> [вывод.lua] [--minify] [--keep-comments] [--map] [--strict] [--mods=a,b]
 --   cubic check   <файл.cub>
 --   cubic run     <файл.cub>
 -- В CraftOS-PC вывод `print` не попадает в stdout, поэтому весь вывод дополнительно пишется в файл
@@ -44,11 +44,18 @@ end
 -- разбор аргументов: позиционные и --флаги
 local args, flags = {}, {}
 for _, a in ipairs(raw) do
-  if a:sub(1, 2) == "--" then flags[a:sub(3)] = true else args[#args + 1] = a end
+  local key, val = a:match("^%-%-([%w%-]+)=(.*)$")
+  if key then
+    flags[key] = val
+  elseif a:sub(1, 2) == "--" then
+    flags[a:sub(3)] = true
+  else
+    args[#args + 1] = a
+  end
 end
 local cmd, input, output = args[1], args[2], args[3]
 if not cmd or not input then
-  say("usage: cubic compile|check|run <file.cub> [out.lua] [--minify] [--keep-comments] [--map] [--strict]")
+  say("usage: cubic compile|check|run <file.cub> [out.lua] [--minify] [--keep-comments] [--map] [--strict] [--mods=a,b]")
   return finish(2)
 end
 
@@ -60,6 +67,10 @@ end
 
 local name = fs.getName(input)
 local opts = { minify = flags["minify"], keep_comments = flags["keep-comments"], strict = flags["strict"] }
+if type(flags["mods"]) == "string" then
+  opts.mods = {}
+  for id in flags["mods"]:gmatch("[^,]+") do opts.mods[#opts.mods + 1] = id end
+end
 local lua, linemap, warnings = cubic.try_compile(src, name, opts)
 if not lua then
   say("error: " .. tostring(linemap))

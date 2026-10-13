@@ -702,8 +702,17 @@ local function make(toks, file, src, hdr)
         return { tag = "TGen", name = name, args = args, line = tok.line }
       elseif name == "fn" and peek().t == "(" then
         next_tok()
-        local params = {}
+        local params, rest = {}, nil
         while peek().t ~= ")" do
+          if peek().t == "*" then
+            next_tok()
+            if peek().t == "name" and peek(1).t == ":" then
+              next_tok()
+              next_tok()
+            end
+            rest = parse_type()
+            break
+          end
           if peek().t == "name" and peek(1).t == ":" then
             next_tok()
             next_tok()
@@ -714,7 +723,7 @@ local function make(toks, file, src, hdr)
         expect(")")
         local ret
         if accept("->") then ret = parse_type() end
-        return { tag = "TFn", params = params, ret = ret, line = tok.line }
+        return { tag = "TFn", params = params, rest = rest, ret = ret, line = tok.line }
       end
       return { tag = "TName", name = name, line = tok.line }
     elseif tok.t == "nil" then
@@ -1083,6 +1092,11 @@ local function make(toks, file, src, hdr)
     elseif t == "with" then return parse_with()
     elseif t == "def" then return parse_def(false)
     elseif t == "class" then return parse_class(false)
+    elseif hdr and t == "name" and tok.v == "open" and peek(1).t == "class" then
+      next_tok()
+      local c = parse_class(false)
+      c.open = true
+      return c
     elseif t == "try" then return parse_try()
     elseif t == "@" then
       local decorators = {}

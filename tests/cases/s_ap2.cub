@@ -1,0 +1,8 @@
+#!strict
+chat = peripheral.find("chatBox")
+if chat != nil:
+    chat.sendMessage("hi", "Cube")
+    chat.undocumentedMethod(1)
+scan = peripheral.find("geoScanner")
+if scan != nil:
+    print(scan.cost(8) + 1)

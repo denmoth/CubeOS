@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Запуск утилиты cubic на ПК через CraftOS-PC. Использование:
-#   tools/cubic.sh compile файл.cub [вывод.lua] [--minify] [--keep-comments] [--map] [--strict]
+#   tools/cubic.sh compile файл.cub [вывод.lua] [--minify] [--keep-comments] [--map] [--strict] [--mods=a,b]
 #   tools/cubic.sh check файл.cub
 #   tools/cubic.sh run файл.cub
 # Пути задаются относительно текущего каталога.

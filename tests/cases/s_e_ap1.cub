@@ -1,0 +1,4 @@
+#!strict
+chat = peripheral.find("chatBox")
+if chat != nil:
+    chat.sendMessage(5)

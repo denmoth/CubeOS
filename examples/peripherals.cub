@@ -1,0 +1,11 @@
+#!strict
+# Типы периферии: monitor из CC, chatBox из Advanced Peripherals (нужен --mods=advancedperipherals)
+mon = peripheral.find("monitor")
+if mon != nil:
+    mon.setTextScale(0.5)
+    mon.setCursorPos(1, 1)
+    mon.write("hello")
+
+chat = peripheral.find("chatBox")
+if chat != nil:
+    chat.sendMessage("Hello from CubeOS", "Cube")

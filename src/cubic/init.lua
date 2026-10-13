@@ -60,9 +60,20 @@ local function type_env(opts)
       end
     end
   end
-  if not opts.headers or #opts.headers == 0 then return base_env end
+  local extra = {}
+  for _, h in ipairs(opts.headers or {}) do extra[#extra + 1] = h end
+  for _, mod in ipairs(opts.mods or {}) do
+    local src = read_file(root .. "/headers/mods/" .. mod .. ".cuh")
+    if not src then
+      error("unknown mod for type headers: " .. tostring(mod) .. " (no headers/mods/" .. tostring(mod) .. ".cuh)", 0)
+    end
+    extra[#extra + 1] = { src = src, name = mod .. ".cuh" }
+  end
+  if #extra == 0 then return base_env end
   local env = copy_env(base_env)
-  for _, h in ipairs(opts.headers) do
+  env.periph = {}
+  for k, v in pairs(base_env.periph) do env.periph[k] = v end
+  for _, h in ipairs(extra) do
     local hast = parser.parse_header(h.src, h.name or "header.cuh")
     checker.check(hast, h.name or "header.cuh", env, true)
   end

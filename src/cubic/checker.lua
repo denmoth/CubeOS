@@ -245,6 +245,15 @@ local function find_member(cls, name)
   return nil
 end
 
+local function class_open(cls)
+  local c = cls
+  while c do
+    if c.open then return true end
+    c = c.base
+  end
+  return false
+end
+
 local function class_loose(cls)
   local c = cls
   while c do
@@ -257,7 +266,7 @@ end
 ---------------------------------------------------------------- окружение
 
 function M.new_env()
-  local env = { vars = {}, types = {} }
+  local env = { vars = {}, types = {}, periph = {} }
   local err_cls = new_class("Error")
   err_cls.fields.message = STR
   err_cls.methods.init = mk_fn({ { name = "message", type = ANY, optional = true } }, ANY)
@@ -487,7 +496,7 @@ function M.check(ast, file, genv, hdr, opts)
     elseif tag == "TFn" then
       local params = {}
       for k, p in ipairs(tn.params) do params[k] = { name = "arg" .. k, type = resolve_type(p) } end
-      return mk_fn(params, tn.ret and resolve_type(tn.ret) or ANY)
+      return mk_fn(params, tn.ret and resolve_type(tn.ret) or ANY, tn.rest and resolve_type(tn.rest) or nil)
     elseif tag == "TRec" then
       local fields = {}
       for _, f in ipairs(tn.fields) do fields[f.name] = resolve_type(f.type) end
@@ -578,6 +587,7 @@ function M.check(ast, file, genv, hdr, opts)
       if class_loose(ot.cls) then return ANY end
       local t = find_member(ot.cls, name)
       if t then return t end
+      if class_open(ot.cls) then return ANY end
       err(line, "class '" .. ot.cls.name .. "' has no member '" .. name .. "'")
       return ANY
     elseif k == "classobj" then
@@ -965,6 +975,15 @@ function M.check(ast, file, genv, hdr, opts)
     if f.tag == "Name" and not lookup_var(f.name) then
       if (f.name == "copy" or f.name == "deepcopy") and #n.args == 1 then
         return infer(n.args[1])
+      end
+    end
+    -- peripheral.find("monitor"): тип по литералу
+    if f.tag == "Attr" and f.name == "find" and f.obj.tag == "Name" and f.obj.name == "peripheral"
+      and not lookup_var("peripheral") and n.args[1] and n.args[1].tag == "String" and genv.periph then
+      local pt = genv.periph[n.args[1].v]
+      if pt then
+        infer_args(n)
+        return union({ pt, NIL })
       end
     end
     local ft = infer(f)
@@ -1642,6 +1661,7 @@ function M.check(ast, file, genv, hdr, opts)
     for _, s in ipairs(stmts) do
       if s.tag == "ClassDef" then
         local cls = new_class(s.name, nil, false)
+        cls.open = s.open == true
         types[s.name] = mk_inst(cls)
         genv.types[s.name] = types[s.name]
         target_vars[s.name] = mk_classobj(cls)
@@ -1673,7 +1693,11 @@ function M.check(ast, file, genv, hdr, opts)
       elseif tag == "Namespace" then
         local members = {}
         load_header_body(s.body, members)
-        target_vars[s.name] = { k = "ns", name = s.name, members = members, open = s.open }
+        if s.name == "peripheral_types" then
+          for pname, pty in pairs(members) do genv.periph[pname] = pty end
+        else
+          target_vars[s.name] = { k = "ns", name = s.name, members = members, open = s.open }
+        end
       end
     end
   end

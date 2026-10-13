@@ -1,0 +1,3 @@
+#!strict
+mon = peripheral.find("monitor")
+mon.write("x")

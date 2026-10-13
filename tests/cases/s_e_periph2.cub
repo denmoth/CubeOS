@@ -1,0 +1,4 @@
+#!strict
+mon = peripheral.find("monitor")
+if mon != nil:
+    mon.setTextScale("big")
