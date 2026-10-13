@@ -1,0 +1,141 @@
+import t
+import json5 as j
+eq = t.eq
+
+def err_of(text):
+    try:
+        j.parse(text)
+    except Error as e:
+        return e.message
+    return nil
+
+# ---- обычный JSON
+v = j.parse('{"a": 1, "b": [true, false, null], "c": "x", "d": {"e": -2.5e1}}')
+eq(v.a, 1, "num")
+eq(v.b, [true, false, j.null], "array")
+eq(v.c, "x", "string")
+eq(v.d.e, -25, "exponent")
+
+# ---- возможности JSON5
+text = """{
+  // comment
+  unquoted: 'single', /* block */
+  "quoted": "double",
+  hex: 0xFF,
+  plus: +5,
+  neg: -0.5,
+  lead: .5,
+  trail: 5.,
+  inf: Infinity,
+  list: [1, 2, 3,],
+  nested: {deep: {deeper: [ ]}},
+  multi: "line1\\
+line2",
+  esc: "\\x41\\u0042\\n\\t\\0",
+}"""
+r = j.parse(text)
+eq(r.unquoted, "single", "single quotes")
+eq(r.quoted, "double", "quoted key")
+eq(r.hex, 255, "hex")
+eq(r.plus, 5, "plus")
+eq(r.neg, -0.5, "negative")
+eq(r.lead, 0.5, "leading dot")
+eq(r.trail, 5, "trailing dot")
+eq(r.inf, math.huge, "Infinity")
+eq(r.list, [1, 2, 3], "trailing comma")
+eq(r.nested, {deep: {deeper: []}}, "nested")
+eq(r.multi, "line1line2", "line continuation")
+eq(r.esc, "AB\n\t\0", "escapes")
+eq(j.parse('"\\uD83D\\uDE00"'), "\u{1F600}", "surrogate pair")
+nan = j.parse("NaN")
+eq(nan != nan, true, "NaN")
+eq(j.parse("  42  "), 42, "top-level number")
+eq(j.parse("// c\n[1] // d"), [1], "comments around")
+
+# ---- ошибки с позицией
+eq(err_of("{\n  a 1}"), "json5: line 2, column 5: expected ':' after the key", "missing colon")
+eq(err_of("[1, 2"), "json5: line 1, column 6: expected ',' or ']'", "unclosed array")
+eq(err_of('"abc'), "json5: line 1, column 1: unterminated string", "unterminated")
+eq(err_of("1 2"), "json5: line 1, column 3: unexpected characters after the value", "trailing")
+eq(err_of("{a: }"), "json5: line 1, column 5: unexpected character '}'", "bad value")
+
+# ---- запись
+eq(j.stringify({a: 1, b: [1, 2]}, {indent: 0}), '{"a":1,"b":[1,2]}', "compact")
+eq(j.stringify({a: 1, b: [1, 2], c: {}}), '{\n  "a": 1,\n  "b": [\n    1,\n    2\n  ],\n  "c": {}\n}', "pretty")
+eq(j.stringify({a: 1, b: [1, 2]}, {json5: true}), '{\n  a: 1,\n  b: [\n    1,\n    2,\n  ],\n}', "json5 style")
+eq(j.stringify("a\"b\n\\", {indent: 0}), '"a\\"b\\n\\\\"', "string escapes")
+eq(j.stringify("\x01", {indent: 0}), '"\\u0001"', "control char")
+eq(j.stringify([1, 1.5, 0.1, 100, -3], {indent: 0}), "[1,1.5,0.1,100,-3]", "numbers")
+eq(j.stringify(math.huge, {indent: 0}), "Infinity", "infinity")
+eq(j.stringify(j.null), "null", "null")
+eq(j.stringify(setmetatable({}, j.array_mt)), "[]", "empty array")
+eq(j.stringify({}), "{}", "empty object")
+data = {name: "x", list: [1, 2, {k: "v"}], flag: true, nothing: j.null, n: 3.25}
+eq(j.parse(j.stringify(data)), data, "roundtrip")
+eq(j.parse(j.stringify(data, {json5: true, indent: 4})), data, "roundtrip json5")
+
+# ---- точечная правка: комментарии и стиль остаются
+T1 = """{
+  // window settings
+  "width": 80,
+  height: 25, /* rows */
+  title: 'Hello',
+}"""
+eq(j.patch(T1, ["width"], 100), """{
+  // window settings
+  "width": 100,
+  height: 25, /* rows */
+  title: 'Hello',
+}""", "patch number")
+eq(j.patch(T1, ["height"], 30), """{
+  // window settings
+  "width": 80,
+  height: 30, /* rows */
+  title: 'Hello',
+}""", "patch keeps comment")
+eq(j.patch(T1, ["title"], "Bye"), """{
+  // window settings
+  "width": 80,
+  height: 25, /* rows */
+  title: "Bye",
+}""", "patch string")
+eq(j.patch(T1, ["extra"], true), """{
+  // window settings
+  "width": 80,
+  height: 25, /* rows */
+  title: 'Hello',
+  "extra": true,
+}""", "patch insert")
+eq(j.parse(j.patch(T1, ["extra"], true)).extra, true, "patch insert parses")
+eq(j.patch("{a: {b: 1}}", ["a", "b"], 2), "{a: {b: 2}}", "nested replace")
+eq(j.patch("{a: {b: 1}}", ["a", "c"], 3), "{a: {b: 1, c: 3}}", "nested insert")
+eq(j.patch("{}", ["x"], 1), '{\n  "x": 1\n}', "insert into empty")
+eq(j.patch("{a: 1}", ["b", "c"], 5), "{a: 1, b: {c: 5}}", "insert nested path")
+eq(j.patch("[1, 2, 3]", [2], 20), "[1, 20, 3]", "array replace")
+eq(j.patch("[1, 2, 3]", [4], 4), "[1, 2, 3, 4]", "array append")
+eq(j.patch("[1, 2,]", [3], 3), "[1, 2, 3,]", "array append trailing comma")
+eq(j.patch("[]", [1], 5), "[5]", "array append empty")
+eq(j.patch("{a: 1}", ["a"], {x: [1, 2]}), "{a: {x: [1, 2]}}", "replace with table")
+
+# ---- удаление
+R1 = """{
+  a: 1,
+  b: 2,
+  c: 3,
+}"""
+eq(j.remove(R1, ["b"]), "{\n  a: 1,\n  c: 3,\n}", "remove middle")
+eq(j.remove(R1, ["c"]), "{\n  a: 1,\n  b: 2,\n}", "remove last with comma")
+eq(j.remove(R1, ["a"]), "{\n  b: 2,\n  c: 3,\n}", "remove first")
+R2 = """{
+  a: 1,
+  b: 2
+}"""
+eq(j.remove(R2, ["b"]), "{\n  a: 1\n}", "remove last no comma")
+eq(j.remove(R2, ["a"]), "{\n  b: 2\n}", "remove first of two")
+eq(j.remove("{a: 1, b: 2, c: 3}", ["b"]), "{a: 1, c: 3}", "remove inline")
+eq(j.remove("{a: 1, b: 2}", ["b"]), "{a: 1}", "remove inline last")
+eq(j.remove("{a: {b: 1, c: 2}}", ["a", "c"]), "{a: {b: 1}}", "remove nested")
+eq(j.remove("[1, 2, 3]", [2]), "[1, 3]", "remove array item")
+eq(j.remove("[1, 3]", [2]), "[1]", "remove last array item")
+eq(j.remove("{a: 1}", ["zzz"]), "{a: 1}", "remove missing")
+print("done")

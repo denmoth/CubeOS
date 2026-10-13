@@ -1,0 +1,4 @@
+import t
+t.eq(1, 2, "x")
+t.eq([1, {a: 2}], [1, {a: 3}], "nested")
+t.eq({a: 1}, {a: 1}, "same")

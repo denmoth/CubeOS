@@ -1,0 +1,10 @@
+export def greet(name):
+    return "hello " .. name
+
+export const VERSION = "1.0"
+
+counter = 0
+
+export def bump():
+    counter += 1
+    return counter

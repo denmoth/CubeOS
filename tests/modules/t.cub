@@ -1,0 +1,17 @@
+# вспомогательные проверки для тестов библиотек
+export def deep_equal(a, b):
+    if type(a) != type(b):
+        return false
+    if type(a) != "table":
+        return a == b
+    for k, v in a:
+        if not deep_equal(v, b[k]):
+            return false
+    for k, v in b:
+        if a[k] == nil:
+            return false
+    return true
+
+export def eq(got, want, label):
+    if not deep_equal(got, want):
+        print("FAIL " .. label .. ": got " .. textutils.serialize(got) .. " want " .. textutils.serialize(want))

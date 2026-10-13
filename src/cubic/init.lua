@@ -157,4 +157,130 @@ function C.run(src, file, opts)
   return runner()
 end
 
+---------------------------------------------------------------- загрузчик модулей
+
+local function dirname(p)
+  return (p:match("^(.*)/[^/]*$")) or ""
+end
+
+local function join(a, b)
+  if a == "" then return b end
+  if b:sub(1, 1) == "/" then return b end
+  return a .. "/" .. b
+end
+
+local function normalize(p)
+  local abs = p:sub(1, 1) == "/"
+  local parts = {}
+  for seg in p:gmatch("[^/]+") do
+    if seg == "." then
+      -- пропускаем
+    elseif seg == ".." then
+      if #parts > 0 and parts[#parts] ~= ".." then
+        parts[#parts] = nil
+      elseif not abs then
+        parts[#parts + 1] = ".."
+      end
+    else
+      parts[#parts + 1] = seg
+    end
+  end
+  return (abs and "/" or "") .. table.concat(parts, "/")
+end
+
+C.path = { dirname = dirname, join = join, normalize = normalize }
+
+local default_fs = {
+  read = read_file,
+  exists = function(p)
+    if fs and fs.exists then return fs.exists(p) and not fs.isDir(p) end
+    local f = io.open(p, "rb")
+    if f then f:close() return true end
+    return false
+  end,
+}
+
+-- Загрузчик модулей для import.
+-- cfg: roots (каталоги поиска для `import a.b`), aliases ({имя = путь} для `$имя/...`),
+--      env (окружение модулей), compile_opts, fs ({read, exists}), base (каталог для `./`)
+-- Возвращает L с функциями L.import (для кода верхнего уровня) и L.import_for(каталог).
+function C.new_loader(cfg)
+  cfg = cfg or {}
+  local rfs = cfg.fs or default_fs
+  local roots = cfg.roots or {}
+  local aliases = cfg.aliases or {}
+  local cache, loading = {}, {}
+  local L = {}
+
+  local function find_file(base)
+    for _, cand in ipairs({ base, base .. ".cub", base .. ".lua", base .. "/init.cub", base .. "/init.lua" }) do
+      if rfs.exists(cand) then return cand end
+    end
+    return nil
+  end
+
+  local function load_file(path)
+    if cache[path] ~= nil then return cache[path] end
+    if loading[path] then error("circular import of " .. path, 0) end
+    loading[path] = true
+    local result
+    local ok, err = pcall(function()
+      local src = rfs.read(path)
+      if not src then error("cannot read " .. path, 0) end
+      local env = cfg.env or _G
+      if path:sub(-4) == ".cub" then
+        local opts = {}
+        for k, v in pairs(cfg.compile_opts or {}) do opts[k] = v end
+        opts.env = env
+        opts.import = L.import_for(dirname(path))
+        local runner = C.load(src, path, opts)
+        result = runner()
+      else
+        local fn, e = load(src, "=" .. path, "t", env)
+        if not fn then error(e, 0) end
+        result = fn()
+      end
+    end)
+    loading[path] = nil
+    if not ok then error(err, 0) end
+    if result == nil then result = {} end
+    cache[path] = result
+    return result
+  end
+
+  function L.resolve(spec, base_dir)
+    local base
+    if spec:sub(1, 2) == "./" or spec:sub(1, 3) == "../" then
+      base = normalize(join(base_dir or "", spec))
+    elseif spec:sub(1, 1) == "/" then
+      base = normalize(spec)
+    elseif spec:sub(1, 1) == "$" then
+      local alias, rest = spec:match("^%$([%w_]+)(.*)$")
+      local target = aliases[alias]
+      if not target then error("unknown path alias $" .. tostring(alias), 0) end
+      base = normalize(target .. rest)
+    else
+      local rel = spec:gsub("%.", "/")
+      for _, root in ipairs(roots) do
+        local f = find_file(normalize(join(root, rel)))
+        if f then return f end
+      end
+      error("module '" .. spec .. "' not found in: " .. table.concat(roots, ", "), 0)
+    end
+    local f = find_file(base)
+    if not f then error("module '" .. spec .. "' not found (" .. base .. ")", 0) end
+    return f
+  end
+
+  function L.import_for(base_dir)
+    return function(spec)
+      return load_file(L.resolve(spec, base_dir))
+    end
+  end
+
+  L.import = L.import_for(cfg.base or "")
+  L.cache = cache
+  return L
+end
+
 return C

@@ -1,0 +1,52 @@
+import t
+import std.list as l
+eq = t.eq
+eq(l.map([1, 2, 3], x => x * 2), [2, 4, 6], "map")
+eq(l.filter([1, 2, 3, 4], x => x % 2 == 0), [2, 4], "filter")
+eq(l.reduce([1, 2, 3, 4], (a, b) => a + b), 10, "reduce")
+eq(l.reduce([1, 2, 3], (a, b) => a + b, 10), 16, "reduce init")
+eq(l.sum([1, 2, 3]), 6, "sum")
+eq(l.any_of([1, 2, 3], x => x > 2), true, "any")
+eq(l.all_of([1, 2, 3], x => x > 2), false, "all")
+eq(l.count_if([1, 2, 3, 4], x => x > 1), 3, "count_if")
+eq(l.index_of(["a", "b"], "b"), 2, "index_of")
+eq(l.index_of(["a"], "z"), nil, "index_of none")
+eq(l.contains([1, 2], 2), true, "contains")
+eq(l.reverse([1, 2, 3]), [3, 2, 1], "reverse")
+eq(l.concat([1, 2], [3]), [1, 2, 3], "concat")
+eq(l.flatten([[1, 2], [3], []]), [1, 2, 3], "flatten")
+eq(l.unique([1, 2, 1, 3, 2]), [1, 2, 3], "unique")
+eq(l.zip([1, 2, 3], ["a", "b"]), [[1, "a"], [2, "b"]], "zip")
+eq(l.take([1, 2, 3, 4], 2), [1, 2], "take")
+eq(l.take([1], 3), [1], "take short")
+eq(l.drop([1, 2, 3, 4], 2), [3, 4], "drop")
+eq(l.chunk([1, 2, 3, 4, 5], 2), [[1, 2], [3, 4], [5]], "chunk")
+eq(l.first([7, 8]), 7, "first")
+eq(l.last([7, 8]), 8, "last")
+eq(l.numbers(1, 5), [1, 2, 3, 4, 5], "numbers")
+eq(l.numbers(5, 1, -2), [5, 3, 1], "numbers step")
+eq(l.sorted([3, 1, 2]), [1, 2, 3], "sorted")
+eq(l.sorted([3, 1, 2], nil, true), [3, 2, 1], "sorted desc")
+eq(l.sorted(["bb", "a", "ccc"], s => len(s)), ["a", "bb", "ccc"], "sorted key")
+stable = l.sorted([{k: 1, v: "a"}, {k: 0, v: "b"}, {k: 1, v: "c"}, {k: 0, v: "d"}], x => x.k)
+eq(l.map(stable, x => x.v), ["b", "d", "a", "c"], "stable")
+big = []
+for i in range[1, 200]:
+    big[i] = (i * 37) % 101
+sorted_big = l.sorted(big)
+ok = true
+for i in range[2, 200]:
+    if sorted_big[i - 1] > sorted_big[i]:
+        ok = false
+eq(ok, true, "sorted big")
+eq(l.min_of([3, 1, 2]), 1, "min")
+eq(l.max_of([3, 1, 2]), 3, "max")
+eq(l.max_of(["a", "ccc", "bb"], s => len(s)), "ccc", "max key")
+g = l.group_by([1, 2, 3, 4, 5], x => x % 2)
+eq(g[1], [1, 3, 5], "group odd")
+eq(g[0], [2, 4], "group even")
+xs = [1, 2, 3]
+l.remove_value(xs, 2)
+eq(xs, [1, 3], "remove_value")
+eq(l.extend([1], [2, 3]), [1, 2, 3], "extend")
+print("done")

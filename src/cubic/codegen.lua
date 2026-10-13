@@ -170,11 +170,15 @@ function M.generate(ast, file, opts)
 
   -- собирает имена, которые инструкции объявляют на уровне функции (как переменные Python)
   local function collect(stmts, names, seen)
-    local function add(name, line)
-      if not seen[name] then
-        seen[name] = true
-        names[#names + 1] = { name = name, line = line }
+    local function add(name, line, is_def)
+      local e = seen[name]
+      if e then
+        if is_def then e.def = true end
+        return
       end
+      e = { name = name, line = line, def = is_def or false }
+      seen[name] = e
+      names[#names + 1] = e
     end
     for _, s in ipairs(stmts) do
       local tag = s.tag
@@ -183,10 +187,12 @@ function M.generate(ast, file, opts)
           if t.tag == "Name" then add(t.name, s.line)
           elseif t.tag == "Starred" then add(t.name, s.line) end
         end
-      elseif tag == "FuncDef" or tag == "ClassDef" or tag == "Import" or tag == "AnnAssign" then
+      elseif tag == "FuncDef" or tag == "ClassDef" or tag == "Import" then
+        add(s.name, s.line, true)
+      elseif tag == "AnnAssign" then
         add(s.name, s.line)
       elseif tag == "FromImport" then
-        for _, n in ipairs(s.names) do add(n.alias, n.line) end
+        for _, n in ipairs(s.names) do add(n.alias, n.line, true) end
       elseif tag == "If" then
         collect(s.body, names, seen)
         for _, e in ipairs(s.elifs) do collect(e.body, names, seen) end
@@ -213,10 +219,14 @@ function M.generate(ast, file, opts)
     local decl = {}
     for _, n in ipairs(names) do
       local name = n.name
-      if not scope.names[name] and not lookup_from(scope.parent, name) then
+      local outer = lookup_from(scope.parent, name)
+      if not scope.names[name] and not outer then
         if B.PROTECTED[name] then protected_error(name, n.line) end
         if B.SHADOW_WARN[name] then warn(n.line, "'" .. name .. "' hides the CC global of the same name in this scope") end
         decl[#decl + 1] = declare(name, "local", n.line)
+        scope.names[name].is_def = n.def
+      elseif outer and outer.is_def and not n.def and not scope.names[name] then
+        warn(n.line, "assignment to '" .. name .. "' replaces the function/class/import of the same name in the enclosing scope; use 'let " .. name .. " = ...' for a local variable")
       end
     end
     if #decl > 180 then

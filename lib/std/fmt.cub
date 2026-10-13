@@ -1,0 +1,55 @@
+# std.fmt: форматирование для людей
+
+# 1536 -> "1.5 KB"
+export def bytes(n):
+    units = ["B", "KB", "MB", "GB"]
+    value = n
+    i = 1
+    while value >= 1024 and i < 4:
+        value = value / 1024
+        i += 1
+    if i == 1:
+        return f"{n} B"
+    return f"{value:.1f} {units[i]}"
+
+# 3725 -> "1h 2m 5s"
+export def duration(seconds):
+    seconds = math.floor(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    parts = []
+    n = 0
+    days = seconds // 86400
+    hours = (seconds // 3600) % 24
+    minutes = (seconds // 60) % 60
+    secs = seconds % 60
+    if days > 0:
+        n += 1
+        parts[n] = f"{days}d"
+    if hours > 0:
+        n += 1
+        parts[n] = f"{hours}h"
+    if minutes > 0:
+        n += 1
+        parts[n] = f"{minutes}m"
+    if secs > 0:
+        n += 1
+        parts[n] = f"{secs}s"
+    return table.concat(parts, " ")
+
+# 1234567 -> "1,234,567"
+export def thousands(n, sep=","):
+    s = f"{math.floor(n)}"
+    sign = ""
+    if string.sub(s, 1, 1) == "-":
+        sign = "-"
+        s = string.sub(s, 2)
+    out = string.reverse(string.gsub(string.reverse(s), "(%d%d%d)", "%1" .. sep))
+    if string.sub(out, 1, len(sep)) == sep:
+        out = string.sub(out, len(sep) + 1)
+    return sign .. out
+
+export def percent(part, total, digits=0):
+    if total == 0:
+        return "0%"
+    return string.format("%." .. digits .. "f%%", part * 100 / total)

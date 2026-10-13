@@ -1,0 +1,12 @@
+FAIL x: got 1 want 2
+FAIL nested: got {
+  1,
+  {
+    a = 2,
+  },
+} want {
+  1,
+  {
+    a = 3,
+  },
+}

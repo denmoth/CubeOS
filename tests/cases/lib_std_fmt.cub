@@ -1,0 +1,18 @@
+import t
+import std.fmt as f
+eq = t.eq
+eq(f.bytes(512), "512 B", "bytes small")
+eq(f.bytes(1536), "1.5 KB", "bytes kb")
+eq(f.bytes(1048576), "1.0 MB", "bytes mb")
+eq(f.duration(45), "45s", "dur s")
+eq(f.duration(3725), "1h 2m 5s", "dur hms")
+eq(f.duration(90061), "1d 1h 1m 1s", "dur d")
+eq(f.duration(3600), "1h", "dur h")
+eq(f.thousands(1234567), "1,234,567", "thousands")
+eq(f.thousands(999), "999", "thousands small")
+eq(f.thousands(-1234), "-1,234", "thousands neg")
+eq(f.thousands(1000, " "), "1 000", "thousands sep")
+eq(f.percent(1, 4), "25%", "percent")
+eq(f.percent(1, 3, 1), "33.3%", "percent digits")
+eq(f.percent(1, 0), "0%", "percent zero")
+print("done")

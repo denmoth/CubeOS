@@ -1,0 +1,9 @@
+import mod_a
+import ../modules/helpers/h as h
+import $m/plain as plain
+import pkg
+from mod_a import greet, VERSION as ver
+print(mod_a.greet("x"), mod_a.VERSION)
+print(h.twice(21), plain.value, pkg.name)
+print(greet("y"), ver)
+print(mod_a.bump(), mod_a.bump())

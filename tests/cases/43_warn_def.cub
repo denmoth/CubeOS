@@ -1,0 +1,8 @@
+def helper():
+    return 1
+
+def uses():
+    helper = 5
+    return helper
+
+print(uses())

@@ -1,0 +1,150 @@
+# std.str: работа со строками (по байтам, рассчитано на ASCII)
+
+def _class(chars):
+    # экранирует символы набора для шаблона Lua
+    return "[" .. string.gsub(chars, "[%^%]%-%%]", "%%%0") .. "]"
+
+# split(s) делит по пробелам, split(s, sep) по подстроке, limit ограничивает число разрезов
+export def split(s, sep=nil, limit=nil):
+    result = []
+    n = 0
+    if sep == nil:
+        for word in s:gmatch("%S+"):
+            n += 1
+            result[n] = word
+        return result
+    if sep == "":
+        raise Error("split: empty separator")
+    start = 1
+    while true:
+        if limit != nil and n >= limit:
+            break
+        i, j = string.find(s, sep, start, true)
+        if i == nil:
+            break
+        n += 1
+        result[n] = string.sub(s, start, i - 1)
+        start = j + 1
+    n += 1
+    result[n] = string.sub(s, start)
+    return result
+
+export def join(items, sep=""):
+    parts = []
+    for i, item in items:
+        parts[i] = str(item)
+    return table.concat(parts, sep)
+
+export def lines(s):
+    s = string.gsub(s, "\r\n", "\n")
+    s = string.gsub(s, "\r", "\n")
+    result = split(s, "\n")
+    if len(result) > 0 and result[len(result)] == "":
+        result[len(result)] = nil
+    return result
+
+export def lstrip(s, chars=nil):
+    if chars == nil:
+        return (string.gsub(s, "^%s+", ""))
+    return (string.gsub(s, "^" .. _class(chars) .. "+", ""))
+
+export def rstrip(s, chars=nil):
+    if chars == nil:
+        return (string.gsub(s, "%s+$", ""))
+    return (string.gsub(s, _class(chars) .. "+$", ""))
+
+export def strip(s, chars=nil):
+    return rstrip(lstrip(s, chars), chars)
+
+export def startswith(s, prefix):
+    return string.sub(s, 1, len(prefix)) == prefix
+
+export def endswith(s, suffix):
+    if suffix == "":
+        return true
+    return string.sub(s, -len(suffix)) == suffix
+
+# позиция первого вхождения подстроки или nil
+export def find(s, sub, start=1):
+    i = string.find(s, sub, start, true)
+    return i
+
+export def count(s, sub):
+    if sub == "":
+        raise Error("count: empty substring")
+    total = 0
+    start = 1
+    while true:
+        i, j = string.find(s, sub, start, true)
+        if i == nil:
+            break
+        total += 1
+        start = j + 1
+    return total
+
+export def replace(s, old, new, limit=nil):
+    if old == "":
+        raise Error("replace: empty pattern")
+    parts = []
+    n = 0
+    done = 0
+    start = 1
+    while true:
+        if limit != nil and done >= limit:
+            break
+        i, j = string.find(s, old, start, true)
+        if i == nil:
+            break
+        n += 1
+        parts[n] = string.sub(s, start, i - 1)
+        n += 1
+        parts[n] = new
+        done += 1
+        start = j + 1
+    n += 1
+    parts[n] = string.sub(s, start)
+    return table.concat(parts)
+
+export def ljust(s, width, fill=" "):
+    pad = width - len(s)
+    if pad <= 0:
+        return s
+    return s .. string.rep(fill, pad)
+
+export def rjust(s, width, fill=" "):
+    pad = width - len(s)
+    if pad <= 0:
+        return s
+    return string.rep(fill, pad) .. s
+
+export def center(s, width, fill=" "):
+    pad = width - len(s)
+    if pad <= 0:
+        return s
+    left = pad // 2
+    return string.rep(fill, left) .. s .. string.rep(fill, pad - left)
+
+export def capitalize(s):
+    return string.upper(string.sub(s, 1, 1)) .. string.lower(string.sub(s, 2))
+
+export def title(s):
+    return (string.gsub(string.lower(s), "(%a)([%w']*)", (a, b) => string.upper(a) .. b))
+
+export def is_blank(s):
+    return string.find(s, "^%s*$") != nil
+
+export def is_digits(s):
+    return string.find(s, "^%d+$") != nil
+
+export def is_alpha(s):
+    return string.find(s, "^%a+$") != nil
+
+export def repeat_str(s, n, sep=""):
+    return string.rep(s, n, sep)
+
+export def reverse(s):
+    return string.reverse(s)
+
+# первая и последняя буквы разные регистры: утилиты для сравнений
+export def iequals(a, b):
+    return string.lower(a) == string.lower(b)

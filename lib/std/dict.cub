@@ -1,0 +1,92 @@
+# std.dict: работа со словарями (таблицами с ключами)
+
+export def keys(d):
+    out = []
+    n = 0
+    for k, v in d:
+        n += 1
+        out[n] = k
+    return out
+
+export def values(d):
+    out = []
+    n = 0
+    for k, v in d:
+        n += 1
+        out[n] = v
+    return out
+
+# ключи по возрастанию (числа и строки по отдельности), чтобы порядок был предсказуем
+export def sorted_keys(d):
+    out = keys(d)
+    table.sort(out, (a, b) => (type(a) .. tostring(a)) < (type(b) .. tostring(b)) if type(a) != type(b) else a < b)
+    return out
+
+export def items(d):
+    out = []
+    n = 0
+    for k, v in d:
+        n += 1
+        out[n] = [k, v]
+    return out
+
+export def count(d):
+    n = 0
+    for k, v in d:
+        n += 1
+    return n
+
+export def is_empty(d):
+    return next(d) == nil
+
+export def has(d, k):
+    return d[k] != nil
+
+export def get(d, k, default=nil):
+    v = d[k]
+    if v == nil:
+        return default
+    return v
+
+# merge(a, b, ...): новый словарь, поздние ключи побеждают
+export def merge(*dicts):
+    out = {}
+    for d in dicts:
+        for k, v in d:
+            out[k] = v
+    return out
+
+export def pick(d, wanted):
+    out = {}
+    for k in wanted:
+        if d[k] != nil:
+            out[k] = d[k]
+    return out
+
+export def omit(d, unwanted):
+    skip = {}
+    for k in unwanted:
+        skip[k] = true
+    out = {}
+    for k, v in d:
+        if not skip[k]:
+            out[k] = v
+    return out
+
+export def from_pairs(pairs_list):
+    out = {}
+    for pair in pairs_list:
+        out[pair[1]] = pair[2]
+    return out
+
+export def map_values(d, f):
+    out = {}
+    for k, v in d:
+        out[k] = f(v)
+    return out
+
+export def invert(d):
+    out = {}
+    for k, v in d:
+        out[v] = k
+    return out

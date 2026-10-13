@@ -7,6 +7,7 @@
 --   NAME.opts     : опции компиляции, по одной в строке (minify, keep_comments)
 --   NAME.luahas   : строки, которые должны встретиться в сгенерированном Lua (по одной в строке)
 --   NAME.luahasnot: строки, которых там быть не должно
+--   NAME.loader   : наличие файла включает настоящий загрузчик модулей (lib/ и tests/modules/)
 -- Каждый тест без .err и .rterr дополнительно прогоняется с минификацией (имя "min:NAME").
 -- Результат пишется в /repo/build/test-result.txt
 
@@ -64,6 +65,14 @@ local function run_case(name, label, force)
     end,
   }, { __index = _G })
   opts.import = function(p) return { path = p } end
+  if fs.exists(base .. ".loader") then
+    local L = cubic.new_loader({
+      roots = { ROOT .. "/lib", ROOT .. "/tests/modules" },
+      aliases = { m = ROOT .. "/tests/modules" },
+      env = opts.env,
+    })
+    opts.import = L.import_for(ROOT .. "/tests/cases")
+  end
 
   local ok, runner, lua = pcall(cubic.load, src, name .. ".cub", opts)
   if want_err then

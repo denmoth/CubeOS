@@ -1,0 +1,310 @@
+# semver: версии по SemVer 2.0 и диапазоны в нотации npm (^ ~ >= < x * || и "a - b")
+import std.str as strs
+
+def _make(major, minor, patch, pre=nil):
+    return {major: major, minor: minor, patch: patch, pre: pre ?? []}
+
+# Разбирает "1.2.3", "v1.2.3-beta.1+build". Возвращает таблицу версии или nil.
+export def parse(text):
+    if type(text) != "string":
+        return nil
+    s = string.match(text, "^%s*v?(.-)%s*$")
+    core_pre, build = string.match(s, "^([^+]*)%+?(.*)$")
+    core, pre_text = string.match(core_pre, "^([^%-]*)%-?(.*)$")
+    major, minor, patch = string.match(core, "^(%d+)%.(%d+)%.(%d+)$")
+    if major == nil:
+        return nil
+    pre = []
+    if pre_text != "":
+        for ident in strs.split(pre_text, "."):
+            if ident == "" or string.find(ident, "[^%w%-]") != nil:
+                return nil
+            if string.find(ident, "^%d+$") != nil:
+                pre[len(pre) + 1] = tonumber(ident)
+            else:
+                pre[len(pre) + 1] = ident
+    v = _make(tonumber(major), tonumber(minor), tonumber(patch), pre)
+    if build != "":
+        v.build = build
+    return v
+
+export def valid(text):
+    return parse(text) != nil
+
+export def format(v):
+    out = v.major .. "." .. v.minor .. "." .. v.patch
+    if len(v.pre) > 0:
+        parts = []
+        for i, ident in v.pre:
+            parts[i] = tostring(ident)
+        out = out .. "-" .. table.concat(parts, ".")
+    if v.build != nil:
+        out = out .. "+" .. v.build
+    return out
+
+def _version(x):
+    if type(x) == "string":
+        v = parse(x)
+        if v == nil:
+            raise Error("invalid version: " .. x)
+        return v
+    return x
+
+def _cmp_ident(a, b):
+    ta = type(a)
+    tb = type(b)
+    if ta == "number" and tb == "number":
+        if a < b:
+            return -1
+        if a > b:
+            return 1
+        return 0
+    if ta == "number":
+        return -1
+    if tb == "number":
+        return 1
+    if a < b:
+        return -1
+    if a > b:
+        return 1
+    return 0
+
+def _cmp_pre(a, b):
+    na = len(a)
+    nb = len(b)
+    if na == 0 and nb == 0:
+        return 0
+    if na == 0:
+        return 1
+    if nb == 0:
+        return -1
+    n = na
+    if nb < n:
+        n = nb
+    for i in range[1, n]:
+        c = _cmp_ident(a[i], b[i])
+        if c != 0:
+            return c
+    if na < nb:
+        return -1
+    if na > nb:
+        return 1
+    return 0
+
+# -1, 0 или 1; принимает строки или разобранные версии. Метаданные сборки не учитываются.
+export def compare(a, b):
+    a = _version(a)
+    b = _version(b)
+    if a.major != b.major:
+        return a.major < b.major and -1 or 1
+    if a.minor != b.minor:
+        return a.minor < b.minor and -1 or 1
+    if a.patch != b.patch:
+        return a.patch < b.patch and -1 or 1
+    return _cmp_pre(a.pre, b.pre)
+
+export def gt(a, b): return compare(a, b) > 0
+export def lt(a, b): return compare(a, b) < 0
+export def eq(a, b): return compare(a, b) == 0
+
+export def inc(v, part):
+    v = _version(v)
+    if part == "major":
+        return _make(v.major + 1, 0, 0)
+    if part == "minor":
+        return _make(v.major, v.minor + 1, 0)
+    if part == "patch":
+        if len(v.pre) > 0:
+            return _make(v.major, v.minor, v.patch)
+        return _make(v.major, v.minor, v.patch + 1)
+    raise Error("inc: part must be major, minor or patch")
+
+# ---------------------------------------------------------------- диапазоны
+
+def _partial(s):
+    # "1", "1.2", "1.x", "1.2.3-beta" -> {major, minor, patch, pre} с nil для пропущенных частей
+    s = string.match(s, "^%s*v?(.-)%s*$")
+    if s == "" or s == "*" or s == "x" or s == "X":
+        return {}
+    core, pre_text = string.match(s, "^([^%-]*)%-?(.*)$")
+    parts = strs.split(core, ".")
+    out = {}
+    names = ["major", "minor", "patch"]
+    for i in range[1, 3]:
+        p = parts[i]
+        if p == nil or p == "x" or p == "X" or p == "*":
+            break
+        if string.find(p, "^%d+$") == nil:
+            raise Error("invalid version range part: " .. s)
+        out[names[i]] = tonumber(p)
+    if pre_text != "":
+        pre = []
+        for ident in strs.split(pre_text, "."):
+            if string.find(ident, "^%d+$") != nil:
+                pre[len(pre) + 1] = tonumber(ident)
+            else:
+                pre[len(pre) + 1] = ident
+        out.pre = pre
+    return out
+
+def _ge(p):
+    return {op: ">=", v: _make(p.major ?? 0, p.minor ?? 0, p.patch ?? 0, p.pre)}
+
+def _lt(major, minor, patch):
+    return {op: "<", v: _make(major, minor, patch)}
+
+# версия сравнивается строго, когда указаны все три части
+def _full(p):
+    return p.major != nil and p.minor != nil and p.patch != nil
+
+def _caret(rest):
+    p = _partial(rest)
+    if p.major == nil:
+        return [_ge(p)]
+    low = _ge(p)
+    if p.major > 0 or p.minor == nil:
+        return [low, _lt(p.major + 1, 0, 0)]
+    if p.minor > 0 or p.patch == nil:
+        return [low, _lt(p.major, p.minor + 1, 0)]
+    return [low, _lt(p.major, p.minor, p.patch + 1)]
+
+def _tilde(rest):
+    p = _partial(rest)
+    if p.major == nil:
+        return [_ge(p)]
+    if p.minor == nil:
+        return [_ge(p), _lt(p.major + 1, 0, 0)]
+    return [_ge(p), _lt(p.major, p.minor + 1, 0)]
+
+def _expand(tok):
+    first = string.sub(tok, 1, 1)
+    if first == "^":
+        return _caret(string.sub(tok, 2))
+    if first == "~":
+        return _tilde(string.sub(tok, 2))
+    op, rest = string.match(tok, "^([<>]=?)(.*)$")
+    if op == nil:
+        op = "="
+        rest = tok
+        if string.sub(tok, 1, 1) == "=":
+            rest = string.sub(tok, 2)
+    p = _partial(rest)
+    if op == "=":
+        if _full(p):
+            return [{op: "=", v: _make(p.major, p.minor, p.patch, p.pre)}]
+        if p.major == nil:
+            return [_ge(p)]
+        if p.minor == nil:
+            return [_ge(p), _lt(p.major + 1, 0, 0)]
+        return [_ge(p), _lt(p.major, p.minor + 1, 0)]
+    if op == ">=":
+        return [_ge(p)]
+    if op == ">":
+        if _full(p):
+            return [{op: ">", v: _make(p.major, p.minor, p.patch, p.pre)}]
+        if p.major == nil:
+            return [{op: "<", v: _make(0, 0, 0)}]
+        if p.minor == nil:
+            return [_ge({major: p.major + 1, minor: 0, patch: 0})]
+        return [_ge({major: p.major, minor: p.minor + 1, patch: 0})]
+    if op == "<":
+        return [_lt(p.major ?? 0, p.minor ?? 0, p.patch ?? 0)]
+    # "<="
+    if _full(p):
+        return [{op: "<=", v: _make(p.major, p.minor, p.patch, p.pre)}]
+    if p.major == nil:
+        return [_ge({major: 0, minor: 0, patch: 0})]
+    if p.minor == nil:
+        return [_lt(p.major + 1, 0, 0)]
+    return [_lt(p.major, p.minor + 1, 0)]
+
+def _parse_set(text):
+    text = strs.strip(text)
+    a, b = string.match(text, "^(%S+)%s+%-%s+(%S+)$")
+    if a != nil:
+        pa = _partial(a)
+        pb = _partial(b)
+        comps = [_ge(pa)]
+        upper = _expand("<=" .. b)
+        for c in upper:
+            comps[len(comps) + 1] = c
+        return comps
+    tokens = strs.split(text)
+    merged = []
+    i = 1
+    while i <= len(tokens):
+        t = tokens[i]
+        if string.find(t, "^[<>=^~]+$") != nil and tokens[i + 1] != nil:
+            t = t .. tokens[i + 1]
+            i += 1
+        merged[len(merged) + 1] = t
+        i += 1
+    comps = []
+    if len(merged) == 0:
+        return [_ge({})]
+    for t in merged:
+        for c in _expand(t):
+            comps[len(comps) + 1] = c
+    return comps
+
+let _range_cache = {}
+
+def _parse_range(text):
+    cached = _range_cache[text]
+    if cached != nil:
+        return cached
+    sets = []
+    for part in strs.split(text, "||"):
+        sets[len(sets) + 1] = _parse_set(part)
+    _range_cache[text] = sets
+    return sets
+
+def _passes(v, comp):
+    c = compare(v, comp.v)
+    op = comp.op
+    if op == "=":
+        return c == 0
+    if op == ">":
+        return c > 0
+    if op == ">=":
+        return c >= 0
+    if op == "<":
+        return c < 0
+    return c <= 0
+
+def _set_ok(v, comps):
+    for comp in comps:
+        if not _passes(v, comp):
+            return false
+    if len(v.pre) > 0:
+        # предварительная версия подходит, только если диапазон явно упоминает её тройку
+        for comp in comps:
+            cv = comp.v
+            if len(cv.pre) > 0 and cv.major == v.major and cv.minor == v.minor and cv.patch == v.patch:
+                return true
+        return false
+    return true
+
+# Подходит ли версия под диапазон ("^1.2", ">=1.0 <2.0", "1.x || 3.x")
+export def satisfies(version, range_text):
+    v = _version(version)
+    for comps in _parse_range(range_text):
+        if _set_ok(v, comps):
+            return true
+    return false
+
+export def max_satisfying(versions, range_text):
+    best = nil
+    for text in versions:
+        v = parse(text)
+        if v != nil and satisfies(v, range_text):
+            if best == nil or compare(v, best) > 0:
+                best = v
+    if best == nil:
+        return nil
+    return format(best)
+
+export def sort(versions):
+    out = copy(versions)
+    table.sort(out, (a, b) => compare(a, b) < 0)
+    return out

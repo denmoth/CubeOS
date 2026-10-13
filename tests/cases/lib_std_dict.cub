@@ -1,0 +1,22 @@
+import t
+import std.dict as d
+eq = t.eq
+data = {a: 1, b: 2, c: 3}
+eq(d.sorted_keys(data), ["a", "b", "c"], "sorted_keys")
+eq(d.count(data), 3, "count")
+eq(d.is_empty({}), true, "empty")
+eq(d.is_empty(data), false, "not empty")
+eq(d.has(data, "a"), true, "has")
+eq(d.get(data, "z", 9), 9, "get default")
+eq(d.get(data, "a", 9), 1, "get")
+eq(d.merge({a: 1}, {a: 2, b: 3}), {a: 2, b: 3}, "merge")
+eq(d.pick(data, ["a", "c"]), {a: 1, c: 3}, "pick")
+eq(d.omit(data, ["a"]), {b: 2, c: 3}, "omit")
+eq(d.from_pairs([["x", 1], ["y", 2]]), {x: 1, y: 2}, "from_pairs")
+eq(d.map_values({a: 1, b: 2}, v => v * 10), {a: 10, b: 20}, "map_values")
+eq(d.invert({a: 1, b: 2}), {[1]: "a", [2]: "b"}, "invert")
+vals = d.values(data)
+table.sort(vals)
+eq(vals, [1, 2, 3], "values")
+eq(d.items({a: 1}), [["a", 1]], "items")
+print("done")

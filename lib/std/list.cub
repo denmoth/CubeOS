@@ -1,0 +1,250 @@
+# std.list: работа со списками (таблицы с элементами 1..n)
+
+export def map(xs, f):
+    out = []
+    for i, x in xs:
+        out[i] = f(x)
+    return out
+
+export def filter(xs, f):
+    out = []
+    n = 0
+    for x in xs:
+        if f(x):
+            n += 1
+            out[n] = x
+    return out
+
+export def reduce(xs, f, init=nil):
+    acc = init
+    seeded = init != nil
+    for x in xs:
+        if not seeded:
+            acc = x
+            seeded = true
+        else:
+            acc = f(acc, x)
+    return acc
+
+export def sum(xs):
+    total = 0
+    for x in xs:
+        total += x
+    return total
+
+export def any_of(xs, f):
+    for x in xs:
+        if f(x):
+            return true
+    return false
+
+export def all_of(xs, f):
+    for x in xs:
+        if not f(x):
+            return false
+    return true
+
+export def count_if(xs, f):
+    total = 0
+    for x in xs:
+        if f(x):
+            total += 1
+    return total
+
+export def index_of(xs, v):
+    for i, x in xs:
+        if x == v:
+            return i
+    return nil
+
+export def contains(xs, v):
+    return index_of(xs, v) != nil
+
+export def reverse(xs):
+    out = []
+    n = len(xs)
+    for i in range[1, n]:
+        out[i] = xs[n - i + 1]
+    return out
+
+export def concat(a, b):
+    out = []
+    n = 0
+    for x in a:
+        n += 1
+        out[n] = x
+    for x in b:
+        n += 1
+        out[n] = x
+    return out
+
+export def flatten(xs):
+    out = []
+    n = 0
+    for sub in xs:
+        for x in sub:
+            n += 1
+            out[n] = x
+    return out
+
+export def unique(xs):
+    seen = {}
+    out = []
+    n = 0
+    for x in xs:
+        if not seen[x]:
+            seen[x] = true
+            n += 1
+            out[n] = x
+    return out
+
+export def zip(a, b):
+    out = []
+    n = len(a)
+    if len(b) < n:
+        n = len(b)
+    for i in range[1, n]:
+        out[i] = [a[i], b[i]]
+    return out
+
+export def take(xs, n):
+    out = []
+    for i in range[1, n]:
+        if xs[i] == nil:
+            break
+        out[i] = xs[i]
+    return out
+
+export def drop(xs, n):
+    out = []
+    k = 0
+    for i in range[n + 1, len(xs)]:
+        k += 1
+        out[k] = xs[i]
+    return out
+
+export def chunk(xs, size):
+    out = []
+    n = 0
+    total = len(xs)
+    i = 1
+    while i <= total:
+        n += 1
+        out[n] = xs[i:i + size - 1]
+        i += size
+    return out
+
+export def first(xs):
+    return xs[1]
+
+export def last(xs):
+    return xs[len(xs)]
+
+export def remove_value(xs, v):
+    i = index_of(xs, v)
+    if i != nil:
+        table.remove(xs, i)
+        return true
+    return false
+
+export def extend(dst, src):
+    n = len(dst)
+    for x in src:
+        n += 1
+        dst[n] = x
+    return dst
+
+# list(range) для чисел: numbers(1, 5) -> [1,2,3,4,5]
+export def numbers(a, b, step=1):
+    out = []
+    n = 0
+    for i in range[a, b] step step:
+        n += 1
+        out[n] = i
+    return out
+
+def _less(a, b, key, desc):
+    ka = a
+    kb = b
+    if key != nil:
+        ka = key(a)
+        kb = key(b)
+    if desc:
+        return kb < ka
+    return ka < kb
+
+# сортировка слиянием, устойчивая; возвращает новый список
+export def sorted(xs, key=nil, desc=false):
+    n = len(xs)
+    items = copy(xs)
+    if n < 2:
+        return items
+    buf = []
+    width = 1
+    while width < n:
+        i = 1
+        while i <= n:
+            mid = i + width
+            hi = i + 2 * width
+            if mid > n + 1:
+                mid = n + 1
+            if hi > n + 1:
+                hi = n + 1
+            a = i
+            b = mid
+            k = i
+            while a < mid and b < hi:
+                if _less(items[b], items[a], key, desc):
+                    buf[k] = items[b]
+                    b += 1
+                else:
+                    buf[k] = items[a]
+                    a += 1
+                k += 1
+            while a < mid:
+                buf[k] = items[a]
+                a += 1
+                k += 1
+            while b < hi:
+                buf[k] = items[b]
+                b += 1
+                k += 1
+            i += 2 * width
+        for j in range[1, n]:
+            items[j] = buf[j]
+        width *= 2
+    return items
+
+export def min_of(xs, key=nil):
+    best = nil
+    best_key = nil
+    for x in xs:
+        k = x
+        if key != nil:
+            k = key(x)
+        if best == nil or k < best_key:
+            best = x
+            best_key = k
+    return best
+
+export def max_of(xs, key=nil):
+    best = nil
+    best_key = nil
+    for x in xs:
+        k = x
+        if key != nil:
+            k = key(x)
+        if best == nil or k > best_key:
+            best = x
+            best_key = k
+    return best
+
+export def group_by(xs, f):
+    groups = {}
+    for x in xs:
+        k = f(x)
+        if groups[k] == nil:
+            groups[k] = []
+        g = groups[k]
+        g[len(g) + 1] = x
+    return groups

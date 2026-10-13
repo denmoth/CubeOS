@@ -1,0 +1,93 @@
+# std.path: пути в стиле CC (разделитель /)
+
+export def is_absolute(p):
+    return string.sub(p, 1, 1) == "/"
+
+# сворачивает ".", ".." и повторные слэши
+export def normalize(p):
+    absolute = is_absolute(p)
+    parts = []
+    n = 0
+    for seg in string.gmatch(p, "[^/]+"):
+        if seg == ".":
+            pass
+        elif seg == "..":
+            if n > 0 and parts[n] != "..":
+                parts[n] = nil
+                n -= 1
+            elif not absolute:
+                n += 1
+                parts[n] = ".."
+        else:
+            n += 1
+            parts[n] = seg
+    result = table.concat(parts, "/")
+    if absolute:
+        return "/" .. result
+    if result == "":
+        return "."
+    return result
+
+export def join(*parts):
+    result = ""
+    for part in parts:
+        if part == nil or part == "":
+            continue
+        if is_absolute(part) or result == "":
+            result = part
+        else:
+            result = result .. "/" .. part
+    return normalize(result)
+
+export def dirname(p):
+    p = normalize(p)
+    d = string.match(p, "^(.*)/[^/]*$")
+    if d == nil:
+        return "."
+    if d == "":
+        return "/"
+    return d
+
+export def basename(p):
+    return string.match(p, "([^/]*)$")
+
+export def extension(p):
+    name = basename(p)
+    ext = string.match(name, "^.+(%.[^%.]+)$")
+    if ext == nil:
+        return ""
+    return ext
+
+export def stem(p):
+    name = basename(p)
+    s = string.match(name, "^(.+)%.[^%.]+$")
+    if s == nil:
+        return name
+    return s
+
+export def split(p):
+    out = []
+    n = 0
+    for seg in string.gmatch(p, "[^/]+"):
+        n += 1
+        out[n] = seg
+    return out
+
+# путь p относительно base (оба нормализуются, оба должны быть либо абсолютными, либо относительными)
+export def relative(p, base):
+    a = split(normalize(p))
+    b = split(normalize(base))
+    i = 1
+    while i <= len(a) and i <= len(b) and a[i] == b[i]:
+        i += 1
+    out = []
+    n = 0
+    for j in range[i, len(b)]:
+        n += 1
+        out[n] = ".."
+    for j in range[i, len(a)]:
+        n += 1
+        out[n] = a[j]
+    if n == 0:
+        return "."
+    return table.concat(out, "/")

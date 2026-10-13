@@ -1,0 +1,26 @@
+import t
+import std.time as tm
+eq = t.eq
+eq(tm.days_from_civil(1970, 1, 1), 0, "epoch")
+eq(tm.days_from_civil(2000, 3, 1), 11017, "2000-03-01")
+eq(tm.days_from_civil(2024, 2, 29), 19782, "2024-02-29")
+eq(tm.civil_from_days(0), {year: 1970, month: 1, day: 1}, "civil epoch")
+eq(tm.civil_from_days(19782), {year: 2024, month: 2, day: 29}, "civil leap")
+eq(tm.civil_from_days(-1), {year: 1969, month: 12, day: 31}, "civil -1")
+ok = true
+for days in range[-1000, 30000] step 997:
+    c = tm.civil_from_days(days)
+    if tm.days_from_civil(c.year, c.month, c.day) != days:
+        ok = false
+eq(ok, true, "roundtrip")
+eq(tm.weekday(0), 4, "weekday epoch")
+ms = tm.from_date(2024, 2, 29, 13, 5, 9)
+eq(tm.to_date(ms), {year: 2024, month: 2, day: 29, hour: 13, minute: 5, second: 9, weekday: 4}, "to_date")
+eq(tm.format_date(ms), "2024-02-29 13:05:09", "format")
+eq(tm.day_index(86400000 * 5 + 1), 5, "day_index")
+eq(tm.day_index(86400000 * 5 + 1, -1), 4, "day_index offset")
+eq(tm.is_leap_year(2000), true, "leap 2000")
+eq(tm.is_leap_year(1900), false, "leap 1900")
+eq(tm.is_leap_year(2024), true, "leap 2024")
+eq(tm.is_leap_year(2023), false, "leap 2023")
+print("done")

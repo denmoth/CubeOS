@@ -1,0 +1,54 @@
+import t
+import semver as sv
+eq = t.eq
+
+p = sv.parse("1.2.3-beta.1+build5")
+eq(p.major, 1, "major")
+eq(p.minor, 2, "minor")
+eq(p.patch, 3, "patch")
+eq(p.pre, ["beta", 1], "pre")
+eq(p.build, "build5", "build")
+eq(sv.format(p), "1.2.3-beta.1+build5", "format")
+eq(sv.format(sv.parse("v1.2.3")), "1.2.3", "v prefix")
+eq(sv.parse("1.2"), nil, "invalid short")
+eq(sv.parse("a.b.c"), nil, "invalid text")
+eq(sv.valid("0.1.0"), true, "valid")
+
+# порядок из спецификации SemVer
+ordered = ["1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta", "1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0", "1.0.1", "1.1.0", "1.10.0", "2.0.0"]
+ok = true
+for i in range[1, len(ordered) - 1]:
+    if sv.compare(ordered[i], ordered[i + 1]) != -1 or sv.compare(ordered[i + 1], ordered[i]) != 1:
+        print("order problem at " .. ordered[i])
+        ok = false
+eq(ok, true, "spec order")
+eq(sv.compare("1.0.0+a", "1.0.0+b"), 0, "build ignored")
+eq(sv.compare("1.2.0", "1.10.0"), -1, "numeric parts")
+eq(sv.gt("2.0.0", "1.9.9"), true, "gt")
+
+cases = [
+    ["1.2.3", "^1.0.0", true], ["2.0.0", "^1.0.0", false], ["1.9.9", "^1.2.3", true], ["1.2.2", "^1.2.3", false],
+    ["0.2.5", "^0.2.3", true], ["0.3.0", "^0.2.3", false], ["0.0.3", "^0.0.3", true], ["0.0.4", "^0.0.3", false],
+    ["1.2.9", "~1.2.3", true], ["1.3.0", "~1.2.3", false], ["1.9.0", "~1", true],
+    ["1.5.0", ">=1.0.0 <2.0.0", true], ["2.0.0", ">=1.0.0 <2.0.0", false],
+    ["1.5.0", "1.x", true], ["2.0.0", "1.x", false], ["1.2.7", "1.2.x", true], ["1.3.0", "1.2.x", false],
+    ["5.0.0", "*", true], ["5.0.0", "", true],
+    ["3.1.0", "1.x || 3.x", true], ["2.0.0", "1.x || 3.x", false],
+    ["1.5.0", "1.2.3 - 2.3.4", true], ["2.3.5", "1.2.3 - 2.3.4", false], ["2.3.4", "1.2.3 - 2.3.4", true],
+    ["1.2.3", "=1.2.3", true], ["1.2.4", "1.2.3", false], ["1.2.3", ">= 1.2.3", true],
+    ["1.2.9", ">1.2", false], ["1.3.0", ">1.2", true], ["1.2.9", "<=1.2", true], ["1.3.0", "<=1.2", false],
+    ["1.2.3-beta.2", "^1.2.3-beta.1", true], ["1.2.4-beta.1", "^1.2.3-beta.1", false],
+    ["1.2.3-beta.1", "^1.0.0", false], ["1.0.0-rc.1", ">=1.0.0-rc.0 <1.0.0", true],
+    ["0.9.0", "^0", true], ["1.0.0", "^0", false], ["0.0.9", "^0.0", true], ["0.1.0", "^0.0", false],
+]
+for c in cases:
+    eq(sv.satisfies(c[1], c[2]), c[3], "satisfies " .. c[1] .. " " .. c[2])
+
+eq(sv.max_satisfying(["1.0.0", "1.2.0", "1.10.0", "2.0.0", "1.3.0-beta"], "^1.0.0"), "1.10.0", "max_satisfying")
+eq(sv.max_satisfying(["3.0.0"], "^1.0.0"), nil, "max_satisfying none")
+eq(sv.sort(["1.10.0", "1.2.0", "1.2.0-rc.1"]), ["1.2.0-rc.1", "1.2.0", "1.10.0"], "sort")
+eq(sv.format(sv.inc("1.2.3", "minor")), "1.3.0", "inc minor")
+eq(sv.format(sv.inc("1.2.3", "patch")), "1.2.4", "inc patch")
+eq(sv.format(sv.inc("1.2.3", "major")), "2.0.0", "inc major")
+eq(sv.format(sv.inc("1.2.3-beta", "patch")), "1.2.3", "inc pre")
+print("done")
