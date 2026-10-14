@@ -13,6 +13,7 @@ if not term.setGraphicsMode then
   return
 end
 
+local mono = font.default(ROOT .. "/assets")
 local f6 = font.from_file(ROOT .. "/assets/fonts/cube-6x9.font")
 -- личный шрифт Minecraft (см. tools/import_mc_font.py), если он собран на этой машине
 local mc = fs.exists(ROOT .. "/assets/private/cube-mc-6x9.font") and font.from_file(ROOT .. "/assets/private/cube-mc-6x9.font") or nil
@@ -37,7 +38,23 @@ local function show(draw_fn)
   os.pullEvent("key")
 end
 
--- экран 0 (если шрифт собран): личный шрифт в стиле Minecraft
+-- экран 0: основной шрифт системы, Monocraft в клетке 6x9
+show(function(buf)
+  local lines = {
+    "cube-mono-6x9 (Monocraft): основной шрифт CubeOS",
+    "The quick brown fox jumps over the lazy dog 0123",
+    "Привет, мир! Съешь ещё этих мягких булок, да выпей",
+    "ПРИВЕТ, МИР! ЪЫЬЭЮЯ ёЁ йЙ жЖ шШ щЩ",
+    "Українська: Є є, І і, Ї ї, Ґ ґ. Їжак із Харкова",
+    "┌──────┬──────┐ ╔══════╦══════╗ █▓▒░ ← ↑ → ↓",
+    "│ Файл │ Вид  │ ║ OK   ║ Нет  ║ α β γ δ π Ω ∞ ≠",
+  }
+  for i, text in ipairs(lines) do
+    mono:draw(buf, 0, (i - 1) * 9, text, 1)
+  end
+end)
+
+-- экран 0b (если шрифт собран): личный шрифт Minecraft для сравнения
 if mc then
   show(function(buf)
     local lines = {

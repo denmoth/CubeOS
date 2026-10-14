@@ -82,13 +82,23 @@ eq(tofu:to_text(), f6:glyph_text(0xFFFD), "fallback glyph")
 eq(f6:draw(pixelbuf.new(40, 9), 2, 0, "ab"), 14, "draw returns next x")
 
 # файлы шрифтов: сжатые блоки, вместе не больше 20 КБ
-total = fs.getSize("/repo/assets/fonts/cube-6x9.font") + fs.getSize("/repo/assets/fonts/cube-5x7.font") + fs.getSize("/repo/assets/fonts/cube-8x16.font")
+total = fs.getSize("/repo/assets/fonts/cube-mono-6x9.font") + fs.getSize("/repo/assets/fonts/cube-6x9.font") + fs.getSize("/repo/assets/fonts/cube-5x7.font") + fs.getSize("/repo/assets/fonts/cube-8x16.font")
 eq(total <= 20000, true, "fonts fit into 20 KB (" .. total .. " bytes)")
-# основной шрифт: личный Minecraft-шрифт, если он есть, иначе cube-6x9; в обоих случаях клетка 6x9 с русскими буквами
+# основной шрифт: Monocraft в клетке 6x9
 main = font.default("/repo/assets")
-eq([main.width, main.height], [6, 9], "default font has the native cell")
-eq(main:can_render("Привіт, мир! Ёжик"), true, "default font renders Russian and Ukrainian")
-# без личного файла выбирается общедоступный
-public = font.default("/repo/assets", nil, (p) => false)
-eq(string.find(public.meta, "misc-fixed", 1, true) != nil, true, "public fallback")
+eq([main.width, main.height, main.ascent], [6, 9, 7], "default font has the native cell")
+eq(string.find(main.meta, "Monocraft", 1, true) != nil, true, "default font is Monocraft")
+eq(string.find(main.meta, "OFL", 1, true) != nil, true, "default font credits its license")
+eq(main:can_render("Привіт, мир! Ёжик Їжак Ґанок Є є"), true, "default font renders Russian and Ukrainian")
+eq(has_ink(main, 0x401) and has_ink(main, 0x419) and has_ink(main, 0x407) and has_ink(main, 0x490), true, "capital letters with marks are drawn")
+# у заглавных с надстрочным знаком (Ё Й Ї) есть отдельная строка со знаком над буквой
+eq(string.find(main:glyph_text(0x401)[1], "#", 1, true) != nil, true, "Yo keeps its dots in the first row")
+# личного шрифта нет, если файла нет
+eq(font.private("/repo/assets", nil, (p) => false), nil, "no private font without the file")
+# Monocraft не пустой для всех нужных букв
+missing_mono = []
+for cp in needed:
+    if not main:has(cp) or not has_ink(main, cp):
+        missing_mono[len(missing_mono) + 1] = cp
+eq(missing_mono, [], "Monocraft has all Russian and Ukrainian letters")
 print("done")

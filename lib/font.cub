@@ -171,12 +171,16 @@ export def from_file(path, reader=nil):
         h.close()
     return Font(data)
 
-# основной шрифт системы: личный шрифт Minecraft из root/private (если собран tools/import_mc_font.py), иначе root/fonts/cube-6x9.font.
-# root обычно "/cubeos/sys/assets" (в репозитории "/repo/assets"); exists(path) по умолчанию проверяет настоящий fs
-export def default(root, reader=nil, exists=nil):
+# основной шрифт системы: Monocraft в клетке 6x9 (root/fonts/cube-mono-6x9.font, лицензия OFL)
+# root обычно "/cubeos/sys/assets" (в репозитории "/repo/assets")
+export def default(root, reader=nil):
+    return from_file(root .. "/fonts/cube-mono-6x9.font", reader)
+
+# личный шрифт Minecraft (root/private/cube-mc-6x9.font, собирается tools/import_mc_font.py на своей машине) или nil
+export def private(root, reader=nil, exists=nil):
     has = exists ?? ((p) => fs.exists(p))
-    private = root .. "/private/cube-mc-6x9.font"
-    if has(private):
-        return from_file(private, reader)
-    return from_file(root .. "/fonts/cube-6x9.font", reader)
+    path = root .. "/private/cube-mc-6x9.font"
+    if has(path):
+        return from_file(path, reader)
+    return nil
 

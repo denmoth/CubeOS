@@ -164,3 +164,10 @@ if __name__ == '__main__':
         f.write('cube-8x16: Spleen by Frederic Cambus (https://github.com/fcambus/spleen), BSD 2-Clause license below.\n'
                 'The Ukrainian Ye (U+0404, U+0454) of cube-8x16 was added by the CubeOS project.\n\n')
         f.write(spleen_license.replace('\r\n', '\n'))
+        mono_license = os.path.join(SRC, 'monocraft', 'LICENSE')
+        if os.path.exists(mono_license):
+            with open(mono_license, encoding='utf-8') as m:
+                f.write('\n\n----------------------------------------------------------------\n\n')
+                f.write('cube-mono-6x9: Monocraft v4.2.1 by Idrees Hassan (https://github.com/IdreesInc/Monocraft),\n'
+                        'SIL Open Font License 1.1, rasterized to the 6x9 cell by tools/import_monocraft.py. License:\n\n')
+                f.write(m.read().replace('\r\n', '\n'))
