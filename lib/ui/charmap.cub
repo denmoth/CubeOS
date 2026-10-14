@@ -1,0 +1,99 @@
+# ui.charmap: символ Unicode -> байт терминала CC для текстового вывода без CC: Graphics.
+#
+# Родной шрифт CC знает ASCII, несколько стрелок и значков в нижних кодах и Latin-1 (160..255). Всё остальное заменяется
+# похожим: рамки на + - |, блоки на # : ., русские буквы на латинские (один символ в одну клетку, чтобы сетка не сломалась).
+# В пиксельном выводе (свой шрифт) замены не нужны.
+#
+#   charmap.byte(0x2500) -> 45 ("-")       charmap.byte(0x416) -> 106 ("j", «Ж»)
+
+const MAP = {}
+
+def _set(cps, value):
+    for cp in cps:
+        MAP[cp] = value
+
+# рамки и линии
+_set([0x2500, 0x2501, 0x2504, 0x2505, 0x2508, 0x2509, 0x2550, 0x2574, 0x2576, 0x257C, 0x257E], 45)
+_set([0x2502, 0x2503, 0x2506, 0x2507, 0x250A, 0x250B, 0x2551, 0x2575, 0x2577, 0x257D, 0x257F], 124)
+for cp in range[0x250C, 0x254B]:
+    if MAP[cp] == nil:
+        MAP[cp] = 43
+for cp in range[0x2552, 0x256C]:
+    MAP[cp] = 43
+_set([0x256D, 0x256E, 0x256F, 0x2570], 43)
+# блоки
+_set([0x2588, 0x2593], 35)
+_set([0x2592], 58)
+_set([0x2591], 46)
+_set([0x2580], 34)
+_set([0x2584], 95)
+_set([0x258C, 0x2590, 0x258F, 0x2595], 124)
+_set([0x259B, 0x259C, 0x2599, 0x259F, 0x2596, 0x2597, 0x2598, 0x259D, 0x259A, 0x259E], 35)
+# стрелки и маркеры (низкие коды CC: 16 ► 17 ◄ 24 ↑ 25 ↓ 26 → 27 ← 30 ▲ 31 ▼)
+_set([0x25B8, 0x25B6, 0x25BA, 0x203A, 0x276F], 62)
+_set([0x25C2, 0x25C0, 0x25C4, 0x2039, 0x276E], 60)
+_set([0x2191, 0x2B06], 24)
+_set([0x2193, 0x2B07], 25)
+_set([0x2192, 0x2B95], 26)
+_set([0x2190, 0x2B05], 27)
+_set([0x25B2, 0x25B4], 30)
+_set([0x25BC, 0x25BE], 31)
+_set([0x2022, 0x25CF, 0x25CB, 0x25C9, 0x25CE, 0x2219], 42)
+_set([0x25A0, 0x25AA, 0x25A3], 35)
+_set([0x25A1, 0x25AB], 45)
+_set([0x2713, 0x2714], 118)
+_set([0x2717, 0x2718, 0x2715], 120)
+_set([0x2026], 46)
+_set([0x2013, 0x2014, 0x2212], 45)
+_set([0x00AB], 60)
+_set([0x00BB], 62)
+_set([0x2018, 0x2019], 39)
+_set([0x201C, 0x201D, 0x201E], 34)
+_set([0x2605, 0x2606], 42)
+_set([0x266A, 0x266B], 35)
+_set([0x23F1, 0x23F0, 0x231B], 111)
+
+# русские и украинские буквы: одна латинская на одну русскую
+const CYR_LOWER = "абвгдеёжзийклмнопрстуфхцчшщъыьэюяіїєґ"
+const CYR_TO_LOWER = "abvgdeejziiklmnoprstufhccwwyyyeuaiiig"
+const CYR_UPPER = "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯІЇЄҐ"
+
+def _fill_cyrillic():
+    lower = unicode.codepoints(CYR_LOWER)
+    mapped = string.byte(CYR_TO_LOWER, 1, string.len(CYR_TO_LOWER))
+    upper = unicode.codepoints(CYR_UPPER)
+    letters = {}
+    for i in range[1, string.len(CYR_TO_LOWER)]:
+        letters[i] = string.byte(CYR_TO_LOWER, i)
+    for i, cp in lower:
+        MAP[cp] = letters[i]
+    for i, cp in upper:
+        MAP[cp] = letters[i] - 32
+    # ж ч ш щ и т. д. получились в нижнем регистре, особые знаки
+    MAP[0x44C] = 39
+    MAP[0x42C] = 39
+    MAP[0x44A] = 39
+    MAP[0x42A] = 39
+
+import unicode
+_fill_cyrillic()
+
+# байт для символа: ASCII как есть, Latin-1 как есть, остальное по таблице замен, неизвестное это «?»
+export def byte(cp):
+    if cp >= 32 and cp < 127:
+        return cp
+    m = MAP[cp]
+    if m != nil:
+        return m
+    if cp >= 160 and cp <= 255:
+        return cp
+    if cp == 127:
+        return 35
+    return 63
+
+# строка с заменами для показа в обычном терминале
+export def ascii_text(s):
+    out = []
+    for cp in unicode.codepoints(s):
+        out[len(out) + 1] = string.char(byte(cp))
+    return table.concat(out)

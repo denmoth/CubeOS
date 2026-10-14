@@ -1,0 +1,174 @@
+# ui.out_pixel: вывод буфера клеток в пиксельный режим (CC: Graphics) своим шрифтом: любые символы Unicode, кириллица, рамки
+#
+#   screen = cgl.open({term: term})
+#   out = out_pixel.new(screen, font, theme)     font: шрифт lib/font.cub (по умолчанию Monocraft 6x9, клетка 6x9 пикселей)
+#   out:open()                                   загружает цвета темы в палитру, очищает
+#   out:present(cells)                           рисует изменившиеся клетки глифами и показывает кадр (cgl считает область изменений)
+#   out:set_theme(theme)                         смена темы на ходу: только палитра
+#   out:tick(dt)                                 эффекты темы (мерцание)
+#
+# Цвета: места палитры темы 0..15 это номера цветов поверхности cgl 0..15; для эффекта «строки развёртки» номера 16..31 это те
+# же цвета потемнее, ими рисуются нечётные строки пикселей каждой клетки.
+
+import ui.theme as theme_mod
+
+const DIM = 0.55
+
+export class PixelOut:
+    def init(self, screen, font, th=nil):
+        self.screen = screen
+        self.font = font
+        self.theme = th ?? theme_mod.get("cubeos")
+        self.cw = font.width
+        self.ch = font.height
+        self.cols = math.floor(screen.w / self.cw)
+        self.rows = math.floor(screen.h / self.ch)
+        self.kind = "pixel"
+        self.cell_w = self.cw
+        self.cell_h = self.ch
+        self.prev_cp = nil
+        self.prev_fg = nil
+        self.prev_bg = nil
+        self.scan = false
+        self.flicker_time = 0
+        self.stats = {frames: 0, cells: 0}
+        self.opened = false
+
+    def size(self):
+        return self.cols, self.rows
+
+    def open(self):
+        self:set_theme(self.theme)
+        self.screen.surface:clear(theme_mod.BG)
+        self.prev_cp = nil
+        self.opened = true
+
+    def _entries(self, th, factor):
+        entries = []
+        for i in range[0, 15]:
+            c = th.palette[i + 1]
+            r = math.min(255, c[1] * factor)
+            g = math.min(255, c[2] * factor)
+            b = math.min(255, c[3] * factor)
+            entries[len(entries) + 1] = [i, r, g, b]
+            if self.scan:
+                entries[len(entries) + 1] = [i + 16, r * DIM, g * DIM, b * DIM]
+        return entries
+
+    def set_theme(self, th):
+        was = self.scan
+        self.theme = th
+        self.scan = th.effects.scanlines == true
+        self.screen:set_colors(self:_entries(th, 1))
+        if was != self.scan:
+            self.prev_cp = nil
+
+    def close(self):
+        if self.opened:
+            self.screen:close()
+            self.opened = false
+
+    def invalidate(self):
+        self.prev_cp = nil
+        self.screen:invalidate()
+
+    # событие мыши в пикселях -> клетка с 0
+    def to_cell(self, x, y):
+        return math.floor(x / self.cw), math.floor(y / self.ch)
+
+    # мерцание ЭЛТ: яркость палитры слегка меняется, пока включено в теме
+    def tick(self, dt):
+        amount = self.theme.effects.flicker ?? 0
+        if amount > 0:
+            self.flicker_time += dt
+            if self.flicker_time >= 0.08:
+                self.flicker_time = 0
+                self.screen:set_colors(self:_entries(self.theme, 1 - amount * math.random()))
+
+    # рисует клетку (x, y) глифом
+    def _cell(self, px, sw, x, y, cp, fg, bg):
+        cw = self.cw
+        ch = self.ch
+        x0 = x * cw
+        y0 = y * ch
+        rows = cp != 32 and self.font:glyph_bits(cp) or nil
+        scan = self.scan
+        for gy in range[1, ch]:
+            base = (y0 + gy - 1) * sw + x0 + 1
+            f = fg
+            b = bg
+            if scan and gy % 2 == 0:
+                f = fg + 16
+                b = bg + 16
+            r = rows != nil and rows[gy] or nil
+            if r == nil:
+                for gx in range[0, cw - 1]:
+                    px[base + gx] = b
+            else:
+                for gx in range[0, cw - 1]:
+                    px[base + gx] = r[gx + 1] == 1 and f or b
+
+    # рисует буфер; возвращает число перерисованных клеток
+    def present(self, c):
+        cols = math.min(self.cols, c.w)
+        rows = math.min(self.rows, c.h)
+        full = self.prev_cp == nil
+        if full:
+            self.prev_cp = []
+            self.prev_fg = []
+            self.prev_bg = []
+        pcp = self.prev_cp
+        pfg = self.prev_fg
+        pbg = self.prev_bg
+        x_lo = 0
+        y_lo = 0
+        x_hi = cols - 1
+        y_hi = rows - 1
+        if not full:
+            x_lo = math.max(0, c.dx0)
+            y_lo = math.max(0, c.dy0)
+            x_hi = math.min(cols - 1, c.dx1)
+            y_hi = math.min(rows - 1, c.dy1)
+        c:clean()
+        s = self.screen.surface
+        if x_lo > x_hi or y_lo > y_hi:
+            return 0
+        px = s.px
+        sw = s.w
+        ccp = c.cp
+        cfg = c.fg
+        cbg = c.bg
+        changed = 0
+        min_x = 1e9
+        min_y = 1e9
+        max_x = -1
+        max_y = -1
+        for y in range[y_lo, y_hi]:
+            base = y * c.w + 1
+            pbase = y * cols + 1
+            for x in range[x_lo, x_hi]:
+                i = base + x
+                j = pbase + x
+                if full or pcp[j] != ccp[i] or pfg[j] != cfg[i] or pbg[j] != cbg[i]:
+                    pcp[j] = ccp[i]
+                    pfg[j] = cfg[i]
+                    pbg[j] = cbg[i]
+                    self:_cell(px, sw, x, y, ccp[i], cfg[i], cbg[i])
+                    changed += 1
+                    if x < min_x:
+                        min_x = x
+                    if x > max_x:
+                        max_x = x
+                    if y < min_y:
+                        min_y = y
+                    if y > max_y:
+                        max_y = y
+        if changed > 0:
+            s:mark(min_x * self.cw, min_y * self.ch, (max_x + 1) * self.cw - 1, (max_y + 1) * self.ch - 1)
+            self.screen:present()
+        self.stats.frames += 1
+        self.stats.cells += changed
+        return changed
+
+export def new(screen, font, th=nil):
+    return PixelOut(screen, font, th)

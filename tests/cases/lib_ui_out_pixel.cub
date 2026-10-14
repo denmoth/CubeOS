@@ -1,0 +1,111 @@
+import t
+import cgl
+import font as fontlib
+import ui.cells as cells
+import ui.theme as theme
+import ui.out_pixel as out_pixel
+eq = t.eq
+
+def make(cols, rows):
+    api = {}
+    state = {pal: {}, draws: 0}
+    def get_size(px):
+        if px:
+            return cols * 6, rows * 9
+        return cols, rows
+    api.getSize = get_size
+    api.setGraphicsMode = (m) => nil
+    api.setPaletteColor = (i, r, g, b) => set_pal(state, i, r, g, b)
+    api.drawPixels = (x, y, rr) => count_draw(state)
+    api.setFrozen = (f) => nil
+    return api, state
+
+def set_pal(state, i, r, g, b):
+    state.pal[i] = [r, g, b]
+
+def count_draw(state):
+    state.draws += 1
+
+tm, st = make(10, 4)
+screen = cgl.open({term: tm})
+f = fontlib.from_file("/repo/assets/fonts/cube-mono-6x9.font")
+out = out_pixel.new(screen, f, theme.get("cubeos"))
+out:open()
+eq([out.cols, out.rows], [10, 4], "grid size from the pixel size")
+eq(math.floor(st.pal[7][1] * 255 + 0.5), 0x4c, "accent is in the surface palette slot 7")
+eq(st.pal[16][2], 0, "slot 16 keeps the default color without scanlines")
+
+c = cells.new(10, 4)
+c:text(1, 1, "H", theme.BRIGHT, theme.PANEL)
+n = out:present(c)
+eq(n, 40, "first frame draws every cell")
+s = screen.surface
+# клетка (1, 1) занимает пиксели x 6..11, y 9..17: внутри только фон панели и белый текст
+seen_fg = 0
+seen_bg = 0
+other = 0
+for y in range[9, 17]:
+    for x in range[6, 11]:
+        v = s:get(x, y)
+        if v == theme.BRIGHT:
+            seen_fg += 1
+        elif v == theme.PANEL:
+            seen_bg += 1
+        else:
+            other += 1
+eq(other, 0, "the cell has only foreground and background colors")
+eq(seen_fg > 5, true, "glyph ink is drawn")
+eq(seen_bg > 20, true, "background is drawn")
+eq(s:get(0, 0), theme.BG, "empty cells have the page background")
+eq(s:get(12, 9), theme.BG, "neighbor cell is untouched")
+
+# повторный кадр и изменение одной клетки
+eq(out:present(c), 0, "nothing changed, nothing redrawn")
+c:set(5, 2, 0x416, theme.OK, theme.BG)
+before = st.draws
+eq(out:present(c), 1, "one changed cell")
+eq(st.draws - before, 1, "one draw call for one cell")
+ink = 0
+for y in range[18, 26]:
+    for x in range[30, 35]:
+        if s:get(x, y) == theme.OK:
+            ink += 1
+eq(ink > 8, true, "Cyrillic letter drawn with the pixel font")
+
+# мышь
+cx, cy = out:to_cell(13, 20)
+eq([cx, cy], [2, 2], "pixel to cell")
+
+# строки развёртки
+out:set_theme(theme.get("retro"))
+eq(st.pal[16] != nil, true, "retro theme loads dimmed colors")
+eq(st.pal[16][2] < st.pal[0][2], true, "dimmed color is darker")
+c2 = cells.new(10, 4)
+c2:text(0, 0, "A", theme.TEXT, theme.BG)
+out:present(c2)
+rows_dim = 0
+for y in range[0, 8]:
+    v = s:get(0, y)
+    if v >= 16:
+        rows_dim += 1
+eq(rows_dim >= 3, true, "odd pixel rows use dimmed colors with scanlines")
+out:set_theme(theme.get("cubeos"))
+out:present(c2)
+all_plain = true
+for y in range[0, 8]:
+    for x in range[0, 5]:
+        if s:get(x, y) >= 16:
+            all_plain = false
+eq(all_plain, true, "switching the theme removes the dimmed rows")
+
+# мерцание меняет только палитру
+out:set_theme(theme.get("retro"))
+draws_before = st.draws
+red_before = st.pal[7][2]
+for i in range[1, 30]:
+    out:tick(0.1)
+eq(st.draws, draws_before, "flicker does not send pixels")
+eq(st.pal[7][2] <= red_before, true, "flicker only dims")
+out:close()
+
+print("done")

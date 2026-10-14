@@ -1,0 +1,140 @@
+# ui.out_text: вывод буфера клеток на обычный терминал CC (без CC: Graphics) через term.blit
+#
+#   out = out_text.new(term, theme)       term: настоящий терминал, монитор или окно
+#   out:open()                            загружает палитру темы и очищает экран
+#   out:present(cells)                    рисует только изменившиеся клетки, одна строка это один вызов blit
+#   out:set_theme(theme)                  меняет палитру на ходу (без перерисовки)
+#   out:close()                           стандартные цвета CC
+#
+# Цвет клетки это номер места палитры темы, на терминале это цвет 2^номер (все 16 цветов CC перекрашены под тему).
+# Символы вне набора CC заменяет ui.charmap (рамки на + - |, русские буквы на латинские).
+
+import ui.charmap as charmap
+import ui.theme as theme_mod
+
+const HEX = "0123456789abcdef"
+
+export class TextOut:
+    def init(self, t, th=nil):
+        self.term = t
+        self.theme = th ?? theme_mod.get("cubeos")
+        self.cols, self.rows = t.getSize()
+        self.prev_cp = nil
+        self.prev_fg = nil
+        self.prev_bg = nil
+        self.kind = "text"
+        self.cell_w = 1
+        self.cell_h = 1
+        self.stats = {frames: 0, cells: 0, calls: 0}
+        self.opened = false
+
+    def size(self):
+        return self.cols, self.rows
+
+    def open(self):
+        self.cols, self.rows = self.term.getSize()
+        self:set_theme(self.theme)
+        self.term.setBackgroundColor(1)
+        self.term.setTextColor(1)
+        self.term.clear()
+        self.prev_cp = nil
+        self.opened = true
+
+    def set_theme(self, th):
+        self.theme = th
+        if self.term.setPaletteColor != nil:
+            let me = self
+            theme_mod.apply(th, (i, r, g, b) => me.term.setPaletteColor(2 ** i, r, g, b))
+        self.prev_cp = nil
+
+    def close(self):
+        if self.opened:
+            if self.term.setPaletteColor != nil:
+                std = [[240, 240, 240], [242, 178, 51], [229, 127, 216], [153, 178, 242], [222, 222, 108], [127, 204, 25],
+                    [242, 178, 204], [76, 76, 76], [153, 153, 153], [76, 153, 178], [178, 102, 229], [51, 102, 204],
+                    [127, 102, 76], [87, 166, 78], [204, 76, 76], [17, 17, 17]]
+                for i in range[0, 15]:
+                    self.term.setPaletteColor(2 ** i, std[i + 1][1] / 255, std[i + 1][2] / 255, std[i + 1][3] / 255)
+            self.term.setBackgroundColor(32768)
+            self.term.setTextColor(1)
+            self.term.clear()
+            self.term.setCursorPos(1, 1)
+            self.opened = false
+
+    def invalidate(self):
+        self.prev_cp = nil
+
+    # клетка терминала от координат события мыши (в текстовом выводе это клетки с 1) -> клетка с 0
+    def to_cell(self, x, y):
+        return x - 1, y - 1
+
+    # рисует буфер; возвращает число отправленных клеток
+    def present(self, c):
+        cols = math.min(self.cols, c.w)
+        rows = math.min(self.rows, c.h)
+        full = self.prev_cp == nil
+        if full:
+            self.prev_cp = []
+            self.prev_fg = []
+            self.prev_bg = []
+        pcp = self.prev_cp
+        pfg = self.prev_fg
+        pbg = self.prev_bg
+        x_lo = 0
+        y_lo = 0
+        x_hi = cols - 1
+        y_hi = rows - 1
+        if not full:
+            x_lo = math.max(0, c.dx0)
+            y_lo = math.max(0, c.dy0)
+            x_hi = math.min(cols - 1, c.dx1)
+            y_hi = math.min(rows - 1, c.dy1)
+        c:clean()
+        if x_lo > x_hi or y_lo > y_hi:
+            return 0
+        sent = 0
+        ccp = c.cp
+        cfg = c.fg
+        cbg = c.bg
+        for y in range[y_lo, y_hi]:
+            first = nil
+            last = nil
+            base = y * c.w + 1
+            pbase = y * cols + 1
+            for x in range[x_lo, x_hi]:
+                i = base + x
+                j = pbase + x
+                if full or pcp[j] != ccp[i] or pfg[j] != cfg[i] or pbg[j] != cbg[i]:
+                    pcp[j] = ccp[i]
+                    pfg[j] = cfg[i]
+                    pbg[j] = cbg[i]
+                    if first == nil:
+                        first = x
+                    last = x
+            if first != nil:
+                chars = []
+                fgs = []
+                bgs = []
+                n = 0
+                for x in range[first, last]:
+                    i = base + x
+                    n += 1
+                    chars[n] = string.char(charmap.byte(ccp[i]))
+                    f = cfg[i]
+                    b = cbg[i]
+                    fgs[n] = string.sub(HEX, f + 1, f + 1)
+                    bgs[n] = string.sub(HEX, b + 1, b + 1)
+                self.term.setCursorPos(first + 1, y + 1)
+                self.term.blit(table.concat(chars), table.concat(fgs), table.concat(bgs))
+                self.stats.calls += 1
+                sent += last - first + 1
+        self.stats.frames += 1
+        self.stats.cells += sent
+        return sent
+
+    # эффекты темы здесь не поддерживаются (нужны пиксели)
+    def tick(self, dt):
+        pass
+
+export def new(t, th=nil):
+    return TextOut(t, th)

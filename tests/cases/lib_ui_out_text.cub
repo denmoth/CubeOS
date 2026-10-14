@@ -1,0 +1,101 @@
+import t
+import ui.cells as cells
+import ui.theme as theme
+import ui.charmap as charmap
+import ui.out_text as out_text
+eq = t.eq
+
+# ---------------------------------------------------------------- замена символов
+eq(charmap.byte(65), 65, "ascii")
+eq(charmap.byte(0x2500), 45, "box line to minus")
+eq(charmap.byte(0x2502), 124, "box vertical to bar")
+eq(charmap.byte(0x256D), 43, "rounded corner to plus")
+eq(charmap.byte(0x2588), 35, "full block to hash")
+eq(charmap.byte(0x2191), 24, "up arrow is the CC character")
+eq(charmap.byte(0x25B8), 62, "pointer to greater-than")
+eq(charmap.byte(0xE9), 0xE9, "Latin-1 stays")
+eq(charmap.byte(0x4E2D), 63, "unknown to question mark")
+eq(charmap.ascii_text("Привет"), "Privet", "Cyrillic is transliterated one letter per cell")
+eq(charmap.ascii_text("Файлы"), "Faily", "Faily")
+eq(charmap.ascii_text("Жук"), "Juk", "capital letters")
+eq(string.len(charmap.ascii_text("Щётка")), 5, "one byte per character")
+eq(charmap.ascii_text("ЁжЇ"), "EjI", "capital Yo and Ji")
+
+# ---------------------------------------------------------------- поддельный терминал
+class Fake:
+    def init(self, cols, rows):
+        self.cols = cols
+        self.rows = rows
+        self.log = []
+        self.text = {}
+        self.fg = {}
+        self.bg = {}
+        self.cx = 1
+        self.cy = 1
+        self.pal = {}
+
+def make(cols, rows):
+    fake = Fake(cols, rows)
+    api = {}
+    def get_size():
+        return cols, rows
+    api.getSize = get_size
+    api.setCursorPos = (x, y) => fake_cursor(fake, x, y)
+    api.blit = (a, b, c) => fake_blit(fake, a, b, c)
+    api.setPaletteColor = (i, r, g, b) => fake_pal(fake, i, r, g, b)
+    api.setBackgroundColor = (c) => table.insert(fake.log, "bg")
+    api.setTextColor = (c) => table.insert(fake.log, "fg")
+    api.clear = () => table.insert(fake.log, "clear")
+    return api, fake
+
+def fake_cursor(fake, x, y):
+    fake.cx = x
+    fake.cy = y
+
+def fake_blit(fake, a, b, c):
+    table.insert(fake.log, "blit " .. fake.cx .. "," .. fake.cy .. " " .. string.len(a))
+    for i in range[1, string.len(a)]:
+        key = (fake.cx + i - 1) .. "," .. fake.cy
+        fake.text[key] = string.sub(a, i, i)
+        fake.fg[key] = string.sub(b, i, i)
+        fake.bg[key] = string.sub(c, i, i)
+
+def fake_pal(fake, i, r, g, b):
+    fake.pal[i] = [r, g, b]
+
+tm, fk = make(10, 3)
+out = out_text.new(tm, theme.get("cubeos"))
+out:open()
+eq(fk.pal[1][1] > 0, true, "palette of the theme is loaded (white slot)")
+eq(math.floor(fk.pal[128][1] * 255 + 0.5), 0x4c, "accent slot (color 128) red channel")
+c = cells.new(10, 3)
+c:text(0, 0, "Файлы", theme.BRIGHT, theme.BG)
+c:text(0, 1, "╭──╮", theme.LINE, theme.BG)
+sent = out:present(c)
+eq(sent, 30, "first frame sends everything")
+eq(fk.text["1,1"] .. fk.text["2,1"] .. fk.text["3,1"], "Fai", "letters transliterated")
+eq(fk.text["1,2"] .. fk.text["2,2"] .. fk.text["4,2"], "+-+", "box drawing replaced")
+eq(fk.fg["1,1"], "6", "foreground is the palette slot as a hex digit")
+eq(fk.bg["1,1"], "0", "background slot")
+fk.log = []
+eq(out:present(c), 0, "nothing changed, nothing sent")
+eq(len(fk.log), 0, "no calls")
+c:set(4, 2, 65, theme.ERR, theme.BG)
+sent = out:present(c)
+eq(sent, 1, "one changed cell")
+eq(fk.log, ["blit 5,3 1"], "one blit at the right place")
+c:set(0, 0, 66)
+c:set(9, 0, 67)
+fk.log = []
+out:present(c)
+eq(fk.log, ["blit 1,1 10"], "changes in one row are one blit over the span")
+x, y = out:to_cell(3, 2)
+eq([x, y], [2, 1], "mouse cell conversion")
+out:set_theme(theme.get("retro"))
+eq(fk.pal[128][1] < 0.3, true, "retro accent is green: little red")
+out:invalidate()
+eq(out:present(c), 30, "invalidate resends everything")
+out:close()
+eq(math.floor(fk.pal[1][1] * 255 + 0.5), 240, "close restores the CC palette")
+
+print("done")
