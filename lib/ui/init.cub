@@ -1,0 +1,79 @@
+# ui: библиотека текстового интерфейса CubeOS (TUI)
+#
+#   import ui
+#   out = ui.open_out({term: term})                 пиксельный вывод, если есть CC: Graphics, иначе обычный терминал
+#   sh = ui.new_shell(out, {theme: ui.theme.get("cubeos")})
+#   sh:register({id: "hello", name: "Привет", launch: (app) => app:set_root(ui.label("Привет, мир"))})
+#   sh:launch("hello")
+#   sh:run()
+#
+# Части: ui.cells (буфер клеток), ui.theme (темы), ui.border (рамки), ui.keymap (клавиши), ui.text, ui.widget (раскладка, рамка,
+# надпись), ui.controls (кнопка, флажок, ползунок, поле ввода...), ui.lists (списки, таблицы, вкладки, выбор), ui.dialogs
+# (диалоги, уведомления), ui.runtime (фокус, события, слои, анимации), ui.shell (программы, верхняя полоса, подвал),
+# ui.out_text и ui.out_pixel (выводы), ui.toys (заставки). Подробности в docs/spec/ui.md.
+
+import ui.theme as theme_mod
+import ui.border as border_mod
+import ui.keymap as keymap_mod
+import ui.cells as cells_mod
+import ui.text as text_mod
+import ui.widget as widget_mod
+import ui.controls as controls_mod
+import ui.lists as lists_mod
+import ui.dialogs as dialogs_mod
+import ui.runtime as runtime_mod
+import ui.shell as shell_mod
+import ui.out_text as out_text_mod
+import ui.out_pixel as out_pixel_mod
+import cgl as cgl_lib
+import font as font_lib
+
+export const theme = theme_mod
+export const border = border_mod
+export const keymap = keymap_mod
+export const cells = cells_mod
+export const text = text_mod
+export const widget = widget_mod
+export const controls = controls_mod
+export const lists = lists_mod
+export const dialogs = dialogs_mod
+export const runtime = runtime_mod
+export const shell_lib = shell_mod
+
+export const vbox = widget_mod.vbox
+export const hbox = widget_mod.hbox
+export const frame = widget_mod.frame
+export const label = widget_mod.label
+export const spacer = widget_mod.spacer
+export const separator = widget_mod.separator
+export const button = controls_mod.button
+export const checkbox = controls_mod.checkbox
+export const switch = controls_mod.switch
+export const slider = controls_mod.slider
+export const input = controls_mod.input
+export const progress = controls_mod.progress
+export const spinner = controls_mod.spinner
+export const list = lists_mod.list
+export const table_view = lists_mod.table_view
+export const tabs = lists_mod.tabs
+export const tab_view = lists_mod.tab_view
+export const text_view = lists_mod.text_view
+export const dropdown = lists_mod.dropdown
+
+# вывод для текущего терминала. opts: term (по умолчанию term), theme, backend ("auto", "pixel", "text"), font (шрифт lib/font.cub для
+# пикселей; по умолчанию Monocraft из assets), assets (папка с assets, "/repo/assets" по умолчанию)
+export def open_out(opts=nil):
+    o = opts ?? {}
+    t = o.term ?? term
+    th = o.theme ?? theme_mod.get("cubeos")
+    backend = o.backend ?? "auto"
+    if backend == "auto":
+        backend = (t.setGraphicsMode != nil and t.drawPixels != nil) and "pixel" or "text"
+    if backend == "pixel":
+        font = o.font ?? font_lib.default(o.assets ?? "/repo/assets")
+        screen = cgl_lib.open({term: t, backend: "graphics", mirror: o.mirror})
+        return out_pixel_mod.new(screen, font, th)
+    return out_text_mod.new(t, th)
+
+export def new_shell(out, opts=nil):
+    return shell_mod.new(out, opts)

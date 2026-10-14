@@ -1,0 +1,555 @@
+# ui.toys: заставки и забавы для TUI: цифровой дождь, аквариум, трубы, снег, DVD-логотип, звёзды, «Жизнь», большие часы, бублик
+#
+#   toys.matrix()      падающие символы, как в «Матрице»
+#   toys.aquarium()    рыбки, пузыри и водоросли из символов
+#   toys.pipes()       трубы из рамочных символов
+#   toys.snow()        снегопад
+#   toys.dvd()         прыгающий логотип, считает попадания в угол
+#   toys.starfield()   полёт сквозь звёзды
+#   toys.life()        игра «Жизнь» Конвея
+#   toys.clock()       большие часы
+#   toys.donut()       вращающийся бублик
+#
+# Каждая заставка это элемент (Widget): кладётся в программу оболочки и сама оживает, пока в дереве. Цвета берутся из темы, поэтому в
+# хакерской теме дождь зелёный, в CubeOS бирюзовый. Случайность можно подменить (props.random) для тестов. Любая клавиша или клик
+# вызывает обработчик "dismiss", если он задан.
+
+import ui.theme as th
+import ui.widget as widget
+import ui.text as txt
+import unicode
+
+# цвета для разноцветных заставок
+const PALETTE = [th.ACCENT, th.OK, th.WARN, th.ERR, th.INFO, th.BRIGHT]
+
+export class Toy(widget.Widget):
+    # props: fps (20), random (функция без аргументов, 0..1), bg (место палитры, по умолчанию BG)
+    def init(self, props=nil):
+        super.init(self, props)
+        p = props ?? {}
+        self.fps = p.fps ?? 20
+        self.rnd = p.random ?? math.random
+        self.bg = p.bg
+        self.focusable = true
+        self.timer = nil
+        self.time = 0
+        self.ready = false
+
+    def attach(self, ui):
+        super.attach(self, ui)
+        if self.timer == nil:
+            let me = self
+            self.timer = ui:every(1 / self.fps, () => me:_tick(1 / me.fps))
+
+    def detach(self):
+        if self.timer != nil:
+            self.timer.cancel()
+            self.timer = nil
+        super.detach(self)
+
+    # первая отрисовка готовит состояние, когда размер уже известен
+    def draw(self, c, t):
+        if self.visible and not self.ready and self.w > 0 and self.h > 0:
+            self:setup()
+            self.ready = true
+        super.draw(self, c, t)
+
+    def _tick(self, dt):
+        if self.w > 0 and self.h > 0:
+            if not self.ready:
+                self:setup()
+                self.ready = true
+            self.time += dt
+            self:step(dt)
+
+    # случайное целое от a до b включительно
+    def rand_int(self, a, b):
+        return math.floor(self.rnd() * (b - a + 1)) + a
+
+    def setup(self):
+        pass
+
+    def step(self, dt):
+        pass
+
+    def _measure(self, max_w, max_h):
+        return max_w, max_h
+
+    def key(self, action, code):
+        self:emit("dismiss")
+        return false
+
+    def mouse(self, kind, mx, my, button):
+        if kind == "down":
+            self:emit("dismiss")
+        return false
+
+    def hints(self):
+        return [["любая клавиша", "выход"]]
+
+# ---------------------------------------------------------------- цифровой дождь
+
+const RAIN = "0123456789ABCDEFGHKLMNPRSTUVXYZ=+*<>|:;#@$%&"
+
+export class Matrix(Toy):
+    def setup(self):
+        self.cols = []
+        for x in range[0, self.w - 1]:
+            self.cols[x + 1] = self:_new_column(true)
+
+    def _new_column(self, anywhere):
+        length = self:rand_int(6, math.max(7, math.floor(self.h * 0.8)))
+        return {head: anywhere and -self:rand_int(0, self.h * 2) or -self:rand_int(1, 12), speed: 6 + self.rnd() * 18, length: length,
+            glyphs: {}}
+
+    def step(self, dt):
+        for x, col in self.cols:
+            col.head += col.speed * dt
+            if col.head - col.length > self.h:
+                self.cols[x] = self:_new_column(false)
+            # символы иногда меняются
+            row = math.floor(col.head)
+            if row >= 0 and row < self.h:
+                col.glyphs[row + 1] = self:rand_int(1, string.len(RAIN))
+            if self.rnd() < 0.3:
+                r = self:rand_int(math.max(0, row - col.length), math.max(0, row))
+                if r < self.h:
+                    col.glyphs[r + 1] = self:rand_int(1, string.len(RAIN))
+        self:invalidate()
+
+    def _draw(self, c, t):
+        c:fill(self.x, self.y, self.w, self.h, 32, th.TEXT, self.bg ?? th.BG)
+        for x, col in self.cols:
+            head = math.floor(col.head)
+            for d in range[0, col.length]:
+                row = head - d
+                if row >= 0 and row < self.h:
+                    g = col.glyphs[row + 1]
+                    if g == nil:
+                        g = self:rand_int(1, string.len(RAIN))
+                        col.glyphs[row + 1] = g
+                    fg = th.LINE
+                    if d == 0:
+                        fg = th.BRIGHT
+                    elif d < 3:
+                        fg = th.ACCENT
+                    elif d < col.length * 0.6:
+                        fg = th.ACCENT_DIM
+                    c:set(self.x + x - 1, self.y + row, string.byte(RAIN, g), fg, nil)
+
+# ---------------------------------------------------------------- аквариум
+
+const FISH = [
+    {right: ["><(((º>"], left: ["<º)))><"], color: th.WARN},
+    {right: ["><>"], left: ["<><"], color: th.ACCENT},
+    {right: ["\\  ", " ><))°>", "/  "], left: ["  /", "<°((>< ", "  \\"], color: th.INFO},
+    {right: [" ,--, ", "<__)=>", "  '' "], left: [" ,--, ", "<=(__>", " ''  "], color: th.OK},
+    {right: ["}-(((°>"], left: ["<°)))-{"], color: th.ERR},
+    {right: ["><))'>"], left: ["<'((><"], color: th.BRIGHT}
+]
+
+export class Aquarium(Toy):
+    def setup(self):
+        self.fish = []
+        for i in range[1, math.max(3, math.floor(self.w / 10))]:
+            self.fish[i] = self:_new_fish(true)
+        self.bubbles = []
+        self.weed = []
+        x = 2
+        while x < self.w - 2:
+            self.weed[len(self.weed) + 1] = {x: x, h: self:rand_int(3, math.max(4, math.floor(self.h / 3))), phase: self.rnd() * 6}
+            x += self:rand_int(4, 9)
+
+    def _new_fish(self, anywhere):
+        kind = FISH[self:rand_int(1, len(FISH))]
+        dir = self.rnd() < 0.5 and 1 or -1
+        sprite = dir == 1 and kind.right or kind.left
+        width = 0
+        for line in sprite:
+            width = math.max(width, unicode.length(line))
+        x = anywhere and self:rand_int(0, self.w) or (dir == 1 and -width or self.w)
+        return {x: x, y: self:rand_int(2, math.max(2, self.h - 4)), dir: dir, speed: 3 + self.rnd() * 9, sprite: sprite, color: kind.color,
+            width: width}
+
+    def step(self, dt):
+        for i, f in self.fish:
+            f.x += f.dir * f.speed * dt
+            if (f.dir == 1 and f.x > self.w) or (f.dir == -1 and f.x < -f.width):
+                self.fish[i] = self:_new_fish(false)
+            if self.rnd() < 0.02:
+                self.bubbles[len(self.bubbles) + 1] = {x: f.x + (f.dir == 1 and f.width or 0), y: f.y, speed: 4 + self.rnd() * 3}
+        keep = []
+        for b in self.bubbles:
+            b.y -= b.speed * dt
+            if b.y > 1:
+                keep[len(keep) + 1] = b
+        self.bubbles = keep
+        self:invalidate()
+
+    def _draw(self, c, t):
+        c:fill(self.x, self.y, self.w, self.h, 32, th.TEXT, self.bg ?? th.BG)
+        # поверхность воды
+        for x in range[0, self.w - 1]:
+            wave = math.sin(x * 0.5 + self.time * 2) > 0 and 126 or 45
+            c:set(self.x + x, self.y, wave, th.ACCENT, nil)
+        # водоросли
+        for wd in self.weed:
+            for i in range[0, wd.h - 1]:
+                sway = math.floor(math.sin(self.time * 1.5 + wd.phase + i * 0.6) * 1.2 + 0.5)
+                c:set(self.x + wd.x + sway, self.y + self.h - 1 - i, i % 2 == 0 and 40 or 41, th.OK, nil)
+        for b in self.bubbles:
+            c:set(self.x + math.floor(b.x), self.y + math.floor(b.y), b.y < self.h / 2 and 111 or 46, th.ACCENT, nil)
+        for f in self.fish:
+            fx = math.floor(f.x)
+            for li, line in f.sprite:
+                yy = f.y + li - 1
+                if yy > 0 and yy < self.h:
+                    i = 0
+                    for cp in unicode.codepoints(line):
+                        xx = fx + i
+                        if cp != 32 and xx >= 0 and xx < self.w:
+                            c:set(self.x + xx, self.y + yy, cp, f.color, nil)
+                        i += 1
+        # песок
+        for x in range[0, self.w - 1]:
+            c:set(self.x + x, self.y + self.h - 1, (x * 7 + 3) % 5 == 0 and 46 or 95, th.WARN, nil)
+
+# ---------------------------------------------------------------- трубы
+
+export class Pipes(Toy):
+    def setup(self):
+        self.grid = {}
+        self.px = self:rand_int(0, self.w - 1)
+        self.py = self:rand_int(0, self.h - 1)
+        self.dir = self:rand_int(0, 3)
+        self.color = th.ACCENT
+        self.count = 0
+        self.last = nil
+
+    # символ клетки трубы: труба входит со стороны, противоположной движению a, и выходит в сторону b
+    # (0 вправо, 1 вниз, 2 влево, 3 вверх); маска сторон: вправо 1, вниз 2, влево 4, вверх 8
+    def _glyph(self, a, b):
+        mask = 2 ** ((a + 2) % 4) + 2 ** b
+        glyphs = {5: 0x2500, 10: 0x2502, 6: 0x256E, 12: 0x256F, 3: 0x256D, 9: 0x2570}
+        return glyphs[mask] ?? 0x253C
+
+    def step(self, dt):
+        for k in range[1, 3]:
+            nd = self.dir
+            if self.rnd() < 0.25:
+                nd = (self.dir + (self.rnd() < 0.5 and 1 or 3)) % 4
+            self.grid[self.py * self.w + self.px] = {g: self:_glyph(self.dir, nd), c: self.color}
+            self.dir = nd
+            dx = {0: 1, 1: 0, 2: -1, 3: 0}
+            dy = {0: 0, 1: 1, 2: 0, 3: -1}
+            self.px += dx[nd]
+            self.py += dy[nd]
+            self.count += 1
+            if self.px < 0 or self.px >= self.w or self.py < 0 or self.py >= self.h or self.count > self.w * self.h * 0.6:
+                if self.count > self.w * self.h * 0.6:
+                    self.grid = {}
+                    self.count = 0
+                self.px = self:rand_int(0, self.w - 1)
+                self.py = self:rand_int(0, self.h - 1)
+                self.dir = self:rand_int(0, 3)
+                self.color = PALETTE[self:rand_int(1, len(PALETTE))]
+        self:invalidate()
+
+    def _draw(self, c, t):
+        c:fill(self.x, self.y, self.w, self.h, 32, th.TEXT, self.bg ?? th.BG)
+        for k, cell in self.grid:
+            y = math.floor(k / self.w)
+            x = k - y * self.w
+            c:set(self.x + x, self.y + y, cell.g, cell.c, nil)
+
+# ---------------------------------------------------------------- снег
+
+export class Snow(Toy):
+    def setup(self):
+        self.flakes = []
+        self.drift = {}
+
+    def step(self, dt):
+        if self.rnd() < 0.8:
+            self.flakes[len(self.flakes) + 1] = {x: self.rnd() * self.w, y: 0, speed: 2 + self.rnd() * 4, sway: self.rnd() * 6,
+                big: self.rnd() < 0.3}
+        keep = []
+        for f in self.flakes:
+            f.y += f.speed * dt
+            f.x += math.sin(self.time + f.sway) * 2 * dt
+            if f.y >= self.h - 1:
+                col = math.floor(f.x)
+                self.drift[col] = math.min(3, (self.drift[col] ?? 0) + 0.34)
+            else:
+                keep[len(keep) + 1] = f
+        self.flakes = keep
+        self:invalidate()
+
+    def _draw(self, c, t):
+        c:fill(self.x, self.y, self.w, self.h, 32, th.TEXT, self.bg ?? th.BG)
+        for f in self.flakes:
+            x = math.floor(f.x)
+            if x >= 0 and x < self.w:
+                c:set(self.x + x, self.y + math.floor(f.y), f.big and 42 or 46, th.BRIGHT, nil)
+        for x, h in self.drift:
+            if x >= 0 and x < self.w:
+                rows = math.floor(h)
+                for i in range[0, rows]:
+                    c:set(self.x + x, self.y + self.h - 1 - i, 0x2591 + math.min(2, i), th.BRIGHT, nil)
+
+# ---------------------------------------------------------------- DVD
+
+export class Dvd(Toy):
+    def setup(self):
+        self.label = " CubeOS "
+        self.px = self:rand_int(0, math.max(0, self.w - 12))
+        self.py = self:rand_int(0, math.max(0, self.h - 3))
+        self.vx = 9
+        self.vy = 4.5
+        self.fx = self.px
+        self.fy = self.py
+        self.color = th.ACCENT
+        self.corners = 0
+
+    def step(self, dt):
+        bw = txt.width(self.label) + 2
+        bh = 3
+        self.fx += self.vx * dt
+        self.fy += self.vy * dt
+        hit_x = false
+        hit_y = false
+        if self.fx < 0:
+            self.fx = 0
+            self.vx = math.abs(self.vx)
+            hit_x = true
+        elif self.fx > self.w - bw:
+            self.fx = math.max(0, self.w - bw)
+            self.vx = -math.abs(self.vx)
+            hit_x = true
+        if self.fy < 0:
+            self.fy = 0
+            self.vy = math.abs(self.vy)
+            hit_y = true
+        elif self.fy > self.h - bh:
+            self.fy = math.max(0, self.h - bh)
+            self.vy = -math.abs(self.vy)
+            hit_y = true
+        if hit_x or hit_y:
+            self.color = PALETTE[self:rand_int(1, len(PALETTE))]
+        if hit_x and hit_y:
+            self.corners += 1
+        self:invalidate()
+
+    def _draw(self, c, t):
+        c:fill(self.x, self.y, self.w, self.h, 32, th.TEXT, self.bg ?? th.BG)
+        bw = txt.width(self.label) + 2
+        x = self.x + math.floor(self.fx)
+        y = self.y + math.floor(self.fy)
+        c:fill(x, y, bw, 3, 32, th.BG, self.color)
+        c:text(x + 1, y + 1, self.label, th.BG, self.color)
+        c:text(self.x + 1, self.y + self.h - 1, "углы: " .. self.corners, th.MUTED, nil)
+
+# ---------------------------------------------------------------- звёзды
+
+export class Starfield(Toy):
+    def setup(self):
+        self.stars = []
+        for i in range[1, math.max(20, math.floor(self.w * self.h / 12))]:
+            self.stars[i] = {x: (self.rnd() - 0.5) * 2, y: (self.rnd() - 0.5) * 2, z: self.rnd()}
+
+    def step(self, dt):
+        for s in self.stars:
+            s.z -= 0.6 * dt
+            if s.z <= 0.02:
+                s.x = (self.rnd() - 0.5) * 2
+                s.y = (self.rnd() - 0.5) * 2
+                s.z = 1
+        self:invalidate()
+
+    def _draw(self, c, t):
+        c:fill(self.x, self.y, self.w, self.h, 32, th.TEXT, self.bg ?? th.BG)
+        cx = self.w / 2
+        cy = self.h / 2
+        for s in self.stars:
+            px = cx + s.x / s.z * cx * 0.5
+            py = cy + s.y / s.z * cy * 0.5
+            if px >= 0 and px < self.w and py >= 0 and py < self.h:
+                near = 1 - s.z
+                glyph = near > 0.75 and 42 or (near > 0.5 and 43 or (near > 0.25 and 46 or 39))
+                fg = near > 0.75 and th.BRIGHT or (near > 0.4 and th.TEXT or th.MUTED)
+                c:set(self.x + math.floor(px), self.y + math.floor(py), glyph, fg, nil)
+
+# ---------------------------------------------------------------- «Жизнь»
+
+export class Life(Toy):
+    def setup(self):
+        self.cells = {}
+        self.gen = 0
+        for y in range[0, self.h - 1]:
+            for x in range[0, self.w - 1]:
+                if self.rnd() < 0.28:
+                    self.cells[y * self.w + x] = true
+
+    def step(self, dt):
+        self.accum = (self.accum ?? 0) + dt
+        if self.accum < 0.12:
+            return
+        self.accum = 0
+        counts = {}
+        for k, v in self.cells:
+            y = math.floor(k / self.w)
+            x = k - y * self.w
+            for dy in [-1, 0, 1]:
+                for dx in [-1, 0, 1]:
+                    if dx != 0 or dy != 0:
+                        nx = (x + dx) % self.w
+                        ny = (y + dy) % self.h
+                        key = ny * self.w + nx
+                        counts[key] = (counts[key] ?? 0) + 1
+        nxt = {}
+        for key, n in counts:
+            if n == 3 or (n == 2 and self.cells[key]):
+                nxt[key] = true
+        self.cells = nxt
+        self.gen += 1
+        # если всё вымерло или застыло, посеять заново
+        total = 0
+        for k, v in nxt:
+            total += 1
+        if total < 6 or self.gen % 400 == 0:
+            self:setup()
+        self:invalidate()
+
+    def _draw(self, c, t):
+        c:fill(self.x, self.y, self.w, self.h, 32, th.TEXT, self.bg ?? th.BG)
+        for k, v in self.cells:
+            y = math.floor(k / self.w)
+            x = k - y * self.w
+            c:set(self.x + x, self.y + y, 0x2588, th.ACCENT, nil)
+
+# ---------------------------------------------------------------- большие часы
+
+# цифры 3x5 из блоков
+const DIGITS = {
+    "0": ["###", "# #", "# #", "# #", "###"], "1": ["  #", "  #", "  #", "  #", "  #"], "2": ["###", "  #", "###", "#  ", "###"],
+    "3": ["###", "  #", "###", "  #", "###"], "4": ["# #", "# #", "###", "  #", "  #"], "5": ["###", "#  ", "###", "  #", "###"],
+    "6": ["###", "#  ", "###", "# #", "###"], "7": ["###", "  #", "  #", "  #", "  #"], "8": ["###", "# #", "###", "# #", "###"],
+    "9": ["###", "# #", "###", "  #", "###"], ":": [" ", "#", " ", "#", " "]
+}
+
+export class Clock(Toy):
+    # props: clock (функция -> строка "ЧЧ:ММ:СС", по умолчанию часы компьютера)
+    def init(self, props=nil):
+        super.init(self, props)
+        self.clock = props != nil and props.clock or _clock_text
+
+    def step(self, dt):
+        self:invalidate()
+
+    def _draw(self, c, t):
+        c:fill(self.x, self.y, self.w, self.h, 32, th.TEXT, self.bg ?? th.BG)
+        s = self.clock()
+        total = 0
+        for ch in string.gmatch(s, "."):
+            total += (DIGITS[ch] != nil and txt.width(DIGITS[ch][1]) or 1) + 1
+        x = self.x + math.floor((self.w - total) / 2)
+        y = self.y + math.floor((self.h - 5) / 2)
+        for ch in string.gmatch(s, "."):
+            glyph = DIGITS[ch]
+            if glyph != nil:
+                for row, line in glyph:
+                    for i in range[1, string.len(line)]:
+                        if string.sub(line, i, i) == "#":
+                            c:set(x + i - 1, y + row - 1, 0x2588, ch == ":" and th.ACCENT_DIM or th.ACCENT, nil)
+                x += string.len(glyph[1]) + 1
+            else:
+                x += 2
+
+def _clock_text():
+    return os.date("%H:%M:%S", os.epoch("local") / 1000)
+
+# ---------------------------------------------------------------- бублик
+
+export class Donut(Toy):
+    def setup(self):
+        self.a = 0
+        self.b = 0
+
+    def step(self, dt):
+        self.a += dt * 1.1
+        self.b += dt * 0.6
+        self:invalidate()
+
+    def _draw(self, c, t):
+        c:fill(self.x, self.y, self.w, self.h, 32, th.TEXT, self.bg ?? th.BG)
+        zbuf = {}
+        shades = ".,-~:;=!*#$@"
+        ca = math.cos(self.a)
+        sa = math.sin(self.a)
+        cb = math.cos(self.b)
+        sb = math.sin(self.b)
+        scale = math.min(self.w / 2.2, self.h * 1.0)
+        theta = 0
+        while theta < 6.283:
+            ct = math.cos(theta)
+            st = math.sin(theta)
+            phi = 0
+            while phi < 6.283:
+                cp = math.cos(phi)
+                sp = math.sin(phi)
+                cx = ct + 2
+                d = 1 / (sp * cx * sa + st * ca + 5)
+                tt = sp * cx * ca - st * sa
+                x = math.floor(self.w / 2 + scale * d * (cp * cx * cb - tt * sb) + 0.5)
+                y = math.floor(self.h / 2 + scale * 0.5 * d * (cp * cx * sb + tt * cb) + 0.5)
+                lum = math.floor(8 * ((st * sa - sp * ct * ca) * cb - sp * ct * sa - st * ca - cp * ct * sb) + 0.5)
+                if x >= 0 and x < self.w and y >= 0 and y < self.h:
+                    key = y * self.w + x
+                    if zbuf[key] == nil or d > zbuf[key]:
+                        zbuf[key] = d
+                        idx = math.max(1, math.min(12, lum + 1))
+                        fg = idx > 9 and th.BRIGHT or (idx > 5 and th.ACCENT or th.ACCENT_DIM)
+                        c:set(self.x + x, self.y + y, string.byte(shades, idx), fg, nil)
+                phi += 0.07
+            theta += 0.09
+
+export def matrix(props=nil):
+    return Matrix(props)
+
+export def aquarium(props=nil):
+    return Aquarium(props)
+
+export def pipes(props=nil):
+    return Pipes(props)
+
+export def snow(props=nil):
+    return Snow(props)
+
+export def dvd(props=nil):
+    return Dvd(props)
+
+export def starfield(props=nil):
+    return Starfield(props)
+
+export def life(props=nil):
+    return Life(props)
+
+export def clock(props=nil):
+    return Clock(props)
+
+export def donut(props=nil):
+    return Donut(props)
+
+# все заставки для списка программ: {id, name, make}
+export def all():
+    return [
+        {id: "matrix", name: "Цифровой дождь", make: matrix},
+        {id: "aquarium", name: "Аквариум", make: aquarium},
+        {id: "pipes", name: "Трубы", make: pipes},
+        {id: "snow", name: "Снегопад", make: snow},
+        {id: "dvd", name: "DVD-логотип", make: dvd},
+        {id: "starfield", name: "Звёзды", make: starfield},
+        {id: "life", name: "Жизнь", make: life},
+        {id: "clock", name: "Большие часы", make: clock},
+        {id: "donut", name: "Бублик", make: donut}
+    ]

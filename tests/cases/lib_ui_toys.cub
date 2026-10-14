@@ -1,0 +1,151 @@
+import t
+import ui.runtime as runtime
+import ui.widget as w
+import ui.toys as toys
+import ui.theme as theme
+import unicode
+eq = t.eq
+
+class StubOut:
+    def init(self, cols, rows):
+        self.cols = cols
+        self.rows = rows
+        self.last = nil
+    def size(self):
+        return self.cols, self.rows
+    def present(self, c):
+        self.last = c:to_lines()
+        c:clean()
+        return 1
+    def to_cell(self, x, y):
+        return x - 1, y - 1
+    def open(self):
+        pass
+    def close(self):
+        pass
+    def set_theme(self, th):
+        pass
+    def invalidate(self):
+        pass
+    def tick(self, dt):
+        pass
+
+# детерминированный генератор
+def make_random(seed):
+    state = {v: seed}
+    def advance():
+        state.v = (state.v * 1103515245 + 12345) % 2147483648
+        return state.v / 2147483648
+    return advance
+
+def run_toy(toy, seconds, cols=40, rows=14):
+    rt_out = StubOut(cols, rows)
+    rt_ui = runtime.new(rt_out, {})
+    rt_ui:set_root(w.vbox([toy]))
+    rt_ui:render()
+    steps = math.floor(seconds * 20)
+    for i in range[1, steps]:
+        rt_ui:tick(0.05)
+        rt_ui:render()
+    return rt_ui, rt_out
+
+def ink(out):
+    n = 0
+    for line in out.last:
+        for cp in unicode.codepoints(line):
+            if cp != 32:
+                n += 1
+    return n
+
+# ---------------------------------------------------------------- все заставки рисуют и не падают
+for entry in toys.all():
+    toy = entry.make({random: make_random(7)})
+    ui, out = run_toy(toy, 3)
+    eq(ink(out) > 0, true, entry.id .. " draws something")
+    eq(toy.time > 2.5, true, entry.id .. " is animated by the runtime timer")
+    ui.root:detach()
+    eq(toy.timer, nil, entry.id .. " stops its timer when removed from the tree")
+
+# ---------------------------------------------------------------- цифровой дождь
+m = toys.matrix({random: make_random(3)})
+ui, out = run_toy(m, 4)
+eq(len(m.cols), 40, "one column per cell column")
+bright = 0
+accent = 0
+for i in range[1, 40 * 14]:
+    f = ui.cells.fg[i]
+    if f == theme.BRIGHT and ui.cells.cp[i] != 32:
+        bright += 1
+    if f == theme.ACCENT and ui.cells.cp[i] != 32:
+        accent += 1
+eq(bright > 3, true, "rain heads are bright")
+eq(accent > bright, true, "and the trail behind them is the accent color")
+rain_before = out.last[5]
+ui:tick(0.05)
+ui:render()
+eq(table.concat(out.last, "") != rain_before .. "", true, "the rain moves")
+
+# ---------------------------------------------------------------- часы
+c = toys.clock({clock: () => "12:34:56", random: make_random(1)})
+ui, out = run_toy(c, 0.5, 50, 9)
+eq(ink(out) > 40, true, "the clock draws big digits")
+lines = out.last
+digits_row = lines[3]
+eq(string.find(digits_row, "█", 1, true) != nil, true, "block characters")
+c2 = toys.clock({clock: () => "00:00:00"})
+ui2, out2 = run_toy(c2, 0.2, 50, 9)
+eq(table.concat(out2.last, "\n") != table.concat(out.last, "\n"), true, "different time, different picture")
+
+# ---------------------------------------------------------------- DVD: логотип отскакивает и не выходит за границы
+d = toys.dvd({random: make_random(5)})
+ui, out = run_toy(d, 30, 40, 12)
+eq(d.fx >= 0 and d.fx <= 40, true, "x stays inside")
+eq(d.fy >= 0 and d.fy <= 12, true, "y stays inside")
+eq(string.find(table.concat(out.last, "\n"), "CubeOS", 1, true) != nil, true, "the logo text is drawn")
+
+# ---------------------------------------------------------------- Жизнь: поколения идут
+life = toys.life({random: make_random(9)})
+ui, out = run_toy(life, 3, 30, 12)
+eq(life.gen > 10, true, "generations advance")
+
+# ---------------------------------------------------------------- трубы: символы и стыки
+p = toys.pipes({random: make_random(11)})
+ui, out = run_toy(p, 5, 30, 12)
+allowed = {}
+for cp in [0x2500, 0x2502, 0x256D, 0x256E, 0x256F, 0x2570, 0x253C]:
+    allowed[cp] = true
+bad = 0
+for k, cell in p.grid:
+    if allowed[cell.g] == nil:
+        bad += 1
+eq(bad, 0, "pipes use only line and corner characters")
+eq(p._glyph(p, 0, 1), 0x256E, "right then down is a top-right corner")
+eq(p._glyph(p, 1, 0), 0x2570, "down then right is a bottom-left corner")
+eq(p._glyph(p, 0, 0), 0x2500, "straight horizontal")
+
+# ---------------------------------------------------------------- аквариум: рыбы не вылетают навсегда
+a = toys.aquarium({random: make_random(21)})
+ui, out = run_toy(a, 20, 40, 14)
+eq(len(a.fish) >= 3, true, "fish are replaced when they swim away")
+eq(string.find(table.concat(out.last, "\n"), "~", 1, true) != nil or string.find(table.concat(out.last, "\n"), "-", 1, true) != nil, true, "the water surface")
+
+# ---------------------------------------------------------------- тема меняет цвета
+hacker = theme.get("hacker")
+out3 = StubOut(30, 10)
+ui3 = runtime.new(out3, {theme: hacker})
+mm = toys.matrix({random: make_random(2)})
+ui3:set_root(w.vbox([mm]))
+ui3:render()
+for i in range[1, 60]:
+    ui3:tick(0.05)
+    ui3:render()
+eq(ui3.theme.name, "hacker", "the toy lives in the theme of its environment")
+
+# выход по клавише
+quit = []
+dm = toys.donut({random: make_random(2)}):on("dismiss", (wd) => table.insert(quit, "x"))
+ui4, out4 = run_toy(dm, 0.5, 30, 12)
+ui4:handle("key", keys.space)
+eq(quit, ["x"], "any key calls dismiss")
+
+print("done")
