@@ -45,6 +45,10 @@ export class Screen:
     def set_colors(self, list):
         self.display:set_colors(list)
 
+    # следующий кадр уйдёт на экран целиком
+    def invalidate(self):
+        self.display:invalidate()
+
     def clear(self, c=0):
         self.surface:clear(c)
 
