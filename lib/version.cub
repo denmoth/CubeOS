@@ -1,0 +1,7 @@
+# version: имя и версия системы, единственное место, откуда их берут баннер терминала, os.version(), установщик и «О системе»
+
+export const NAME = "CubeOS"
+export const VERSION = "0.3.0"
+
+export def full():
+    return NAME .. " " .. VERSION

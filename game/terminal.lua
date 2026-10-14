@@ -1,11 +1,11 @@
 -- Терминал CubeOS: оболочка CraftOS на весь экран (классические программы CC работают как есть). На компьютере: /repo/game/terminal.lua [программа] [аргументы]
--- Запускает rom/programs/shell.lua (или указанную программу) в окружении совместимости; os.version() возвращает "CubeOS 2.0". Выход: команда exit.
+-- Запускает rom/programs/shell.lua (или указанную программу) в окружении совместимости; os.version() возвращает "CubeOS 0.3.0". Выход: команда exit.
 local ROOT = "/repo"
 local cubic = loadfile(ROOT .. "/src/cubic/init.lua")(ROOT .. "/src/cubic")
 local loader = cubic.new_loader({ roots = { ROOT .. "/lib" } })
 
 -- компиляция модулей Cubic в CC идёт долго; между модулями отдаём управление
-for _, name in ipairs({ "compat.vararg", "compat.bios", "compat.env", "compat.proc" }) do
+for _, name in ipairs({ "version", "compat.vararg", "compat.bios", "compat.env", "compat.proc" }) do
   loader.import(name)
   os.queueEvent("preload")
   os.pullEvent("preload")

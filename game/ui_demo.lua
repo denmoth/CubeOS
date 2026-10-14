@@ -18,7 +18,7 @@ preload({
   "unicode", "font", "pixelbuf", "compress", "cgl.color", "cgl.surface", "cgl.quant", "cgl.graphics", "cgl.teletext", "cgl.mirror",
   "cgl.anim", "cgl", "ui.cells", "ui.theme", "ui.border", "ui.keymap", "ui.text", "ui.charmap", "ui.widget", "ui.controls",
   "ui.lists", "ui.dialogs", "ui.runtime", "ui.out_text", "ui.out_pixel", "ui.shell", "ui.toys", "ui",
-  "term.chars", "term.vterm", "term.view", "compat.bios", "compat.env", "compat.proc", "term.app",
+  "version", "term.chars", "term.vterm", "term.view", "compat.bios", "compat.env", "compat.proc", "term.app",
 })
 local demo = loader.import("ui_demo")
 
