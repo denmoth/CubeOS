@@ -17,6 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 import build_font as bf  # noqa: E402
+import boxdraw  # noqa: E402
 
 TTF = os.path.join(ROOT, 'build', 'fonts-src', 'monocraft', 'Monocraft-ttf', 'Monocraft.ttf')
 K = 8                      # во сколько раз рисуем крупнее
@@ -108,6 +109,10 @@ if __name__ == '__main__':
         fallback_raw, fallback = bf.build_one(bf.FONTS[0])
         merged = dict(fallback)
         merged.update(glyphs)
+        # рамки и блоки генерируем под клетку (у Monocraft и X11 они неполные или не стыкуются)
+        for code in [c for c in merged if 0x2500 <= c <= 0x259F]:
+            del merged[code]
+        merged.update(boxdraw.glyphs(W, H))
         meta = 'name=cube-mono-6x9;base=Monocraft v4.2.1 (c) 2022 Idrees Hassan, SIL OFL 1.1, rasterized to 6x9;fallback=X11 misc-fixed 6x9'
         raw = bf.pack_font(W, H, ASCENT - 1, merged, meta)
         with open(os.path.join(ROOT, 'assets', 'fonts', 'cube-mono-6x9.font'), 'wb') as f:
