@@ -36,6 +36,23 @@
 | `deflate` | `inflate`/`deflate` по RFC 1951 (динамический и фиксированный Хаффман, ленивый LZ77) | вектора и проверка потока настоящим zlib (`tools/verify_deflate.py`) |
 | `compress` | контейнер: байт метода + размер + данные; `compress(data, "auto")` выбирает самый маленький из методов 0/1/2 | круговые проверки |
 
+### Остальные библиотеки
+
+| Модуль | Назначение |
+|---|---|
+| `json` | строгий JSON: `parse`, `stringify`, `null`, `array`; поверх разборщика json5 с режимом strict |
+| `base64` | `encode(data, url_safe, pad)`, `decode`; векторы RFC 4648 |
+| `url` | `encode`, `decode`, `query_parse`, `query_build`, `parse` |
+| `unicode` | UTF-8: `codepoints`, `chars`, `length`, `sub`, `reverse`, `lower`, `upper`, `capitalize`, `is_valid`, `width`; регистр для латиницы, кириллицы, греческого |
+| `rand` | детерминированный генератор xorshift32: `new(seed)`, `u32`, `float`, `int`, `choice`, `shuffle`, `sample`; `seed_from_string` (FNV-1a) для слова дня и общих сидов |
+| `collections` | `Stack`, `Queue`, `Set`, `Heap`, `LRU` |
+| `textwrap` | `wrap`, `fill`, `indent`, `truncate`, `pad_left`, `pad_right`, `center` |
+| `argparse` | разбор аргументов команд: флаги, короткие склеенные, числа, списки, позиционные, `usage`, `help_text` |
+| `history` | undo/redo с лимитом и склейкой подряд идущих действий |
+| `log` | журнал с уровнями, кольцевой буфер, приёмник в файл |
+| `event` | шина событий с приоритетами, `once`, `off` |
+| `vec` | `Vec2`, `Vec3`, `Rect`, `clamp`, `lerp` |
+
 ## Особенности
 
 - Скорость измерена только в эмуляторе. Реальные цифры в игровом CC (Cobalt) нужно снять отдельно, это влияет на выбор метода сжатия по умолчанию и на число итераций PBKDF2.
