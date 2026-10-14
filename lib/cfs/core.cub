@@ -183,12 +183,9 @@ export class CFS:
         if m.readonly or m.provider:is_readonly():
             errors.fail("EROFS", "read-only file system", real)
 
-    # проверка нового имени: допустимость и совпадение с существующим именем без учёта регистра
-    def _check_new_name(self, m, real, allow_internal=false):
+    # совпадение с существующим именем без учёта регистра (на хостах без учёта регистра это также защита от подмены)
+    def _check_case(self, real):
         name = paths.basename(real)
-        paths.check_name(name, real)
-        if not allow_internal and (string.sub(name, -4) == ".sym" or _is_internal_name(name)):
-            errors.fail("ENAME", "this name is reserved by the file system", real)
         parent_real = paths.parent(real)
         pm, prel = self:_locate(parent_real)
         pst = pm.provider:stat(prel)
@@ -200,6 +197,14 @@ export class CFS:
                     shown = string.sub(sibling, 1, -5)
                 if shown != name and unicode.lower(shown) == lowered:
                     errors.fail("ENAME", "a name that differs only by case already exists: " .. shown, real)
+
+    # проверка нового имени: допустимость, зарезервированные имена и совпадение без учёта регистра
+    def _check_new_name(self, m, real, allow_internal=false):
+        name = paths.basename(real)
+        paths.check_name(name, real)
+        if not allow_internal and (string.sub(name, -4) == ".sym" or _is_internal_name(name)):
+            errors.fail("ENAME", "this name is reserved by the file system", real)
+        self:_check_case(real)
 
     def _notify(self, kind, path, to=nil):
         for id, w in self.watchers:
@@ -341,6 +346,8 @@ export class CFS:
             errors.fail("EISDIR", "is a directory", real)
         if existing == nil:
             self:_check_new_name(m, real, o.internal ?? false)
+        else:
+            self:_check_case(real)
         text = tostring(data)
         if o.append and existing != nil:
             text = m.provider:read(rel) .. text

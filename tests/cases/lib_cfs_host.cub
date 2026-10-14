@@ -1,0 +1,86 @@
+import t
+import cfs
+eq = t.eq
+
+def code_of(f):
+    try:
+        f()
+    except Error as e:
+        return e.code
+    return nil
+
+# CFS поверх настоящей файловой системы хоста (CraftOS-PC или игра)
+base = "/repo/build/cfs_it"
+if fs.exists(base):
+    fs.delete(base)
+fs.makeDir(base)
+
+asked = []
+def confirm(op, path, sub):
+    asked[len(asked) + 1] = op
+    return true
+
+fsys = cfs.new({confirm: confirm})
+fsys:mount("/", cfs.host(base))
+fsys:mount("/cubeos/tmp", cfs.tmp(500))
+cfs.install_defaults(fsys)
+for d in ["/cubeos/users/ivan/home", "/cubeos/shared", "/cubeos/sys"]:
+    fsys:mkdir(nil, d, {parents: true})
+ivan = cfs.subject("ivan")
+boss = cfs.subject("boss", ["admin"])
+v = cfs.view(fsys, ivan, {aliases: cfs.default_aliases("ivan")})
+home = "/cubeos/users/ivan/home"
+
+# обычная работа и атомарная замена
+v:write("$home/a.txt", "one")
+v:write("$home/a.txt", "two")
+eq(v:read("$home/a.txt"), "two", "overwrite on the real disk")
+leftovers = []
+for name in fs.list(base .. home):
+    leftovers[len(leftovers) + 1] = name
+eq(leftovers, ["a.txt"], "no temporary files left")
+v:mkdir("$home/dir/sub", {parents: true})
+v:write("$home/dir/sub/f.txt", "deep")
+eq(v:glob("$home/**/*.txt"), [home .. "/a.txt", home .. "/dir/sub/f.txt"], "glob on real disk")
+eq(v:stat("$home/a.txt").size, 3, "size on real disk")
+
+# ссылки .sym на настоящем диске
+v:link(home .. "/dir/sub/f.txt", home .. "/deep-link")
+eq(v:read("$home/deep-link"), "deep", "link on real disk")
+eq(fs.exists(base .. home .. "/deep-link.sym"), true, "link is stored as a .sym file")
+eq(v:lstat("$home/deep-link").type, "link", "lstat on real disk")
+
+# корзина на настоящем диске
+v:remove("$home/dir", {recursive: true})
+eq(len(v:trash_items()), 1, "dir moved to the real trash")
+v:trash_restore(v:trash_items()[1].id)
+eq(v:read("$home/dir/sub/f.txt"), "deep", "restored from the real trash")
+
+# между дисками: настоящий диск и память
+v:move("$home/a.txt", "/cubeos/tmp/a.txt")
+eq(v:read("/cubeos/tmp/a.txt"), "two", "moved from disk to memory")
+eq(v:exists("$home/a.txt"), false, "gone from disk")
+v:copy("/cubeos/tmp/a.txt", "$home/back.txt")
+eq(v:read("$home/back.txt"), "two", "copied from memory to disk")
+eq(code_of(() => v:write("/cubeos/tmp/big", string.rep("x", 600))), "ENOSPC", "memory limit through CFS")
+
+# важные файлы на настоящем диске
+bv = cfs.view(fsys, boss, {aliases: cfs.default_aliases("boss")})
+bv:write("/cubeos/shared/!lock", "1")
+eq(asked, ["write"], "confirmation on the real disk")
+eq(code_of(() => v:write("/cubeos/shared/!lock", "2")), "EACCES", "user blocked on the real disk")
+
+# имена
+eq(code_of(() => v:write("$home/Back.txt", "x")), "ENAME", "case collision on the real disk")
+eq(code_of(() => v:write("$home/bad|name", "x")), "ENAME", "forbidden name on the real disk")
+
+# замещённый fs на настоящем диске
+lfs = cfs.legacy_fs(v)
+h = lfs.open(home .. "/legacy.txt", "w")
+h.write("data")
+h.close()
+eq(lfs.getSize(home .. "/legacy.txt"), 4, "legacy on the real disk")
+eq(lfs.getFreeSpace("/") > 0, true, "free space of the real disk")
+
+fs.delete(base)
+print("done")
