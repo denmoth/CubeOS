@@ -1,0 +1,91 @@
+import t
+import ui.shell as shell_mod
+import term.app as term_app
+import term.view as view_mod
+eq = t.eq
+
+class StubOut:
+    def init(self, cols, rows):
+        self.cols = cols
+        self.rows = rows
+        self.kind = "text"
+    def size(self):
+        return self.cols, self.rows
+    def present(self, c):
+        self.last = c:to_lines()
+        c:clean()
+        return 1
+    def to_cell(self, x, y):
+        return x - 1, y - 1
+    def open(self):
+        pass
+    def close(self):
+        pass
+    def set_theme(self, th):
+        pass
+    def invalidate(self):
+        pass
+    def tick(self, dt):
+        pass
+    def set_term_palette(self, list16):
+        pass
+
+HIST = "/repo/build/term_view_history"
+if fs.exists(HIST):
+    fs.delete(HIST)
+out = StubOut(40, 12)
+sh = shell_mod.new(out, {clock: () => "14:32", animations: false})
+sh:register(term_app.spec({history_path: HIST, greeting: false}))
+app = sh:launch("terminal")
+sh:tick(0.05)
+sh:render()
+view = app.ui.root
+vt = app.vterm
+
+# много строк вывода: в прокрутке назад они остаются
+for i in range[1, 40]:
+    vt:setCursorPos(1, vt.h)
+    vt:write("line " .. i)
+    vt:scroll(1)
+sh:tick(0.05)
+sh:render()
+eq(len(vt.hist) >= 30, true, "scrolled-off lines are kept in the history")
+eq(view.offset, 0, "the view starts at the bottom")
+
+# колесо мыши листает назад, Shift+PgUp тоже, символ возвращает вниз
+sh:handle("mouse_scroll", -1, 5, 5)
+eq(view.offset, 3, "one wheel tick up scrolls three lines")
+sh:handle("mouse_scroll", 1, 5, 5)
+eq(view.offset, 0, "and back down")
+sh:handle("key", keys.leftShift, false)
+sh:handle("key", keys.pageUp, false)
+sh:handle("key_up", keys.pageUp)
+sh:handle("key_up", keys.leftShift)
+eq(view.offset > 5, true, "Shift+PgUp scrolls a page")
+sh:render()
+eq(string.find(table.concat(out.last, "\n"), "line 1", 1, true) != nil or view.offset > 0, true, "older lines are shown")
+sh:handle("char", "x")
+eq(view.offset, 0, "typing returns to the bottom")
+
+# выделение мышью копирует; правая кнопка вставляет
+vt:setCursorPos(1, 3)
+vt:clearLine()
+vt:write("copy this text")
+sh:tick(0.05)
+sh:render()
+sh:handle("mouse_click", 1, 1, 4)
+sh:handle("mouse_drag", 1, 9, 4)
+sh:handle("mouse_up", 1, 9, 4)
+eq(view_mod.clipboard.text, "copy this", "dragging selects and copies the text")
+sh:handle("key", keys.leftCtrl, false)
+sh:handle("key", keys.u, false)
+sh:handle("key_up", keys.u)
+sh:handle("key_up", keys.leftCtrl)
+sh:handle("mouse_click", 2, 3, 6)
+sh:handle("mouse_up", 2, 3, 6)
+sh:tick(0.05)
+sh:render()
+eq(string.find(table.concat(out.last, "\n"), "copy this", 2, true) != nil, true, "a right click pastes it into the command line")
+
+fs.delete(HIST)
+print("done")

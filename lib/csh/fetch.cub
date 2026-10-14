@@ -81,6 +81,8 @@ export def logo_rows():
     return rows
 
 def plural_kb(n):
+    if n >= 1073741824:
+        return string.format("%.1f GB", n / 1073741824)
     if n >= 1048576:
         return string.format("%.1f MB", n / 1048576)
     return string.format("%.0f KB", n / 1024)

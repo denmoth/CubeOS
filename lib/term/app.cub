@@ -30,6 +30,8 @@ export def spec(opts=nil):
         view = view_mod.new(vt, {height: "fill", width: "fill"})
         env = compat_env.new({vterm: vt})
         out = app.ui.out
+        if app.shell != nil:
+            out = app.shell.out
         env.csh_opts = {history_path: o.history_path ?? "/.csh_history", user: o.user, host: o.host, greeting: o.greeting,
             info: {display: out.kind == "pixel" and "pixel mode" or "text mode", font: out.kind == "pixel" and "Monocraft 6x9" or nil}}
         popts = {name: o.name ?? "terminal", on_exit: (p, ok, err) => on_exit(app, p, ok, err, o),

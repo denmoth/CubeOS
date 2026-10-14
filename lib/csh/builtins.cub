@@ -145,7 +145,7 @@ def b_ls(sh, args):
             mode = fsys.isReadOnly(p) and "r-" or "rw"
             size = d and "-" or tostring(fsys.getSize(p))
             line = kind .. mode .. " " .. string.rep(" ", 8 - string.len(size)) .. size .. " "
-            sh:write_color("7", line)
+            sh:write_color("8", line)
             sh:write_color(color_for(sh, p, nm), nm .. (d and "/" or ""))
             sh:println("")
         return 0
