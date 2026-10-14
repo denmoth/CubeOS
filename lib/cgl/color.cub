@@ -1,0 +1,224 @@
+# cgl.color: палитры, цвета, градиенты, смешивание
+#
+# Цвет в CGL это номер в палитре (0..255). Первые 16 номеров совпадают с 16 цветами CC (номер = номер бита: colors.white это 1 = 2^0,
+# colors.black это 32768 = 2^15), остальные это куб 6x6x6 (16..231) и 24 серых (232..255), как в 256-цветном терминале.
+# Прозрачность в спрайтах это специальное значение CLEAR (-1), в палитре его нет.
+#
+#   p = color.default_palette()
+#   p:nearest(255, 128, 0)           ближайший номер к RGB
+#   p:set(3, 10, 20, 30)             переопределить цвет
+#   g = color.gradient(p, 1, 9, 8)   8 номеров от цвета 1 до цвета 9 (смешивание в RGB)
+
+export const CLEAR = -1
+
+# названия 16 цветов CC в порядке номеров (номер = индекс бита)
+export const CC_NAMES = ["white", "orange", "magenta", "lightBlue", "yellow", "lime", "pink", "gray", "lightGray", "cyan",
+    "purple", "blue", "brown", "green", "red", "black"]
+
+# стандартная палитра CC (RGB 0..255), в порядке номеров
+const CC_RGB = [[240, 240, 240], [242, 178, 51], [229, 127, 216], [153, 178, 242], [222, 222, 108], [127, 204, 25],
+    [242, 178, 204], [76, 76, 76], [153, 153, 153], [76, 153, 178], [178, 102, 229], [51, 102, 204], [127, 102, 76],
+    [87, 166, 78], [204, 76, 76], [17, 17, 17]]
+
+const CUBE_LEVELS = [0, 95, 135, 175, 215, 255]
+
+def _clamp(v, lo, hi):
+    if v < lo:
+        return lo
+    if v > hi:
+        return hi
+    return v
+
+def _round(v):
+    return math.floor(v + 0.5)
+
+export def rgb_to_hsv(r, g, b):
+    r = r / 255
+    g = g / 255
+    b = b / 255
+    mx = math.max(r, g, b)
+    mn = math.min(r, g, b)
+    d = mx - mn
+    h = 0
+    if d != 0:
+        if mx == r:
+            h = ((g - b) / d) % 6
+        elif mx == g:
+            h = (b - r) / d + 2
+        else:
+            h = (r - g) / d + 4
+        h = h * 60
+    s = mx == 0 and 0 or d / mx
+    return h, s, mx
+
+export def hsv_to_rgb(h, s, v):
+    h = h % 360
+    c = v * s
+    x = c * (1 - math.abs((h / 60) % 2 - 1))
+    m = v - c
+    r = 0
+    g = 0
+    b = 0
+    if h < 60:
+        r = c
+        g = x
+    elif h < 120:
+        r = x
+        g = c
+    elif h < 180:
+        g = c
+        b = x
+    elif h < 240:
+        g = x
+        b = c
+    elif h < 300:
+        r = x
+        b = c
+    else:
+        r = c
+        b = x
+    return _round((r + m) * 255), _round((g + m) * 255), _round((b + m) * 255)
+
+# смешивание двух RGB: t от 0 (первый) до 1 (второй)
+export def lerp_rgb(r1, g1, b1, r2, g2, b2, t):
+    return _round(r1 + (r2 - r1) * t), _round(g1 + (g2 - g1) * t), _round(b1 + (b2 - b1) * t)
+
+# "#rrggbb" или "rrggbb" -> r, g, b
+export def parse_hex(text):
+    r, g, b = string.match(text, "^#?(%x%x)(%x%x)(%x%x)$")
+    if r == nil:
+        raise Error("bad color: " .. tostring(text))
+    return tonumber(r, 16), tonumber(g, 16), tonumber(b, 16)
+
+export def to_hex(r, g, b):
+    return string.format("#%02x%02x%02x", r, g, b)
+
+# яркость цвета 0..255 по восприятию
+export def luma(r, g, b):
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+export class Palette:
+    # entries: список {r, g, b}; по умолчанию полная палитра из 256 цветов
+    def init(self, entries=nil):
+        self.rgb = []
+        self.size = 0
+        if entries != nil:
+            for i, e in entries:
+                self.rgb[i] = [e[1], e[2], e[3]]
+            self.size = len(entries)
+        self.cache = {}
+
+    def set(self, index, r, g, b):
+        self.rgb[index + 1] = [_clamp(_round(r), 0, 255), _clamp(_round(g), 0, 255), _clamp(_round(b), 0, 255)]
+        if index + 1 > self.size:
+            self.size = index + 1
+        self.cache = {}
+
+    # возвращает r, g, b
+    def get(self, index):
+        c = self.rgb[index + 1]
+        if c == nil:
+            return 0, 0, 0
+        return c[1], c[2], c[3]
+
+    def hex(self, index):
+        r, g, b = self:get(index)
+        return to_hex(r, g, b)
+
+    def copy(self):
+        p = Palette()
+        for i in range[1, self.size]:
+            c = self.rgb[i]
+            if c != nil:
+                p.rgb[i] = [c[1], c[2], c[3]]
+        p.size = self.size
+        return p
+
+    # ближайший по RGB номер среди first..last (по умолчанию все); результат кэшируется
+    def nearest(self, r, g, b, first=0, last=nil):
+        top = last ?? (self.size - 1)
+        key = r * 65536 + g * 256 + b + first * 4294967296 + top * 1099511627776
+        cached = self.cache[key]
+        if cached != nil:
+            return cached
+        best = first
+        best_d = 1e30
+        for i in range[first, top]:
+            c = self.rgb[i + 1]
+            if c != nil:
+                dr = c[1] - r
+                dg = c[2] - g
+                db = c[3] - b
+                # веса по восприятию (красный и синий менее заметны, чем зелёный)
+                d = 0.30 * dr * dr + 0.59 * dg * dg + 0.11 * db * db
+                if d < best_d:
+                    best_d = d
+                    best = i
+                    if d == 0:
+                        break
+        self.cache[key] = best
+        return best
+
+    # палитра из n номеров между from_index и to_index (смешивание в RGB)
+    def gradient(self, from_index, to_index, n):
+        out = []
+        r1, g1, b1 = self:get(from_index)
+        r2, g2, b2 = self:get(to_index)
+        for i in range[0, n - 1]:
+            t = n == 1 and 0 or i / (n - 1)
+            r, g, b = lerp_rgb(r1, g1, b1, r2, g2, b2, t)
+            out[i + 1] = self:nearest(r, g, b)
+        return out
+
+    # цвет, смешанный из двух номеров
+    def mix(self, a, b, t):
+        r1, g1, b1 = self:get(a)
+        r2, g2, b2 = self:get(b)
+        r, g, bl = lerp_rgb(r1, g1, b1, r2, g2, b2, t)
+        return self:nearest(r, g, bl)
+
+# стандартная палитра из 256 цветов (16 цветов CC, куб 6x6x6, 24 серых)
+export def default_palette():
+    p = Palette()
+    for i in range[0, 15]:
+        c = CC_RGB[i + 1]
+        p.rgb[i + 1] = [c[1], c[2], c[3]]
+    for i in range[0, 215]:
+        r = CUBE_LEVELS[i // 36 + 1]
+        g = CUBE_LEVELS[(i // 6) % 6 + 1]
+        b = CUBE_LEVELS[i % 6 + 1]
+        p.rgb[16 + i + 1] = [r, g, b]
+    for i in range[0, 23]:
+        level = 8 + i * 10
+        p.rgb[232 + i + 1] = [level, level, level]
+    p.size = 256
+    return p
+
+# палитра только из 16 цветов CC
+export def cc_palette():
+    p = Palette()
+    for i in range[0, 15]:
+        c = CC_RGB[i + 1]
+        p.rgb[i + 1] = [c[1], c[2], c[3]]
+    p.size = 16
+    return p
+
+# порядковая растеризация (матрица Байера 4x4): решает, брать ли второй цвет в точке (x, y) при доле t (0..1)
+const BAYER4 = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]
+
+export def dither(t, x, y):
+    threshold = (BAYER4[y % 4 + 1][x % 4 + 1] + 0.5) / 16
+    return t > threshold
+
+# номер бита CC для номера палитры 0..15 -> значение colors.* (степень двойки)
+export def cc_value(index):
+    return 2 ** index
+
+# значение colors.* (степень двойки) -> номер 0..15
+export def cc_index(value):
+    n = 0
+    v = value
+    while v > 1:
+        v = v // 2
+        n += 1
+    return n

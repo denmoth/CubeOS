@@ -1,0 +1,613 @@
+# cgl.surface: поверхность для рисования (буфер пикселей с цветами-номерами палитры) и все примитивы
+#
+#   s = surface.new(100, 60)           ширина, высота; пиксели заполнены цветом 0
+#   s:line(0, 0, 99, 59, 5)            линия (Брезенхэм), необязательно толщина
+#   s:circle(50, 30, 20, 7, true)      окружность, true: залитая
+#   s:text(font, 4, 4, "Привет", 15)   текст шрифтом (см. lib/font.cub)
+#   s:blit(sprite, 10, 10)             копирование с прозрачностью (CLEAR = -1)
+#
+# Координаты с нуля, как в term.drawPixels. Все операции учитывают область отсечения (clip) и сдвиг начала координат (translate).
+# Цвет это номер палитры (cgl.color); CLEAR (-1) означает прозрачный пиксель в спрайтах.
+
+import cgl.color as color
+import unicode
+
+export const CLEAR = -1
+
+def _floor(v):
+    return math.floor(v)
+
+def _round(v):
+    return math.floor(v + 0.5)
+
+export class Surface:
+    def init(self, width, height, fill=0):
+        self.w = width
+        self.h = height
+        self.px = []
+        for i in range[1, width * height]:
+            self.px[i] = fill
+        self.cx0 = 0
+        self.cy0 = 0
+        self.cx1 = width - 1
+        self.cy1 = height - 1
+        self.ox = 0
+        self.oy = 0
+        self.clips = []
+        self.origins = []
+
+    # ------------------------------------------------------------ область отсечения и сдвиг
+
+    # сужает область рисования до пересечения с (x, y, w, h) в текущих координатах; pop_clip возвращает прежнюю
+    def push_clip(self, x, y, w, h):
+        self.clips[len(self.clips) + 1] = [self.cx0, self.cy0, self.cx1, self.cy1]
+        x0 = x + self.ox
+        y0 = y + self.oy
+        self.cx0 = math.max(self.cx0, x0)
+        self.cy0 = math.max(self.cy0, y0)
+        self.cx1 = math.min(self.cx1, x0 + w - 1)
+        self.cy1 = math.min(self.cy1, y0 + h - 1)
+
+    def pop_clip(self):
+        c = table.remove(self.clips)
+        if c != nil:
+            self.cx0 = c[1]
+            self.cy0 = c[2]
+            self.cx1 = c[3]
+            self.cy1 = c[4]
+
+    # сдвигает начало координат; pop_origin возвращает прежнее
+    def push_origin(self, dx, dy):
+        self.origins[len(self.origins) + 1] = [self.ox, self.oy]
+        self.ox += dx
+        self.oy += dy
+
+    def pop_origin(self):
+        o = table.remove(self.origins)
+        if o != nil:
+            self.ox = o[1]
+            self.oy = o[2]
+
+    # ------------------------------------------------------------ пиксели
+
+    def set(self, x, y, c):
+        x += self.ox
+        y += self.oy
+        if x >= self.cx0 and x <= self.cx1 and y >= self.cy0 and y <= self.cy1:
+            self.px[y * self.w + x + 1] = c
+
+    # цвет пикселя или nil вне поверхности (учитывает сдвиг, не учитывает отсечение)
+    def get(self, x, y):
+        x += self.ox
+        y += self.oy
+        if x < 0 or y < 0 or x >= self.w or y >= self.h:
+            return nil
+        return self.px[y * self.w + x + 1]
+
+    # заливает всю поверхность (отсечение и сдвиг не действуют)
+    def clear(self, c=0):
+        for i in range[1, self.w * self.h]:
+            self.px[i] = c
+
+    def copy(self):
+        s = Surface(self.w, self.h)
+        for i in range[1, self.w * self.h]:
+            s.px[i] = self.px[i]
+        return s
+
+    def equals(self, other):
+        if self.w != other.w or self.h != other.h:
+            return false
+        for i in range[1, self.w * self.h]:
+            if self.px[i] != other.px[i]:
+                return false
+        return true
+
+    # контрольная сумма содержимого (для тестов и сравнения кадров)
+    def checksum(self):
+        a = 1
+        b = 0
+        for i in range[1, self.w * self.h]:
+            a = (a + (self.px[i] + 2)) % 65521
+            b = (b + a) % 65521
+        return b * 65536 + a
+
+    # ------------------------------------------------------------ прямоугольники и линии
+
+    def fill_rect(self, x, y, w, h, c):
+        x0 = math.max(x + self.ox, self.cx0)
+        y0 = math.max(y + self.oy, self.cy0)
+        x1 = math.min(x + self.ox + w - 1, self.cx1)
+        y1 = math.min(y + self.oy + h - 1, self.cy1)
+        if x0 > x1 or y0 > y1:
+            return
+        px = self.px
+        stride = self.w
+        for yy in range[y0, y1]:
+            base = yy * stride + 1
+            for xx in range[x0, x1]:
+                px[base + xx] = c
+
+    def hline(self, x, y, length, c):
+        self:fill_rect(x, y, length, 1, c)
+
+    def vline(self, x, y, length, c):
+        self:fill_rect(x, y, 1, length, c)
+
+    # контур прямоугольника толщиной t внутрь
+    def rect(self, x, y, w, h, c, t=1):
+        if w <= 0 or h <= 0:
+            return
+        if t * 2 >= w or t * 2 >= h:
+            self:fill_rect(x, y, w, h, c)
+            return
+        self:fill_rect(x, y, w, t, c)
+        self:fill_rect(x, y + h - t, w, t, c)
+        self:fill_rect(x, y + t, t, h - 2 * t, c)
+        self:fill_rect(x + w - t, y + t, t, h - 2 * t, c)
+
+    # линия Брезенхэма; thickness > 1 рисует квадратное «перо»
+    def line(self, x0, y0, x1, y1, c, thickness=1):
+        x0 = _round(x0)
+        y0 = _round(y0)
+        x1 = _round(x1)
+        y1 = _round(y1)
+        dx = math.abs(x1 - x0)
+        dy = -math.abs(y1 - y0)
+        sx = x0 < x1 and 1 or -1
+        sy = y0 < y1 and 1 or -1
+        err = dx + dy
+        half = (thickness - 1) // 2
+        while true:
+            if thickness <= 1:
+                self:set(x0, y0, c)
+            else:
+                self:fill_rect(x0 - half, y0 - half, thickness, thickness, c)
+            if x0 == x1 and y0 == y1:
+                break
+            e2 = 2 * err
+            if e2 >= dy:
+                err += dy
+                x0 += sx
+            if e2 <= dx:
+                err += dx
+                y0 += sy
+
+    # ------------------------------------------------------------ окружности и эллипсы
+
+    def circle(self, cx, cy, r, c, fill=false):
+        if r < 0:
+            return
+        if r == 0:
+            self:set(cx, cy, c)
+            return
+        x = r
+        y = 0
+        err = 1 - r
+        while x >= y:
+            if fill:
+                self:fill_rect(cx - x, cy + y, 2 * x + 1, 1, c)
+                if y != 0:
+                    self:fill_rect(cx - x, cy - y, 2 * x + 1, 1, c)
+                if x != y:
+                    self:fill_rect(cx - y, cy + x, 2 * y + 1, 1, c)
+                    self:fill_rect(cx - y, cy - x, 2 * y + 1, 1, c)
+            else:
+                self:set(cx + x, cy + y, c)
+                self:set(cx - x, cy + y, c)
+                self:set(cx + x, cy - y, c)
+                self:set(cx - x, cy - y, c)
+                self:set(cx + y, cy + x, c)
+                self:set(cx - y, cy + x, c)
+                self:set(cx + y, cy - x, c)
+                self:set(cx - y, cy - x, c)
+            y += 1
+            if err < 0:
+                err += 2 * y + 1
+            else:
+                x -= 1
+                err += 2 * (y - x) + 1
+
+    # эллипс с полуосями rx и ry; контур без разрывов (по строкам и по столбцам)
+    def ellipse(self, cx, cy, rx, ry, c, fill=false):
+        if rx < 0 or ry < 0:
+            return
+        if rx == 0 or ry == 0:
+            self:fill_rect(cx - rx, cy - ry, 2 * rx + 1, 2 * ry + 1, c)
+            return
+        for dy in range[-ry, ry]:
+            t = 1 - (dy * dy) / (ry * ry)
+            half = _round(rx * math.sqrt(t < 0 and 0 or t))
+            if fill:
+                self:fill_rect(cx - half, cy + dy, 2 * half + 1, 1, c)
+            else:
+                self:set(cx - half, cy + dy, c)
+                self:set(cx + half, cy + dy, c)
+        if not fill:
+            for dx in range[-rx, rx]:
+                t = 1 - (dx * dx) / (rx * rx)
+                half = _round(ry * math.sqrt(t < 0 and 0 or t))
+                self:set(cx + dx, cy - half, c)
+                self:set(cx + dx, cy + half, c)
+
+    # прямоугольник со скруглёнными углами радиуса r
+    def round_rect(self, x, y, w, h, r, c, fill=false):
+        r = math.min(r, w // 2, h // 2)
+        if r <= 0:
+            if fill:
+                self:fill_rect(x, y, w, h, c)
+            else:
+                self:rect(x, y, w, h, c)
+            return
+        if fill:
+            self:fill_rect(x + r, y, w - 2 * r, h, c)
+            self:fill_rect(x, y + r, r, h - 2 * r, c)
+            self:fill_rect(x + w - r, y + r, r, h - 2 * r, c)
+            self:_corner(x + r, y + r, r, c, 1, true)
+            self:_corner(x + w - r - 1, y + r, r, c, 2, true)
+            self:_corner(x + r, y + h - r - 1, r, c, 3, true)
+            self:_corner(x + w - r - 1, y + h - r - 1, r, c, 4, true)
+        else:
+            self:fill_rect(x + r, y, w - 2 * r, 1, c)
+            self:fill_rect(x + r, y + h - 1, w - 2 * r, 1, c)
+            self:fill_rect(x, y + r, 1, h - 2 * r, c)
+            self:fill_rect(x + w - 1, y + r, 1, h - 2 * r, c)
+            self:_corner(x + r, y + r, r, c, 1, false)
+            self:_corner(x + w - r - 1, y + r, r, c, 2, false)
+            self:_corner(x + r, y + h - r - 1, r, c, 3, false)
+            self:_corner(x + w - r - 1, y + h - r - 1, r, c, 4, false)
+
+    # четверть окружности: 1 левый верх, 2 правый верх, 3 левый низ, 4 правый низ
+    def _corner(self, cx, cy, r, c, quarter, fill):
+        x = r
+        y = 0
+        err = 1 - r
+        sxm = (quarter == 1 or quarter == 3) and -1 or 1
+        sym = (quarter == 1 or quarter == 2) and -1 or 1
+        while x >= y:
+            if fill:
+                if sxm < 0:
+                    self:fill_rect(cx - x, cy + sym * y, x + 1, 1, c)
+                    self:fill_rect(cx - y, cy + sym * x, y + 1, 1, c)
+                else:
+                    self:fill_rect(cx, cy + sym * y, x + 1, 1, c)
+                    self:fill_rect(cx, cy + sym * x, y + 1, 1, c)
+            else:
+                self:set(cx + sxm * x, cy + sym * y, c)
+                self:set(cx + sxm * y, cy + sym * x, c)
+            y += 1
+            if err < 0:
+                err += 2 * y + 1
+            else:
+                x -= 1
+                err += 2 * (y - x) + 1
+
+    # ------------------------------------------------------------ многоугольники
+
+    # points: [[x, y], ...]; заливка по правилу чётности, горизонтальные «ленты» по строкам
+    def polygon(self, points, c, fill=false):
+        n = len(points)
+        if n < 1:
+            return
+        if not fill:
+            for i in range[1, n]:
+                a = points[i]
+                b = points[i % n + 1]
+                self:line(a[1], a[2], b[1], b[2], c)
+            return
+        miny = points[1][2]
+        maxy = points[1][2]
+        for p in points:
+            miny = math.min(miny, p[2])
+            maxy = math.max(maxy, p[2])
+        for y in range[_floor(miny), _floor(maxy)]:
+            sy = y + 0.5
+            xs = []
+            for i in range[1, n]:
+                a = points[i]
+                b = points[i % n + 1]
+                y0 = a[2]
+                y1 = b[2]
+                if (y0 <= sy and y1 > sy) or (y1 <= sy and y0 > sy):
+                    xs[len(xs) + 1] = a[1] + (sy - y0) * (b[1] - a[1]) / (y1 - y0)
+            table.sort(xs)
+            i = 1
+            while i + 1 <= len(xs):
+                x0 = _round(xs[i])
+                x1 = _round(xs[i + 1]) - 1
+                if x1 >= x0:
+                    self:fill_rect(x0, y, x1 - x0 + 1, 1, c)
+                i += 2
+            # контур поверх заливки закрывает щели на вершинах
+        for i in range[1, n]:
+            a = points[i]
+            b = points[i % n + 1]
+            self:line(a[1], a[2], b[1], b[2], c)
+
+    def triangle(self, x0, y0, x1, y1, x2, y2, c, fill=false):
+        self:polygon([[x0, y0], [x1, y1], [x2, y2]], c, fill)
+
+    # заливка связной области цветом c, начиная с (x, y); область определяется цветом начальной точки
+    def flood_fill(self, x, y, c):
+        target = self:get(x, y)
+        if target == nil or target == c:
+            return 0
+        count = 0
+        stack = [[x, y]]
+        while len(stack) > 0:
+            p = table.remove(stack)
+            px = p[1]
+            py = p[2]
+            if self:get(px, py) == target:
+                lx = px
+                while self:get(lx - 1, py) == target:
+                    lx -= 1
+                rx = px
+                while self:get(rx + 1, py) == target:
+                    rx += 1
+                for xx in range[lx, rx]:
+                    self:set(xx, py, c)
+                    count += 1
+                for dy in [-1, 1]:
+                    inside = false
+                    for xx in range[lx, rx]:
+                        match = self:get(xx, py + dy) == target
+                        if match and not inside:
+                            stack[len(stack) + 1] = [xx, py + dy]
+                        inside = match
+        return count
+
+    # ------------------------------------------------------------ градиенты и узоры
+
+    # градиент из списка цветов (номеров) по вертикали ("v") или горизонтали ("h")
+    def fill_gradient(self, x, y, w, h, colors, direction="v"):
+        n = len(colors)
+        if n == 0 or w <= 0 or h <= 0:
+            return
+        if direction == "h":
+            for i in range[0, w - 1]:
+                idx = n == 1 and 1 or _floor(i * (n - 1) / math.max(1, w - 1) + 0.5) + 1
+                self:fill_rect(x + i, y, 1, h, colors[idx])
+        else:
+            for j in range[0, h - 1]:
+                idx = n == 1 and 1 or _floor(j * (n - 1) / math.max(1, h - 1) + 0.5) + 1
+                self:fill_rect(x, y + j, w, 1, colors[idx])
+
+    # узор 8x8 (список из 8 чисел, младший бит слева) двумя цветами; c2 = CLEAR оставляет фон как есть
+    def fill_pattern(self, x, y, w, h, pattern, c1, c2=-1):
+        for j in range[0, h - 1]:
+            row = pattern[j % 8 + 1]
+            for i in range[0, w - 1]:
+                on = (row // (2 ** (i % 8))) % 2 == 1
+                if on:
+                    self:set(x + i, y + j, c1)
+                elif c2 != CLEAR:
+                    self:set(x + i, y + j, c2)
+
+    # ------------------------------------------------------------ копирование
+
+    # копирует src в (x, y). opts: sx, sy, sw, sh (часть источника), flip_x, flip_y, scale (или scale_x, scale_y),
+    # transparent (какой цвет источника не копировать, по умолчанию CLEAR; false копирует всё), map (таблица замены цветов)
+    def blit(self, src, x, y, opts=nil):
+        o = opts ?? {}
+        sx0 = o.sx ?? 0
+        sy0 = o.sy ?? 0
+        sw = o.sw ?? (src.w - sx0)
+        sh = o.sh ?? (src.h - sy0)
+        scale_x = o.scale_x ?? o.scale ?? 1
+        scale_y = o.scale_y ?? o.scale ?? 1
+        flip_x = o.flip_x ?? false
+        flip_y = o.flip_y ?? false
+        skip = CLEAR
+        if o.transparent != nil:
+            skip = o.transparent
+        map = o.map
+        dw = _floor(sw * scale_x)
+        dh = _floor(sh * scale_y)
+        if dw <= 0 or dh <= 0:
+            return
+        ax = x + self.ox
+        ay = y + self.oy
+        x0 = math.max(ax, self.cx0)
+        y0 = math.max(ay, self.cy0)
+        x1 = math.min(ax + dw - 1, self.cx1)
+        y1 = math.min(ay + dh - 1, self.cy1)
+        if x0 > x1 or y0 > y1:
+            return
+        spx = src.px
+        dpx = self.px
+        sstride = src.w
+        dstride = self.w
+        plain = scale_x == 1 and scale_y == 1 and not flip_x and not flip_y
+        for yy in range[y0, y1]:
+            if plain:
+                srow = (sy0 + (yy - ay)) * sstride + 1 + sx0 - ax
+                drow = yy * dstride + 1
+                for xx in range[x0, x1]:
+                    c = spx[srow + xx]
+                    if c != skip:
+                        if map != nil and map[c] != nil:
+                            c = map[c]
+                        dpx[drow + xx] = c
+            else:
+                ry = _floor((yy - ay) / scale_y)
+                if flip_y:
+                    ry = sh - 1 - ry
+                srow = (sy0 + ry) * sstride + 1 + sx0
+                drow = yy * dstride + 1
+                for xx in range[x0, x1]:
+                    rx = _floor((xx - ax) / scale_x)
+                    if flip_x:
+                        rx = sw - 1 - rx
+                    c = spx[srow + rx]
+                    if c != skip:
+                        if map != nil and map[c] != nil:
+                            c = map[c]
+                        dpx[drow + xx] = c
+
+    # новая поверхность из части этой
+    def crop(self, x, y, w, h):
+        s = Surface(w, h, CLEAR)
+        for yy in range[0, h - 1]:
+            for xx in range[0, w - 1]:
+                v = self:get(x + xx, y + yy)
+                if v != nil:
+                    s.px[yy * w + xx + 1] = v
+        return s
+
+    # поворот на 90 градусов по часовой стрелке times раз; возвращает новую поверхность
+    def rotate90(self, times=1):
+        t = times % 4
+        if t == 0:
+            return self:copy()
+        if t == 2:
+            s = Surface(self.w, self.h)
+            for yy in range[0, self.h - 1]:
+                for xx in range[0, self.w - 1]:
+                    s.px[(self.h - 1 - yy) * self.w + (self.w - 1 - xx) + 1] = self.px[yy * self.w + xx + 1]
+            return s
+        s = Surface(self.h, self.w)
+        for yy in range[0, self.h - 1]:
+            for xx in range[0, self.w - 1]:
+                v = self.px[yy * self.w + xx + 1]
+                if t == 1:
+                    s.px[xx * s.w + (self.h - 1 - yy) + 1] = v
+                else:
+                    s.px[(self.w - 1 - xx) * s.w + yy + 1] = v
+        return s
+
+    # девятичастная растяжка (для рамок и кнопок): углы остаются, края и центр растягиваются до (w, h)
+    def nine_patch(self, src, x, y, w, h, left, top, right, bottom):
+        mw = src.w - left - right
+        mh = src.h - top - bottom
+        tw = w - left - right
+        th = h - top - bottom
+        if tw < 0 or th < 0:
+            return
+        self:blit(src, x, y, {sx: 0, sy: 0, sw: left, sh: top})
+        self:blit(src, x + w - right, y, {sx: src.w - right, sy: 0, sw: right, sh: top})
+        self:blit(src, x, y + h - bottom, {sx: 0, sy: src.h - bottom, sw: left, sh: bottom})
+        self:blit(src, x + w - right, y + h - bottom, {sx: src.w - right, sy: src.h - bottom, sw: right, sh: bottom})
+        if mw > 0 and tw > 0:
+            self:blit(src, x + left, y, {sx: left, sy: 0, sw: mw, sh: top, scale_x: tw / mw, scale_y: 1})
+            self:blit(src, x + left, y + h - bottom, {sx: left, sy: src.h - bottom, sw: mw, sh: bottom, scale_x: tw / mw, scale_y: 1})
+        if mh > 0 and th > 0:
+            self:blit(src, x, y + top, {sx: 0, sy: top, sw: left, sh: mh, scale_x: 1, scale_y: th / mh})
+            self:blit(src, x + w - right, y + top, {sx: src.w - right, sy: top, sw: right, sh: mh, scale_x: 1, scale_y: th / mh})
+        if mw > 0 and mh > 0 and tw > 0 and th > 0:
+            self:blit(src, x + left, y + top, {sx: left, sy: top, sw: mw, sh: mh, scale_x: tw / mw, scale_y: th / mh})
+
+    # ------------------------------------------------------------ текст
+
+    # рисует текст шрифтом lib/font.cub. opts: spacing, scale (целое), bold, italic, underline, shadow {color, dx, dy},
+    # outline (цвет контура); возвращает x за последним символом
+    def text(self, f, x, y, str, c, opts=nil):
+        o = opts ?? {}
+        scale = o.scale ?? 1
+        spacing = o.spacing ?? 0
+        if o.outline != nil:
+            for dy in [-1, 0, 1]:
+                for dx in [-1, 0, 1]:
+                    if dx != 0 or dy != 0:
+                        self:_text_pass(f, x + dx * scale, y + dy * scale, str, o.outline, scale, spacing, false, o.italic ?? false)
+        if o.shadow != nil:
+            sh = o.shadow
+            self:_text_pass(f, x + (sh.dx ?? 1) * scale, y + (sh.dy ?? 1) * scale, str, sh.color ?? 0, scale, spacing, o.bold ?? false, o.italic ?? false)
+        end_x = self:_text_pass(f, x, y, str, c, scale, spacing, o.bold ?? false, o.italic ?? false)
+        if o.underline:
+            self:fill_rect(x, y + (f.ascent + 1) * scale, end_x - x - spacing * scale, scale, c)
+        return end_x
+
+    def _text_pass(self, f, x, y, str, c, scale, spacing, bold, italic):
+        for cp in unicode.codepoints(str):
+            rows = f:glyph_bits(cp)
+            if rows != nil:
+                for gy in range[1, f.height]:
+                    row = rows[gy]
+                    shift = 0
+                    if italic:
+                        # наклон: верхние строки сдвинуты вправо
+                        shift = _floor((f.height - gy) / 4) * scale
+                    for gx in range[1, f.width]:
+                        if row[gx] == 1:
+                            px0 = x + (gx - 1) * scale + shift
+                            py0 = y + (gy - 1) * scale
+                            if scale == 1:
+                                self:set(px0, py0, c)
+                                if bold:
+                                    self:set(px0 + 1, py0, c)
+                            else:
+                                self:fill_rect(px0, py0, scale + (bold and scale or 0), scale, c)
+            x += (f.width + spacing) * scale
+        return x
+
+    # ------------------------------------------------------------ отладка
+
+    # поверхность в виде списка строк; map: таблица цвет -> символ (по умолчанию 0 это ".", остальное цифра или "#")
+    def to_text(self, map=nil):
+        out = []
+        for yy in range[0, self.h - 1]:
+            parts = []
+            for xx in range[0, self.w - 1]:
+                v = self.px[yy * self.w + xx + 1]
+                ch = nil
+                if map != nil:
+                    ch = map[v]
+                if ch == nil:
+                    if v == CLEAR:
+                        ch = " "
+                    elif v == 0:
+                        ch = "."
+                    elif v >= 1 and v <= 9:
+                        ch = tostring(v)
+                    else:
+                        ch = "#"
+                parts[xx + 1] = ch
+            out[yy + 1] = table.concat(parts)
+        return out
+
+# ширина и высота текста в пикселях (шрифт моноширинный)
+export def measure(f, str, spacing=0, scale=1):
+    n = 0
+    for cp in unicode.codepoints(str):
+        n += 1
+    if n == 0:
+        return 0, f.height * scale
+    return (n * f.width + (n - 1) * spacing) * scale, f.height * scale
+
+# разбивает текст на строки не шире width пикселей (по словам; слишком длинное слово режется)
+export def wrap(f, str, width, spacing=0, scale=1):
+    lines = []
+    per_char = (f.width + spacing) * scale
+    max_chars = math.max(1, _floor((width + spacing * scale) / per_char))
+    for paragraph in string.gmatch(str .. "\n", "([^\n]*)\n"):
+        words = []
+        for w in string.gmatch(paragraph, "%S+"):
+            words[len(words) + 1] = w
+        current = ""
+        for w in words:
+            cand = current == "" and w or (current .. " " .. w)
+            if unicode.length(cand) <= max_chars:
+                current = cand
+            else:
+                if current != "":
+                    lines[len(lines) + 1] = current
+                    current = ""
+                while unicode.length(w) > max_chars:
+                    lines[len(lines) + 1] = unicode.sub(w, 1, max_chars)
+                    w = unicode.sub(w, max_chars + 1)
+                current = w
+        lines[len(lines) + 1] = current
+    return lines
+
+# укорачивает строку до ширины width, добавляя ending ("…" по умолчанию как "...")
+export def ellipsize(f, str, width, ending="...", spacing=0, scale=1):
+    w = measure(f, str, spacing, scale)
+    if w <= width:
+        return str
+    per_char = (f.width + spacing) * scale
+    keep = math.max(0, _floor((width + spacing * scale) / per_char) - unicode.length(ending))
+    return unicode.sub(str, 1, keep) .. ending
+
+export def new(width, height, fill=0):
+    return Surface(width, height, fill)

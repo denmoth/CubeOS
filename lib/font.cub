@@ -110,6 +110,10 @@ export class Font:
             return nil
         return self:_bits(index)
 
+    # публичный вариант _glyph для рисования в других библиотеках (cgl): строки из 0 и 1 или nil
+    def glyph_bits(self, cp):
+        return self:_glyph(cp)
+
     def glyph_text(self, cp):
         rows = self:_glyph(cp)
         out = []
