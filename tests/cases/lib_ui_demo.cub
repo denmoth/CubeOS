@@ -1,0 +1,77 @@
+import t
+import ../../examples/ui_demo as demo
+import ui.theme as themes_mod
+eq = t.eq
+
+# терминал-заглушка: текстовый режим принимает blit, пиксельный drawPixels
+def make_term(cols, rows, pixel_mode):
+    api = {}
+    state = {blits: 0, draws: 0, text: {}}
+    def get_size(px):
+        if px:
+            return cols * 6, rows * 9
+        return cols, rows
+    api.getSize = get_size
+    api.setCursorPos = (x, y) => nil
+    api.blit = (a, b, c) => count_blit(state)
+    api.setPaletteColor = (i, r, g, b) => nil
+    api.setBackgroundColor = (c) => nil
+    api.setTextColor = (c) => nil
+    api.clear = () => nil
+    if pixel_mode:
+        api.setGraphicsMode = (m) => nil
+        api.drawPixels = (x, y, rr) => count_draw(state)
+        api.setFrozen = (f) => nil
+    return api, state
+
+def count_blit(state):
+    state.blits += 1
+
+def count_draw(state):
+    state.draws += 1
+
+# ---------------------------------------------------------------- текстовый режим
+tm, st = make_term(51, 19, false)
+sh = demo.main({term: tm, backend: "text", frames: 20, clock: () => "14:32"})
+eq(len(sh.apps), 1, "the home app is running")
+eq(sh.current.name, "Главная", "home is current")
+eq(st.blits > 10, true, "something was drawn")
+
+# все программы запускаются и живут несколько кадров
+for spec in sh.registry:
+    if spec.id != "home":
+        sh:launch_spec(spec)
+        for i in range[1, 10]:
+            sh:tick(0.05)
+            sh:render()
+eq(len(sh.apps) >= 14, true, "every program started")
+
+# секундомер: запустить, уйти на другую программу, время идёт
+stop = nil
+for a in sh.apps:
+    if a.id != nil and a.spec.id == "stopwatch":
+        stop = a
+eq(stop != nil, true, "stopwatch is running")
+sh:switch_to(stop)
+sh:handle("key", keys.enter)
+sh:tick(0.05)
+sh:render()
+sh:switch_to(sh.apps[1])
+for i in range[1, 25]:
+    sh:tick(0.1)
+sh:render()
+eq(len(stop.bar_items), 1, "the stopwatch has a bar widget")
+bar_text = stop.bar_items[1].text()
+eq(string.find(bar_text, "00:02", 1, true) != nil, true, "the stopwatch kept counting in the background (" .. bar_text .. ")")
+
+# смена темы через оболочку
+sh:set_theme(themes_mod.get("hacker"))
+eq(sh.ui.theme.name, "hacker", "theme switch")
+
+# ---------------------------------------------------------------- пиксельный режим
+tm2, st2 = make_term(51, 19, true)
+sh2 = demo.main({term: tm2, backend: "pixel", frames: 10, clock: () => "14:32", theme: "retro"})
+eq(st2.draws >= 1, true, "pixel mode draws")
+eq(sh2.ui.theme.name, "retro", "retro theme")
+
+print("done")

@@ -1,0 +1,332 @@
+# Демонстрация библиотеки интерфейса CubeOS: оболочка с программами, переключением, виджетами в верхней полосе, темами и заставками.
+# Запуск в игре: game/ui_demo.lua [pixel|text] [monitor=имя] [theme=имя] [keys=arrows|wasd|vim]
+#
+# Программы: Главная, Файлы (настоящий просмотр /), Настройки (тема, рамки, клавиши, анимации меняются на лету), Секундомер и Плеер
+# (работают в фоне, их виджеты видны в верхней полосе), Виджеты (все элементы и диалоги), и заставки (дождь, аквариум, трубы...).
+# Alt+←→ листает программы, Alt+W закрывает, F9 открывает список программ.
+
+import ui
+import ui.toys as toys
+import ui.border as border
+import ui.theme as themes
+import ui.dialogs as dialogs
+import ui.lists as lists
+import unicode
+
+# ---------------------------------------------------------------- Главная
+
+def home_app(shell):
+    def launch(app):
+        left = ui.list([], {max_rows: 12})
+        info = ui.vbox([], {padding: [1, 0]})
+        title = ui.label("CubeOS", {fg: themes.BRIGHT})
+        sub = ui.label("текстовый интерфейс на клетках, написан на Cubic", {fg: themes.MUTED})
+        desc = ui.label("", {wrap: true})
+        stats = ui.label("", {fg: themes.MUTED})
+        info:add(title)
+        info:add(sub)
+        info:add(ui.spacer(1))
+        info:add(desc)
+        info:add(ui.spacer(1))
+        info:add(stats)
+        items = []
+        for s in shell.registry:
+            if s.id != "home":
+                items[len(items) + 1] = {text: (s.icon ?? "▪") .. " " .. (s.name ?? s.id), data: s}
+        left:set_items(items)
+        def show(index):
+            it = items[index]
+            if it != nil:
+                desc:set_text(it.data.desc ?? "")
+        left:on("select", (wd, index, item) => show(index))
+        left:on("activate", (wd, index, item) => shell:launch_spec(items[index].data))
+        show(1)
+        stats:set_text("Программ запущено: " .. len(shell.apps) .. "   Enter открыть, Alt+←→ переключать")
+        body = ui.hbox([ui.frame("Программы", left, {width: 30}), ui.frame("О программе", info, {width: "fill", padding: 1})], {gap: 1})
+        app:set_root(ui.vbox([body], {padding: 1}))
+        app.ui:every(1, () => stats:set_text("Программ запущено: " .. len(shell.apps) .. "   Enter открыть, Alt+←→ переключать"))
+    return {id: "home", name: "Главная", icon: "⌂", desc: "список программ", launch: launch}
+
+# ---------------------------------------------------------------- Файлы
+
+def files_app(shell):
+    def launch(app):
+        state = {path: "/"}
+        columns = [{title: "Имя", width: "fill"}, {title: "Размер", width: 9, align: "right"}]
+        tbl = ui.table_view(columns, [], {max_rows: 14})
+        crumb = ui.label("/", {fg: themes.INFO})
+        status = ui.label("", {fg: themes.MUTED})
+        viewer = ui.text_view("", {})
+        def human(n):
+            if n < 1024:
+                return n .. " Б"
+            if n < 1024 * 1024:
+                return string.format("%.1f КБ", n / 1024)
+            return string.format("%.1f МБ", n / 1024 / 1024)
+        def refresh():
+            names = fs.list(state.path)
+            table.sort(names)
+            rows = []
+            if state.path != "/":
+                rows[1] = ["▸ ..", "<папка>"]
+            for n in names:
+                full = fs.combine(state.path, n)
+                if fs.isDir(full):
+                    rows[len(rows) + 1] = ["▸ " .. n, "<папка>"]
+                else:
+                    rows[len(rows) + 1] = ["  " .. n, human(fs.getSize(full))]
+            tbl:set_items(rows)
+            crumb:set_text(state.path)
+            status:set_text(len(rows) .. " элементов   свободно " .. human(fs.getFreeSpace("/")))
+        def open_row(index):
+            row = tbl.items[index]
+            if row == nil:
+                return
+            name = unicode.sub(row[1], 3)
+            if name == "..":
+                state.path = fs.getDir(state.path)
+                if state.path == "":
+                    state.path = "/"
+                refresh()
+            else:
+                full = fs.combine(state.path, name)
+                if fs.isDir(full):
+                    state.path = "/" .. full
+                    refresh()
+                else:
+                    view_file(full)
+        def view_file(full):
+            f = fs.open(full, "r")
+            if f == nil:
+                dialogs.message(app.ui, {title: "Файлы", text: "Не удалось открыть " .. full, kind: "error"})
+                return
+            data = f.readAll() ?? ""
+            f.close()
+            if string.len(data) > 6000:
+                data = string.sub(data, 1, 6000) .. "\n…"
+            viewer:set_text(data)
+            dialogs.message(app.ui, {title: full, text: "Файл открыт справа: " .. string.len(data) .. " байт.", kind: "info"})
+        tbl:on("activate", (wd, index, row) => open_row(index))
+        refresh()
+        body = ui.hbox([ui.vbox([crumb, tbl, status], {width: 36}), ui.frame("Просмотр", viewer, {width: "fill"})], {gap: 1})
+        app:set_root(ui.vbox([body], {padding: 1}))
+    return {id: "files", name: "Файлы", icon: "▤", desc: "папки и файлы компьютера, просмотр текста", launch: launch}
+
+# ---------------------------------------------------------------- Настройки
+
+def settings_app(shell):
+    def launch(app):
+        names = themes.names()
+        theme_pick = ui.dropdown(names, 1)
+        for i, n in names:
+            if n == shell.ui.theme.name:
+                theme_pick.selected = i
+        border_names = border.names()
+        border_pick = ui.dropdown(border_names, 1)
+        for i, n in border_names:
+            if n == shell.ui.theme.border:
+                border_pick.selected = i
+        keys_pick = ui.dropdown(["arrows", "wasd", "vim"], 1)
+        anim_sw = ui.switch("Анимации", shell.ui.animations)
+        speed = ui.slider(0.25, 3, shell.ui.speed, {step: 0.25, width: 20, format: (v) => string.format("%.2f×", v)})
+        def apply_theme():
+            base = themes.get(theme_pick:value())
+            chosen_border = border_pick:value()
+            if chosen_border != base.border:
+                base = base:derive({border: chosen_border})
+            shell:set_theme(base)
+        theme_pick:on("change", (wd, i, v) => on_theme_picked())
+        def on_theme_picked():
+            # у каждой темы своя рамка по умолчанию: показать её в списке рамок
+            base = themes.get(theme_pick:value())
+            for i, n in border_names:
+                if n == base.border:
+                    border_pick.selected = i
+            apply_theme()
+        border_pick:on("change", (wd, i, v) => apply_theme())
+        keys_pick:on("change", (wd, i, v) => shell.ui:set_keymap(v))
+        anim_sw:on("change", (wd, on) => set_animations(on))
+        def set_animations(on):
+            shell.ui.animations = on
+            for a in shell.apps:
+                a.ui.animations = on
+        speed:on("change", (wd, v) => set_speed(v))
+        def set_speed(v):
+            shell.ui.speed = v
+            for a in shell.apps:
+                a.ui.speed = v
+        def row(label, control):
+            return ui.hbox([ui.label(label, {width: 18}), control], {gap: 1})
+        page = ui.vbox([
+            row("Тема", theme_pick),
+            row("Рамки", border_pick),
+            row("Клавиши", keys_pick),
+            ui.spacer(1),
+            anim_sw,
+            row("Скорость анимаций", speed),
+            ui.spacer(1),
+            ui.label("Темы: cubeos, dark, light, retro (развёртка и мерцание в пикселях), hacker, amber, contrast.", {wrap: true, fg: themes.MUTED}),
+            ui.label("Клавиши WASD и Vim работают везде, кроме полей ввода: там буквы остаются буквами.", {wrap: true, fg: themes.MUTED})
+        ], {gap: 1})
+        app:set_root(ui.vbox([ui.frame("Вид и управление", page, {padding: 1})], {padding: 1}))
+    return {id: "settings", name: "Настройки", icon: "⚙", desc: "тема, рамки, клавиши, анимации", launch: launch}
+
+# ---------------------------------------------------------------- Секундомер (в фоне, виджет в верхней полосе)
+
+def stopwatch_app(shell):
+    def launch(app):
+        st = {running: false, elapsed: 0, laps: []}
+        big = ui.label("00:00.0", {fg: themes.ACCENT, align: "center"})
+        laps_list = ui.list([], {max_rows: 8})
+        def fmt(sec):
+            m = math.floor(sec / 60)
+            s = sec - m * 60
+            return string.format("%02d:%04.1f", m, s)
+        item = app:add_bar_item({id: "stopwatch", priority: 60, fg: themes.WARN, text: () => (st.running and "⏱ " or "⏸ ") .. fmt(st.elapsed)})
+        def tick():
+            if st.running:
+                st.elapsed += 0.1
+            big:set_text(fmt(st.elapsed))
+        app.ui:every(0.1, tick)
+        start = ui.button(st.running and "Стоп" or "Старт")
+        reset = ui.button("Сброс")
+        lap = ui.button("Круг")
+        def toggle():
+            st.running = not st.running
+            start.text = st.running and "Стоп" or "Старт"
+            app:notify(st.running and "Секундомер запущен" or "Секундомер остановлен", {kind: "info"})
+        start:on("press", (wd) => toggle())
+        reset:on("press", (wd) => do_reset())
+        def do_reset():
+            st.elapsed = 0
+            st.laps = []
+            laps_list:set_items([])
+            big:set_text(fmt(0))
+        lap:on("press", (wd) => add_lap())
+        def add_lap():
+            st.laps[len(st.laps) + 1] = st.elapsed
+            items = []
+            for i, v in st.laps:
+                items[i] = "Круг " .. i .. "   " .. fmt(v)
+            laps_list:set_items(items)
+        page = ui.vbox([big, ui.spacer(1), ui.hbox([start, reset, lap], {gap: 2, justify: "center"}), ui.spacer(1), ui.frame("Круги", laps_list, {})], {gap: 0})
+        app:set_root(ui.vbox([ui.frame("Секундомер", page, {padding: 1})], {padding: 1}))
+    return {id: "stopwatch", name: "Секундомер", icon: "⏱", desc: "работает в фоне, время видно сверху", launch: launch}
+
+# ---------------------------------------------------------------- Плеер (имитация: прогресс идёт в фоне)
+
+def player_app(shell):
+    def launch(app):
+        tracks = [{name: "Calm", len: 143}, {name: "Wait", len: 218}, {name: "Mellohi", len: 96}, {name: "Cat", len: 185}]
+        st = {index: 1, pos: 0, playing: false}
+        tlist = ui.list([], {max_rows: 6})
+        items = []
+        for i, tr in tracks:
+            items[i] = {text: tr.name, hint: string.format("%d:%02d", math.floor(tr.len / 60), tr.len % 60)}
+        tlist:set_items(items)
+        bar = ui.progress(0, {width: 36})
+        now = ui.label("Calm  0:00", {fg: themes.BRIGHT})
+        def fmt(sec):
+            return string.format("%d:%02d", math.floor(sec / 60), math.floor(sec) % 60)
+        item = app:add_bar_item({id: "player", priority: 40, fg: themes.INFO, text: () => (st.playing and "♪ " or "· ") .. tracks[st.index].name})
+        def refresh():
+            tr = tracks[st.index]
+            bar:set_value(st.pos / tr.len)
+            now:set_text(tr.name .. "  " .. fmt(st.pos) .. " / " .. fmt(tr.len))
+        def tick():
+            if st.playing:
+                st.pos += 1
+                if st.pos >= tracks[st.index].len:
+                    st.index = st.index % len(tracks) + 1
+                    st.pos = 0
+                    tlist:select(st.index, true)
+                refresh()
+        app.ui:every(1, tick)
+        play = ui.button("▶ / ⏸")
+        nxt = ui.button("Дальше")
+        play:on("press", (wd) => toggle_play())
+        def toggle_play():
+            st.playing = not st.playing
+            app:notify(st.playing and "Играет: " .. tracks[st.index].name or "Пауза")
+        nxt:on("press", (wd) => next_track())
+        def next_track():
+            st.index = st.index % len(tracks) + 1
+            st.pos = 0
+            tlist:select(st.index, true)
+            refresh()
+        tlist:on("activate", (wd, index, it) => pick(index))
+        def pick(index):
+            st.index = index
+            st.pos = 0
+            st.playing = true
+            refresh()
+        page = ui.vbox([now, bar, ui.spacer(1), ui.hbox([play, nxt], {gap: 2}), ui.spacer(1), ui.frame("Треки", tlist, {})], {})
+        app:set_root(ui.vbox([ui.frame("Плеер (имитация)", page, {padding: 1})], {padding: 1}))
+    return {id: "player", name: "Плеер", icon: "♪", desc: "музыка в фоне, название видно сверху", launch: launch}
+
+# ---------------------------------------------------------------- Виджеты и диалоги
+
+def widgets_app(shell):
+    def launch(app):
+        name = ui.input({placeholder: "Ваше имя", width: 24})
+        check = ui.checkbox("Запомнить меня", true)
+        sw = ui.switch("Уведомления", true)
+        sl = ui.slider(0, 100, 40, {step: 5, width: 24})
+        sel = ui.dropdown(["Малый", "Средний", "Большой"], 2)
+        bar = ui.progress(0.35, {width: 30})
+        spin = ui.spinner()
+        sl:on("change", (wd, v) => bar:set_value(v / 100))
+        b_msg = ui.button("Сообщение")
+        b_yes = ui.button("Вопрос")
+        b_pr = ui.button("Запрос")
+        b_toast = ui.button("Уведомление")
+        b_msg:on("press", (wd) => dialogs.message(app.ui, {title: "Сообщение", text: "Диалог вырастает из центра, страница позади затемнена. Esc закрывает.", kind: "info"}))
+        b_yes:on("press", (wd) => ask())
+        def ask():
+            dialogs.confirm(app.ui, "Удалить файл?", "notes.txt уйдёт в корзину, вернуть можно из неё.", (yes) => answered(yes), {yes: "Удалить", no: "Отмена"})
+        def answered(yes):
+            app:notify(yes and "Удалено" or "Отменено", {kind: yes and "warn" or "info"})
+        b_pr:on("press", (wd) => ask_name())
+        def ask_name():
+            dialogs.prompt(app.ui, "Имя файла", "Как назвать файл?", "notes.txt", (text) => named(text))
+        def named(text):
+            if text != nil:
+                app:notify("Файл: " .. text, {kind: "ok"})
+        b_toast:on("press", (wd) => app:notify("Готово: действие выполнено", {kind: "ok"}))
+        col1 = ui.vbox([ui.label("Имя"), name, ui.spacer(1), check, sw, ui.spacer(1), ui.label("Размер"), sel], {gap: 0})
+        col2 = ui.vbox([ui.label("Значение"), sl, ui.label("Прогресс"), bar, ui.hbox([ui.label("Ожидание "), spin]), ui.spacer(1),
+            ui.hbox([b_msg, b_yes], {gap: 1}), ui.hbox([b_pr, b_toast], {gap: 1})], {gap: 0})
+        app:set_root(ui.vbox([ui.hbox([ui.frame("Ввод", col1, {padding: 1, width: 34}), ui.frame("Значения и диалоги", col2, {padding: 1, width: "fill"})], {gap: 1})], {padding: 1}))
+    return {id: "widgets", name: "Виджеты", icon: "▣", desc: "все элементы, диалоги и уведомления", launch: launch}
+
+# ---------------------------------------------------------------- заставки как программы
+
+def toy_app(entry):
+    def launch(app):
+        toy = entry.make({})
+        app:set_root(ui.vbox([toy], {}))
+    return {id: "toy_" .. entry.id, name: entry.name, icon: "✦", desc: "заставка", launch: launch}
+
+export def main(opts=nil):
+    o = opts ?? {}
+    out = o.out ?? ui.open_out({term: o.term, backend: o.backend})
+    sh = ui.new_shell(out, {theme: themes.get(o.theme ?? "cubeos"), keys: o.keys ?? "arrows", animations: o.animations ?? true, clock: o.clock})
+    sh:register(home_app(sh))
+    sh:register(files_app(sh))
+    sh:register(settings_app(sh))
+    sh:register(stopwatch_app(sh))
+    sh:register(player_app(sh))
+    sh:register(widgets_app(sh))
+    for entry in toys.all():
+        sh:register(toy_app(entry))
+    sh:launch("home")
+    if o.frames != nil:
+        # проверка без цикла: прогнать несколько кадров
+        out:open()
+        for i in range[1, o.frames]:
+            sh:tick(0.05)
+            sh:render()
+        out:close()
+        return sh
+    sh:run()
+    return sh
