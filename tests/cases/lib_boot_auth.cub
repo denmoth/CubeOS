@@ -1,0 +1,134 @@
+import t
+import cfs
+import boot.auth as auth
+eq = t.eq
+
+clock = {now: 1000}
+def now():
+    return clock.now
+
+counter = {n: 0}
+def entropy():
+    counter.n = counter.n + 1
+    return "e" .. counter.n
+
+def fresh():
+    let fsys = cfs.new({})
+    fsys:mount("/", cfs.memory())
+    return fsys
+
+fsys = fresh()
+a = auth.new(fsys, {rounds: 2, clock: now, entropy: entropy})
+a:load()
+eq(a:has_users(), false, "empty system has no users")
+
+a:create_user({name: "ivan", display: "Иван", groups: ["staff"], color: "blue"}, "secret", true)
+a:create_user({name: "anna"}, "pass1")
+a:create_user({name: "guest", display: "Гость", roles: ["guest"], temp: true})
+eq(a:has_users(), true, "users created")
+eq(len(a:list()), 3, "three users listed")
+
+listed = a:list()
+eq(listed[1].name, "ivan", "first listed")
+eq(listed[1].display, "Иван", "cyrillic display name")
+eq(listed[1].admin, true, "ivan is an admin")
+eq(listed[1].passwordless, false, "ivan has a password")
+eq(listed[3].passwordless, true, "guest has no password")
+eq(listed[3].temp, true, "guest is temporary")
+
+# файлы лежат там, где договорились, и не содержат пароль в открытом виде
+users_text = fsys:read_file(nil, auth.USERS_PATH)
+shadow_text = fsys:read_file(nil, auth.SHADOW_PATH)
+sudoers_text = fsys:read_file(nil, auth.SUDOERS_PATH)
+eq(string.find(users_text, "ivan", 1, true) != nil, true, "users.conf lists ivan")
+eq(string.find(shadow_text, "secret", 1, true), nil, "no plain password in shadow")
+eq(string.find(shadow_text, "pbkdf2-sha256$2$", 1, true) != nil, true, "hash format")
+eq(string.find(sudoers_text, "ivan", 1, true) != nil, true, "sudoers lists ivan")
+
+# проверка паролей
+ok, why = a:verify("ivan", "secret")
+eq(ok, true, "right password")
+ok, why = a:verify("ivan", "wrong")
+eq([ok, why], [false, "bad password"], "wrong password")
+ok, why = a:verify("nobody", "x")
+eq([ok, why], [false, "unknown"], "unknown user")
+eq(a:verify("guest", ""), true, "passwordless user")
+eq(a:verify("guest", "something"), false, "passwordless user rejects a password")
+eq(a:verify("IVAN", "secret"), true, "user names ignore case")
+
+# задержка после неудач: 3 ошибки подряд, дальше пауза растёт вдвое
+a2 = auth.new(fsys, {rounds: 2, clock: now, entropy: entropy})
+a2:load()
+a2:verify("anna", "bad")
+a2:verify("anna", "bad")
+ok, why, wait = a2:verify("anna", "bad")
+eq([ok, why, wait], [false, "bad password", 5], "third failure starts a 5 second pause")
+ok, why, wait = a2:verify("anna", "pass1")
+eq([ok, why, wait], [false, "locked", 5], "locked even with the right password")
+clock.now = clock.now + 5000
+ok, why, wait = a2:verify("anna", "bad")
+eq([ok, why, wait], [false, "bad password", 10], "pause doubles")
+clock.now = clock.now + 10000
+eq(a2:verify("anna", "pass1"), true, "works after the pause and resets the counter")
+a2:verify("anna", "bad")
+ok, why, wait = a2:verify("anna", "bad")
+eq(why, "bad password", "counter was reset")
+
+# данные переживают перезагрузку
+a3 = auth.new(fsys, {rounds: 2, clock: now, entropy: entropy})
+a3:load()
+eq(len(a3:list()), 3, "reloaded users")
+eq(a3:verify("ivan", "secret"), true, "reloaded password")
+eq(a3:is_admin("ivan"), true, "reloaded admin flag")
+eq(a3:is_admin("anna"), false, "anna is not an admin")
+
+# субъекты CFS
+s = a3:subject_for("ivan")
+eq([s.name, s.roles, s.groups], ["ivan", ["user"], ["staff"]], "normal subject")
+s2 = a3:subject_for("ivan", true)
+eq(s2.roles, ["user", "admin"], "elevated subject")
+s3 = a3:subject_for("anna", true)
+eq(s3.roles, ["user"], "non-admin cannot be elevated")
+eq(a3:subject_for("guest").roles, ["guest"], "guest role")
+
+# изменение паролей и администраторов
+a3:set_password("anna", "newpass")
+eq(a3:verify("anna", "pass1"), false, "old password rejected")
+eq(a3:verify("anna", "newpass"), true, "new password works")
+a3:set_password("anna", nil)
+eq(a3:verify("anna", ""), true, "password removed")
+a3:set_admin("anna", true)
+eq(a3:is_admin("anna"), true, "anna promoted")
+a3:set_admin("anna", false)
+eq(a3:is_admin("anna"), false, "anna demoted")
+
+# ошибки
+def message_of(f):
+    try:
+        f()
+    except Error as e:
+        return tostring(e)
+    return nil
+eq(string.find(message_of(() => a3:create_user({name: "ivan"})), "already exists", 1, true) != nil, true, "duplicate user")
+eq(string.find(message_of(() => a3:create_user({name: "bad:name"})), "invalid user name", 1, true) != nil, true, "bad name")
+a3:create_user({name: "Иван"})
+eq(a3:user("иван") != nil, true, "cyrillic user names are allowed")
+strict = auth.new(fsys, {rounds: 2, min_password: 6})
+eq(string.find(message_of(() => strict:create_user({name: "tom"}, "abc")), "too short", 1, true) != nil, true, "minimum password length")
+
+# удаление
+eq(a3:delete_user("guest"), true, "delete")
+eq(a3:user("guest"), nil, "deleted user is gone")
+eq(a3:delete_user("guest"), false, "deleting again")
+a4 = auth.new(fsys, {rounds: 2})
+a4:load()
+eq(len(a4:list()), 3, "deletion persisted (ivan, anna, Иван)")
+
+# хэш: разные соли дают разные записи, проверка работает напрямую
+h1 = auth.make_hash("pw", "00112233445566778899aabbccddeeff", 2)
+h2 = auth.make_hash("pw", "ffeeddccbbaa99887766554433221100", 2)
+eq(h1 != h2, true, "salt changes the hash")
+eq(auth.check_hash("pw", h1), true, "check_hash accepts")
+eq(auth.check_hash("px", h1), false, "check_hash rejects")
+eq(auth.check_hash("pw", "md5$1$00$00"), false, "unknown algorithm rejected")
+print("done")

@@ -1,0 +1,230 @@
+# boot.auth: учётные записи, пароли, повышение прав
+#
+# Файлы (читает и пишет только система):
+#   /cubeos/sys/cfg/users.conf       список пользователей: имя, подпись, роли, группы, цвет плитки, флаги (JSON5)
+#   /cubeos/sys/sec/shadow.lock      хэши паролей: имя -> "pbkdf2-sha256$раунды$соль$хэш"
+#   /cubeos/sys/sec/sudoers.lock     администраторы: {admins: [имена]}
+#
+# Пользователь без записи в shadow.lock это пользователь без пароля (например, гость).
+# Пароль проверяется через PBKDF2-HMAC-SHA256; после трёх неудач вход замедляется (пауза растёт вдвое, не больше минуты).
+#
+#   auth = Auth(fsys, {rounds: 1000})
+#   auth:load()
+#   ok, err = auth:verify("ivan", "secret")
+#   subject = auth:subject_for("ivan")          субъект CFS (роли user и группы)
+#   subject2 = auth:subject_for("ivan", true)   с ролью admin (повышение прав, пользователь обязан быть администратором)
+
+import sha256
+import json5
+import unicode
+import cfs.rules as rules_mod
+import cfs.path as paths
+
+export const USERS_PATH = "/cubeos/sys/cfg/users.conf"
+export const SHADOW_PATH = "/cubeos/sys/sec/shadow.lock"
+export const SUDOERS_PATH = "/cubeos/sys/sec/sudoers.lock"
+
+def _default_clock():
+    return os.epoch("utc")
+
+def _default_entropy():
+    # в CC нет генератора случайных чисел операционной системы: смешиваем время, счётчики и math.random
+    return sha256.hex(tostring(os.epoch("utc")) .. ":" .. tostring(os.clock()) .. ":" .. tostring(math.random()) .. ":" .. tostring(os.getComputerID()))
+
+def _from_hex(h):
+    return (string.gsub(h, "..", (pair) => string.char(tonumber(pair, 16))))
+
+# сравнение без досрочного выхода
+def _same(a, b):
+    if len(a) != len(b):
+        return false
+    diff = 0
+    for i in range[1, len(a)]:
+        if string.byte(a, i) != string.byte(b, i):
+            diff += 1
+    return diff == 0
+
+export def make_hash(password, salt_hex, rounds):
+    return "pbkdf2-sha256$" .. rounds .. "$" .. salt_hex .. "$" .. sha256.to_hex(sha256.pbkdf2(password, _from_hex(salt_hex), rounds))
+
+# проверка пароля по записи вида pbkdf2-sha256$раунды$соль$хэш
+export def check_hash(password, record):
+    algo, rounds, salt_hex, want = string.match(record, "^([%w%-]+)%$(%d+)%$(%x+)%$(%x+)$")
+    if algo != "pbkdf2-sha256":
+        return false
+    got = sha256.to_hex(sha256.pbkdf2(password, _from_hex(salt_hex), tonumber(rounds)))
+    return _same(got, want)
+
+export class Auth:
+    # opts: rounds (по умолчанию 1000), clock, entropy, min_password (по умолчанию 1), paths {users, shadow, sudoers}
+    def init(self, fsys, opts=nil):
+        o = opts ?? {}
+        self.fsys = fsys
+        self.rounds = o.rounds ?? 1000
+        self.clock = o.clock ?? _default_clock
+        self.entropy = o.entropy ?? _default_entropy
+        self.min_password = o.min_password ?? 1
+        self.users_path = (o.paths ?? {}).users ?? USERS_PATH
+        self.shadow_path = (o.paths ?? {}).shadow ?? SHADOW_PATH
+        self.sudoers_path = (o.paths ?? {}).sudoers ?? SUDOERS_PATH
+        self.records = []
+        self.shadow = {}
+        self.admins = {}
+        self.fails = {}
+        self.counter = 0
+
+    # ------------------------------------------------------------ чтение и запись
+
+    def _read(self, path):
+        if not self.fsys:exists(nil, path):
+            return nil
+        return self.fsys:read_file(nil, path)
+
+    def load(self):
+        text = self:_read(self.users_path)
+        self.records = []
+        if text != nil:
+            data = json5.parse(text)
+            for rec in data.users ?? []:
+                self.records[len(self.records) + 1] = rec
+        text = self:_read(self.shadow_path)
+        self.shadow = text != nil and json5.parse(text) or {}
+        text = self:_read(self.sudoers_path)
+        self.admins = {}
+        if text != nil:
+            for name in (json5.parse(text).admins ?? []):
+                self.admins[name] = true
+
+    def _write(self, path, value):
+        self.fsys:mkdir(nil, paths.parent(path), {parents: true})
+        self.fsys:write_file(nil, path, json5.stringify(value, {json5: true, indent: 2}) .. "\n")
+
+    def save(self):
+        self:_write(self.users_path, {users: self.records})
+        self:_write(self.shadow_path, self.shadow)
+        names = []
+        for name, flag in self.admins:
+            names[len(names) + 1] = name
+        table.sort(names)
+        self:_write(self.sudoers_path, {admins: names})
+
+    # ------------------------------------------------------------ пользователи
+
+    def has_users(self):
+        return len(self.records) > 0
+
+    def user(self, name):
+        lowered = unicode.lower(name)
+        for rec in self.records:
+            if unicode.lower(rec.name) == lowered:
+                return rec
+        return nil
+
+    # публичные сведения для экрана входа (без хэшей)
+    def list(self):
+        out = []
+        for rec in self.records:
+            out[len(out) + 1] = {name: rec.name, display: rec.display ?? rec.name, color: rec.color, temp: rec.temp ?? false,
+                passwordless: self.shadow[rec.name] == nil, admin: self.admins[rec.name] == true, roles: rec.roles ?? ["user"]}
+        return out
+
+    def is_admin(self, name):
+        return self.admins[name] == true
+
+    def _salt(self):
+        self.counter += 1
+        return string.sub(sha256.hex(self.entropy() .. ":" .. self.counter), 1, 32)
+
+    # record: {name, display?, roles?, groups?, color?, temp?}; admin: сделать администратором; password: nil без пароля
+    def create_user(self, record, password=nil, admin=false):
+        problem = paths.name_problem(record.name)
+        if problem != nil:
+            raise Error("invalid user name: " .. problem)
+        if self:user(record.name) != nil:
+            raise Error("user already exists: " .. record.name)
+        if password != nil and len(password) < self.min_password:
+            raise Error("the password is too short (at least " .. self.min_password .. ")")
+        rec = {name: record.name, display: record.display ?? record.name, roles: record.roles ?? ["user"],
+            groups: record.groups ?? [], color: record.color, temp: record.temp ?? false}
+        self.records[len(self.records) + 1] = rec
+        if password != nil:
+            self.shadow[record.name] = make_hash(password, self:_salt(), self.rounds)
+        if admin:
+            self.admins[record.name] = true
+        self:save()
+        return rec
+
+    def set_password(self, name, password):
+        rec = self:user(name)
+        if rec == nil:
+            raise Error("no such user: " .. name)
+        if password == nil or password == "":
+            self.shadow[rec.name] = nil
+        else:
+            if len(password) < self.min_password:
+                raise Error("the password is too short (at least " .. self.min_password .. ")")
+            self.shadow[rec.name] = make_hash(password, self:_salt(), self.rounds)
+        self.fails[rec.name] = nil
+        self:save()
+
+    def set_admin(self, name, flag):
+        rec = self:user(name)
+        if rec == nil:
+            raise Error("no such user: " .. name)
+        self.admins[rec.name] = flag and true or nil
+        self:save()
+
+    def delete_user(self, name):
+        rec = self:user(name)
+        if rec == nil:
+            return false
+        for i, r in self.records:
+            if r == rec:
+                table.remove(self.records, i)
+                break
+        self.shadow[rec.name] = nil
+        self.admins[rec.name] = nil
+        self:save()
+        return true
+
+    # ------------------------------------------------------------ проверка
+
+    # возвращает true или false и причину: "unknown", "bad password", "locked" (поле wait: секунд до следующей попытки)
+    def verify(self, name, password):
+        rec = self:user(name)
+        if rec == nil:
+            return false, "unknown"
+        t = self.clock()
+        fail = self.fails[rec.name]
+        if fail != nil and fail.until > t:
+            return false, "locked", math.ceil((fail.until - t) / 1000)
+        stored = self.shadow[rec.name]
+        ok = false
+        if stored == nil:
+            ok = password == nil or password == ""
+        else:
+            ok = password != nil and check_hash(password, stored)
+        if ok:
+            self.fails[rec.name] = nil
+            return true
+        count = (fail != nil and fail.count or 0) + 1
+        wait = 0
+        if count >= 3:
+            wait = math.min(60000, 5000 * 2 ** (count - 3))
+        self.fails[rec.name] = {count: count, until: t + wait}
+        return false, "bad password", math.ceil(wait / 1000)
+
+    # субъект CFS для пользователя; elevated: добавить роль admin (только для администраторов)
+    def subject_for(self, name, elevated=false):
+        rec = self:user(name)
+        if rec == nil:
+            raise Error("no such user: " .. name)
+        roles = []
+        for r in rec.roles ?? ["user"]:
+            roles[len(roles) + 1] = r
+        if elevated and self.admins[rec.name] == true:
+            roles[len(roles) + 1] = "admin"
+        return rules_mod.subject(rec.name, roles, rec.groups ?? [])
+
+export def new(fsys, opts=nil):
+    return Auth(fsys, opts)

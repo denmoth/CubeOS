@@ -1,0 +1,128 @@
+import t
+import cfs
+import kernel
+import boot.auth as auth
+import boot.session as session
+eq = t.eq
+
+clock = {now: 1000}
+def now():
+    return clock.now
+
+def code_of(f):
+    try:
+        f()
+    except Error as e:
+        return e.code
+    return nil
+
+def message_of(f):
+    try:
+        f()
+    except Error as e:
+        return tostring(e)
+    return nil
+
+def build():
+    let fsys = cfs.new({clock: now})
+    fsys:mount("/", cfs.memory({now: now}))
+    fsys:mount("/cubeos/tmp", cfs.tmp(65536, now))
+    cfs.install_defaults(fsys)
+    fsys:mkdir(nil, "/cubeos/shared", {parents: true})
+    fsys:mkdir(nil, "/cubeos/sys/cfg", {parents: true})
+    return fsys
+
+fsys = build()
+a = auth.new(fsys, {rounds: 2, clock: now})
+a:load()
+a:create_user({name: "ivan", display: "Иван"}, "secret", true)
+a:create_user({name: "anna"}, "pass1")
+a:create_user({name: "guest", display: "Гость", roles: ["guest"], temp: true})
+k = kernel.new({clock: now, fsys: fsys})
+sm = session.new(fsys, a, {kernel: k, clock: now, elevate_ms: 60000})
+
+# ---------------------------------------------------------------- вход
+s, why = sm:open("ivan", "wrong")
+eq([s, why], [nil, "bad password"], "wrong password refuses to open")
+s, why = sm:open("nobody", "x")
+eq([s, why], [nil, "unknown"], "unknown user")
+s = sm:open("ivan", "secret")
+eq([s.id, s.user, s.display, s.profile], [1, "ivan", "Иван", "ivan"], "session fields")
+eq(s.admin_capable, true, "ivan can elevate")
+eq(s.env.home, "/cubeos/users/ivan/home", "home in env")
+eq(sm:active().id, 1, "active session")
+for dir in ["home/documents", "home/pictures", "apps", "cache", "cfg", "data", "desktop", "trash"]:
+    eq(fsys:exists(nil, "/cubeos/users/ivan/" .. dir), true, "profile directory " .. dir)
+
+v = s.view
+v:write("$docs/note.txt", "hello")
+eq(v:read("/cubeos/users/ivan/home/documents/note.txt"), "hello", "own home is writable through $docs")
+eq(code_of(() => v:read("/cubeos/users/anna/home/documents/x")), "EACCES", "other homes are closed")
+eq(code_of(() => v:write("/cubeos/shared/x", "1")), "EACCES", "shared is read only for users")
+
+# ---------------------------------------------------------------- несколько сессий и гость
+s2 = sm:open("anna", "pass1")
+eq(s2.id, 2, "second session")
+eq(sm:active().id, 2, "last opened becomes active")
+eq(sm:switch(1), true, "switch")
+eq(sm:active().user, "ivan", "switched")
+eq(sm:switch(99), false, "switch to a missing session")
+eq(len(sm:list()), 2, "two sessions")
+
+g = sm:open("guest", "")
+eq([g.profile, g.guest], ["guest-3", true], "guest gets a temporary profile")
+g.view:write("$home/scratch.txt", "temp")
+eq(fsys:exists(nil, "/cubeos/users/guest-3/home/scratch.txt"), true, "guest file exists")
+eq(code_of(() => g.view:read("/cubeos/users/ivan/home/documents/note.txt")), "EACCES", "guest cannot read other homes")
+eq(sm:close(3), true, "close the guest session")
+eq(fsys:exists(nil, "/cubeos/users/guest-3"), false, "temporary profile removed with the session")
+eq(sm:active() != nil, true, "another session became active")
+eq(sm:close(3), false, "closing twice")
+
+# ---------------------------------------------------------------- повышение прав
+eq(code_of(() => sm:view(1):write("/cubeos/shared/x", "1")), "EACCES", "not elevated: shared is closed")
+ok, why = sm:elevate(2, "pass1")
+eq([ok, why], [false, "not an administrator"], "anna cannot elevate")
+ok, why = sm:elevate(1, "bad")
+eq([ok, why], [false, "bad password"], "wrong password does not elevate")
+eq(sm:elevate(1, "secret"), true, "ivan elevates")
+eq(sm:is_elevated(1), true, "elevated")
+sm:view(1):write("/cubeos/shared/x", "admin wrote this")
+eq(fsys:read_file(nil, "/cubeos/shared/x"), "admin wrote this", "elevated view may write shared")
+eq(sm:subject(1).roles, ["user", "admin"], "elevated subject has the admin role")
+clock.now = clock.now + 61000
+eq(sm:is_elevated(1), false, "elevation expires")
+eq(code_of(() => sm:view(1):write("/cubeos/shared/y", "1")), "EACCES", "not elevated after the timeout")
+sm:elevate(1, "secret")
+sm:drop_elevation(1)
+eq(sm:is_elevated(1), false, "elevation dropped")
+
+# ---------------------------------------------------------------- блокировка
+eq(sm:lock(1), true, "lock")
+eq(sm:get(1).state, "locked", "state locked")
+eq(string.find(message_of(() => sm:spawn(1, (sys, args) => nil)), "locked", 1, true) != nil, true, "no spawn in a locked session")
+ok, why = sm:unlock(1, "bad")
+eq([ok, why], [false, "bad password"], "wrong password does not unlock")
+eq(sm:unlock(1, "secret"), true, "unlock")
+eq(sm:get(1).state, "active", "active again")
+
+# ---------------------------------------------------------------- процессы сессии
+log = []
+def worker(sys, args):
+    fv = sys.view()
+    fv:write("$home/from-process.txt", "by " .. sys.info().user)
+    log[len(log) + 1] = "wrote"
+    sys.sleep(10)
+def short_lived(sys, args):
+    log[len(log) + 1] = "short"
+pid = sm:spawn(1, worker, [], {name: "worker"})
+pid2 = sm:spawn(1, short_lived, [], {name: "short"})
+k:run_ready()
+eq(log, ["wrote", "short"], "session programs ran")
+eq(fsys:read_file(nil, "/cubeos/users/ivan/home/from-process.txt"), "by ivan", "process runs as the session user with its view")
+eq(sm:get(1).pids, [pid], "finished processes leave the session list")
+eq(k:proc(pid).subject.name, "ivan", "process subject")
+sm:close(1)
+eq(k:alive(pid), false, "closing the session kills its processes")
+eq(sm:get(1), nil, "session removed")
+print("done")

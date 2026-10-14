@@ -1,0 +1,252 @@
+# boot.session: сессии пользователей
+#
+# Сессия это вход пользователя в систему: его субъект CFS, вид файловой системы (`$home` и другие алиасы), окружение и
+# процессы, запущенные от его имени. Сессий может быть несколько (быстрая смена пользователя), активна одна.
+# Гость (запись с temp: true) получает временный профиль users/<имя>-<номер сессии>, который удаляется при выходе.
+#
+#   sm = SessionManager(fsys, auth, {kernel: k})
+#   s = sm:open("ivan", "secret")                 проверяет пароль, готовит профиль, возвращает сессию
+#   pid = sm:spawn(s.id, program, args, {ui: true})
+#   sm:elevate(s.id, "secret")                    повышение прав на время (по умолчанию 5 минут), только администраторам
+#   sm:lock(s.id); sm:unlock(s.id, "secret")
+#   sm:close(s.id)                                завершает процессы сессии и закрывает её
+
+import cfs
+import cfs.rules as rules_mod
+
+const PROFILE_DIRS = ["home/documents", "home/pictures", "home/videos", "home/projects", "apps", "cache", "cfg", "data",
+    "desktop", "trash"]
+
+def _default_clock():
+    return os.epoch("utc")
+
+export class Session:
+    def init(self, id, record, profile, subject, view, opts):
+        self.id = id
+        self.user = record.name
+        self.display = record.display ?? record.name
+        self.profile = profile
+        self.home = "/cubeos/users/" .. profile
+        self.base_subject = subject
+        self.view = view
+        self.guest = record.temp ?? false
+        self.admin_capable = false
+        self.state = "active"
+        self.elevated_until = 0
+        self.created = opts.now
+        self.env = {user: profile, display: record.display ?? record.name, home: "/cubeos/users/" .. profile .. "/home",
+            lang: opts.lang ?? "ru", de: opts.de ?? "tui"}
+        self.pids = []
+        self.aliases = nil
+
+export class SessionManager:
+    # opts: kernel, clock, elevate_ms (по умолчанию 300000), lang, de, aliases (общие алиасы для всех сессий)
+    def init(self, fsys, auth, opts=nil):
+        o = opts ?? {}
+        self.fsys = fsys
+        self.auth = auth
+        self.kernel = o.kernel
+        self.clock = o.clock ?? _default_clock
+        self.elevate_ms = o.elevate_ms ?? 300000
+        self.lang = o.lang
+        self.de = o.de
+        self.sessions = {}
+        self.order = []
+        self.next_id = 1
+        self.active_id = nil
+        self.on_open = o.on_open
+        self.on_close = o.on_close
+        self.on_event = nil
+        if self.kernel != nil:
+            self:attach(self.kernel)
+
+    # следим за завершением процессов сессий
+    def attach(self, kernel):
+        self.kernel = kernel
+        previous = kernel.on_exit
+        let me = self
+        kernel.on_exit = (info) => me:_process_exited(info, previous)
+
+    def _process_exited(self, info, previous):
+        for id, s in self.sessions:
+            for i, pid in s.pids:
+                if pid == info.pid:
+                    table.remove(s.pids, i)
+                    break
+        if previous != nil:
+            previous(info)
+
+    # ------------------------------------------------------------ профиль
+
+    def ensure_profile(self, profile):
+        base = "/cubeos/users/" .. profile
+        for dir in PROFILE_DIRS:
+            self.fsys:mkdir(nil, base .. "/" .. dir, {parents: true})
+
+    def _subject(self, s):
+        if self.clock() < s.elevated_until:
+            return self.auth:subject_for(s.user, true)
+        return s.base_subject
+
+    # ------------------------------------------------------------ вход и выход
+
+    # проверяет пароль (trusted=true пропускает проверку: автовход, служебные случаи) и открывает сессию
+    # возвращает сессию или nil, причина, секунд до повторной попытки
+    def open(self, name, password=nil, trusted=false):
+        rec = self.auth:user(name)
+        if rec == nil:
+            return nil, "unknown"
+        if not trusted:
+            ok, why, wait = self.auth:verify(name, password)
+            if not ok:
+                return nil, why, wait
+        id = self.next_id
+        self.next_id += 1
+        profile = rec.name
+        if rec.temp:
+            profile = rec.name .. "-" .. id
+        base_subject = self.auth:subject_for(rec.name)
+        # субъект профиля носит имя профиля, чтобы правила users/$user/** давали доступ именно к его папке
+        subject = rules_mod.subject(profile, base_subject.roles, base_subject.groups)
+        self:ensure_profile(profile)
+        view = cfs.view(self.fsys, subject, {aliases: cfs.default_aliases(profile)})
+        s = Session(id, rec, profile, subject, view, {now: self.clock(), lang: self.lang, de: self.de})
+        s.admin_capable = self.auth:is_admin(rec.name)
+        self.sessions[id] = s
+        self.order[len(self.order) + 1] = id
+        self.active_id = id
+        if self.on_open != nil:
+            self.on_open(s)
+        return s
+
+    def get(self, id):
+        return self.sessions[id]
+
+    def active(self):
+        return self.active_id != nil and self.sessions[self.active_id] or nil
+
+    def list(self):
+        out = []
+        for id in self.order:
+            s = self.sessions[id]
+            if s != nil:
+                out[len(out) + 1] = s
+        return out
+
+    def switch(self, id):
+        if self.sessions[id] == nil:
+            return false
+        self.active_id = id
+        return true
+
+    # завершает процессы сессии (просьба завершиться, затем принудительно), удаляет временный профиль
+    def close(self, id):
+        s = self.sessions[id]
+        if s == nil:
+            return false
+        if self.kernel != nil:
+            for pid in self:_pids_copy(s):
+                self.kernel:kill(pid, "kill")
+        self.sessions[id] = nil
+        for i, oid in self.order:
+            if oid == id:
+                table.remove(self.order, i)
+                break
+        if self.active_id == id:
+            self.active_id = self.order[len(self.order)]
+        if s.guest:
+            path = "/cubeos/users/" .. s.profile
+            if self.fsys:exists(nil, path):
+                self.fsys:remove(nil, path, {recursive: true, permanent: true})
+        if self.on_close != nil:
+            self.on_close(s)
+        return true
+
+    def _pids_copy(self, s):
+        out = []
+        for pid in s.pids:
+            out[len(out) + 1] = pid
+        return out
+
+    # ------------------------------------------------------------ блокировка и повышение прав
+
+    def lock(self, id):
+        s = self.sessions[id]
+        if s == nil:
+            return false
+        s.state = "locked"
+        s.elevated_until = 0
+        return true
+
+    def unlock(self, id, password):
+        s = self.sessions[id]
+        if s == nil:
+            return false, "no session"
+        ok, why, wait = self.auth:verify(s.user, password)
+        if not ok:
+            return false, why, wait
+        s.state = "active"
+        return true
+
+    # повышение прав: пароль пользователя и право администратора; возвращает true или false и причину
+    def elevate(self, id, password):
+        s = self.sessions[id]
+        if s == nil:
+            return false, "no session"
+        if not self.auth:is_admin(s.user):
+            return false, "not an administrator"
+        ok, why, wait = self.auth:verify(s.user, password)
+        if not ok:
+            return false, why, wait
+        s.elevated_until = self.clock() + self.elevate_ms
+        return true
+
+    def drop_elevation(self, id):
+        s = self.sessions[id]
+        if s != nil:
+            s.elevated_until = 0
+
+    def is_elevated(self, id):
+        s = self.sessions[id]
+        return s != nil and self.clock() < s.elevated_until
+
+    # субъект сессии с учётом повышения прав
+    def subject(self, id):
+        s = self.sessions[id]
+        if s == nil:
+            return nil
+        return self:_subject(s)
+
+    # вид файловой системы сессии (после повышения прав новый вид получает права администратора)
+    def view(self, id):
+        s = self.sessions[id]
+        if s == nil:
+            return nil
+        if self.clock() < s.elevated_until:
+            subject = self:_subject(s)
+            # субъект профиля: имя профиля и роль admin
+            elevated = rules_mod.subject(s.profile, subject.roles, subject.groups)
+            return cfs.view(self.fsys, elevated, {aliases: cfs.default_aliases(s.profile)})
+        return s.view
+
+    # ------------------------------------------------------------ процессы сессии
+
+    # запускает программу от имени сессии; opts: name, ui, detached
+    def spawn(self, id, program, args=nil, opts=nil):
+        s = self.sessions[id]
+        if s == nil:
+            raise Error("no such session: " .. tostring(id))
+        if self.kernel == nil:
+            raise Error("the session manager has no kernel")
+        if s.state == "locked":
+            raise Error("the session is locked")
+        o = opts ?? {}
+        subject = self:_subject(s)
+        profile_subject = rules_mod.subject(s.profile, subject.roles, subject.groups)
+        pid = self.kernel:spawn(program, args, {name: o.name, ui: o.ui, detached: true, subject: profile_subject,
+            view: self:view(id), parent: o.parent})
+        s.pids[len(s.pids) + 1] = pid
+        return pid
+
+export def new(fsys, auth, opts=nil):
+    return SessionManager(fsys, auth, opts)
