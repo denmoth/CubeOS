@@ -74,3 +74,11 @@
 Точные API CC: Graphics и HQ Speaker **(проверить)**, когда дойдём до драйверов.
 
 Идеи дополнительных аддонов: Advanced Peripherals, CC:C Bridge (Create), Tom's Peripherals, Plethora, Peripheralium, CC:VS.
+
+
+## Где что (2026-10-15)
+
+- Состояние проекта и передача дел: [15-handoff.md](15-handoff.md).
+- План ядра и загрузки: [16-kernel-integration.md](16-kernel-integration.md).
+- Защита данных: [14-data-protection.md](14-data-protection.md).
+- Решения: [08-decisions-log.md](08-decisions-log.md) (D1–D207).
