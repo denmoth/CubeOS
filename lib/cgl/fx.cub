@@ -184,18 +184,54 @@ export def remap(s, map, x=0, y=0, w=nil, h=nil):
         s:mark(lo_x, lo_y, hi_x, hi_y)
 
 # следы: Trail хранит ряды ступеней яркости (ramps: список списков номеров цветов от тёмного к яркому) и фоновый цвет.
-#   t = fx.Trail([ramp_red, ramp_cyan], bg)    ramp_red[1] тёмный, ramp_red[n] яркий
+#   t = fx.Trail([ramp_red, ramp_cyan], bg, {every: 1, steps: 1, taper: 0.5})   ramp_red[1] тёмный, ramp_red[n] яркий
 #   t:fade(s)                                   каждый кадр: все яркие пиксели на ступень темнее, самые тёмные становятся фоном
-#   рисуете новое положение объектов самой яркой ступенью (ramp[n]) поверх
+#   t:stamp(s, x0, y0, x1, y1, r, ramp)        сплошной мазок объекта из прошлой точки в новую (вместо ряда кругов)
 # fade идёт по таблице, одна проверка на пиксель; область (x, y, w, h) задаёт, где затухать (по умолчанию вся поверхность)
 export class Trail:
-    def init(self, ramps, bg):
+    # opts: every (затухать раз в N вызовов fade; длина следа в кадрах = ступеней * every), steps (на сколько ступеней темнеет
+    # за раз: больше значит короче след), min_speed (меньше этого расстояния за кадр мазок рисуется одной точкой, по умолчанию 1.5),
+    # taper (0..1: какой доле радиуса сужается хвост мазка, 1 без сужения), from_level (с какой ступени начинается хвост мазка,
+    # по умолчанию на 4 темнее самой яркой), max_sweep (самый длинный мазок в пикселях, по умолчанию 400)
+    def init(self, ramps, bg, opts=nil):
+        o = opts ?? {}
         self.bg = bg
+        self.every = o.every ?? 1
+        self.steps = math.max(1, o.steps ?? 1)
+        self.min_speed = o.min_speed ?? 1.5
+        self.taper = o.taper ?? 1
+        self.from_level = o.from_level
+        self.max_sweep = o.max_sweep ?? 400
+        self.count = 0
         self.map = {}
         for ramp in ramps:
-            self.map[ramp[1]] = bg
-            for k in range[2, len(ramp)]:
-                self.map[ramp[k]] = ramp[k - 1]
+            for k in range[1, len(ramp)]:
+                target = k - self.steps
+                self.map[ramp[k]] = target >= 1 and ramp[target] or bg
 
     def fade(self, s, x=0, y=0, w=nil, h=nil):
+        self.count += 1
+        if self.count % self.every != 0:
+            return
         remap(s, self.map, x, y, w, h)
+
+    # Сплошной мазок объекта из прошлой точки (x0, y0) в новую (x1, y1): круги радиуса r вдоль отрезка, яркость растёт к новому концу
+    # (от ступени from_level до самой яркой), радиус сужается к хвосту по taper. Если объект почти не двигался, рисуется одна точка.
+    # Так след выглядит как плавная полоса, а не как ряд кругов в местах прошлых кадров.
+    def stamp(self, s, x0, y0, x1, y1, r, ramp):
+        n = len(ramp)
+        dx = x1 - x0
+        dy = y1 - y0
+        dist = math.sqrt(dx * dx + dy * dy)
+        if dist < self.min_speed:
+            s:circle(math.floor(x1 + 0.5), math.floor(y1 + 0.5), r, ramp[n], true)
+            return
+        dist = math.min(dist, self.max_sweep)
+        from_level = self.from_level ?? math.max(1, n - 4)
+        spacing = math.max(1, math.floor(r / 2))
+        count = math.max(1, math.ceil(dist / spacing))
+        for i in range[0, count]:
+            t = i / count
+            level = math.floor(from_level + (n - from_level) * t + 0.5)
+            radius = math.max(1, math.floor(r * (self.taper + (1 - self.taper) * t) + 0.5))
+            s:circle(math.floor(x0 + dx * t + 0.5), math.floor(y0 + dy * t + 0.5), radius, ramp[level], true)

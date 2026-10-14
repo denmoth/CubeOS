@@ -153,6 +153,49 @@ steps = color.shade_steps(255, 0, 0, 4)
 eq([steps[1][1], steps[4][1]], [0, 255], "shade_steps from the background to the color")
 eq(steps[2][1] < steps[3][1], true, "shade_steps rise")
 
+# мазок: сплошная полоса между прошлой и новой точкой
+ramp = [20, 21, 22, 23, 24, 25, 26, 27]
+st = fx.Trail([ramp], 0, {taper: 1})
+mz = sf.new(60, 20, 0)
+st:stamp(mz, 5, 10, 50, 10, 3, ramp)
+gap = false
+for x in range[5, 50]:
+    if mz:get(x, 10) == 0:
+        gap = true
+eq(gap, false, "the stroke has no gaps between the two points")
+eq(mz:get(50, 10), 27, "the new end is the brightest")
+eq(mz:get(5, 10) < mz:get(50, 10), true, "the tail is darker")
+eq(mz:get(27, 10) > mz:get(10, 10), true, "brightness grows toward the head")
+st2 = fx.Trail([ramp], 0, {taper: 0.34})
+mz2 = sf.new(60, 20, 0)
+st2:stamp(mz2, 5, 10, 50, 10, 6, ramp)
+head = 0
+tail = 0
+for y in range[0, 19]:
+    if mz2:get(48, y) != 0:
+        head += 1
+    if mz2:get(8, y) != 0:
+        tail += 1
+eq(tail < head, true, "taper narrows the tail")
+mz3 = sf.new(20, 20, 0)
+st:stamp(mz3, 10, 10, 10.4, 10, 3, ramp)
+eq(mz3:get(10, 10), 27, "almost no movement: one dot, no smear")
+eq(mz3:get(14, 10), 0, "and it stays small")
+# длина следа и скорость затухания
+slow = fx.Trail([ramp], 0, {every: 2})
+sl = sf.new(3, 1, 27)
+slow:fade(sl)
+eq(sl:get(0, 0), 27, "every=2: the first call does nothing")
+slow:fade(sl)
+eq(sl:get(0, 0), 26, "every=2: the second call fades a step")
+fast = fx.Trail([ramp], 0, {steps: 3})
+fa = sf.new(3, 1, 27)
+fast:fade(fa)
+eq(fa:get(0, 0), 24, "steps=3 darkens three steps at once")
+fa:set(0, 0, 21)
+fast:fade(fa)
+eq(fa:get(0, 0), 0, "and falls to the background")
+
 # ---------------------------------------------------------------- remap
 s = sf.new(3, 1, 0)
 s:set(1, 0, 5)

@@ -2,6 +2,7 @@
 --   [graphics|teletext]   вывод (по умолчанию сам)
 --   monitor[=имя]         рисовать на мониторе (первом найденном или с таким именем, в том числе по проводному модему)
 --   mirror=имя1,имя2      показывать то же самое ещё на этих мониторах (того же размера); основной задаётся monitor=
+--   view=число            ограничить тяжёлые сцены демо окном такого числа пикселей (например, view=90000); по умолчанию весь экран
 --   fps=число             предел кадров в секунду (по умолчанию 20: терминал обновляется раз в игровой тик); 0 без предела, для замеров
 --   scale=число          масштаб текста монитора; по умолчанию 0.5 (больше всего клеток и пикселей, максимальное разрешение)
 -- Возвращает opts для cgl.open / demo.main, найденный монитор (или nil) и выбранный масштаб.
@@ -20,6 +21,8 @@ return function(args)
       target = peripheral.wrap(opts.monitor)
     elseif a:sub(1, 7) == "mirror=" then
       for name in a:sub(8):gmatch("[^,]+") do mirror_names[#mirror_names + 1] = name end
+    elseif a:sub(1, 5) == "view=" then
+      opts.view_budget = tonumber(a:sub(6))
     elseif a:sub(1, 4) == "fps=" then
       opts.fps = tonumber(a:sub(5))
     elseif a:sub(1, 6) == "scale=" then
