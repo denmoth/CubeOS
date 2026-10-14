@@ -1,0 +1,602 @@
+# kernel: ядро CubeOS: процессы, планировщик, события, сообщения, ответственность за зависшие программы
+#
+# Процесс это сопрограмма. Программы уступают управление друг другу при вызовах sys (sleep, wait_event, receive, ...)
+# и при автоматических отдачах (код, скомпилированный с --yield, вызывает rt.tick, а он, когда квант вышел, уступает ядру).
+#
+#   k = kernel.new({clock: ..., rt: cubic.rt, fsys: fsys})
+#   pid = k:spawn((sys, args) => ..., [], {name: "demo"})
+#   k:run_ready()          выполнить всё, что готово
+#   k:feed("key", 65)      передать событие CC (клавиши идут активной программе, остальное ждущим)
+#   k:tick()               таймеры, паузы, проверка зависших; в настоящем CC всё это делает k:run()
+#
+# Подробности: docs/spec/kernel.md
+
+import kernel.sys as sys_mod
+import cfs.rules as rules_mod
+
+const INPUT_EVENTS = {key: true, key_up: true, char: true, paste: true, mouse_click: true, mouse_up: true,
+    mouse_drag: true, mouse_scroll: true}
+const MAX_QUEUE = 256
+const MAX_EXITED = 64
+
+def _default_clock():
+    return os.epoch("utc")
+
+def _matches(filter, name):
+    if filter == nil:
+        return true
+    for f in filter:
+        if f == name:
+            return true
+    return false
+
+export class Proc:
+    def init(self, pid, name, program, args, opts):
+        self.pid = pid
+        self.name = name
+        self.program = program
+        self.args = args
+        self.co = coroutine.create(program)
+        self.started = false
+        self.state = "ready"
+        self.wait = nil
+        self.deadline = nil
+        self.resume_value = nil
+        self.events = []
+        self.inbox = []
+        self.parent = opts.parent
+        self.subject = opts.subject
+        self.view = opts.view
+        self.ui = opts.ui ?? false
+        self.detached = opts.detached ?? false
+        self.out = opts.out
+        self.cpu_ms = 0
+        self.slices = 0
+        self.started_at = 0
+        self.hung = false
+        self.snooze_until = 0
+        self.term_deadline = nil
+        self.children = []
+
+export class Kernel:
+    # opts: clock (мс), rt (cubic.rt для отдачи управления кодом с yield), fsys (CFS для блокировок), pull (источник событий),
+    #       slice_ms (квант), hung_ms (после скольких мс без ответа программа считается зависшей), snooze_ms,
+    #       grace_ms (сколько ждать после просьбы завершиться), lag_ms (пауза между тиками, после которой считаем, что лагает сервер),
+    #       max_procs, on_hung (функция(proc)), on_exit (функция(info)), log (функция(text))
+    def init(self, opts=nil):
+        o = opts ?? {}
+        self.clock = o.clock ?? _default_clock
+        self.rt = o.rt
+        self.cubic = o.cubic
+        self.fsys = o.fsys
+        self.pull = o.pull
+        self.slice_ms = o.slice_ms ?? 50
+        self.hung_ms = o.hung_ms ?? 5000
+        self.snooze_ms = o.snooze_ms ?? 300000
+        self.grace_ms = o.grace_ms ?? 3000
+        self.lag_ms = o.lag_ms ?? 2000
+        self.max_procs = o.max_procs ?? 64
+        self.on_hung = o.on_hung
+        self.on_exit = o.on_exit
+        self.log_fn = o.log
+        self.procs = {}
+        self.ready = []
+        self.next_pid = 1
+        self.current = nil
+        self.focus_pid = nil
+        self.services = {}
+        self.exited = {}
+        self.exit_order = []
+        self.sys = sys_mod
+        self.lag_until = 0
+        self.last_tick = self.clock()
+        self.running = false
+        self.log_lines = []
+        self.stdout_lines = {}
+        self.handlers = {}
+        self:_install_handlers()
+        if self.rt != nil:
+            let ks = self
+            self.rt.slice_hook = (now) => ks:_preempt(now)
+
+    # ------------------------------------------------------------ журнал
+
+    def log(self, text):
+        self.log_lines[len(self.log_lines) + 1] = text
+        if len(self.log_lines) > 200:
+            table.remove(self.log_lines, 1)
+        if self.log_fn != nil:
+            self.log_fn(text)
+
+    # ------------------------------------------------------------ процессы
+
+    def proc(self, pid):
+        return self.procs[pid]
+
+    def alive(self, pid):
+        return self.procs[pid] != nil
+
+    def count(self):
+        n = 0
+        for pid, p in self.procs:
+            n += 1
+        return n
+
+    # запускает процесс. program: функция fn(sys, args). opts: name, parent, subject, view, ui, detached, out
+    def spawn(self, program, args=nil, opts=nil):
+        o = opts ?? {}
+        if self:count() >= self.max_procs:
+            raise Error("too many processes")
+        parent = o.parent != nil and self.procs[o.parent] or nil
+        if parent == nil and self.current != nil and o.parent == nil:
+            parent = self.current
+        spawn_opts = {parent: parent != nil and parent.pid or nil, subject: o.subject, view: o.view, ui: o.ui,
+            detached: o.detached, out: o.out}
+        if parent != nil:
+            if spawn_opts.subject == nil:
+                spawn_opts.subject = parent.subject
+            if spawn_opts.view == nil:
+                spawn_opts.view = parent.view
+            if spawn_opts.out == nil:
+                spawn_opts.out = parent.out
+        pid = self.next_pid
+        self.next_pid += 1
+        proc = Proc(pid, o.name ?? ("proc" .. pid), program, args ?? [], spawn_opts)
+        proc.started_at = self.clock()
+        self.procs[pid] = proc
+        if parent != nil:
+            parent.children[len(parent.children) + 1] = pid
+        self.ready[len(self.ready) + 1] = proc
+        if proc.ui:
+            self.focus_pid = pid
+        self:log("spawn " .. pid .. " " .. proc.name)
+        return pid
+
+    def _wake(self, proc, value):
+        if proc.state == "dead":
+            return
+        proc.state = "ready"
+        proc.wait = nil
+        proc.deadline = nil
+        proc.resume_value = value
+        self.ready[len(self.ready) + 1] = proc
+
+    def _remove_from_ready(self, proc):
+        for i, p in self.ready:
+            if p == proc:
+                table.remove(self.ready, i)
+                return
+
+    def _die(self, proc, how, code, err):
+        if proc.state == "dead":
+            return
+        proc.state = "dead"
+        self:_remove_from_ready(proc)
+        self.procs[proc.pid] = nil
+        info = {pid: proc.pid, name: proc.name, how: how, code: code, err: err, cpu_ms: proc.cpu_ms}
+        self.exited[proc.pid] = info
+        self.exit_order[len(self.exit_order) + 1] = proc.pid
+        if len(self.exit_order) > MAX_EXITED:
+            old = table.remove(self.exit_order, 1)
+            self.exited[old] = nil
+        self:log("exit " .. proc.pid .. " " .. proc.name .. " (" .. how .. ")" .. (err != nil and (": " .. tostring(err)) or ""))
+        # службы, блокировки, фокус
+        for name, pid in self.services:
+            if pid == proc.pid:
+                self.services[name] = nil
+        if self.fsys != nil:
+            self.fsys:release_owner(proc.pid)
+        if self.focus_pid == proc.pid:
+            self.focus_pid = nil
+            self:focus_next()
+        # дети без detached завершаются вместе с родителем
+        for cpid in proc.children:
+            child = self.procs[cpid]
+            if child != nil and not child.detached:
+                self:_die(child, "killed", nil, "parent exited")
+        # ждущие завершения
+        for pid, other in self.procs:
+            if other.state == "waiting" and other.wait != nil and other.wait.kind == "child" and other.wait.pid == proc.pid:
+                self:_wake(other, {code: code, err: err})
+        if self.on_exit != nil:
+            self.on_exit(info)
+
+    # просьба завершиться (событие terminate) или немедленное завершение
+    def kill(self, pid, mode="term"):
+        proc = self.procs[pid]
+        if proc == nil:
+            return false
+        if mode == "kill":
+            self:_die(proc, "killed", nil, "killed")
+            return true
+        proc.term_deadline = self.clock() + self.grace_ms
+        self:_enqueue(proc, {name: "terminate", args: [], at: self.clock()})
+        return true
+
+    # ------------------------------------------------------------ планировщик
+
+    def _preempt(self, now):
+        # вызывается из кода с автоматической отдачей: уступаем ядру, оставаясь готовыми.
+        # Вне процесса (или внутри чужой сопрограммы) ничего не делаем.
+        if self.current == nil or coroutine.running() != self.current.co:
+            return
+        coroutine.yield({op: "preempt"})
+
+    def _run_slice(self, proc):
+        start = self.clock()
+        self.current = proc
+        if self.rt != nil:
+            self.rt.slice_t0 = start
+        value = proc.resume_value
+        proc.resume_value = nil
+        while true:
+            ok = nil
+            req = nil
+            if not proc.started:
+                proc.started = true
+                ok, req = coroutine.resume(proc.co, self.sys, proc.args)
+            else:
+                ok, req = coroutine.resume(proc.co, value)
+            now = self.clock()
+            proc.cpu_ms += now - start
+            start = now
+            if not ok:
+                self.current = nil
+                self:_die(proc, "crashed", nil, req)
+                return
+            if coroutine.status(proc.co) == "dead":
+                self.current = nil
+                self:_die(proc, "exited", req ?? 0, nil)
+                return
+            kind, result = self:_syscall(proc, req)
+            if kind == "block":
+                break
+            if kind == "dead":
+                break
+            if kind == "preempt":
+                proc.state = "ready"
+                proc.resume_value = nil
+                self.ready[len(self.ready) + 1] = proc
+                break
+            # мгновенный вызов: продолжаем тот же процесс, если квант не вышел
+            value = result
+            if self.clock() - start >= self.slice_ms:
+                proc.state = "ready"
+                proc.resume_value = result
+                self.ready[len(self.ready) + 1] = proc
+                break
+            if self.rt != nil:
+                self.rt.slice_t0 = self.clock()
+        proc.slices += 1
+        self.current = nil
+
+    # выполняет все готовые процессы (каждый по кванту); max_rounds защищает от бесконечного цикла
+    def run_ready(self, max_rounds=100000):
+        rounds = 0
+        while len(self.ready) > 0 and rounds < max_rounds:
+            proc = table.remove(self.ready, 1)
+            if proc.state == "ready":
+                self:_run_slice(proc)
+            rounds += 1
+        return rounds
+
+    # запускает программу на Cubic из исходника (компилируется с автоматической отдачей управления);
+    # в программе доступны sys и args
+    def spawn_source(self, src, name, args=nil, opts=nil):
+        if self.cubic == nil:
+            raise Error("kernel has no compiler (opts.cubic)")
+        env = setmetatable({sys: self.sys, args: args ?? []}, {__index: _G})
+        o = opts ?? {}
+        runner = self.cubic.load(src, name, {yield: true, env: env, import: o.import})
+        return self:spawn((s, a) => runner(), args, {name: o.name ?? name, parent: o.parent, subject: o.subject,
+            view: o.view, ui: o.ui, detached: o.detached, out: o.out})
+
+    # ------------------------------------------------------------ события
+
+    def _enqueue(self, proc, ev):
+        if proc.state == "waiting" and proc.wait != nil and proc.wait.kind == "event" and _matches(proc.wait.filter, ev.name):
+            self:_wake(proc, self:_pack(ev))
+            return
+        proc.events[len(proc.events) + 1] = ev
+        if len(proc.events) > MAX_QUEUE:
+            table.remove(proc.events, 1)
+
+    def _pack(self, ev):
+        out = [ev.name]
+        for a in ev.args:
+            out[len(out) + 1] = a
+        return out
+
+    # передаёт событие CC: ввод идёт активной программе, остальное ждущим подходящим программам
+    def feed(self, name, *args):
+        ev = {name: name, args: args, at: self.clock()}
+        if INPUT_EVENTS[name]:
+            target = self.focus_pid != nil and self.procs[self.focus_pid] or nil
+            if target != nil:
+                self:_enqueue(target, ev)
+            return
+        snapshot = []
+        for pid, p in self.procs:
+            snapshot[len(snapshot) + 1] = p
+        for p in snapshot:
+            if p.state == "waiting" and p.wait != nil and p.wait.kind == "event" and _matches(p.wait.filter, name):
+                self:_wake(p, self:_pack(ev))
+
+    # ------------------------------------------------------------ фокус
+
+    def set_focus(self, pid):
+        if self.procs[pid] == nil:
+            return false
+        self.focus_pid = pid
+        return true
+
+    # переключает фокус на следующую программу с интерфейсом
+    def focus_next(self):
+        list_ = []
+        for pid, p in self.procs:
+            if p.ui:
+                list_[len(list_) + 1] = pid
+        if len(list_) == 0:
+            self.focus_pid = nil
+            return nil
+        table.sort(list_)
+        pick = list_[1]
+        for i, pid in list_:
+            if pid == self.focus_pid and list_[i + 1] != nil:
+                pick = list_[i + 1]
+        self.focus_pid = pick
+        return pick
+
+    # ------------------------------------------------------------ время и наблюдение
+
+    def next_wakeup(self):
+        best = nil
+        for pid, p in self.procs:
+            if p.deadline != nil and (best == nil or p.deadline < best):
+                best = p.deadline
+            if p.term_deadline != nil and (best == nil or p.term_deadline < best):
+                best = p.term_deadline
+        return best
+
+    # таймеры, принудительное завершение после просьбы, обнаружение лагов и зависших программ
+    def tick(self):
+        now = self.clock()
+        gap = now - self.last_tick
+        self.last_tick = now
+        if gap > self.lag_ms:
+            # сервер подвис: программы не виноваты. Сдвигаем отметки событий и временно не обвиняем.
+            self.lag_until = now + self.hung_ms
+            for pid, p in self.procs:
+                for ev in p.events:
+                    ev.at += gap
+            self:log("lag detected: " .. gap .. " ms between ticks")
+        due = []
+        for pid, p in self.procs:
+            if p.state == "waiting" and p.deadline != nil and p.deadline <= now:
+                due[len(due) + 1] = p
+        for p in due:
+            self:_wake(p, nil)
+        killers = []
+        for pid, p in self.procs:
+            if p.term_deadline != nil and p.term_deadline <= now:
+                killers[len(killers) + 1] = p
+        for p in killers:
+            self:_die(p, "killed", nil, "did not exit after terminate")
+        self:_check_hung(now)
+
+    def _check_hung(self, now):
+        if now < self.lag_until:
+            return
+        for pid, p in self.procs:
+            first = p.events[1]
+            if first != nil and now - first.at >= self.hung_ms and now >= p.snooze_until and not p.hung:
+                p.hung = true
+                self:log("not responding: " .. pid .. " " .. p.name)
+                if self.on_hung != nil:
+                    self.on_hung(p)
+            elif first == nil and p.hung:
+                p.hung = false
+
+    # ответ пользователя на «не отвечает»: "wait" ждать, "snooze" отложить (мс, по умолчанию snooze_ms), "kill" закрыть
+    def answer_hung(self, pid, answer, ms=nil):
+        p = self.procs[pid]
+        if p == nil:
+            return false
+        if answer == "kill":
+            self:_die(p, "killed", nil, "closed by the user")
+            return true
+        p.hung = false
+        t = self.clock()
+        if answer == "snooze":
+            p.snooze_until = t + (ms ?? self.snooze_ms)
+        for ev in p.events:
+            ev.at = t
+        return true
+
+    # ------------------------------------------------------------ главный цикл настоящего CC
+
+    # self.pull(timeout_ms) возвращает список события или nil по таймауту
+    def run(self, until_empty=false):
+        if self.pull == nil:
+            raise Error("kernel has no event source (opts.pull)")
+        self.running = true
+        while self.running:
+            self:run_ready()
+            if until_empty and self:count() == 0:
+                break
+            wake = self:next_wakeup()
+            timeout = 500
+            if wake != nil:
+                timeout = math.max(0, math.min(500, wake - self.clock()))
+            if len(self.ready) > 0:
+                timeout = 0
+            ev = self.pull(timeout)
+            if ev != nil:
+                self:feed(unpack(ev))
+            self:tick()
+        self.running = false
+
+    def stop(self):
+        self.running = false
+
+    # ------------------------------------------------------------ сведения
+
+    def ps(self):
+        out = []
+        for pid, p in self.procs:
+            out[len(out) + 1] = {pid: pid, name: p.name, state: p.state, parent: p.parent,
+                user: p.subject != nil and p.subject.name or "system", cpu_ms: p.cpu_ms, ui: p.ui, hung: p.hung}
+        table.sort(out, (a, b) => a.pid < b.pid)
+        return out
+
+    def exit_info(self, pid):
+        return self.exited[pid]
+
+    # ------------------------------------------------------------ обработчики системных вызовов
+
+    def _install_handlers(self):
+        h = self.handlers
+        k = self
+
+        def preempt(proc, req):
+            return "preempt", nil
+        h.preempt = preempt
+
+        def sleep(proc, req):
+            ms = req.ms ?? 0
+            if ms <= 0:
+                return "preempt", nil
+            proc.state = "waiting"
+            proc.wait = {kind: "sleep"}
+            proc.deadline = k.clock() + ms
+            return "block", nil
+        h.sleep = sleep
+
+        def wait_event(proc, req):
+            for i, ev in proc.events:
+                if _matches(req.filter, ev.name):
+                    table.remove(proc.events, i)
+                    return "value", k:_pack(ev)
+            proc.state = "waiting"
+            proc.wait = {kind: "event", filter: req.filter}
+            if req.timeout_ms != nil:
+                proc.deadline = k.clock() + req.timeout_ms
+            return "block", nil
+        h.wait_event = wait_event
+
+        def spawn(proc, req):
+            o = req.opts ?? {}
+            if o.subject != nil and not rules_mod.is_system(proc.subject):
+                return "value", {error: "only system processes can start a process as another user"}
+            ok, result = pcall(k.spawn, k, req.program, req.args, {name: o.name, parent: proc.pid, subject: o.subject,
+                view: o.view, ui: o.ui, detached: o.detached, out: o.out})
+            if not ok:
+                return "value", {error: tostring(result)}
+            return "value", {pid: result}
+        h.spawn = spawn
+
+        def wait(proc, req):
+            info = k.exited[req.pid]
+            if info != nil:
+                return "value", {code: info.code, err: info.err}
+            if k.procs[req.pid] == nil:
+                return "value", {error: "no such process"}
+            proc.state = "waiting"
+            proc.wait = {kind: "child", pid: req.pid}
+            return "block", nil
+        h.wait = wait
+
+        def exit(proc, req):
+            k:_die(proc, "exited", req.code ?? 0, nil)
+            return "dead", nil
+        h.exit = exit
+
+        def kill(proc, req):
+            target = k.procs[req.pid]
+            if target == nil:
+                return "value", {ok: false}
+            # убивать чужие процессы может только система, администратор или владелец
+            allowed = rules_mod.is_admin(proc.subject) or target.subject == nil or proc.subject == target.subject or (proc.subject != nil and target.subject != nil and proc.subject.name == target.subject.name)
+            if not allowed:
+                return "value", {error: "permission denied"}
+            return "value", {ok: k:kill(req.pid, req.mode ?? "term")}
+        h.kill = kill
+
+        def send(proc, req):
+            target = k.procs[req.to]
+            if target == nil:
+                return "value", {ok: false}
+            msg = {from: proc.pid, msg: req.msg}
+            if target.state == "waiting" and target.wait != nil and target.wait.kind == "receive":
+                k:_wake(target, msg)
+            else:
+                target.inbox[len(target.inbox) + 1] = msg
+                if len(target.inbox) > MAX_QUEUE:
+                    table.remove(target.inbox, 1)
+            return "value", {ok: true}
+        h.send = send
+
+        def receive(proc, req):
+            if len(proc.inbox) > 0:
+                return "value", table.remove(proc.inbox, 1)
+            proc.state = "waiting"
+            proc.wait = {kind: "receive"}
+            if req.timeout_ms != nil:
+                proc.deadline = k.clock() + req.timeout_ms
+            return "block", nil
+        h.receive = receive
+
+        def info(proc, req):
+            return "value", {pid: proc.pid, name: proc.name, parent: proc.parent,
+                user: proc.subject != nil and proc.subject.name or "system", cpu_ms: proc.cpu_ms, started: proc.started_at}
+        h.info = info
+
+        def ps(proc, req):
+            return "value", {list: k:ps()}
+        h.ps = ps
+
+        def now(proc, req):
+            return "value", {ms: k.clock()}
+        h.now = now
+
+        def set_focus(proc, req):
+            return "value", {ok: k:set_focus(req.pid)}
+        h.set_focus = set_focus
+
+        def focus(proc, req):
+            return "value", {pid: k.focus_pid}
+        h.focus = focus
+
+        def register(proc, req):
+            if k.services[req.name] != nil and k.procs[k.services[req.name]] != nil:
+                return "value", {error: "service name is taken"}
+            k.services[req.name] = proc.pid
+            return "value", {ok: true}
+        h.register = register
+
+        def lookup(proc, req):
+            return "value", {pid: k.services[req.name]}
+        h.lookup = lookup
+
+        def view(proc, req):
+            return "value", {view: proc.view}
+        h.view = view
+
+        def out(proc, req):
+            if proc.out != nil:
+                proc.out(req.text)
+            else:
+                k.stdout_lines[proc.pid] = (k.stdout_lines[proc.pid] ?? "") .. req.text
+            return "value", {ok: true}
+        h.out = out
+
+    def _syscall(self, proc, req):
+        if type(req) != "table" or req.op == nil:
+            return "value", nil
+        handler = self.handlers[req.op]
+        if handler == nil:
+            return "value", {error: "unknown system call: " .. tostring(req.op)}
+        return handler(proc, req)
+
+export def new(opts=nil):
+    return Kernel(opts)

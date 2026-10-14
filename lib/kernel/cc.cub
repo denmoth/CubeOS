@@ -1,0 +1,24 @@
+# kernel.cc: источник событий для ядра в настоящем CC (и CraftOS-PC)
+#
+#   k = kernel.new({pull: cckernel.pull, rt: cubic.rt, cubic: cubic})
+#   k:run()
+#
+# pull(timeout_ms) ждёт событие CC не дольше timeout_ms и возвращает список {имя, аргументы...}, по таймауту nil.
+
+export def pull(timeout_ms):
+    if timeout_ms <= 0:
+        # мгновенный опрос: помечаем очередь и забираем всё, что пришло раньше пометки
+        os.queueEvent("kernel_poll")
+        while true:
+            ev = table.pack(os.pullEventRaw())
+            if ev[1] == "kernel_poll":
+                return nil
+            return [unpack(ev, 1, ev.n)]
+    timer = os.startTimer(timeout_ms / 1000)
+    while true:
+        ev = table.pack(os.pullEventRaw())
+        if ev[1] == "timer" and ev[2] == timer:
+            return nil
+        if ev[1] != "kernel_poll":
+            os.cancelTimer(timer)
+            return [unpack(ev, 1, ev.n)]

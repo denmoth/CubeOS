@@ -1,0 +1,58 @@
+import t
+import kernel
+eq = t.eq
+
+clock = {now: 1000}
+def now():
+    return clock.now
+
+hung = []
+def on_hung(proc):
+    hung[len(hung) + 1] = proc.name
+
+# с slice_ms 0 каждая проверка автоотдачи уступает ядру: программы чередуются, даже если сами ничего не вызывают
+k = kernel.new({clock: now, cubic: cubic_host, rt: cubic_host.rt, slice_ms: 0})
+counter_src = "count = 0\nwhile count < 2000:\n    count += 1\nsys.out('done' .. count)"
+a = k:spawn_source(counter_src, "counter-a")
+b = k:spawn_source(counter_src, "counter-b")
+k:run_ready()
+eq(k.stdout_lines[a], "done2000", "program A finished")
+eq(k.stdout_lines[b], "done2000", "program B finished")
+eq(k:exit_info(a).how, "exited", "A exited normally")
+# каждая программа прошла много квантов: её вытесняли из цикла несколько раз
+eq(cubic_host.rt.native_yields, 0, "no native yields inside the kernel")
+
+# вытесняющие циклы считаются по слайсам: ставим мало итераций и проверяем число переключений
+k2 = kernel.new({clock: now, cubic: cubic_host, rt: cubic_host.rt, slice_ms: 0})
+p1 = k2:spawn_source("n = 0\nwhile n < 3000:\n    n += 1", "loop")
+steps = 0
+while k2:alive(p1) and steps < 100:
+    k2:run_ready(1)
+    steps += 1
+eq(steps >= 10, true, "a long loop was preempted many times (steps " .. steps .. ")")
+eq(k2:alive(p1), false, "the loop finished")
+
+# цикл, который не слушает события: ядро замечает зависание и спрашивает
+k3 = kernel.new({clock: now, cubic: cubic_host, rt: cubic_host.rt, slice_ms: 0, hung_ms: 5000, lag_ms: 1000000000, on_hung: on_hung})
+busy = k3:spawn_source("x = 0\nwhile true:\n    x += 1", "busy", [], {ui: true})
+k3:run_ready(1)
+k3:feed("key", 65)
+for i in range[1, 8]:
+    clock.now = clock.now + 1000
+    k3:tick()
+    k3:run_ready(1)
+eq(hung, ["busy"], "a busy loop that ignores input is reported as not responding")
+eq(k3:alive(busy), true, "still alive until the user decides")
+k3:answer_hung(busy, "kill")
+eq(k3:alive(busy), false, "closed by the user")
+
+# программа на Cubic пользуется sys и получает события
+k4 = kernel.new({clock: now, cubic: cubic_host, rt: cubic_host.rt})
+src = "name, v = sys.wait_event(['ping'])\nsys.out(name .. v .. #args)"
+src = "name, v = sys.wait_event(['ping'])\nsys.out(name .. v .. len(args))"
+e = k4:spawn_source(src, "listener", ["x", "y"])
+k4:run_ready()
+k4:feed("ping", "!")
+k4:run_ready()
+eq(k4.stdout_lines[e], "ping!2", "Cubic program talks to the kernel through sys and args")
+print("done")

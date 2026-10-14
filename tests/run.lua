@@ -87,6 +87,7 @@ local function run_case(name, label, force)
       for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
       buf[#buf + 1] = table.concat(parts, "\t")
     end,
+    cubic_host = cubic,  -- для тестов, которым нужен сам компилятор (rt, load)
     -- тесты не должны трогать настоящую периферию (в игре у компьютера есть монитор, колонка, принтер)
     peripheral = {
       find = function() return nil end,

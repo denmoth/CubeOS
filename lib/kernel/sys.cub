@@ -1,0 +1,97 @@
+# kernel.sys: системные вызовы для программ CubeOS
+#
+# Программа получает этот модуль как sys (первым аргументом процесса или глобальным именем в программе на Cubic).
+# Вызовы можно делать только из процесса, запущенного ядром: каждый вызов отдаёт управление ядру
+# (coroutine.yield с запросом), ядро выполняет его и возвращает результат.
+#
+#   sys.sleep(0.5)                     пауза в секундах
+#   name, a, b = sys.wait_event()      следующее событие (key, char, mouse_click, timer, rednet_message, ...)
+#   name = sys.wait_event(["key"], 2)  только ключи, ждать не дольше 2 секунд (иначе nil)
+#   pid = sys.spawn(fn, ["arg"])       запустить процесс
+#   code, err = sys.wait(pid)          дождаться завершения
+#   sys.send(pid, msg); from, msg = sys.receive(timeout)
+#   sys.exit(0)
+
+def _call(request):
+    return coroutine.yield(request)
+
+def _check(result):
+    if result != nil and result.error != nil:
+        raise Error(result.error)
+    return result
+
+# уступить управление другим процессам и сразу вернуться в очередь
+export def yield():
+    _call({op: "preempt"})
+
+export def sleep(seconds=0):
+    _call({op: "sleep", ms: seconds * 1000})
+
+# ждёт события; filter: список имён (nil любое), timeout: секунды (nil без ограничения). Возвращает имя и аргументы
+export def wait_event(filter=nil, timeout=nil):
+    res = _call({op: "wait_event", filter: filter, timeout_ms: timeout != nil and timeout * 1000 or nil})
+    if res == nil:
+        return nil
+    return unpack(res)
+
+# запускает процесс; program: функция fn(sys, args); opts: name, subject (только system), view, ui, detached
+export def spawn(program, args=nil, opts=nil):
+    res = _check(_call({op: "spawn", program: program, args: args, opts: opts}))
+    return res.pid
+
+# ждёт завершения процесса; возвращает код выхода и текст ошибки (если процесс упал)
+export def wait(pid):
+    res = _check(_call({op: "wait", pid: pid}))
+    return res.code, res.err
+
+export def exit(code=0):
+    _call({op: "exit", code: code})
+
+# mode: "term" (просьба завершиться: событие terminate, через паузу принудительно) или "kill"
+export def kill(pid, mode="term"):
+    return _check(_call({op: "kill", pid: pid, mode: mode})).ok
+
+export def send(pid, message):
+    return _check(_call({op: "send", to: pid, msg: message})).ok
+
+# ждёт сообщение; возвращает номер отправителя и сообщение, по таймауту nil
+export def receive(timeout=nil):
+    res = _call({op: "receive", timeout_ms: timeout != nil and timeout * 1000 or nil})
+    if res == nil:
+        return nil
+    return res.from, res.msg
+
+export def getpid():
+    return _check(_call({op: "info"})).pid
+
+# сведения о своём процессе: {pid, name, parent, user, cpu_ms, started}
+export def info():
+    return _check(_call({op: "info"}))
+
+# список процессов: {pid, name, state, parent, user, cpu_ms, ui}
+export def ps():
+    return _check(_call({op: "ps"})).list
+
+export def now():
+    return _check(_call({op: "now"})).ms
+
+export def set_focus(pid):
+    return _check(_call({op: "set_focus", pid: pid})).ok
+
+export def focus():
+    return _check(_call({op: "focus"})).pid
+
+# регистрирует процесс под именем службы (например, "netd"); lookup находит номер
+export def register(name):
+    return _check(_call({op: "register", name: name})).ok
+
+export def lookup(name):
+    return _check(_call({op: "lookup", name: name})).pid
+
+# вид файловой системы процесса (cfs.view) или nil
+export def view():
+    return _check(_call({op: "view"})).view
+
+# пишет в стандартный вывод процесса (ядро решает, куда он идёт)
+export def out(text):
+    _call({op: "out", text: tostring(text)})

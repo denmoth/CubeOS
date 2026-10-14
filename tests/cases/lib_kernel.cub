@@ -1,0 +1,360 @@
+import t
+import kernel
+import cfs
+import cfs.rules as rules
+eq = t.eq
+
+clock = {now: 1000}
+def now():
+    return clock.now
+
+log = []
+def say(text):
+    log[len(log) + 1] = text
+
+def mk(extra=nil):
+    o = extra ?? {}
+    o.clock = now
+    return kernel.new(o)
+
+def advance(k, ms):
+    clock.now = clock.now + ms
+    k:tick()
+    k:run_ready()
+
+# ---------------------------------------------------------------- чередование и паузы
+log = []
+k = mk()
+def prog_a(sys, args):
+    say("a1")
+    sys.sleep(1)
+    say("a2")
+    sys.sleep(1)
+    say("a3")
+def prog_b(sys, args):
+    say("b1")
+    sys.sleep(1.5)
+    say("b2")
+pa = k:spawn(prog_a, [], {name: "A"})
+pb = k:spawn(prog_b, [], {name: "B"})
+eq(pa, 1, "first pid")
+eq(pb, 2, "second pid")
+k:run_ready()
+eq(log, ["a1", "b1"], "both started")
+advance(k, 1000)
+eq(log, ["a1", "b1", "a2"], "A wakes first")
+advance(k, 500)
+eq(log, ["a1", "b1", "a2", "b2"], "B wakes at 1.5 s")
+advance(k, 1000)
+eq(log, ["a1", "b1", "a2", "b2", "a3"], "A finishes")
+eq(k:count(), 0, "all exited")
+eq(k:exit_info(pa).how, "exited", "exit info")
+eq(k:exit_info(pa).code, 0, "default exit code")
+
+# ---------------------------------------------------------------- события и фокус
+log = []
+k = mk()
+def reader(sys, args):
+    while true:
+        name, a = sys.wait_event()
+        say(args[1] .. ":" .. name .. ":" .. tostring(a))
+        if a == "stop":
+            return 7
+ui1 = k:spawn(reader, ["one"], {name: "one", ui: true})
+ui2 = k:spawn(reader, ["two"], {name: "two", ui: true})
+k:run_ready()
+eq(k.focus_pid, ui2, "last ui process has focus")
+k:feed("key", 65)
+k:run_ready()
+eq(log, ["two:key:65"], "key goes to the focused process")
+k:set_focus(ui1)
+k:feed("char", "x")
+k:run_ready()
+eq(log, ["two:key:65", "one:char:x"], "focus switched")
+k:feed("rednet_message", 5)
+k:run_ready()
+eq(len(log), 4, "broadcast reaches both waiting processes")
+eq(k:focus_next(), ui2, "focus_next cycles")
+k:feed("key", "stop")
+k:run_ready()
+eq(k:exit_info(ui2).code, 7, "exit code from return value")
+eq(k.focus_pid, ui1, "focus moves to a live ui process after exit")
+k:feed("terminal_resize")
+k:run_ready()
+
+# события, пришедшие пока процесс занят, не теряются
+log = []
+k = mk()
+def sleeper(sys, args):
+    sys.sleep(5)
+    name, a = sys.wait_event(["key"])
+    say(name .. a)
+    name, a = sys.wait_event(["key"])
+    say(name .. a)
+pid = k:spawn(sleeper, [], {ui: true})
+k:run_ready()
+k:feed("key", 1)
+k:feed("key", 2)
+k:feed("char", "ignored")
+advance(k, 5000)
+eq(log, ["key1", "key2"], "queued input is delivered in order after the pause")
+
+# фильтр и таймаут
+log = []
+k = mk()
+def timeout_prog(sys, args):
+    ev = sys.wait_event(["never"], 2)
+    say("timeout:" .. tostring(ev))
+    ev2, v = sys.wait_event(["go"], 10)
+    say("got:" .. ev2 .. v)
+k:spawn(timeout_prog, [], {})
+k:run_ready()
+advance(k, 2000)
+eq(log, ["timeout:nil"], "wait_event timeout returns nil")
+k:feed("go", "!")
+k:run_ready()
+eq(log, ["timeout:nil", "got:go!"], "filtered event")
+
+# ---------------------------------------------------------------- spawn, wait, сбои, дети
+log = []
+k = mk()
+def child(sys, args):
+    sys.sleep(1)
+    say("child done")
+    return 42
+def crasher(sys, args):
+    error("boom")
+def parent(sys, args):
+    cp = sys.spawn(child, [], {name: "child"})
+    code, err = sys.wait(cp)
+    say("child code " .. code)
+    bp = sys.spawn(crasher, [], {name: "bad"})
+    code2, err2 = sys.wait(bp)
+    say("crash: " .. tostring(code2) .. " " .. tostring(err2))
+    code3, err3 = sys.wait(9999)
+pp = k:spawn(parent, [], {name: "parent"})
+k:run_ready()
+advance(k, 1000)
+eq(log[1], "child done", "child ran")
+eq(log[2], "child code 42", "wait returns exit code")
+eq(string.find(log[3], "crash: nil", 1, true) != nil and string.find(log[3], "boom", 1, true) != nil, true, "crash reported to the waiter")
+eq(k:exit_info(pp).how, "crashed", "unknown pid wait raises and crashes the parent")
+eq(k:exit_info(3).how, "crashed", "crash info")
+
+# дети умирают с родителем, detached остаются
+k = mk()
+def forever(sys, args):
+    while true:
+        sys.sleep(1)
+def mother(sys, args):
+    sys.spawn(forever, [], {name: "kid"})
+    sys.spawn(forever, [], {name: "free", detached: true})
+    sys.sleep(2)
+mom = k:spawn(mother, [], {name: "mom"})
+k:run_ready()
+eq(k:count(), 3, "three processes")
+advance(k, 2000)
+eq(k:count(), 1, "kid died with mom, detached stays")
+eq(k:ps()[1].name, "free", "detached process remains")
+
+# лимит процессов
+k = mk({max_procs: 2})
+k:spawn(forever, [], {})
+k:spawn(forever, [], {})
+try:
+    k:spawn(forever, [], {})
+    eq(true, false, "limit should raise")
+except Error as e:
+    eq(string.find(tostring(e), "too many", 1, true) != nil, true, "process limit")
+
+# ---------------------------------------------------------------- сообщения и службы
+log = []
+k = mk()
+def server(sys, args):
+    sys.register("echo")
+    while true:
+        sender, msg = sys.receive()
+        if msg == "quit":
+            return
+        sys.send(sender, "echo:" .. msg)
+def client(sys, args):
+    sys.sleep(0.1)
+    srv = sys.lookup("echo")
+    sys.send(srv, "hello")
+    sender, reply = sys.receive(5)
+    say(reply)
+    say("missing:" .. tostring(sys.lookup("nothing")))
+    sender2, none = sys.receive(1)
+    say("timeout:" .. tostring(sender2))
+    sys.send(srv, "quit")
+k:spawn(server, [], {name: "server"})
+k:spawn(client, [], {name: "client"})
+k:run_ready()
+advance(k, 100)
+advance(k, 1000)
+eq(log, ["echo:hello", "missing:nil", "timeout:nil"], "messages and services")
+eq(k:count(), 0, "both exited")
+eq(k.services["echo"], nil, "service unregistered on exit")
+
+# ---------------------------------------------------------------- завершение и права
+log = []
+k = mk({grace_ms: 3000})
+def polite(sys, args):
+    ev = sys.wait_event(["terminate"])
+    say("polite got " .. ev)
+def stubborn(sys, args):
+    while true:
+        sys.sleep(1)
+        say("still here")
+pol = k:spawn(polite, [], {name: "polite"})
+stub = k:spawn(stubborn, [], {name: "stubborn"})
+k:run_ready()
+k:kill(pol, "term")
+k:kill(stub, "term")
+k:run_ready()
+eq(log[1], "polite got terminate", "terminate event delivered")
+eq(k:alive(pol), false, "polite exited")
+advance(k, 3000)
+eq(k:alive(stub), false, "stubborn killed after the grace period")
+eq(k:exit_info(stub).err, "did not exit after terminate", "kill reason")
+
+user = rules.subject("ivan")
+other = rules.subject("anna")
+admin = rules.subject("boss", ["admin"])
+system = rules.subject("kernel", ["system"])
+log = []
+k = mk()
+def target_prog(sys, args):
+    while true:
+        sys.sleep(1)
+tgt = k:spawn(target_prog, [], {name: "t", subject: other})
+def attempt_spawn_as(sys, args):
+    ok, err = pcall(sys.spawn, target_prog, [], {name: "x", subject: admin})
+    say("spawn as other: " .. tostring(ok))
+def attempt_kill(sys, args):
+    ok, err = pcall(sys.kill, args[1], "kill")
+    say("kill other: " .. tostring(ok))
+k:spawn(attempt_spawn_as, [], {subject: user})
+k:spawn(attempt_kill, [tgt], {subject: user})
+k:run_ready()
+eq(log, ["spawn as other: false", "kill other: false"], "users cannot impersonate or kill others")
+eq(k:alive(tgt), true, "target alive")
+k:spawn(attempt_kill, [tgt], {subject: admin})
+k:run_ready()
+eq(log[3], "kill other: true", "admin may kill")
+eq(k:alive(tgt), false, "target killed by admin")
+def spawn_as_prog(sys, args):
+    pid = sys.spawn(target_prog, [], {name: "y", subject: other, detached: true})
+    say("system spawn ok " .. pid)
+k:spawn(spawn_as_prog, [], {subject: system})
+k:run_ready()
+eq(string.find(log[4], "system spawn ok", 1, true) != nil, true, "system may start processes as other users")
+eq(k:ps()[len(k:ps())].user, "anna", "ps shows the user")
+
+# ---------------------------------------------------------------- «не отвечает»
+log = []
+hung_calls = []
+def on_hung(proc):
+    hung_calls[len(hung_calls) + 1] = proc.name
+k = mk({hung_ms: 5000, snooze_ms: 60000, lag_ms: 1000000000, on_hung: on_hung})
+def deaf(sys, args):
+    while true:
+        sys.yield()
+        sys.sleep(1)
+dp = k:spawn(deaf, [], {name: "deaf", ui: true})
+k:run_ready()
+k:feed("key", 1)
+advance(k, 1000)
+advance(k, 3000)
+eq(hung_calls, [], "not yet unresponsive")
+clock.now = clock.now + 1500
+k:tick()
+eq(hung_calls, ["deaf"], "reported after the timeout")
+k:tick()
+eq(len(hung_calls), 1, "reported only once")
+eq(k:proc(dp).hung, true, "flagged")
+k:answer_hung(dp, "snooze")
+clock.now = clock.now + 7000
+k:tick()
+eq(len(hung_calls), 1, "snoozed: no new report")
+clock.now = clock.now + 60000
+k:tick()
+eq(len(hung_calls), 2, "reported again after the snooze")
+k:answer_hung(dp, "wait")
+clock.now = clock.now + 2000
+k:tick()
+eq(len(hung_calls), 2, "waiting resets the timer")
+k:answer_hung(dp, "kill")
+eq(k:alive(dp), false, "closed by the user")
+
+# лаги сервера не считаются виной программы
+hung_calls = []
+k = mk({hung_ms: 5000, lag_ms: 2000, on_hung: on_hung})
+dp = k:spawn(deaf, [], {name: "deaf", ui: true})
+k:run_ready()
+k:feed("key", 1)
+clock.now = clock.now + 1000
+k:tick()
+clock.now = clock.now + 30000
+k:tick()
+eq(hung_calls, [], "a long gap between ticks is lag, not a hang")
+clock.now = clock.now + 4000
+k:tick()
+eq(hung_calls, [], "still inside the lag grace window")
+for i in range[1, 8]:
+    clock.now = clock.now + 1500
+    k:tick()
+eq(hung_calls, ["deaf"], "after the grace window a real hang is reported")
+
+# ---------------------------------------------------------------- источник событий и главный цикл
+log = []
+script = [["key", 1], ["key", 2], ["rednet_message", 9]]
+pos = {n: 0}
+def pull(timeout):
+    pos.n = pos.n + 1
+    if pos.n > len(script):
+        clock.now = clock.now + 1000
+        return nil
+    return script[pos.n]
+k = mk({pull: pull})
+def loop_prog(sys, args):
+    while true:
+        name, a = sys.wait_event()
+        say(name .. tostring(a))
+        if name == "rednet_message":
+            return
+k:spawn(loop_prog, [], {ui: true})
+k:run(true)
+eq(log, ["key1", "key2", "rednet_message9"], "run loop delivers events until all exit")
+
+# ---------------------------------------------------------------- блокировки CFS освобождаются
+fsys = cfs.new({})
+fsys:mount("/", cfs.memory())
+fsys:write_file(nil, "/f", "x")
+k = mk({fsys: fsys})
+def locker(sys, args):
+    fsys:lock(sys.getpid(), "/f", "exclusive")
+    sys.sleep(10)
+lp = k:spawn(locker, [], {})
+k:run_ready()
+eq(fsys:lock_info("/f").owners, [lp], "process holds the lock")
+k:kill(lp, "kill")
+eq(fsys:lock_info("/f"), nil, "lock released when the process dies")
+
+# вид файловой системы процесса и вывод
+fsys:mkdir(nil, "/home/ivan", {parents: true})
+fsys.rules:add("/home/ivan/**", {"*": "rwxl"})
+v = cfs.view(fsys, rules.subject("ivan"), {})
+log = []
+k = mk({fsys: fsys})
+def file_prog(sys, args):
+    fv = sys.view()
+    fv:write("/home/ivan/note.txt", "from process")
+    say(fv:read("/home/ivan/note.txt"))
+    sys.out("hello ")
+    sys.out("world")
+fp = k:spawn(file_prog, [], {view: v, subject: rules.subject("ivan"), name: "files"})
+k:run_ready()
+eq(log, ["from process"], "process uses its own CFS view")
+eq(k.stdout_lines[fp], "hello world", "stdout collected")
+print("done")
