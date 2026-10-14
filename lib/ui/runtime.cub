@@ -10,6 +10,7 @@
 # Среда не знает, обычный это терминал или пиксели: ей нужен вывод (out) с методами size, present, to_cell, open, close, set_theme.
 
 import cgl.anim as anim
+import unicode
 import ui.cells as cells_mod
 import ui.theme as th
 import ui.keymap as keymap_mod
@@ -306,9 +307,20 @@ export class Ui:
     def handle(self, name, a=nil, b=nil, c=nil):
         if name == "key":
             self:_track_mods(a, true)
-            return self:_on_key(a)
+            return self:_on_key(a, b)
         if name == "key_up":
             self:_track_mods(a, false)
+            if self.focus != nil and self.focus.raw_input:
+                return self.focus:raw_event("key_up", a, nil)
+            return false
+        if name == "paste":
+            if self.focus != nil and self.focus.raw_input:
+                return self.focus:raw_event("paste", a, nil)
+            if self.focus != nil and self.focus.captures_text:
+                for cp in unicode.codepoints(a):
+                    self.focus:char(unicode.char(cp))
+                self:invalidate()
+                return true
             return false
         if name == "char":
             if self.focus != nil and self.focus:char(a):
@@ -332,10 +344,14 @@ export class Ui:
             return true
         return false
 
-    def _on_key(self, code):
+    def _on_key(self, code, held=false):
         combo = self:_hotkey_name(code)
         if combo != nil and self.hotkeys[combo] != nil:
             self.hotkeys[combo]()
+            self:invalidate()
+            return true
+        if self.focus != nil and self.focus.raw_input:
+            self.focus:raw_event("key", code, held)
             self:invalidate()
             return true
         text_mode = self.focus != nil and self.focus.captures_text

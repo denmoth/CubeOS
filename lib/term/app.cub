@@ -1,0 +1,56 @@
+# term.app: программа «Терминал» для оболочки ui: настоящий CraftOS (ROM-shell) в окне, с запуском классических программ
+#
+#   shell:register(term_app.spec())                                   в список программ
+#   shell:launch("terminal")
+#   shell:register(term_app.spec({id: "lua", name: "Lua", program: "rom/programs/lua.lua"}))
+#
+# Внутри: виртуальный терминал (term.vterm), элемент показа (term.view), окружение CraftOS (compat.env) и legacy-процесс (compat.proc).
+# События: ввод идёт процессу, пока вкладка на экране; таймеры по номеру только владельцу, остальные события (rednet, modem, http,
+# disk...) всем терминалам. Когда программа заканчивается, вкладка закрывается.
+
+import term.vterm as vterm
+import term.view as view_mod
+import compat.env as compat_env
+import compat.proc as compat_proc
+
+# события, которые идут только в экран на переднем плане (клавиатура и мышь обрабатывает оболочка сама)
+const INPUT_EVENTS = {key: true, key_up: true, char: true, paste: true, mouse_click: true, mouse_drag: true, mouse_up: true,
+    mouse_scroll: true, monitor_touch: true, term_resize: true}
+
+# spec: id (terminal), name (Терминал), icon, program (rom/programs/shell.lua), args, w, h (начальный размер), exit_closes (true)
+export def spec(opts=nil):
+    o = opts ?? {}
+    def launch(app):
+        cols = app.ui.cols
+        rows = app.ui.rows
+        vt = vterm.new(cols, rows, {})
+        view = view_mod.new(vt, {height: "fill", width: "fill"})
+        env = compat_env.new({vterm: vt})
+        proc = compat_proc.new(env, o.program ?? "rom/programs/shell.lua", o.args ?? [], {name: o.name ?? "terminal",
+            on_exit: (p, ok, err) => on_exit(app, p, ok, err, o), on_shutdown: (p, reboot) => app:close()})
+        view:on("event", (w, name, a, b, c) => proc:feed(name, a, b, c))
+        app:set_root(view)
+        app.on_event = (name, a, b, c, d, e) => route_event(proc, name, a, b, c, d, e)
+        app.proc = proc
+        app.vterm = vt
+        proc:start()
+    return {id: o.id ?? "terminal", name: o.name ?? "Терминал", icon: o.icon ?? ">", desc: o.desc ?? "командная строка CraftOS", launch: launch}
+
+def on_exit(app, proc, ok, err, o):
+    if o.exit_closes ?? true:
+        app:close()
+
+# события, пришедшие не от ввода: таймеры и будильники владельцу, остальное всем
+def route_event(proc, name, a, b, c, d, e):
+    if not proc:alive():
+        return
+    if name == "timer":
+        if proc:owns_timer(a):
+            proc:feed(name, a, b, c, d, e)
+        return
+    if name == "alarm":
+        if proc:owns_alarm(a):
+            proc:feed(name, a, b, c, d, e)
+        return
+    if INPUT_EVENTS[name] == nil:
+        proc:feed(name, a, b, c, d, e)

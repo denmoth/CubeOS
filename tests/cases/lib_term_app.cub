@@ -1,0 +1,112 @@
+import t
+import ui.shell as shell_mod
+import term.app as term_app
+import unicode
+eq = t.eq
+
+class StubOut:
+    def init(self, cols, rows):
+        self.cols = cols
+        self.rows = rows
+        self.last = nil
+        self.palette_calls = 0
+        self.kind = "text"
+    def size(self):
+        return self.cols, self.rows
+    def present(self, c):
+        self.last = c:to_lines()
+        self.cells = c
+        c:clean()
+        return 1
+    def to_cell(self, x, y):
+        return x - 1, y - 1
+    def open(self):
+        pass
+    def close(self):
+        pass
+    def set_theme(self, th):
+        pass
+    def invalidate(self):
+        pass
+    def tick(self, dt):
+        pass
+    def set_term_palette(self, list16):
+        self.palette_calls += 1
+
+def type_text(sh, text):
+    for i in range[1, string.len(text)]:
+        sh:handle("char", string.sub(text, i, i))
+
+def screen_text(out):
+    return table.concat(out.last, "\n")
+
+out = StubOut(50, 14)
+sh = shell_mod.new(out, {clock: () => "14:32", animations: false})
+sh:register(term_app.spec())
+app = sh:launch("terminal")
+sh:tick(0.05)
+sh:render()
+eq(string.find(screen_text(out), "CraftOS", 1, true) != nil, true, "the CraftOS banner is shown inside the app area")
+eq(string.find(out.last[1], "Терминал", 1, true) != nil, true, "the tab is named Терминал")
+eq(app.vterm.w, 50, "the virtual terminal takes the app width")
+eq(app.vterm.h, 12, "and the height under the top bar and above the footer")
+
+# ввод команды с клавиатуры оболочки
+type_text(sh, "type rom")
+sh:handle("key", keys.enter, false)
+sh:handle("key_up", keys.enter)
+sh:tick(0.05)
+sh:render()
+eq(string.find(screen_text(out), "directory", 1, true) != nil, true, "a command typed on the shell keyboard runs in the terminal")
+
+# история и стрелки идут программе, а не меняют фокус оболочки
+sh:handle("key", keys.up, false)
+sh:render()
+eq(string.find(screen_text(out), "type rom", 1, true) != nil, true, "Up reaches the program (history), the shell does not move the focus")
+
+
+# цвета терминала в клетках: места 32..47
+found = false
+for i in range[1, 50 * 14]:
+    if out.cells.fg[i] >= 32 and out.cells.fg[i] < 48:
+        found = true
+eq(found, true, "terminal cells carry terminal palette colors (32..47)")
+
+# палитра терминала отдаётся выводу
+eq(out.palette_calls >= 1, true, "the terminal palette is pushed to the output")
+
+# программа с таймером: sleep
+f = fs.open("/repo/build/term_app_sleep.lua", "w")
+f.write("print('before') sleep(0.05) print('after')")
+f.close()
+sh2 = shell_mod.new(StubOut(40, 10), {clock: () => "14:32", animations: false})
+sh2:register(term_app.spec({id: "sleeper", name: "Sleep", program: "/repo/build/term_app_sleep.lua", exit_closes: false}))
+app2 = sh2:launch("sleeper")
+sh2:render()
+eq(string.find(table.concat(sh2.out.last, "\n"), "before", 1, true) != nil, true, "the program started")
+eq(string.find(table.concat(sh2.out.last, "\n"), "after", 1, true), nil, "and is waiting for its timer")
+got = false
+for i in range[1, 40]:
+    ev, id = os.pullEvent("timer")
+    sh2:handle("timer", id)
+    if not app2.proc:alive():
+        got = true
+        break
+sh2:tick(0.05)
+sh2:render()
+eq(got, true, "the shell routes the timer event to the terminal that owns it")
+eq(string.find(table.concat(sh2.out.last, "\n"), "after", 1, true) != nil, true, "and the program continues")
+fs.delete("/repo/build/term_app_sleep.lua")
+
+# выход программы закрывает вкладку
+f = fs.open("/repo/build/term_app_quick.lua", "w")
+f.write("print('bye')")
+f.close()
+sh3 = shell_mod.new(StubOut(40, 10), {clock: () => "14:32", animations: false})
+sh3:register(term_app.spec({id: "quick", name: "Quick", program: "/repo/build/term_app_quick.lua"}))
+app3 = sh3:launch("quick")
+eq(app3.closed, true, "when the program ends its tab closes")
+eq(len(sh3.apps), 0, "no apps left")
+fs.delete("/repo/build/term_app_quick.lua")
+
+print("done")

@@ -23,6 +23,8 @@ export class TextOut:
         self.prev_fg = nil
         self.prev_bg = nil
         self.kind = "text"
+        # цвета терминала CC (места 32..47) -> ближайшие цвета темы, палитру терминала на таком экране не держим отдельно
+        self.term_map = nil
         self.cell_w = 1
         self.cell_h = 1
         self.stats = {frames: 0, cells: 0, calls: 0}
@@ -40,8 +42,36 @@ export class TextOut:
         self.prev_cp = nil
         self.opened = true
 
+    # палитра терминала CC (список из 16 троек): каждый её цвет заменяется ближайшим цветом темы
+    def set_term_palette(self, list16):
+        self.term_palette = list16
+        self:_remap()
+        self.prev_cp = nil
+
+    def _remap(self):
+        pal = self.term_palette
+        if pal == nil:
+            self.term_map = nil
+            return
+        m = []
+        for i in range[1, 16]:
+            best = 0
+            best_d = 1e18
+            for k in range[1, 16]:
+                tc = self.theme.palette[k]
+                dr = pal[i][1] - tc[1]
+                dg = pal[i][2] - tc[2]
+                db = pal[i][3] - tc[3]
+                d = dr * dr * 3 + dg * dg * 4 + db * db * 2
+                if d < best_d:
+                    best_d = d
+                    best = k - 1
+            m[i] = best
+        self.term_map = m
+
     def set_theme(self, th):
         self.theme = th
+        self:_remap()
         if self.term.setPaletteColor != nil:
             let me = self
             theme_mod.apply(th, (i, r, g, b) => me.term.setPaletteColor(2 ** i, r, g, b))
@@ -67,6 +97,12 @@ export class TextOut:
     # клетка терминала от координат события мыши (в текстовом выводе это клетки с 1) -> клетка с 0
     def to_cell(self, x, y):
         return x - 1, y - 1
+
+    def _term_color(self, v):
+        i = (v - 32) % 16 + 1
+        if self.term_map != nil:
+            return self.term_map[i]
+        return i - 1
 
     # рисует буфер; возвращает число отправленных клеток
     def present(self, c):
@@ -122,6 +158,10 @@ export class TextOut:
                     chars[n] = string.char(charmap.byte(ccp[i]))
                     f = cfg[i]
                     b = cbg[i]
+                    if f >= 32:
+                        f = self:_term_color(f)
+                    if b >= 32:
+                        b = self:_term_color(b)
                     fgs[n] = string.sub(HEX, f + 1, f + 1)
                     bgs[n] = string.sub(HEX, b + 1, b + 1)
                 self.term.setCursorPos(first + 1, y + 1)

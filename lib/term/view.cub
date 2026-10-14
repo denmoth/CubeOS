@@ -1,0 +1,93 @@
+# term.view: элемент ui, показывающий виртуальный терминал (term.vterm) и отдающий ему клавиатуру и мышь как события CC
+#
+#   view = view.new(vt)
+#   view:on("event", (w, name, a, b, c) => proc:feed(name, a, b, c))     события для программы: key, char, key_up, paste, mouse_*, term_resize
+#
+# Размер терминала подгоняется под элемент (vt:resize, событие term_resize). Цвета терминала это места палитры 32..47 (ui.cells),
+# пиксельный вывод рисует их палитрой терминала CC; байты 128..159 (телетекст) рисуются блоками. Курсор рисуется инверсией, мигает,
+# если программа включила мигание.
+
+import ui.widget as widget
+import term.chars as chars
+
+export class TermView(widget.Widget):
+    def init(self, vt, props=nil):
+        super.init(self, props)
+        self.vt = vt
+        self.focusable = true
+        self.raw_input = true
+        self.captures_text = true
+        self.palette_seen = 0
+        self.ctrl = false
+        let me = self
+        vt.on_change = (v, y) => me:invalidate()
+
+    def _measure(self, max_w, max_h):
+        return self.vt.w, self.vt.h
+
+    def _layout(self):
+        if self.w > 0 and self.h > 0 and (self.w != self.vt.w or self.h != self.vt.h):
+            self.vt:resize(self.w, self.h)
+            self:emit("event", "term_resize")
+
+    def raw_event(self, name, a, b):
+        # Ctrl+T это прерывание программы (событие terminate), как в CC
+        if name == "key" and (a == keys.leftCtrl or a == keys.rightCtrl):
+            self.ctrl = true
+        elif name == "key_up" and (a == keys.leftCtrl or a == keys.rightCtrl):
+            self.ctrl = false
+        if name == "key" and a == keys.t and self.ctrl:
+            self:emit("event", "terminate")
+            return true
+        self:emit("event", name, a, b)
+        return true
+
+    def char(self, ch):
+        self:emit("event", "char", ch)
+        return true
+
+    def mouse(self, kind, mx, my, button):
+        x = mx - self.x + 1
+        y = my - self.y + 1
+        if kind == "down":
+            self:emit("event", "mouse_click", button, x, y)
+        elif kind == "drag":
+            self:emit("event", "mouse_drag", button, x, y)
+        elif kind == "up":
+            self:emit("event", "mouse_up", button, x, y)
+        elif kind == "scroll":
+            self:emit("event", "mouse_scroll", button, x, y)
+        return true
+
+    def hints(self):
+        return []
+
+    def _palette_list(self):
+        out = []
+        for i in range[1, 16]:
+            p = self.vt.palette[i]
+            out[i] = [p[1], p[2], p[3]]
+        return out
+
+    def _draw(self, c, t):
+        vt = self.vt
+        if self.palette_seen != vt.palette_rev and self.ui != nil and self.ui.out.set_term_palette != nil:
+            self.palette_seen = vt.palette_rev
+            self.ui.out:set_term_palette(self:_palette_list())
+        rows = math.min(vt.h, self.h)
+        cols = math.min(vt.w, self.w)
+        for y in range[1, rows]:
+            tt = vt.text[y]
+            ff = vt.fg[y]
+            bb = vt.bg[y]
+            for x in range[1, cols]:
+                c:set(self.x + x - 1, self.y + y - 1, chars.to_cp(tt[x]), 32 + ff[x], 32 + bb[x])
+        if vt.blink and self.focused and (self.ui == nil or self.ui.blink):
+            if vt.cx >= 1 and vt.cx <= cols and vt.cy >= 1 and vt.cy <= rows:
+                cx = self.x + vt.cx - 1
+                cy = self.y + vt.cy - 1
+                f = vt.fgc
+                c:set(cx, cy, nil, 32 + vt.bg[vt.cy][vt.cx], 32 + f)
+
+export def new(vt, props=nil):
+    return TermView(vt, props)

@@ -44,6 +44,8 @@ export class Widget:
         self.min_height = p.min_height ?? 0
         self.handlers = {}
         self.captures_text = false
+        # raw_input: элемент сам разбирает клавиатуру (терминал программ CC): клавиши и символы идут ему как есть, без действий раскладки
+        self.raw_input = false
         self.tooltip = p.tooltip
         # stretch: false не растягивать поперёк ряда (кнопки и флажки занимают свою ширину)
         self.stretch = true
@@ -181,6 +183,10 @@ export class Widget:
 
     # введённый символ (строка из одного символа Unicode)
     def char(self, ch):
+        return false
+
+    # сырое событие для элементов с raw_input: имя ("key", "key_up", "paste"), аргументы как в CC
+    def raw_event(self, name, a, b):
         return false
 
     # kind: "down", "up", "drag", "scroll"; button: кнопка мыши или направление прокрутки (-1 вверх, 1 вниз)

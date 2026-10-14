@@ -92,6 +92,9 @@ _fill_cyrillic()
 export def byte(cp):
     if cp >= 32 and cp < 127:
         return cp
+    # сырые коды терминала CC (0xE000 + байт): как есть
+    if cp >= 0xE000 and cp < 0xE100:
+        return cp - 0xE000
     m = MAP[cp]
     if m != nil:
         return m

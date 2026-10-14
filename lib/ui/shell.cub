@@ -24,11 +24,17 @@ import ui.cells as cells_mod
 import unicode
 
 # виртуальный вывод программы: ничего не рисует на экран, буфер клеток забирает оболочка
+# события ввода и вида: их разбирает оболочка, программам они идут через экран переднего плана
+const INPUT_EVENTS = {key: true, key_up: true, char: true, paste: true, mouse_click: true, mouse_drag: true, mouse_up: true,
+    mouse_scroll: true, monitor_touch: true, term_resize: true, monitor_resize: true}
+
 export class VirtualOut:
     def init(self, cols, rows):
         self.cols = cols
         self.rows = rows
         self.kind = "virtual"
+        self.term_palette = nil
+        self.on_term_palette = nil
 
     def size(self):
         return self.cols, self.rows
@@ -55,6 +61,12 @@ export class VirtualOut:
     def tick(self, dt):
         pass
 
+    # палитра терминала CC от программы-терминала: хранится, оболочка применяет её, когда программа на экране
+    def set_term_palette(self, list16):
+        self.term_palette = list16
+        if self.on_term_palette != nil:
+            self.on_term_palette(list16)
+
 export class App:
     def init(self, shell, id, spec):
         self.shell = shell
@@ -68,6 +80,9 @@ export class App:
         self.closed = false
         cols, rows = shell:app_size()
         self.out = VirtualOut(cols, rows)
+        let me = self
+        self.out.on_term_palette = (list16) => shell:_term_palette_changed(me, list16)
+        self.on_event = nil
         self.ui = runtime.new(self.out, {theme: shell.ui.theme, keymap: shell.ui.keymap, animations: shell.ui.animations,
             speed: shell.ui.speed})
 
@@ -124,6 +139,12 @@ class AppHost(widget.Widget):
     def _text_mode(self):
         a = self.shell.current
         return a != nil and a.ui.focus != nil and a.ui.focus.captures_text
+
+    def raw_event(self, name, a, b):
+        cur = self.shell.current
+        if cur == nil or cur.ui.focus == nil:
+            return false
+        return cur.ui.focus:raw_event(name, a, b)
 
     def key(self, action, code):
         a = self.shell.current
@@ -365,11 +386,17 @@ export class Shell:
         self:switch_to(app, self.current == nil)
         return app
 
+    def _term_palette_changed(self, app, list16):
+        if self.current == app and self.out.set_term_palette != nil:
+            self.out:set_term_palette(list16)
+
     def switch_to(self, app, instant=false):
         if app == self.current or app.closed:
             return
         old = self.current
         self.current = app
+        if app.out.term_palette != nil and self.out.set_term_palette != nil:
+            self.out:set_term_palette(app.out.term_palette)
         app.badge = false
         app.ui:invalidate_layout()
         self.ui:invalidate()
@@ -448,7 +475,7 @@ export class Shell:
 
     # ------------------------------------------------------------ цикл
 
-    def handle(self, name, a=nil, b=nil, c=nil):
+    def handle(self, name, a=nil, b=nil, c=nil, d=nil, e=nil):
         if name == "term_resize" or name == "monitor_resize":
             self:resize()
             return true
@@ -462,9 +489,16 @@ export class Shell:
             handled = self.ui:handle("mouse_click", 1, px, py)
             self.ui:handle("mouse_up", 1, px, py)
             return handled
-        if self.host.captures_text != self.host:_text_mode():
-            self.host.captures_text = self.host:_text_mode()
-        return self.ui:handle(name, a, b, c)
+        cur = self.current
+        self.host.raw_input = cur != nil and cur.ui.focus != nil and cur.ui.focus.raw_input
+        self.host.captures_text = self.host:_text_mode()
+        handled = self.ui:handle(name, a, b, c)
+        # события, не связанные с вводом (таймеры, rednet, modem, http, disk...): программам, у которых есть обработчик
+        if INPUT_EVENTS[name] == nil:
+            for ap in self.apps:
+                if ap.on_event != nil:
+                    ap.on_event(name, a, b, c, d, e)
+        return handled
 
     def tick(self, dt):
         changed = false
@@ -513,7 +547,7 @@ export class Shell:
         last = os.epoch("utc") / 1000
         timer = os.startTimer(0.05)
         while not self.quit:
-            ev, a, b, c = pull()
+            ev, a, b, c, d, e = pull()
             if ev == "terminate":
                 break
             if ev == "timer" and a == timer:
@@ -522,7 +556,7 @@ export class Shell:
                 last = now
                 timer = os.startTimer(self:needs_ticks() and 0.05 or 0.5)
             else:
-                self:handle(ev, a, b, c)
+                self:handle(ev, a, b, c, d, e)
             self:render()
         self.out:close()
 

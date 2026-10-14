@@ -11,6 +11,7 @@
 # же цвета потемнее, ими рисуются нечётные строки пикселей каждой клетки.
 
 import ui.theme as theme_mod
+import term.chars as chars
 
 const DIM = 0.55
 
@@ -30,6 +31,9 @@ export class PixelOut:
         self.prev_fg = nil
         self.prev_bg = nil
         self.scan = false
+        # палитра терминала CC (16 цветов legacy-программ): места палитры поверхности 32..47, потемнее 48..63
+        self.term_palette = nil
+        self.tele_cache = {}
         self.flicker_time = 0
         self.stats = {frames: 0, cells: 0}
         self.opened = false
@@ -53,7 +57,41 @@ export class PixelOut:
             entries[len(entries) + 1] = [i, r, g, b]
             if self.scan:
                 entries[len(entries) + 1] = [i + 16, r * DIM, g * DIM, b * DIM]
+        if self.term_palette != nil:
+            for i in range[0, 15]:
+                c = self.term_palette[i + 1]
+                r = math.min(255, c[1] * factor)
+                g = math.min(255, c[2] * factor)
+                b = math.min(255, c[3] * factor)
+                entries[len(entries) + 1] = [32 + i, r, g, b]
+                if self.scan:
+                    entries[len(entries) + 1] = [48 + i, r * DIM, g * DIM, b * DIM]
         return entries
+
+    # палитра терминала для программ CC: список из 16 троек [r, g, b] (0..255); клетки с цветами 32..47 рисуются ею
+    def set_term_palette(self, list16):
+        self.term_palette = list16
+        self.screen:set_colors(self:_entries(self.theme, 1))
+        self.prev_cp = nil
+
+    # картинка телетекст-символа (128..159) в клетке 6x9: шесть блоков 3x3, правый нижний всегда фоновый
+    def _teletext_rows(self, cp):
+        cached = self.tele_cache[cp]
+        if cached != nil:
+            return cached
+        bits = cp - 0xE080
+        rows = []
+        for y in range[1, self.ch]:
+            row = []
+            band = math.floor((y - 1) / (self.ch / 3))
+            for x in range[1, self.cw]:
+                col = x <= self.cw / 2 and 0 or 1
+                mask = 2 ** (band * 2 + col)
+                on = mask < 32 and math.floor(bits / mask) % 2 == 1
+                row[x] = on and 1 or 0
+            rows[y] = row
+        self.tele_cache[cp] = rows
+        return rows
 
     def set_theme(self, th):
         was = self.scan
@@ -91,7 +129,14 @@ export class PixelOut:
         ch = self.ch
         x0 = x * cw
         y0 = y * ch
-        rows = cp != 32 and self.font:glyph_bits(cp) or nil
+        rows = nil
+        if chars.is_teletext(cp):
+            rows = self:_teletext_rows(cp)
+        else:
+            if cp >= 0xE000 and cp < 0xE100:
+                cp = chars.low_glyph(cp) ?? 32
+            if cp != 32:
+                rows = self.font:glyph_bits(cp)
         scan = self.scan
         for gy in range[1, ch]:
             base = (y0 + gy - 1) * sw + x0 + 1
