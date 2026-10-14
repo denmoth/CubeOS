@@ -30,7 +30,7 @@ export class TeletextDisplay:
         self.enc = {}
         self.enc_count = 0
         self.spare = nil
-        self.stats = {frames: 0, pixels: 0, calls: 0}
+        self.stats = {frames: 0, pixels: 0, calls: 0, scan_ms: 0, send_ms: 0}
         self.kind = "teletext"
         self.opened = false
 
@@ -143,6 +143,8 @@ export class TeletextDisplay:
 
     # рисует кадр; возвращает число изменившихся клеток
     def present(self, s):
+        t0 = os.epoch("utc")
+        send = 0
         cols = math.min(self.cols, s.w // 2)
         rows = math.min(self.rows, s.h // 3)
         q = self.quant
@@ -205,13 +207,17 @@ export class TeletextDisplay:
                     chars[n] = e[1]
                     fgs[n] = e[2]
                     bgs[n] = e[3]
+                ts = os.epoch("utc")
                 term.setCursorPos(first_x + 1, cy + 1)
                 term.blit(table.concat(chars), table.concat(fgs), table.concat(bgs))
+                send += os.epoch("utc") - ts
                 self.stats.calls += 1
         self.spare = prev != nil and prev or nil
         self.prev = cur
         self.stats.frames += 1
         self.stats.pixels += changed * 6
+        self.stats.send_ms += send
+        self.stats.scan_ms += os.epoch("utc") - t0 - send
         return changed
 
 export def new(t, opts=nil):

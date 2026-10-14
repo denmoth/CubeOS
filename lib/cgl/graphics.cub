@@ -23,7 +23,7 @@ export class GraphicsDisplay:
         self.frozen = o.frozen ?? true
         self.w, self.h = t.getSize(true)
         self.prev = nil
-        self.stats = {frames: 0, pixels: 0, calls: 0}
+        self.stats = {frames: 0, pixels: 0, calls: 0, scan_ms: 0, send_ms: 0}
         self.kind = "graphics"
         self.final = []
         if self.mode == 1:
@@ -93,6 +93,7 @@ export class GraphicsDisplay:
 
     # рисует кадр; возвращает число отправленных пикселей
     def present(self, s):
+        t0 = os.epoch("utc")
         w = math.min(self.w, s.w)
         h = math.min(self.h, s.h)
         prev = self.prev
@@ -175,6 +176,8 @@ export class GraphicsDisplay:
             return 0
         if self.frozen and self.term.setFrozen != nil:
             self.term.setFrozen(true)
+        t1 = os.epoch("utc")
+        self.stats.scan_ms += t1 - t0
         sent = 0
         for r in rects:
             rows = []
@@ -190,6 +193,7 @@ export class GraphicsDisplay:
         if self.frozen and self.term.setFrozen != nil:
             self.term.setFrozen(false)
         self.stats.pixels += sent
+        self.stats.send_ms += os.epoch("utc") - t1
         return sent
 
 export def new(t, opts=nil):

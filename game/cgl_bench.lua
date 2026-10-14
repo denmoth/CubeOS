@@ -8,18 +8,11 @@ local fx = loader.import("cgl.fx")
 local g3d = loader.import("cgl.g3d")
 local fontlib = loader.import("font")
 
--- аргументы: [graphics|teletext] [monitor[=имя]] [scale=число]; те же, что у cgl_demo.lua
-local opts = { backend = "auto" }
-local target, scale = nil, 0.5
-for _, a in ipairs({ ... }) do
-  if a == "graphics" or a == "teletext" then opts.backend = a
-  elseif a == "monitor" then target = peripheral.find("monitor")
-  elseif a:sub(1, 8) == "monitor=" then target = peripheral.wrap(a:sub(9))
-  elseif a:sub(1, 6) == "scale=" then scale = tonumber(a:sub(7)) or scale end
-end
-if target then
-  if target.setTextScale then target.setTextScale(scale) end
-  opts.term = target
+-- аргументы те же, что у cgl_demo.lua (см. game/cgl_args.lua)
+local opts, target, scale = dofile(ROOT .. "/game/cgl_args.lua")({ ... })
+if not opts then
+  printError(target)
+  return
 end
 local out = target or term
 
@@ -77,14 +70,16 @@ bench("set_colors 48 цветов", function(i)
   screen:set_colors(list)
 end)
 
+local st = screen.display.stats
+results[#results + 1] = string.format("present всего: кадров %d, скан %d мс, отправка %d мс, вызовов %d", st.frames, st.scan_ms, st.send_ms, st.calls)
 screen:close()
 term.clear(); term.setCursorPos(1, 1)
 if target then out.clear() end
-print("CGL bench: " .. screen.kind .. " " .. w .. "x" .. h .. (target and " (monitor)" or ""))
+print("CGL bench: " .. screen.kind .. " " .. w .. "x" .. h .. (target and (" (monitor, scale " .. tostring(scale) .. ")") or ""))
 for _, line in ipairs(results) do print(line) end
-local f = fs.open(ROOT .. "/build/cgl-bench.txt", "w")
+local f = fs.open(ROOT .. "/build/cgl-bench-" .. screen.kind .. (target and "-monitor" or "") .. ".txt", "w")
 if f then
-  f.writeLine("CGL bench: " .. screen.kind .. " " .. w .. "x" .. h)
+  f.writeLine("CGL bench: " .. screen.kind .. " " .. w .. "x" .. h .. (target and (" (monitor, scale " .. tostring(scale) .. ")") or ""))
   for _, line in ipairs(results) do f.writeLine(line) end
   f.close()
 end

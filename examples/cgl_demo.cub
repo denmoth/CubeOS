@@ -1,7 +1,7 @@
 # Демонстрация Cube Graphics Library: заставка, плазма, трёхмерная сцена, галерея фигур и окно, логотип.
 # Запуск в игре: game/cgl_demo.lua (стрелки: сцена, D: дизеринг телетекста, M: смена вывода, Q: выход, мышь: частицы)
 #
-# main(opts): backend, term (например, монитор), monitor (его имя для касаний), auto (переключать сцены каждые N кадров и выйти, для проверок), wait, clock.
+# main(opts): backend, term (например, монитор), monitor (его имя для касаний), log_path (файл со средним fps по сценам), auto (переключать сцены каждые N кадров и выйти, для проверок), wait, clock.
 # Работает с CC: Graphics (пиксели 6x9 на клетку) и на обычном цветном терминале (телетекст, 2x3 пикселя на клетку).
 
 import cgl
@@ -328,6 +328,9 @@ export def main(opts=nil):
     classes = [Intro, Title, PlasmaScene, Scene3D, Gallery, LogoScene]
     names = ["Интро", "Заставка", "Плазма", "3D", "Фигуры", "Логотип"]
     state = {index: 1, scene: nil, quit: false, flip: false}
+    perf = []
+    for i in range[1, len(classes)]:
+        perf[i] = {frames: 0, time: 0}
 
     def enter(i):
         if state.scene != nil and state.scene.leave != nil:
@@ -371,6 +374,10 @@ export def main(opts=nil):
 
     def update(dt, frame):
         ctx.t += dt
+        if frame > 0:
+            rec = perf[state.index]
+            rec.frames += 1
+            rec.time += dt
         if o.auto != nil and frame > 0 and frame % o.auto == 0:
             if state.index == len(classes):
                 state.quit = true
@@ -396,4 +403,16 @@ export def main(opts=nil):
             enter(state.index)
         else:
             state.quit = true
+    st = ctx.screen.display.stats
+    if o.log_path != nil:
+        lines = ["CGL demo: " .. ctx.screen.kind .. " " .. ctx.w .. "x" .. ctx.h]
+        for i in range[1, len(classes)]:
+            r = perf[i]
+            if r.time > 0:
+                lines[len(lines) + 1] = names[i] .. ": " .. string.format("%.1f", r.frames / r.time) .. " fps (" .. r.frames .. " frames)"
+        lines[len(lines) + 1] = "present: scan " .. st.scan_ms .. " ms, send " .. st.send_ms .. " ms, calls " .. st.calls .. ", frames " .. st.frames
+        f = fs.open(o.log_path, "w")
+        if f != nil:
+            f.write(table.concat(lines, "\n") .. "\n")
+            f.close()
     ctx.screen:close()
