@@ -59,6 +59,7 @@ export class Starfield:
         self.stars = []
         self.cx = w / 2
         self.cy = h / 2
+        self.drawn = []
         for i in range[1, count]:
             self.stars[i] = self:_new_star(true)
 
@@ -71,8 +72,20 @@ export class Starfield:
             if st.z <= 0.02:
                 self.stars[i] = self:_new_star(false)
 
-    # ramp: цвета от дальнего (тусклого) к ближнему (яркому)
-    def draw(self, s, ramp):
+    # стирает нарисованное прошлым draw, возвращая цвета из bg (копия поверхности без звёзд): так фон не перерисовывается целиком
+    def erase(self, s, bg):
+        d = self.drawn
+        if d != nil:
+            for i in range[1, len(d)] step 2:
+                v = bg:get(d[i], d[i + 1])
+                if v != nil:
+                    s:set(d[i], d[i + 1], v)
+        self.drawn = []
+
+    # ramp: цвета от дальнего (тусклого) к ближнему (яркому); skip = [x0, y0, x1, y1]: прямоугольник, где звёзды не рисуются
+    def draw(self, s, ramp, skip=nil):
+        self.drawn = []
+        drawn = self.drawn
         n = len(ramp)
         scale = math.max(self.w, self.h) / 2
         for st in self.stars:
@@ -87,10 +100,17 @@ export class Starfield:
                 c = ramp[k]
                 x = math.floor(px)
                 y = math.floor(py)
-                s:set(x, y, c)
-                if st.z < 0.25:
-                    s:set(x + 1, y, c)
-                    s:set(x, y + 1, c)
+                if skip == nil or x < skip[1] or x > skip[3] or y < skip[2] or y > skip[4]:
+                    s:set(x, y, c)
+                    drawn[len(drawn) + 1] = x
+                    drawn[len(drawn) + 1] = y
+                    if st.z < 0.25:
+                        s:set(x + 1, y, c)
+                        s:set(x, y + 1, c)
+                        drawn[len(drawn) + 1] = x + 1
+                        drawn[len(drawn) + 1] = y
+                        drawn[len(drawn) + 1] = x
+                        drawn[len(drawn) + 1] = y + 1
 
 export class Particles:
     def init(self, opts=nil):

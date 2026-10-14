@@ -16,16 +16,27 @@ import unicode
 
 const ROOT = "/repo"
 
+# окно для сцен, которые перерисовываются целиком каждый кадр: не больше ~90 тысяч пикселей
+def make_view(w, h):
+    budget = 90000
+    if w * h <= budget * 1.3:
+        return {x: 0, y: 0, w: w, h: h}
+    f = math.sqrt(budget / (w * h))
+    vw = math.floor(w * f)
+    vh = math.floor(h * f)
+    return {x: math.floor((w - vw) / 2), y: math.floor((h - vh) / 2), w: vw, h: vh}
+
 def _scale(ctx, graphics_value, text_value):
     return ctx.screen.kind == "graphics" and graphics_value or text_value
 
 # ---------------------------------------------------------------- вспомогательное
 
 # текст по центру с контуром и тенью
-def centered(ctx, msg, y, c, scale, outline=nil):
-    msg = sf.ellipsize(ctx.font, msg, ctx.w - 2, "..", 0, scale)
+def centered(ctx, msg, y, c, scale, outline=nil, x0=0, width=nil):
+    width = width ?? ctx.w
+    msg = sf.ellipsize(ctx.font, msg, width - 2, "..", 0, scale)
     w = sf.measure(ctx.font, msg, 0, scale)
-    ctx.s:text(ctx.font, math.floor((ctx.w - w) / 2), y, msg, c, {scale: scale, outline: outline, shadow: outline == nil and {color: ctx.black, dx: 1, dy: 1} or nil})
+    ctx.s:text(ctx.font, x0 + math.floor((width - w) / 2), y, msg, c, {scale: scale, outline: outline, shadow: outline == nil and {color: ctx.black, dx: 1, dy: 1} or nil})
 
 def label(ctx, x, y, msg, c):
     msg = sf.ellipsize(ctx.font, msg, ctx.w - x - 1, "..")
@@ -113,20 +124,46 @@ class Intro:
 
 # ---------------------------------------------------------------- сцена 1: заставка
 
+# Небо, солнце, море и полоса палитры рисуются один раз. Каждый кадр меняются только волны (стираются прошлые линии цветом воды),
+# звёзды (стираются точки из копии фона) и, пока идёт анимация, прямоугольник заголовка. Так сцена не зависит от размера экрана.
 class Title:
     def init(self, ctx):
-        self.sky = ctx.pal:ramp([[6, 8, 36], [30, 20, 80], [150, 50, 120], [250, 130, 80], [255, 210, 120]], 30)
+        s = ctx.s
+        self.sky = ctx.pal:ramp([[6, 8, 36], [30, 20, 80], [150, 50, 120], [250, 130, 80], [255, 210, 120]], 30, 0, 207)
+        self.sun_ramp = ctx.pal:ramp([[255, 240, 160], [255, 150, 60], [230, 60, 90]], 6, 0, 207)
+        s:fill_gradient(0, 0, ctx.w, ctx.h, self.sky, "v")
+        self.horizon = math.floor(ctx.h * 0.72)
+        r = math.floor(ctx.h * 0.22)
+        sx = math.floor(ctx.w / 2)
+        n = len(self.sun_ramp)
+        bh = math.ceil(r / n)
+        for i in range[0, n - 1]:
+            s:push_clip(0, self.horizon - r + i * bh, ctx.w, bh)
+            s:circle(sx, self.horizon, r, self.sun_ramp[i + 1], true)
+            s:pop_clip()
+        s:fill_rect(0, self.horizon, ctx.w, ctx.h - self.horizon, ctx.deep)
+        if ctx.screen.kind == "graphics":
+            for i in range[0, 207]:
+                s:fill_rect(math.floor(i * ctx.w / 208), ctx.h - 4, math.ceil(ctx.w / 208), 4, i)
+        self.bg = s:copy()
         self.stars = fx.Starfield(ctx.w, ctx.h, 40, {speed: 0.05})
         self.animator = anim.Animator()
         self.drop = {y: -40}
+        self.scale = math.max(1, math.floor(ctx.w / 70))
+        self.title = "CGL"
+        self.sub = sf.ellipsize(ctx.font, "Cube Graphics Library", ctx.w - 2, "..")
+        self.typed = {n: 0}
+        # прямоугольник, который занимает заголовок за всё время анимации
+        tw = sf.measure(ctx.font, self.title, 0, self.scale)
+        sw = sf.measure(ctx.font, self.sub, 0, 1)
+        self.rect = [math.floor((ctx.w - math.max(tw, sw)) / 2) - 3 * self.scale, 0, math.max(tw, sw) + 6 * self.scale,
+            math.floor(ctx.h * 0.18) + 9 * self.scale + 3 + 14]
         let me = self
         self.animator:add(anim.tween({from: -40, to: math.floor(ctx.h * 0.18), time: 1.4, ease: "out_bounce", delay: 0.2,
             on_update: (v) => me:set_drop(v)}))
-        self.typed = {n: 0}
-        self.sub = "Cube Graphics Library"
         self.animator:add(anim.tween({from: 0, to: unicode.length(self.sub), time: 1.6, delay: 1.2, on_update: (v) => me:set_typed(v)}))
-        self.sun = {y: 0}
-        self.sun_ramp = ctx.pal:ramp([[255, 240, 160], [255, 150, 60], [230, 60, 90]], 6)
+        self.title_done = false
+        self.prev_t = nil
 
     def set_drop(self, v):
         self.drop.y = v
@@ -134,80 +171,88 @@ class Title:
     def set_typed(self, v):
         self.typed.n = math.floor(v)
 
-    def draw(self, ctx, dt, t):
+    def draw_waves(self, ctx, t, colors):
         s = ctx.s
-        self.animator:update(dt)
-        s:fill_gradient(0, 0, ctx.w, ctx.h, self.sky, "v")
-        self.stars:update(dt)
-        self.stars:draw(s, [ctx.dark_gray, ctx.light_gray, ctx.white])
-        # солнце над горизонтом, горизонт и волны
-        horizon = math.floor(ctx.h * 0.72)
-        r = math.floor(ctx.h * 0.22)
-        sx = math.floor(ctx.w / 2)
-        n = len(self.sun_ramp)
-        bh = math.ceil(r / n)
-        for i in range[0, n - 1]:
-            s:push_clip(0, horizon - r + i * bh, ctx.w, bh)
-            s:circle(sx, horizon, r, self.sun_ramp[i + 1], true)
-            s:pop_clip()
-        s:fill_rect(0, horizon, ctx.w, ctx.h - horizon, ctx.deep)
         for k in range[0, 3]:
-            yy = horizon + 2 + k * k * math.floor(ctx.h / 40) + k
+            yy = self.horizon + 2 + k * k * math.floor(ctx.h / 40) + k
             prev_x = 0
             prev_y = yy
             for x in range[0, ctx.w - 1] step 2:
                 y2 = yy + math.floor(math.sin(x / (6 + k * 2) + t * (1 + k * 0.4)) * (1 + k * 0.5))
-                s:line(prev_x, prev_y, x, y2, ctx.waves[k + 1])
+                s:line(prev_x, prev_y, x, y2, colors[k + 1])
                 prev_x = x
                 prev_y = y2
-        # заголовок
-        scale = math.max(1, math.floor(ctx.w / 70))
-        centered(ctx, "CGL", math.floor(self.drop.y), ctx.white, scale, ctx.black)
-        sub = unicode.sub(self.sub, 1, self.typed.n)
-        if self.typed.n > 0:
-            centered(ctx, sub, math.floor(self.drop.y) + 9 * scale + 3, ctx.yellow, 1, ctx.black)
-        # полоса всей палитры внизу
-        if ctx.screen.kind == "graphics":
-            for i in range[0, 255]:
-                s:fill_rect(math.floor(i * ctx.w / 256), ctx.h - 4, math.ceil(ctx.w / 256), 4, i)
-
-# ---------------------------------------------------------------- сцена 2: плазма
-
-class PlasmaScene:
-    def init(self, ctx):
-        # считаем плазму не крупнее ~110 пикселей в ширину и растягиваем: на большом мониторе иначе нет и 4 кадров в секунду
-        self.k = math.max(1, math.ceil(ctx.w / 110))
-        self.small = sf.new(math.ceil(ctx.w / self.k), math.ceil(ctx.h / self.k), 0)
-        ramp = ctx.pal:ramp(color.rainbow_stops(12, 0.9, 1), 48)
-        self.plasma = fx.Plasma(self.small.w, self.small.h, ramp)
-
-    def draw(self, ctx, dt, t):
-        self.plasma:draw(self.small, t)
-        ctx.s:blit(self.small, 0, 0, {scale: self.k})
-        centered(ctx, "Plasma", math.floor(ctx.h / 2) - 5, ctx.white, _scale(ctx, 2, 1), ctx.black)
-
-# ---------------------------------------------------------------- сцена 4: трёхмерная графика
-
-class Scene3D:
-    def init(self, ctx):
-        self.stars = fx.Starfield(ctx.w, ctx.h, 60, {speed: 0.35})
-        self.small = nil
-        self.torus = g3d.torus(1, 0.42, 18, 10)
-        self.cube = g3d.cube(1)
-        self.ramp = ctx.pal:ramp([[8, 20, 60], [30, 90, 200], [90, 200, 255], [255, 255, 255]], 10)
-        self.ramp2 = ctx.pal:ramp([[40, 10, 10], [200, 60, 40], [255, 200, 90]], 6)
 
     def draw(self, ctx, dt, t):
         s = ctx.s
-        s:clear(ctx.deep)
+        r = self.rect
+        self.stars:erase(s, self.bg)
+        if self.prev_t != nil:
+            self:draw_waves(ctx, self.prev_t, [ctx.deep, ctx.deep, ctx.deep, ctx.deep])
+        self.stars:update(dt)
+        self.stars:draw(s, [ctx.dark_gray, ctx.light_gray, ctx.white], [r[1], r[2], r[1] + r[3], r[2] + r[4]])
+        self:draw_waves(ctx, t, ctx.waves)
+        self.prev_t = t
+        animating = self.animator:busy()
+        if animating or not self.title_done:
+            self.animator:update(dt)
+            s:restore(self.bg, r[1], r[2], r[3], r[4])
+            centered(ctx, self.title, math.floor(self.drop.y), ctx.white, self.scale, ctx.black)
+            if self.typed.n > 0:
+                centered(ctx, unicode.sub(self.sub, 1, self.typed.n), math.floor(self.drop.y) + 9 * self.scale + 3, ctx.yellow, 1, ctx.black)
+            if not animating:
+                self.title_done = true
+
+# ---------------------------------------------------------------- сцена 2: плазма
+
+# Плазма занимает окно не больше ~90 тысяч пикселей: перерисовывать весь большой монитор 20 раз в секунду Lua не может
+class PlasmaScene:
+    def init(self, ctx):
+        v = ctx.view
+        self.v = v
+        if v.w < ctx.w:
+            ctx.s:rect(v.x - 2, v.y - 2, v.w + 4, v.h + 4, ctx.gray)
+        # считаем плазму не крупнее ~110 пикселей в ширину и растягиваем
+        self.k = math.max(1, math.ceil(v.w / 110))
+        self.small = sf.new(math.ceil(v.w / self.k), math.ceil(v.h / self.k), 0)
+        ramp = ctx.pal:ramp(color.rainbow_stops(12, 0.9, 1), 48, 0, 207)
+        self.plasma = fx.Plasma(self.small.w, self.small.h, ramp)
+
+    def draw(self, ctx, dt, t):
+        v = self.v
+        s = ctx.s
+        self.plasma:draw(self.small, t)
+        s:push_clip(v.x, v.y, v.w, v.h)
+        s:blit(self.small, v.x, v.y, {scale: self.k})
+        s:pop_clip()
+        centered(ctx, "Plasma", v.y + math.floor(v.h / 2) - 5, ctx.white, _scale(ctx, 2, 1), ctx.black, v.x, v.w)
+
+# ---------------------------------------------------------------- сцена 3: трёхмерная графика
+
+class Scene3D:
+    def init(self, ctx):
+        v = ctx.view
+        self.v = v
+        if v.w < ctx.w:
+            ctx.s:rect(v.x - 2, v.y - 2, v.w + 4, v.h + 4, ctx.gray)
+        self.stars = fx.Starfield(v.w, v.h, 60, {speed: 0.35})
+        self.torus = g3d.torus(1, 0.42, 18, 10)
+        self.cube = g3d.cube(1)
+        self.ramp = ctx.pal:ramp([[8, 20, 60], [30, 90, 200], [90, 200, 255], [255, 255, 255]], 10, 0, 207)
+        self.ramp2 = ctx.pal:ramp([[40, 10, 10], [200, 60, 40], [255, 200, 90]], 6, 0, 207)
+        # трёхмерная часть считается в уменьшенном размере и растягивается
+        self.k = math.max(1, math.ceil(v.w / 150))
+        self.small = sf.new(math.ceil(v.w / self.k), math.ceil(v.h / self.k), sf.CLEAR)
+
+    def draw(self, ctx, dt, t):
+        v = self.v
+        s = ctx.s
+        s:push_clip(v.x, v.y, v.w, v.h)
+        s:push_origin(v.x, v.y)
+        s:fill_rect(0, 0, v.w, v.h, ctx.deep)
         self.stars:update(dt)
         self.stars:draw(s, [ctx.dark_gray, ctx.gray, ctx.light_gray, ctx.white])
-        # трёхмерная часть считается в уменьшенном размере и растягивается: заливка граней дорогая на больших экранах
-        k = math.max(1, math.ceil(ctx.w / 150))
         sm = self.small
-        if sm == nil or sm.w != math.ceil(ctx.w / k):
-            sm = sf.new(math.ceil(ctx.w / k), math.ceil(ctx.h / k), sf.CLEAR)
-            self.small = sm
         sm:clear(sf.CLEAR)
         g3d.render(sm, self.torus, {mode: "flat", ramp: self.ramp, rx: t * 0.7, ry: t * 0.45, z: 3.6, fov: sm.h * 1.3})
         size = math.floor(sm.h * 0.3)
@@ -215,38 +260,31 @@ class Scene3D:
             cx: sm.w - size, cy: size})
         g3d.render(sm, self.cube, {mode: "wire", color: ctx.green, rx: -t * 0.6, ry: t * 0.8, z: 5, fov: sm.h * 1.2,
             cx: size, cy: sm.h - size})
-        s:blit(sm, 0, 0, {scale: k})
-        label(ctx, 2, 2, "g3d: flat + wire", ctx.white)
+        s:blit(sm, 0, 0, {scale: self.k})
+        s:text(ctx.font, 2, 2, "g3d: flat + wire", ctx.white, {outline: ctx.black})
+        s:pop_origin()
+        s:pop_clip()
 
-# ---------------------------------------------------------------- сцена 5: фигуры и окно
+# ---------------------------------------------------------------- сцена 4: фигуры и окно
 
+# Окно рисуется один раз и запоминается; каждый кадр восстанавливаются и перерисовываются только полоса прогресса, ряд кругов и
+# место, где летают частицы
 class Gallery:
     def init(self, ctx):
+        s = ctx.s
         self.particles = fx.Particles({gravity: 60})
         self.bar = {v: 0}
         self.animator = anim.Animator()
         let me = self
         self.animator:add(anim.tween({from: 0, to: 1, time: 2.5, ease: "in_out_sine", repeat: -1, yoyo: true,
             on_update: (v) => me:set_bar(v)}))
-        self.bg = ctx.pal:ramp([[18, 24, 48], [40, 56, 96]], 16)
-        self.hue = ctx.pal:ramp(color.rainbow_stops(6, 0.8, 1), 24)
-
-    def set_bar(self, v):
-        self.bar.v = v
-
-    def click(self, ctx, x, y):
-        self.particles:burst(x, y, 40, {speed: 70, life: 1.4, color: [ctx.yellow, ctx.orange, ctx.red, ctx.white]})
-
-    def draw(self, ctx, dt, t):
-        s = ctx.s
-        self.animator:update(dt)
-        s:fill_gradient(0, 0, ctx.w, ctx.h, self.bg, "v")
-        k = _scale(ctx, 1, 0.5)
+        bgramp = ctx.pal:ramp([[18, 24, 48], [40, 56, 96]], 16, 0, 207)
+        self.hue = ctx.pal:ramp(color.rainbow_stops(6, 0.8, 1), 24, 0, 207)
+        s:fill_gradient(0, 0, ctx.w, ctx.h, bgramp, "v")
         wx = math.floor(ctx.w * 0.1)
         wy = math.floor(ctx.h * 0.12)
         ww = math.floor(ctx.w * 0.8)
         wh = math.floor(ctx.h * 0.76)
-        # окно: тень, тело, заголовок
         s:round_rect(wx + 3, wy + 3, ww, wh, 4, ctx.black, true)
         s:round_rect(wx, wy, ww, wh, 4, ctx.panel, true)
         s:round_rect(wx, wy, ww, wh, 4, ctx.light_gray, false)
@@ -257,47 +295,93 @@ class Gallery:
         s:circle(wx + 14, wy + 5, 2, ctx.yellow, true)
         s:circle(wx + 21, wy + 5, 2, ctx.green, true)
         s:text(ctx.font, wx + 28, wy + 1, "cgl: окно", ctx.black)
-        # содержимое: полоса прогресса, узор, круги, эллипс
-        px = wx + 6
-        py = wy + 16
-        pw = ww - 12
+        self.px = wx + 6
+        self.py = wy + 16
+        self.pw = ww - 12
+        px = self.px
+        py = self.py
+        pw = self.pw
         s:rect(px, py, pw, 7, ctx.light_gray)
-        s:fill_rect(px + 1, py + 1, math.floor((pw - 2) * self.bar.v), 5, ctx.green)
         s:fill_pattern(px, py + 11, math.floor(pw / 3), 14, [0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA], ctx.cyan, ctx.blue)
         s:ellipse(px + math.floor(pw * 0.55), py + 18, 14, 7, ctx.orange, true)
         s:ellipse(px + math.floor(pw * 0.55), py + 18, 14, 7, ctx.white, false)
-        for i in range[0, 4]:
-            s:circle(px + 6 + i * 10, py + 36 + math.floor(math.sin(t * 3 + i) * 3), 4, self.hue[i * 4 + 1], true)
         s:triangle(px + pw - 24, py + 30, px + pw - 4, py + 30, px + pw - 14, py + 44, ctx.yellow, true)
         s:triangle(px + pw - 24, py + 30, px + pw - 4, py + 30, px + pw - 14, py + 44, ctx.white, false)
         s:text(ctx.font, px, wy + wh - 11, "Клик: частицы", ctx.white)
-        self.particles:update(dt)
-        self.particles:draw(s)
+        self.bg = s:copy()
+        self.pbox = nil
 
-# ---------------------------------------------------------------- сцена 6: логотип
+    def set_bar(self, v):
+        self.bar.v = v
 
-class LogoScene:
-    def init(self, ctx):
-        self.logo = cimg.read_file(ROOT .. "/assets/images/cubeos-logo.cimg")
-        self.bg = ctx.pal:ramp([[10, 14, 30], [30, 40, 80]], 12)
+    def click(self, ctx, x, y):
+        self.particles:burst(x, y, 40, {speed: 70, life: 1.4, color: [ctx.yellow, ctx.orange, ctx.red, ctx.white]})
 
     def draw(self, ctx, dt, t):
         s = ctx.s
-        s:fill_gradient(0, 0, ctx.w, ctx.h, self.bg, "v")
+        self.animator:update(dt)
+        px = self.px
+        py = self.py
+        pw = self.pw
+        # полоса прогресса
+        s:restore(self.bg, px + 1, py + 1, pw - 2, 5)
+        s:fill_rect(px + 1, py + 1, math.floor((pw - 2) * self.bar.v), 5, ctx.green)
+        # ряд кругов
+        s:restore(self.bg, px, py + 28, 60, 18)
+        for i in range[0, 4]:
+            s:circle(px + 6 + i * 10, py + 36 + math.floor(math.sin(t * 3 + i) * 3), 4, self.hue[i * 4 + 1], true)
+        # частицы: стираем прошлый прямоугольник, двигаем, рисуем
+        if self.pbox != nil:
+            b = self.pbox
+            s:restore(self.bg, b[1] - 1, b[2] - 1, b[3] - b[1] + 3, b[4] - b[2] + 3)
+            self.pbox = nil
+        self.particles:update(dt)
+        items = self.particles.items
+        if len(items) > 0:
+            self.particles:draw(s)
+            x0 = 1e9
+            y0 = 1e9
+            x1 = -1e9
+            y1 = -1e9
+            for p in items:
+                x0 = math.min(x0, math.floor(p.x + 0.5))
+                y0 = math.min(y0, math.floor(p.y + 0.5))
+                x1 = math.max(x1, math.floor(p.x + 0.5))
+                y1 = math.max(y1, math.floor(p.y + 0.5))
+            self.pbox = [x0, y0, x1, y1]
+
+# ---------------------------------------------------------------- сцена 5: логотип
+
+class LogoScene:
+    def init(self, ctx):
+        s = ctx.s
+        self.logo = cimg.read_file(ROOT .. "/assets/images/cubeos-logo.cimg")
+        bg = ctx.pal:ramp([[10, 14, 30], [30, 40, 80]], 12, 0, 207)
+        s:fill_gradient(0, 0, ctx.w, ctx.h, bg, "v")
+        self.bg = s:copy()
+        self.k = ctx.h >= 120 and 1 or 0.4
+        self.lw = math.floor(self.logo.w * self.k)
+        self.lh = math.floor(self.logo.h * self.k)
+        self.base = math.floor(ctx.h * 0.78)
+        half = math.floor(self.lw * 0.6) + 6
+        top = self.base - self.lh - math.floor(ctx.h * 0.25) - 3
+        # полоса, в которой всё происходит (логотип, тень, подпись)
+        self.band = [math.floor(ctx.w / 2) - half, top, half * 2, self.base + 24 - top]
+
+    def draw(self, ctx, dt, t):
+        s = ctx.s
+        b = self.band
+        s:restore(self.bg, b[1], b[2], b[3], b[4])
         bounce = math.abs(math.sin(t * 2.2))
-        base = math.floor(ctx.h * 0.78)
-        k = ctx.h >= 120 and 1 or 0.4
-        lw = math.floor(self.logo.w * k)
-        lh = math.floor(self.logo.h * k)
-        y = base - lh - math.floor(bounce * ctx.h * 0.25)
+        y = self.base - self.lh - math.floor(bounce * ctx.h * 0.25)
         # тень на полу уменьшается с высотой
-        sh = math.floor(lw * (0.6 - bounce * 0.25))
-        s:ellipse(math.floor(ctx.w / 2), base + 2, math.max(2, sh), math.max(1, math.floor(sh / 4)), ctx.black, true)
+        sh = math.floor(self.lw * (0.6 - bounce * 0.25))
+        s:ellipse(math.floor(ctx.w / 2), self.base + 2, math.max(2, sh), math.max(1, math.floor(sh / 4)), ctx.black, true)
         # «монета»: сжатие по горизонтали
         squeeze = math.abs(math.cos(t * 1.1))
-        sw = math.max(1, lw * squeeze)
-        s:blit(self.logo, math.floor((ctx.w - sw) / 2), y, {scale_x: sw / self.logo.w, scale_y: k, flip_x: math.cos(t * 1.1) < 0})
-        centered(ctx, "CubeOS", base + 8, ctx.white, 1, ctx.black)
+        sw = math.max(1, self.lw * squeeze)
+        s:blit(self.logo, math.floor((ctx.w - sw) / 2), y, {scale_x: sw / self.logo.w, scale_y: self.k, flip_x: math.cos(t * 1.1) < 0})
+        centered(ctx, "CubeOS", self.base + 8, ctx.white, 1, ctx.black)
 
 # ---------------------------------------------------------------- запуск
 
@@ -327,6 +411,8 @@ export def main(opts=nil):
     ctx.blue = near(40, 70, 190)
     ctx.panel = near(34, 40, 66)
     ctx.waves = [near(250, 150, 90), near(220, 90, 130), near(150, 60, 150), near(80, 40, 120)]
+    # окно для тяжёлых сцен (плазма, 3D): не больше ~90 тысяч пикселей, на большом мониторе оно по центру
+    ctx.view = make_view(ctx.w, ctx.h)
     classes = [Intro, Title, PlasmaScene, Scene3D, Gallery, LogoScene]
     names = ["Интро", "Заставка", "Плазма", "3D", "Фигуры", "Логотип"]
     state = {index: 1, scene: nil, quit: false, flip: false}
@@ -338,6 +424,8 @@ export def main(opts=nil):
         if state.scene != nil and state.scene.leave != nil:
             state.scene:leave(ctx)
         state.index = i
+        ctx.s = ctx.screen.surface
+        ctx.s:clear(ctx.black)
         state.scene = classes[i](ctx)
 
     def key(code):
@@ -406,6 +494,7 @@ export def main(opts=nil):
             ctx.w = ctx.screen.w
             ctx.h = ctx.screen.h
             ctx.pal = ctx.screen.palette
+            ctx.view = make_view(ctx.w, ctx.h)
             enter(state.index)
         else:
             state.quit = true

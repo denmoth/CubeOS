@@ -515,6 +515,16 @@ export class Surface:
                             c = map[c]
                         dpx[drow + xx] = c
 
+    # возвращает прямоугольник из bg (копии поверхности с тем же размером): стирает нарисованное поверх, не перерисовывая фон.
+    # Так делают анимации на больших экранах: фон один раз, а каждый кадр восстанавливается только то, что движется
+    def restore(self, bg, x, y, w, h):
+        x0 = math.max(0, x)
+        y0 = math.max(0, y)
+        x1 = math.min(self.w - 1, x + w - 1)
+        y1 = math.min(self.h - 1, y + h - 1)
+        if x1 >= x0 and y1 >= y0:
+            self:blit(bg, x0, y0, {sx: x0, sy: y0, sw: x1 - x0 + 1, sh: y1 - y0 + 1, transparent: false})
+
     # новая поверхность из части этой
     def crop(self, x, y, w, h):
         s = Surface(w, h, CLEAR)
