@@ -1,0 +1,530 @@
+# ui.runtime: среда интерфейса: фокус, события, всплывающие слои (диалоги, списки, подсказки), анимации, таймеры, вывод
+#
+#   ui = runtime.new(out, {theme: theme.get("cubeos"), keys: "arrows"})
+#   ui:set_root(root)
+#   ui:handle("key", keys.enter)             событие CC: key, char, mouse_click, mouse_drag, mouse_up, mouse_scroll, term_resize
+#   ui:tick(0.05)                            время идёт: анимации и таймеры
+#   ui:render()                              раскладка и рисование при необходимости, показ на экране
+#   runtime.run(ui)                          готовый цикл для CC (ждёт события, тикает только пока есть что анимировать)
+#
+# Среда не знает, обычный это терминал или пиксели: ей нужен вывод (out) с методами size, present, to_cell, open, close, set_theme.
+
+import cgl.anim as anim
+import ui.cells as cells_mod
+import ui.theme as th
+import ui.keymap as keymap_mod
+import ui.widget as widget
+
+export class Ui:
+    # opts: theme, keys ("arrows", "wasd", "vim") или keymap, animations (true), speed (множитель времени анимаций, 1)
+    def init(self, out, opts=nil):
+        o = opts ?? {}
+        self.out = out
+        self.cols, self.rows = out:size()
+        self.cells = cells_mod.new(self.cols, self.rows)
+        self.theme = o.theme ?? th.get("cubeos")
+        self.keymap = o.keymap ?? keymap_mod.new(o.keys ?? "arrows")
+        self.root = nil
+        self.overlays = []
+        self.focus = nil
+        self.animator = anim.Animator()
+        self.timers = []
+        self.time = 0
+        self.layout_dirty = true
+        self.draw_dirty = true
+        self.animations = o.animations ?? true
+        self.speed = o.speed ?? 1
+        self.mods = {shift: false, ctrl: false, alt: false}
+        self.hotkeys = {}
+        self.mouse_target = nil
+        self.blink = true
+        self.blink_time = 0
+        self.stats = {renders: 0, layouts: 0}
+        self.next_timer_id = 1
+        self.quit = false
+
+    # ------------------------------------------------------------ корень, тема
+
+    def set_root(self, root):
+        if self.root != nil:
+            self.root:detach()
+        self.root = root
+        root:attach(self)
+        self:invalidate_layout()
+        self:focus_first()
+
+    def set_theme(self, t):
+        self.theme = t
+        self.out:set_theme(t)
+        self:invalidate()
+
+    def set_keymap(self, preset):
+        self.keymap = keymap_mod.new(preset)
+
+    def invalidate(self):
+        self.draw_dirty = true
+
+    def invalidate_layout(self):
+        self.layout_dirty = true
+        self.draw_dirty = true
+
+    # размер вывода изменился (окно, монитор)
+    def resize(self):
+        self.cols, self.rows = self.out:size()
+        self.cells:resize(self.cols, self.rows)
+        self.out:invalidate()
+        self:invalidate_layout()
+
+    # ------------------------------------------------------------ рисование
+
+    def layout(self):
+        self.layout_dirty = false
+        self.stats.layouts += 1
+        if self.root != nil:
+            self.root:layout(0, 0, self.cols, self.rows)
+        for o in self.overlays:
+            self:_layout_overlay(o)
+
+    def _layout_overlay(self, o):
+        wd = o.widget
+        w, h = wd:measure(self.cols - 2, self.rows - 2)
+        w = math.min(w, self.cols)
+        h = math.min(h, self.rows)
+        x = 0
+        y = 0
+        if o.anchor == "at":
+            x = o.x
+            y = o.y
+            if x + w > self.cols:
+                x = self.cols - w
+            if y + h > self.rows:
+                y = self.rows - h
+        elif o.anchor == "bottom":
+            x = math.floor((self.cols - w) / 2)
+            y = self.rows - h - (o.margin ?? 2)
+        elif o.anchor == "top_right":
+            x = self.cols - w - 1
+            y = o.margin ?? 1
+        else:
+            x = math.floor((self.cols - w) / 2)
+            y = math.floor((self.rows - h) / 2)
+        x = math.max(0, x)
+        y = math.max(0, y)
+        wd:layout(x + (o.dx ?? 0), y + (o.dy ?? 0), w, h)
+
+    def draw(self):
+        self.draw_dirty = false
+        c = self.cells
+        t = self.theme
+        c:fill(0, 0, self.cols, self.rows, 32, th.TEXT, th.BG)
+        if self.root != nil:
+            self.root:draw(c, t)
+        for o in self.overlays:
+            if o.modal and o.dim:
+                c:remap(0, 0, self.cols, self.rows, t.dim)
+            if o.shadow:
+                wd = o.widget
+                c:fill(wd.x + 1, wd.y + 1, wd.w, wd.h, 0x2591, th.SHADOW, th.BG)
+            o.widget:draw(c, t)
+
+    # раскладка и рисование при необходимости; показывает кадр. Возвращает число отправленных клеток
+    def render(self):
+        if self.layout_dirty:
+            self:layout()
+        if self.draw_dirty:
+            self:draw()
+            self.stats.renders += 1
+        return self.out:present(self.cells)
+
+    # ------------------------------------------------------------ фокус
+
+    def _scope(self):
+        # элементы, до которых можно дойти: верхний модальный слой или всё
+        n = len(self.overlays)
+        for i in range[n, 1] step -1:
+            if self.overlays[i].modal:
+                return self.overlays[i].widget
+        return self.root
+
+    def focusables(self):
+        out = []
+        scope = self:_scope()
+        if scope != nil:
+            scope:focusables(out)
+        # немодальные слои выше (например, выпадающий список) тоже доступны
+        if scope != self.root:
+            return out
+        for o in self.overlays:
+            if not o.modal:
+                o.widget:focusables(out)
+        return out
+
+    def focus_widget(self, w):
+        if self.focus == w:
+            return
+        old = self.focus
+        self.focus = w
+        if old != nil:
+            old:on_blur()
+        if w != nil:
+            w:on_focus()
+        self:invalidate()
+
+    def focus_first(self):
+        list = self:focusables()
+        if len(list) > 0:
+            self:focus_widget(list[1])
+        else:
+            self:focus_widget(nil)
+
+    # Tab и Shift+Tab по кругу
+    def focus_cycle(self, reverse=false):
+        list = self:focusables()
+        n = len(list)
+        if n == 0:
+            return
+        idx = 0
+        for i, w in list:
+            if w == self.focus:
+                idx = i
+        if reverse:
+            idx = idx <= 1 and n or idx - 1
+        else:
+            idx = idx >= n and 1 or idx + 1
+        self:focus_widget(list[idx])
+
+    # стрелки между элементами: ближайший по выбранному направлению (по центрам прямоугольников)
+    def focus_move(self, dx, dy):
+        list = self:focusables()
+        cur = self.focus
+        if cur == nil:
+            self:focus_first()
+            return true
+        cx = cur.x + cur.w / 2
+        cy = cur.y + cur.h / 2
+        best = nil
+        best_score = 1e30
+        for w in list:
+            if w != cur:
+                wx = w.x + w.w / 2
+                wy = w.y + w.h / 2
+                ddx = wx - cx
+                ddy = wy - cy
+                ahead = ddx * dx + ddy * dy
+                if ahead > 0:
+                    side = math.abs(ddx * dy) + math.abs(ddy * dx)
+                    # вдоль направления ближе лучше, в сторону вдвое хуже
+                    score = ahead + side * 2
+                    if score < best_score:
+                        best_score = score
+                        best = w
+        if best != nil:
+            self:focus_widget(best)
+            return true
+        return false
+
+    # ------------------------------------------------------------ слои
+
+    # показывает элемент поверх страницы. opts: modal (true: ввод только в нём), dim (затемнить фон), dismiss (Esc и клик вне
+    # закрывают), anchor ("center", "at", "bottom", "top_right"), x, y, dx, dy, shadow, on_close
+    # возвращает слой; закрыть: ui:close_overlay(слой)
+    def open_overlay(self, wd, opts=nil):
+        o = opts ?? {}
+        layer = {widget: wd, modal: o.modal ?? true, dim: o.dim ?? (o.modal ?? true), dismiss: o.dismiss ?? true,
+            anchor: o.anchor ?? "center", x: o.x ?? 0, y: o.y ?? 0, dx: o.dx, dy: o.dy, margin: o.margin, shadow: o.shadow ?? false,
+            on_close: o.on_close, saved_focus: self.focus}
+        self.overlays[len(self.overlays) + 1] = layer
+        wd:attach(self)
+        if layer.modal:
+            self:focus_first()
+        self:invalidate_layout()
+        return layer
+
+    def close_overlay(self, layer):
+        for i, o in self.overlays:
+            if o == layer:
+                table.remove(self.overlays, i)
+                layer.widget:detach()
+                if layer.saved_focus != nil and layer.saved_focus.ui == self:
+                    self:focus_widget(layer.saved_focus)
+                else:
+                    self:focus_first()
+                if layer.on_close != nil:
+                    layer.on_close(layer)
+                self:invalidate_layout()
+                return true
+        return false
+
+    def top_overlay(self):
+        return self.overlays[len(self.overlays)]
+
+    # ------------------------------------------------------------ события
+
+    def _hotkey_name(self, code):
+        name = keys.getName(code)
+        if name == nil:
+            return nil
+        prefix = ""
+        if self.mods.ctrl:
+            prefix = prefix .. "ctrl+"
+        if self.mods.alt:
+            prefix = prefix .. "alt+"
+        if self.mods.shift:
+            prefix = prefix .. "shift+"
+        return prefix .. name
+
+    # сочетание клавиш на всю среду: ui:hotkey("ctrl+q", fn); fn вызывается без параметров
+    def hotkey(self, combo, fn):
+        self.hotkeys[combo] = fn
+
+    def _track_mods(self, code, down):
+        if code == keys.leftShift or code == keys.rightShift:
+            self.mods.shift = down
+        elif code == keys.leftCtrl or code == keys.rightCtrl:
+            self.mods.ctrl = down
+        elif code == keys.leftAlt or code == keys.rightAlt:
+            self.mods.alt = down
+
+    # событие CC; возвращает true, если среда его обработала
+    def handle(self, name, a=nil, b=nil, c=nil):
+        if name == "key":
+            self:_track_mods(a, true)
+            return self:_on_key(a)
+        if name == "key_up":
+            self:_track_mods(a, false)
+            return false
+        if name == "char":
+            if self.focus != nil and self.focus:char(a):
+                self:invalidate()
+                return true
+            return false
+        if name == "mouse_click":
+            cx, cy = self.out:to_cell(b, c)
+            return self:_on_mouse("down", cx, cy, a)
+        if name == "mouse_drag":
+            cx, cy = self.out:to_cell(b, c)
+            return self:_on_mouse("drag", cx, cy, a)
+        if name == "mouse_up":
+            cx, cy = self.out:to_cell(b, c)
+            return self:_on_mouse("up", cx, cy, a)
+        if name == "mouse_scroll":
+            cx, cy = self.out:to_cell(b, c)
+            return self:_on_mouse("scroll", cx, cy, a)
+        if name == "term_resize" or name == "monitor_resize":
+            self:resize()
+            return true
+        return false
+
+    def _on_key(self, code):
+        combo = self:_hotkey_name(code)
+        if combo != nil and self.hotkeys[combo] != nil:
+            self.hotkeys[combo]()
+            self:invalidate()
+            return true
+        text_mode = self.focus != nil and self.focus.captures_text
+        action = self.keymap:action(code, text_mode)
+        if action == nil:
+            return false
+        if action == "tab" and self.mods.shift:
+            action = "shift_tab"
+        return self:dispatch_action(action, code)
+
+    # действие по цепочке: сфокусированный элемент, его родители, затем общие правила среды
+    def dispatch_action(self, action, code=nil):
+        w = self.focus
+        while w != nil:
+            if w:key(action, code):
+                self:invalidate()
+                return true
+            w = w.parent
+        if action == "tab":
+            self:focus_cycle(false)
+            return true
+        if action == "shift_tab":
+            self:focus_cycle(true)
+            return true
+        if action == "up":
+            return self:focus_move(0, -1)
+        if action == "down":
+            return self:focus_move(0, 1)
+        if action == "left":
+            return self:focus_move(-1, 0)
+        if action == "right":
+            return self:focus_move(1, 0)
+        if action == "back":
+            top = self:top_overlay()
+            if top != nil and top.dismiss:
+                self:close_overlay(top)
+                return true
+        return false
+
+    def _target_at(self, cx, cy):
+        n = len(self.overlays)
+        for i in range[n, 1] step -1:
+            o = self.overlays[i]
+            r = o.widget:hit(cx, cy)
+            if r != nil:
+                return r, o
+            if o.modal:
+                return nil, o
+        if self.root != nil:
+            return self.root:hit(cx, cy), nil
+        return nil, nil
+
+    def _on_mouse(self, kind, cx, cy, button):
+        if kind == "down":
+            w, layer = self:_target_at(cx, cy)
+            if w == nil:
+                if layer != nil and layer.dismiss:
+                    self:close_overlay(layer)
+                    return true
+                return false
+            self.mouse_target = w
+            # фокус получает ближайший родитель, который его принимает
+            f = w
+            while f != nil and not (f.focusable and not f.disabled):
+                f = f.parent
+            if f != nil:
+                self:focus_widget(f)
+            w:mouse("down", cx, cy, button)
+            self:invalidate()
+            return true
+        if kind == "scroll":
+            w = self:_target_at(cx, cy)
+            while w != nil:
+                if w:mouse("scroll", cx, cy, button):
+                    self:invalidate()
+                    return true
+                w = w.parent
+            return false
+        # drag и up уходят тому элементу, где началось нажатие
+        w = self.mouse_target
+        if w == nil:
+            return false
+        w:mouse(kind, cx, cy, button)
+        if kind == "up":
+            self.mouse_target = nil
+        self:invalidate()
+        return true
+
+    # ------------------------------------------------------------ время
+
+    # анимация значения: target[field] плавно идёт к to за seconds. Без анимаций (opts.animations = false) ставится сразу
+    def animate(self, target, field, to, seconds, ease_name="out_cubic", on_done=nil):
+        if not self.animations or seconds <= 0:
+            target[field] = to
+            self:invalidate()
+            if on_done != nil:
+                on_done()
+            return nil
+        let me = self
+        tw = anim.tween({from: target[field] ?? 0, to: to, time: seconds / self.speed, ease: ease_name,
+            on_update: (v) => me:_set_field(target, field, v), on_done: on_done})
+        self.animator:add(tw)
+        return tw
+
+    def _set_field(self, target, field, v):
+        target[field] = v
+        self:invalidate()
+
+    # добавляет готовую анимацию из cgl.anim (твин, последовательность...)
+    def play(self, a):
+        self.animator:add(a)
+        return a
+
+    # вызвать fn через seconds секунд; возвращает таймер (timer:cancel())
+    def after(self, seconds, fn):
+        return self:_timer(seconds, nil, fn)
+
+    # вызывать fn каждые seconds секунд, пока таймер не отменён
+    def every(self, seconds, fn):
+        return self:_timer(seconds, seconds, fn)
+
+    def _timer(self, seconds, every, fn):
+        id = self.next_timer_id
+        self.next_timer_id += 1
+        timer = {id: id, at: self.time + seconds, every: every, fn: fn, active: true}
+        let me = self
+        timer.cancel = () => me:_cancel(timer)
+        self.timers[len(self.timers) + 1] = timer
+        return timer
+
+    def _cancel(self, timer):
+        timer.active = false
+
+    # нужен ли дальше тик (есть анимации, таймеры, мигающий курсор, эффекты темы)
+    def needs_ticks(self):
+        if self.animator:busy() or len(self.timers) > 0:
+            return true
+        if self.focus != nil and self.focus.captures_text:
+            return true
+        if (self.theme.effects.flicker ?? 0) > 0:
+            return true
+        return false
+
+    # проходит время dt секунд; возвращает true, если что-то поменялось и надо перерисовать
+    def tick(self, dt):
+        self.time += dt
+        self.animator:update(dt * self.speed)
+        keep = []
+        for tm in self.timers:
+            if tm.active and self.time >= tm.at:
+                tm.fn()
+                self:invalidate()
+                if tm.every != nil and tm.active:
+                    tm.at = self.time + tm.every
+                else:
+                    tm.active = false
+            if tm.active:
+                keep[len(keep) + 1] = tm
+        self.timers = keep
+        if self.focus != nil and self.focus.captures_text:
+            self.blink_time += dt
+            if self.blink_time >= 0.5:
+                self.blink_time = 0
+                self.blink = not self.blink
+                self:invalidate()
+        else:
+            self.blink = true
+        self.out:tick(dt)
+        return self.draw_dirty
+
+    # подсказки подвала: от сфокусированного элемента вверх по родителям, потом общие
+    def hints(self):
+        out = []
+        seen = {}
+        w = self.focus
+        while w != nil:
+            for h in w:hints():
+                if seen[h[1]] == nil:
+                    seen[h[1]] = true
+                    out[len(out) + 1] = h
+            w = w.parent
+        return out
+
+export def new(out, opts=nil):
+    return Ui(out, opts)
+
+# готовый цикл для CC: ждёт события; пока есть анимации и таймеры, просыпается каждые 0.05 с. Возвращает, когда ui.quit равен true
+export def run(ui, opts=nil):
+    o = opts ?? {}
+    pull = o.pull ?? os.pullEventRaw
+    ui.out:open()
+    ui:render()
+    last = os.epoch("utc") / 1000
+    timer = nil
+    while not ui.quit:
+        if ui:needs_ticks() and timer == nil:
+            timer = os.startTimer(0.05)
+        ev, a, b, c = pull()
+        if ev == "terminate":
+            break
+        if ev == "timer" and a == timer:
+            timer = nil
+            now = os.epoch("utc") / 1000
+            ui:tick(math.min(0.25, now - last))
+            last = now
+        else:
+            ui:handle(ev, a, b, c)
+        ui:render()
+    ui.out:close()

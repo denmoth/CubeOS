@@ -7,9 +7,10 @@
 #
 # Действия: up down left right enter back tab home end page_up page_down delete backspace menu help.
 # Сочетания с Ctrl, Alt и Shift обрабатывает среда (runtime), сюда приходит чистая клавиша.
+# Esc привязан и по имени, и по кодам 256 (новый CC) и 1 (старый): в разных сборках таблица keys отличается.
 
 const ARROW_KEYS = {
-    up: ["up"], down: ["down"], left: ["left"], right: ["right"], enter: ["enter", "numPadEnter"], back: ["escape"],
+    up: ["up"], down: ["down"], left: ["left"], right: ["right"], enter: ["enter", "numPadEnter"], back: ["escape", 256, 1],
     tab: ["tab"], home: ["home"], end: ["end"], page_up: ["pageUp"], page_down: ["pageDown"], delete: ["delete"],
     backspace: ["backspace"], menu: ["f10"], help: ["f1"]
 }

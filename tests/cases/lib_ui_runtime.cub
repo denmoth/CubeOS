@@ -1,0 +1,199 @@
+import t
+import ui.runtime as runtime
+import ui.widget as w
+import ui.theme as theme
+eq = t.eq
+ESC = keys.escape ?? 1
+
+# заглушка вывода
+class StubOut:
+    def init(self, cols, rows):
+        self.cols = cols
+        self.rows = rows
+        self.presented = 0
+        self.last = nil
+        self.ticks = 0
+        self.theme_changes = 0
+        self.invalidated = 0
+    def size(self):
+        return self.cols, self.rows
+    def present(self, c):
+        self.presented += 1
+        self.last = c:to_lines()
+        c:clean()
+        return 1
+    def to_cell(self, x, y):
+        return x - 1, y - 1
+    def open(self):
+        pass
+    def close(self):
+        pass
+    def set_theme(self, th):
+        self.theme_changes += 1
+    def invalidate(self):
+        self.invalidated += 1
+    def tick(self, dt):
+        self.ticks += 1
+
+# кнопка для проверки: фокусируется, запоминает действия
+class Btn(w.Widget):
+    def init(self, name, props=nil):
+        super.init(self, props)
+        self.name = name
+        self.focusable = true
+        self.log = []
+        self.consume = props != nil and props.consume or nil
+    def _measure(self, max_w, max_h):
+        return 4, 1
+    def key(self, action, code):
+        self.log[len(self.log) + 1] = action
+        return self.consume == action
+    def mouse(self, kind, mx, my, button):
+        self.log[len(self.log) + 1] = kind
+        return kind == "scroll"
+    def char(self, ch):
+        self.log[len(self.log) + 1] = "char:" .. ch
+        return true
+    def _draw(self, c, t):
+        c:text(self.x, self.y, self.name)
+
+def make(cols, rows):
+    out = StubOut(cols, rows)
+    ui = runtime.new(out, {})
+    return ui, out
+
+# ---------------------------------------------------------------- фокус
+ui, out = make(20, 6)
+b1 = Btn("one")
+b2 = Btn("two")
+b3 = Btn("tri")
+ui:set_root(w.vbox([b1, b2, b3]))
+ui:render()
+eq(ui.focus == b1, true, "the first focusable gets the focus")
+eq(out.last[1]:sub(1, 3), "one", "drawn")
+ui:handle("key", keys.tab)
+eq(ui.focus == b2, true, "Tab moves forward")
+ui:handle("key", keys.tab)
+ui:handle("key", keys.tab)
+eq(ui.focus == b1, true, "Tab wraps around")
+ui:handle("key", keys.leftShift)
+ui:handle("key", keys.tab)
+eq(ui.focus == b3, true, "Shift+Tab moves backward")
+ui:handle("key_up", keys.leftShift)
+ui:handle("key", keys.down)
+eq(ui.focus == b3, true, "Down at the end stays")
+eq(b3.log[len(b3.log)], "down", "the widget saw the action first")
+ui:handle("key", keys.up)
+eq(ui.focus == b2, true, "arrows move the focus when the widget does not handle them")
+b2.consume = "up"
+ui:handle("key", keys.up)
+eq(ui.focus == b2, true, "a widget that consumes the action keeps the focus")
+
+# нажатие на элемент
+ui:handle("mouse_click", 1, 1, 3)
+eq(ui.focus == b3, true, "click focuses the widget (row 3 is the third button)")
+eq(b3.log[len(b3.log)], "down", "click is delivered as down")
+ui:handle("mouse_up", 1, 1, 3)
+eq(b3.log[len(b3.log)], "up", "release goes to the same widget")
+ui:handle("char", "x")
+eq(b3.log[len(b3.log)], "char:x", "characters go to the focused widget")
+ui:handle("mouse_scroll", -1, 1, 1)
+eq(b1.log[len(b1.log)], "scroll", "scroll goes to the widget under the pointer")
+
+# ---------------------------------------------------------------- слои
+ui2, out2 = make(20, 8)
+page = Btn("page")
+ui2:set_root(w.vbox([page]))
+ui2:render()
+dlg_btn = Btn("ok")
+dlg = w.frame("Диалог", w.vbox([dlg_btn]))
+layer = ui2:open_overlay(dlg, {})
+ui2:render()
+eq(ui2.focus == dlg_btn, true, "a modal overlay takes the focus")
+eq(dlg.x > 0 and dlg.y > 0, true, "the dialog is centered")
+eq(dlg.x + dlg.w <= 20, true, "inside the screen")
+ui2:handle("key", keys.tab)
+eq(ui2.focus == dlg_btn, true, "Tab stays inside the modal dialog")
+ui2:handle("key", ESC)
+eq(len(ui2.overlays), 0, "Esc closes a dismissable dialog")
+eq(ui2.focus == page, true, "the focus returns to the page")
+layer = ui2:open_overlay(w.frame("x", Btn("in")), {dismiss: false})
+ui2:handle("key", ESC)
+eq(len(ui2.overlays), 1, "a dialog without dismiss ignores Esc")
+ui2:close_overlay(layer)
+eq(len(ui2.overlays), 0, "closed by code")
+
+# клик вне диалога закрывает его
+layer = ui2:open_overlay(w.frame("x", Btn("in")), {})
+ui2:render()
+ui2:handle("mouse_click", 1, 1, 1)
+eq(len(ui2.overlays), 0, "click outside closes the dialog")
+closed = []
+layer = ui2:open_overlay(w.frame("x", Btn("in")), {on_close: (l) => table.insert(closed, "closed")})
+ui2:close_overlay(layer)
+eq(closed, ["closed"], "on_close is called")
+
+# затемнение страницы под диалогом
+page_cells = ui2.cells
+ui2:render()
+l2 = ui2:open_overlay(w.frame("x", Btn("in")), {})
+ui2:render()
+eq(ui2.cells:colors_lines("fg")[1]:sub(1, 1), "4", "the page text is dimmed under a modal dialog (TEXT becomes MUTED)")
+ui2:close_overlay(l2)
+
+# немодальный слой не забирает фокус
+tip = Btn("tip")
+l3 = ui2:open_overlay(w.frame(nil, w.label("подсказка")), {modal: false, anchor: "at", x: 2, y: 2})
+ui2:render()
+eq(ui2.focus == page, true, "a non-modal overlay keeps the focus")
+ui2:close_overlay(l3)
+
+# ---------------------------------------------------------------- время
+ui3, out3 = make(10, 4)
+ui3:set_root(w.vbox([Btn("a")]))
+fired = []
+t1 = ui3:after(1, () => table.insert(fired, "after"))
+t2 = ui3:every(0.5, () => table.insert(fired, "every"))
+eq(ui3:needs_ticks(), true, "timers need ticks")
+ui3:tick(0.4)
+eq(fired, [], "nothing yet")
+ui3:tick(0.2)
+eq(fired, ["every"], "the repeating timer fires")
+ui3:tick(0.5)
+eq(fired, ["every", "after", "every"], "the one-shot fires once and the repeating again")
+t2.cancel()
+ui3:tick(2)
+eq(fired, ["every", "after", "every"], "a cancelled timer stops")
+eq(ui3:needs_ticks(), false, "no timers and no animations: no ticks needed")
+
+obj = {v: 0}
+ui3:animate(obj, "v", 10, 1, "linear")
+eq(ui3:needs_ticks(), true, "an animation needs ticks")
+ui3:tick(0.5)
+eq(obj.v, 5, "halfway")
+ui3:tick(0.6)
+eq(obj.v, 10, "arrived")
+eq(ui3:needs_ticks(), false, "done")
+ui3.animations = false
+obj2 = {v: 0}
+done = false
+ui3:animate(obj2, "v", 7, 1, "linear", () => table.insert(fired, "done"))
+eq(obj2.v, 7, "without animations the value is set at once")
+eq(fired[len(fired)], "done", "and on_done is called")
+
+# горячие клавиши и тема
+hits = []
+ui3:hotkey("ctrl+q", () => table.insert(hits, "q"))
+ui3:handle("key", keys.leftCtrl)
+ui3:handle("key", keys.q)
+eq(hits, ["q"], "ctrl+q hotkey")
+ui3:handle("key_up", keys.leftCtrl)
+ui3:handle("key", keys.q)
+eq(hits, ["q"], "without ctrl it is not the hotkey")
+ui3:set_theme(theme.get("retro"))
+eq(out3.theme_changes, 1, "the output got the new theme")
+eq(ui3.theme.name, "retro", "theme changed")
+ui3:resize()
+eq(out3.invalidated, 1, "resize invalidates the output")
+
+print("done")
