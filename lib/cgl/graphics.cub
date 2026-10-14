@@ -1,0 +1,162 @@
+# cgl.graphics: вывод поверхности в пиксельный режим CC: Graphics
+#
+#   d = graphics.new(term, {mode: 2})      mode 2: 256 цветов своей палитры (по умолчанию); mode 1: 16 цветов CC
+#   d:open()                               включает режим и загружает палитру
+#   n = d:present(surface)                 рисует только изменившееся с прошлого кадра, возвращает число отправленных пикселей
+#   d:close()                              возвращает текстовый режим
+#
+# Кадр сравнивается с прошлым построчно, изменения собираются в прямоугольники (соседние строки сливаются, если не растёт
+# лишняя площадь) и уходят одним вызовом drawPixels на прямоугольник. Вывод обёрнут в setFrozen, чтобы экран не мигал.
+# Размер поверхности должен совпадать с d.w x d.h; лишнее обрезается, недостающее остаётся как было.
+
+import cgl.color as color
+import cgl.quant as quant
+
+export class GraphicsDisplay:
+    # opts: mode (1 или 2), palette (палитра поверхности), dither (только для mode 1), clear (цвет вместо прозрачного пикселя),
+    # frozen (по умолчанию true: использовать setFrozen)
+    def init(self, t, opts=nil):
+        o = opts ?? {}
+        self.term = t
+        self.mode = o.mode ?? 2
+        self.palette = o.palette ?? color.default_palette()
+        self.frozen = o.frozen ?? true
+        self.w, self.h = t.getSize(true)
+        self.prev = nil
+        self.stats = {frames: 0, pixels: 0, calls: 0}
+        self.kind = "graphics"
+        self.final = []
+        if self.mode == 1:
+            self.term_palette = color.cc_palette()
+            self.quant = quant.new(self.palette, self.term_palette, {dither: o.dither ?? false, clear: o.clear})
+        else:
+            self.clear_color = o.clear ?? self.palette:nearest(0, 0, 0)
+        self.opened = false
+
+    # включает графический режим и переносит палитру в терминал
+    def open(self):
+        self.term.setGraphicsMode(self.mode)
+        self.w, self.h = self.term.getSize(true)
+        self:sync_palette()
+        self.prev = nil
+        self.opened = true
+
+    def sync_palette(self):
+        if self.mode == 2:
+            for i in range[0, self.palette.size - 1]:
+                r, g, b = self.palette:get(i)
+                self.term.setPaletteColor(i, r / 255, g / 255, b / 255)
+        else:
+            self.quant:rebuild()
+            for i in range[0, 15]:
+                r, g, b = self.term_palette:get(i)
+                self.term.setPaletteColor(2 ** i, r / 255, g / 255, b / 255)
+        self.prev = nil
+
+    def close(self):
+        if self.opened:
+            self.term.setGraphicsMode(false)
+            self.opened = false
+
+    # следующий кадр целиком (например, после смены размера окна)
+    def invalidate(self):
+        self.prev = nil
+
+    def size(self):
+        return self.w, self.h
+
+    # событие мыши в пикселях поверхности (в режиме пикселей CC уже отдаёт пиксельные координаты)
+    def to_pixel(self, x, y):
+        return x, y
+
+    # номер цвета терминала для номера цвета поверхности
+    def _terminal_color(self, v, x, y):
+        if self.mode == 2:
+            if v < 0:
+                return self.clear_color
+            return v
+        return 2 ** self.quant:pick(v, x, y)
+
+    # рисует кадр; возвращает число отправленных пикселей
+    def present(self, s):
+        w = math.min(self.w, s.w)
+        h = math.min(self.h, s.h)
+        prev = self.prev
+        full = prev == nil
+        cur = []
+        spans_a = []
+        spans_b = []
+        spx = s.px
+        sw = s.w
+        mode2 = self.mode == 2
+        clear_color = self.clear_color
+        for y in range[0, h - 1]:
+            base = y * w
+            sbase = y * sw + 1
+            a = nil
+            b = nil
+            for x in range[0, w - 1]:
+                v = spx[sbase + x]
+                c = nil
+                if mode2:
+                    c = v < 0 and clear_color or v
+                else:
+                    c = 2 ** self.quant:pick(v, x, y)
+                cur[base + x + 1] = c
+                if full or prev[base + x + 1] != c:
+                    if a == nil:
+                        a = x
+                    b = x
+            spans_a[y + 1] = a
+            spans_b[y + 1] = b
+        self.prev = cur
+        self.stats.frames += 1
+        # прямоугольники из построчных промежутков
+        rects = []
+        open_rect = nil
+        for y in range[0, h - 1]:
+            a = spans_a[y + 1]
+            b = spans_b[y + 1]
+            if a == nil:
+                if open_rect != nil:
+                    rects[len(rects) + 1] = open_rect
+                    open_rect = nil
+            elif open_rect == nil:
+                open_rect = {x0: a, x1: b, y0: y, y1: y, cells: b - a + 1}
+            else:
+                nx0 = math.min(open_rect.x0, a)
+                nx1 = math.max(open_rect.x1, b)
+                rows = y - open_rect.y0 + 1
+                if (nx1 - nx0 + 1) * rows <= (open_rect.cells + b - a + 1) * 1.5 + 16:
+                    open_rect.x0 = nx0
+                    open_rect.x1 = nx1
+                    open_rect.y1 = y
+                    open_rect.cells += b - a + 1
+                else:
+                    rects[len(rects) + 1] = open_rect
+                    open_rect = {x0: a, x1: b, y0: y, y1: y, cells: b - a + 1}
+        if open_rect != nil:
+            rects[len(rects) + 1] = open_rect
+        if len(rects) == 0:
+            return 0
+        if self.frozen and self.term.setFrozen != nil:
+            self.term.setFrozen(true)
+        sent = 0
+        for r in rects:
+            rows = []
+            for y in range[r.y0, r.y1]:
+                row = []
+                base = y * w + 1
+                for x in range[r.x0, r.x1]:
+                    row[x - r.x0 + 1] = cur[base + x]
+                rows[y - r.y0 + 1] = row
+            self.term.drawPixels(r.x0, r.y0, rows)
+            sent += (r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1)
+            self.stats.calls += 1
+        if self.frozen and self.term.setFrozen != nil:
+            self.term.setFrozen(false)
+        self.stats.pixels += sent
+        return sent
+
+export def new(t, opts=nil):
+    return GraphicsDisplay(t, opts)

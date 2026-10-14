@@ -1,0 +1,183 @@
+# cgl.teletext: вывод поверхности через «телетекстные» символы 128..159, работает на любом цветном терминале CC
+#
+# Один символ несёт 2x3 пикселя и два цвета (текст и фон), поэтому изображение получается в 2 раза шире и в 3 раза выше, чем
+# число клеток: на 51x19 клеток выходит 102x57 пикселей. Из шести пикселей клетки выбираются два самых частых цвета терминала
+# (16 цветов CC), остальные пиксели отходят к ближайшему из этих двух. Правый нижний пиксель символа всегда фоновый, поэтому
+# при необходимости цвета меняются местами, а рисунок инвертируется.
+#
+#   d = teletext.new(term, {dither: true})
+#   d:open(); d:present(surface); d:close()
+
+import cgl.color as color
+import cgl.quant as quant
+
+const HEX = "0123456789abcdef"
+
+export class TeletextDisplay:
+    # opts: palette (палитра поверхности), dither, clear, terminal_palette (палитра терминала из 16 цветов; если задана,
+    # она переносится в терминал при open)
+    def init(self, t, opts=nil):
+        o = opts ?? {}
+        self.term = t
+        self.palette = o.palette ?? color.default_palette()
+        self.term_palette = o.terminal_palette ?? color.cc_palette()
+        self.load_palette = o.terminal_palette != nil
+        self.quant = quant.new(self.palette, self.term_palette, {dither: o.dither ?? false, clear: o.clear})
+        self.cols, self.rows = t.getSize()
+        self.w = self.cols * 2
+        self.h = self.rows * 3
+        self.prev = nil
+        self.stats = {frames: 0, pixels: 0, calls: 0}
+        self.kind = "teletext"
+        self.opened = false
+
+    def open(self):
+        self.cols, self.rows = self.term.getSize()
+        self.w = self.cols * 2
+        self.h = self.rows * 3
+        self:sync_palette()
+        self.term.setBackgroundColor(2 ** self.quant.clear)
+        self.term.clear()
+        self.prev = nil
+        self.opened = true
+
+    def sync_palette(self):
+        if self.load_palette:
+            for i in range[0, 15]:
+                r, g, b = self.term_palette:get(i)
+                self.term.setPaletteColor(2 ** i, r / 255, g / 255, b / 255)
+        self.quant:rebuild()
+        self.prev = nil
+
+    def close(self):
+        if self.opened:
+            self.term.setBackgroundColor(32768)
+            self.term.setTextColor(1)
+            self.term.clear()
+            self.term.setCursorPos(1, 1)
+            self.opened = false
+
+    def invalidate(self):
+        self.prev = nil
+
+    def size(self):
+        return self.w, self.h
+
+    # клетка (x, y) события мыши -> пиксель в её левом верхнем углу
+    def to_pixel(self, x, y):
+        return (x - 1) * 2, (y - 1) * 3
+
+    # символ и цвета клетки по шести номерам цветов терминала (слева направо, сверху вниз)
+    def encode(self, p):
+        q = self.quant
+        # два самых частых цвета
+        counts = {}
+        order = []
+        for i in range[1, 6]:
+            c = p[i]
+            if counts[c] == nil:
+                counts[c] = 0
+                order[len(order) + 1] = c
+            counts[c] += 1
+        first = order[1]
+        for i in range[2, len(order)]:
+            c = order[i]
+            if counts[c] > counts[first] or (counts[c] == counts[first] and c < first):
+                first = c
+        second = first
+        best = 0
+        for i in range[1, len(order)]:
+            c = order[i]
+            if c != first and (counts[c] > best or (counts[c] == best and c < second)):
+                second = c
+                best = counts[c]
+        fg = first
+        bg = second
+        bits = 0
+        weight = 1
+        for i in range[1, 5]:
+            on = p[i] == fg
+            if p[i] != fg and p[i] != bg:
+                on = q:distance(p[i], fg) < q:distance(p[i], bg)
+            if on:
+                bits += weight
+            weight = weight * 2
+        br_fg = p[6] == fg
+        if p[6] != fg and p[6] != bg:
+            br_fg = q:distance(p[6], fg) < q:distance(p[6], bg)
+        if br_fg:
+            # правый нижний пиксель должен быть фоновым: меняем роли цветов и инвертируем рисунок
+            fg, bg = bg, fg
+            bits = 31 - bits
+        return 128 + bits, fg, bg
+
+    # рисует кадр; возвращает число изменившихся клеток
+    def present(self, s):
+        cols = math.min(self.cols, s.w // 2)
+        rows = math.min(self.rows, s.h // 3)
+        q = self.quant
+        full = self.prev == nil
+        prev = self.prev ?? {}
+        cur = {}
+        spx = s.px
+        sw = s.w
+        changed = 0
+        p = [0, 0, 0, 0, 0, 0]
+        for cy in range[0, rows - 1]:
+            first_x = nil
+            last_x = nil
+            chars = []
+            fgs = []
+            bgs = []
+            for cx in range[0, cols - 1]:
+                x = cx * 2
+                y = cy * 3
+                i1 = y * sw + x + 1
+                dither = q.dither
+                if dither:
+                    p[1] = q:pick(spx[i1], x, y)
+                    p[2] = q:pick(spx[i1 + 1], x + 1, y)
+                    p[3] = q:pick(spx[i1 + sw], x, y + 1)
+                    p[4] = q:pick(spx[i1 + sw + 1], x + 1, y + 1)
+                    p[5] = q:pick(spx[i1 + 2 * sw], x, y + 2)
+                    p[6] = q:pick(spx[i1 + 2 * sw + 1], x + 1, y + 2)
+                else:
+                    p[1] = q:index(spx[i1])
+                    p[2] = q:index(spx[i1 + 1])
+                    p[3] = q:index(spx[i1 + sw])
+                    p[4] = q:index(spx[i1 + sw + 1])
+                    p[5] = q:index(spx[i1 + 2 * sw])
+                    p[6] = q:index(spx[i1 + 2 * sw + 1])
+                sig = p[1] + p[2] * 16 + p[3] * 256 + p[4] * 4096 + p[5] * 65536 + p[6] * 1048576
+                k = cy * cols + cx + 1
+                cur[k] = sig
+                if full or prev[k] != sig:
+                    if first_x == nil:
+                        first_x = cx
+                    last_x = cx
+                    changed += 1
+            if first_x != nil:
+                # заново кодируем промежуток целиком (клетки между изменившимися дешевле отправить, чем разбивать вызов)
+                for cx in range[first_x, last_x]:
+                    sig = cur[cy * cols + cx + 1]
+                    p[1] = sig % 16
+                    p[2] = (sig // 16) % 16
+                    p[3] = (sig // 256) % 16
+                    p[4] = (sig // 4096) % 16
+                    p[5] = (sig // 65536) % 16
+                    p[6] = (sig // 1048576) % 16
+                    ch, fg, bg = self:encode(p)
+                    n = cx - first_x + 1
+                    chars[n] = string.char(ch)
+                    fgs[n] = string.sub(HEX, fg + 1, fg + 1)
+                    bgs[n] = string.sub(HEX, bg + 1, bg + 1)
+                self.term.setCursorPos(first_x + 1, cy + 1)
+                self.term.blit(table.concat(chars), table.concat(fgs), table.concat(bgs))
+                self.stats.calls += 1
+        self.prev = cur
+        self.stats.frames += 1
+        self.stats.pixels += changed * 6
+        return changed
+
+export def new(t, opts=nil):
+    return TeletextDisplay(t, opts)

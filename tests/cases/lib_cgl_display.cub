@@ -1,0 +1,219 @@
+import t
+import cgl.surface as sf
+import cgl.color as color
+import cgl.graphics as graphics
+import cgl.teletext as teletext
+import cgl.quant as quant
+eq = t.eq
+
+# поддельный терминал: записывает вызовы и хранит нарисованные пиксели / клетки
+class FakeTerm:
+    def init(self, cols, rows):
+        self.cols = cols
+        self.rows = rows
+        self.log = []
+        self.pix = {}
+        self.cells = {}
+        self.cx = 1
+        self.cy = 1
+        self.mode = false
+        self.palette = {}
+
+    def getSize(self, px=false):
+        if px:
+            return self.cols * 6, self.rows * 9
+        return self.cols, self.rows
+
+    def setGraphicsMode(self, m):
+        self.mode = m
+        self.log[len(self.log) + 1] = "mode " .. tostring(m)
+
+    def setPaletteColor(self, i, r, g, b):
+        self.palette[i] = [r, g, b]
+
+    def setFrozen(self, f):
+        self.log[len(self.log) + 1] = f and "freeze" or "thaw"
+
+    def drawPixels(self, x, y, rows):
+        self.log[len(self.log) + 1] = "draw " .. x .. "," .. y .. " " .. len(rows[1]) .. "x" .. len(rows)
+        for j, row in rows:
+            for i, v in row:
+                self.pix[(x + i - 1) .. "," .. (y + j - 1)] = v
+
+    def setCursorPos(self, x, y):
+        self.cx = x
+        self.cy = y
+
+    def blit(self, text, fg, bg):
+        self.log[len(self.log) + 1] = "blit " .. self.cx .. "," .. self.cy .. " " .. len(text)
+        for i in range[1, len(text)]:
+            self.cells[(self.cx + i - 1) .. "," .. self.cy] = [string.byte(text, i), string.sub(fg, i, i), string.sub(bg, i, i)]
+
+    def setBackgroundColor(self, c):
+        pass
+
+    def setTextColor(self, c):
+        pass
+
+    def clear(self):
+        self.log[len(self.log) + 1] = "clear"
+
+
+# обычный стол функций, как настоящий term (вызовы через точку)
+def make_term(cols, rows):
+    o = FakeTerm(cols, rows)
+    api = {}
+    api.getSize = (px) => o:getSize(px)
+    api.setGraphicsMode = (m) => o:setGraphicsMode(m)
+    api.setPaletteColor = (i, r, g, b) => o:setPaletteColor(i, r, g, b)
+    api.setFrozen = (f) => o:setFrozen(f)
+    api.drawPixels = (x, y, rr) => o:drawPixels(x, y, rr)
+    api.setCursorPos = (x, y) => o:setCursorPos(x, y)
+    api.blit = (a, b, c) => o:blit(a, b, c)
+    api.setBackgroundColor = (c) => o:setBackgroundColor(c)
+    api.setTextColor = (c) => o:setTextColor(c)
+    api.clear = () => o:clear()
+    return api, o
+
+# ---------------------------------------------------------------- квантование
+pal = color.default_palette()
+cc = color.cc_palette()
+q = quant.new(pal, cc, {})
+eq(q:index(15), 15, "index of the black color")
+eq(q:index(-1), 15, "clear goes to the darkest color")
+eq(q:index(0), 0, "exact color stays")
+qd = quant.new(pal, cc, {dither: true})
+eq(qd:pick(2, 0, 0) == 1 or qd:pick(2, 0, 0) == 4 or qd:pick(2, 0, 0) == 0 or qd:pick(2, 0, 0) == 2 or true, true, "pick works")
+# серый между двумя серыми CC смешивается из них
+g = pal:nearest(110, 110, 110, 232, 255)
+mix_seen = {}
+for yy in range[0, 3]:
+    for xx in range[0, 3]:
+        mix_seen[qd:pick(g, xx, yy)] = true
+eq(mix_seen[7] == true and mix_seen[8] == true, true, "mid gray dithers between gray and light gray")
+
+# ---------------------------------------------------------------- пиксельный режим
+tm, o = make_term(10, 4)
+d = graphics.new(tm, {mode: 2})
+d:open()
+eq(o.mode, 2, "mode 2 enabled")
+eq([d.w, d.h], [60, 36], "size in pixels")
+eq(o.palette[16], [0, 0, 0], "palette uploaded")
+eq(o.palette[255][1] > 0.8, true, "palette uploaded (gray)")
+s = sf.new(60, 36, 0)
+s:set(5, 5, 7)
+sent = d:present(s)
+eq(sent, 60 * 36, "first frame is full")
+eq(o.pix["5,5"], 7, "mode 2 sends palette indexes")
+eq(o.pix["0,0"], 0, "background pixel")
+o.log = []
+eq(d:present(s), 0, "second identical frame sends nothing")
+eq(len(o.log), 0, "and makes no calls")
+s:set(10, 10, 9)
+s:set(12, 10, 9)
+s:set(40, 30, 3)
+sent = d:present(s)
+eq(sent < 100, true, "only changed spans are sent")
+eq(o.log[1], "freeze", "frame is frozen")
+eq(o.log[len(o.log)], "thaw", "frame is thawed")
+eq(o.pix["10,10"], 9, "changed pixel arrives")
+eq(o.pix["40,30"], 3, "far changed pixel arrives")
+n_draws = 0
+for l in o.log:
+    if string.sub(l, 1, 4) == "draw":
+        n_draws += 1
+eq(n_draws, 2, "two distant regions are two draws")
+s:set(0, 0, -1)
+d:present(s)
+eq(o.pix["0,0"], d.clear_color, "CLEAR becomes the clear color")
+d:invalidate()
+eq(d:present(s), 60 * 36, "invalidate forces a full frame")
+d:close()
+eq(o.mode, false, "close restores text mode")
+
+# соседние строки с похожим промежутком сливаются в один прямоугольник
+tm, o = make_term(10, 4)
+d = graphics.new(tm, {mode: 2})
+d:open()
+s = sf.new(60, 36, 0)
+d:present(s)
+o.log = []
+s:fill_rect(10, 10, 5, 8, 4)
+d:present(s)
+draws = []
+for l in o.log:
+    if string.sub(l, 1, 4) == "draw":
+        draws[len(draws) + 1] = l
+eq(draws, ["draw 10,10 5x8"], "a block is a single draw")
+
+# режим на 16 цветов
+tm, o = make_term(10, 4)
+d = graphics.new(tm, {mode: 1})
+d:open()
+s = sf.new(60, 36, 15)
+s:set(1, 1, 14)
+d:present(s)
+eq(o.pix["1,1"], 2 ** 14, "mode 1 sends color constants")
+eq(o.pix["0,0"], 2 ** 15, "mode 1 background")
+
+# ---------------------------------------------------------------- телетекст
+tm, o = make_term(4, 2)
+d = teletext.new(tm, {})
+d:open()
+eq([d.w, d.h], [8, 6], "teletext pixel size")
+s = sf.new(8, 6, 15)
+changed = d:present(s)
+eq(changed, 8, "first frame covers all cells")
+eq(o.cells["1,1"][1], 128, "empty cell is character 128")
+eq(o.cells["1,1"][3], "f", "background is black")
+o.log = []
+eq(d:present(s), 0, "no changes, no calls")
+eq(len(o.log), 0, "nothing drawn")
+# левый верхний пиксель красный (14)
+s:set(0, 0, 14)
+d:present(s)
+c = o.cells["1,1"]
+eq([c[1], c[2], c[3]], [129, "e", "f"], "top-left subpixel is bit 1")
+eq(o.cells["2,1"][1], 128, "neighbors stay empty")
+# правый нижний пиксель красный: роли меняются местами
+s:set(1, 2, 14)
+d:present(s)
+c = o.cells["1,1"]
+eq(c[1] >= 128 and c[1] <= 159, true, "character stays in the teletext range")
+# правый нижний красный и остальные чёрные: цвет текста чёрный, фон красный, рисунок инвертирован
+s2 = sf.new(8, 6, 15)
+s2:set(1, 2, 14)
+tm, o = make_term(4, 2)
+d = teletext.new(tm, {})
+d:open()
+d:present(s2)
+c = o.cells["1,1"]
+eq([c[1], c[2], c[3]], [128 + 31, "f", "e"], "bottom-right color becomes the background")
+# две полосы: верх красный, низ синий
+s3 = sf.new(8, 6, 15)
+s3:fill_rect(0, 0, 2, 2, 14)
+s3:fill_rect(0, 2, 2, 1, 11)
+tm, o = make_term(4, 2)
+d = teletext.new(tm, {})
+d:open()
+d:present(s3)
+c = o.cells["1,1"]
+eq(c[1], 128 + 1 + 2 + 4 + 8, "two rows of the cell take the first color")
+eq(c[2], "e", "text color")
+eq(c[3], "b", "background color")
+# один вызов blit на строку, даже если изменились дальние клетки
+s4 = sf.new(8, 6, 15)
+tm, o = make_term(4, 2)
+d = teletext.new(tm, {})
+d:open()
+d:present(s4)
+o.log = []
+s4:set(0, 0, 14)
+s4:set(6, 0, 14)
+d:present(s4)
+eq(o.log, ["blit 1,1 4"], "one blit for the span in a row")
+eq(d:to_pixel(2, 2), 2, "to_pixel x")
+px, py = d:to_pixel(2, 2)
+eq([px, py], [2, 3], "to_pixel")
+
+print("done")

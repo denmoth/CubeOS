@@ -1,0 +1,102 @@
+# cgl.quant: перевод цветов поверхности (палитра до 256 цветов) в ограниченную палитру терминала (16 цветов CC)
+#
+# Для каждого номера цвета поверхности заранее считается ближайший цвет терминала и, если включён дизеринг, второй цвет, которым
+# можно «разбавить» первый, чтобы получилась нужная смесь (порядковая растеризация Байера 4x4 по координатам пикселя).
+#
+#   q = quant.new(src_palette, dst_palette, {dither: true, clear: 15})
+#   q:index(v)            номер цвета терминала для номера v (или для CLEAR)
+#   q:pick(v, x, y)       то же с дизерингом в точке (x, y)
+
+import cgl.color as color
+
+export class Quantizer:
+    # src: палитра поверхности; dst: палитра терминала (до 16 цветов); opts: dither (по умолчанию false), clear (номер цвета
+    # терминала вместо прозрачного пикселя, по умолчанию самый тёмный)
+    def init(self, src, dst, opts=nil):
+        o = opts ?? {}
+        self.src = src
+        self.dst = dst
+        self.dither = o.dither ?? false
+        self.clear = o.clear ?? dst:nearest(0, 0, 0)
+        self.main = []
+        self.alt = []
+        self.share = []
+        self:rebuild()
+
+    # пересчитать таблицы (после изменения палитр)
+    def rebuild(self):
+        self.main = []
+        self.alt = []
+        self.share = []
+        self.main[1] = self.clear
+        for v in range[0, self.src.size - 1]:
+            r, g, b = self.src:get(v)
+            a = self.dst:nearest(r, g, b)
+            self.main[v + 2] = a
+            if self.dither:
+                self:_mix(v + 2, r, g, b, a)
+
+    # лучшая смесь двух цветов терминала для цвета (r, g, b); если одиночный ближайший цвет лучше, смесь не нужна
+    def _mix(self, slot, r, g, b, a):
+        ar, ag, ab = self.dst:get(a)
+        sr = r - ar
+        sg = g - ag
+        sb = b - ab
+        base = 0.30 * sr * sr + 0.59 * sg * sg + 0.11 * sb * sb
+        if base < 30:
+            return
+        n = self.dst.size
+        best_score = 1e30
+        best_a = nil
+        best_b = nil
+        best_t = 0
+        for i in range[0, n - 2]:
+            r1, g1, b1 = self.dst:get(i)
+            for j in range[i + 1, n - 1]:
+                r2, g2, b2 = self.dst:get(j)
+                dr = r2 - r1
+                dg = g2 - g1
+                db = b2 - b1
+                len2 = dr * dr + dg * dg + db * db
+                if len2 > 0:
+                    t = ((r - r1) * dr + (g - g1) * dg + (b - b1) * db) / len2
+                    if t >= 0.08 and t <= 0.92:
+                        er = r - r1 - dr * t
+                        eg = g - g1 - dg * t
+                        eb = b - b1 - db * t
+                        err = 0.30 * er * er + 0.59 * eg * eg + 0.11 * eb * eb
+                        # среди хороших смесей берём пару ближайших цветов: меньше шума
+                        score = err + 0.02 * len2
+                        if err < base * 0.6 and score < best_score:
+                            best_score = score
+                            best_a = i
+                            best_b = j
+                            best_t = t
+        if best_a != nil:
+            if best_t < 0.5:
+                self.main[slot] = best_a
+                self.alt[slot] = best_b
+                self.share[slot] = best_t
+            else:
+                self.main[slot] = best_b
+                self.alt[slot] = best_a
+                self.share[slot] = 1 - best_t
+
+    def index(self, v):
+        return self.main[v + 2] ?? self.clear
+
+    def pick(self, v, x, y):
+        slot = v + 2
+        alt = self.alt[slot]
+        if alt != nil and color.dither(self.share[slot], x, y):
+            return alt
+        return self.main[slot] ?? self.clear
+
+    # расстояние между двумя цветами терминала (для выбора ближайшего из двух)
+    def distance(self, i, j):
+        r1, g1, b1 = self.dst:get(i)
+        r2, g2, b2 = self.dst:get(j)
+        return 0.30 * (r1 - r2) ** 2 + 0.59 * (g1 - g2) ** 2 + 0.11 * (b1 - b2) ** 2
+
+export def new(src, dst, opts=nil):
+    return Quantizer(src, dst, opts)
