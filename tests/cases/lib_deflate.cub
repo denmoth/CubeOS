@@ -30,6 +30,7 @@ total = 0
 for line in read_lines("/repo/tests/data/deflate_vectors.txt"):
     name, raw_hex, comp_hex = string.match(line, "^([^|]*)|([^|]*)|([^|]*)$")
     total += 1
+    sleep(0)
     got = df.inflate(unhex(comp_hex))
     if got != unhex(raw_hex):
         print("FAIL inflate " .. name)
@@ -70,6 +71,7 @@ samples = {
 out_lines = []
 for name in ["empty", "one", "short", "text", "noise", "zeros", "allbytes", "repeat", "mixed"]:
     raw = samples[name]
+    sleep(0)
     packed = df.deflate(raw)
     back = df.inflate(packed)
     eq(back == raw, true, "deflate roundtrip " .. name)

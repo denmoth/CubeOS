@@ -7,12 +7,16 @@ import cfs.errors as errors
 export const MAX_NAME = 64
 const FORBIDDEN = "[\\:%*%?\"<>|%c]"
 
-# сворачивает ".", ".." и повторные слэши; ".." выше корня остаётся в корне
+# сворачивает ".", ".." и повторные слэши; ".." выше корня остаётся в корне;
+# пробелы и точки в конце имени убираются сами ("report.txt " это "report.txt")
 export def normalize(p):
     parts = []
     n = 0
-    for seg in string.gmatch(p, "[^/]+"):
-        if seg == ".":
+    for raw in string.gmatch(p, "[^/]+"):
+        seg = raw
+        if raw != "." and raw != "..":
+            seg = (string.gsub(raw, "[ %.]+$", ""))
+        if seg == "" or seg == ".":
             pass
         elif seg == "..":
             if n > 0:

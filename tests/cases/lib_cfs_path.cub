@@ -6,6 +6,8 @@ eq = t.eq
 eq(p.normalize("/a//b/./c/../d"), "/a/b/d", "normalize")
 eq(p.normalize("/../.."), "/", "normalize above root")
 eq(p.normalize("a/b"), "/a/b", "normalize relative")
+eq(p.normalize("/a/b  /c.txt. "), "/a/b/c.txt", "trailing spaces and dots are trimmed")
+eq(p.normalize("/a/../b/.."), "/", "dotdot still works")
 eq(p.split("/a/b/c"), ["a", "b", "c"], "split")
 eq(p.split("/"), [], "split root")
 eq(p.join("/a/b", "c"), "/a/b/c", "join relative")
