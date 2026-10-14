@@ -1,0 +1,139 @@
+import t
+import cfs
+import kernel
+import boot.services as services
+import cfs.rules as rules
+eq = t.eq
+
+clock = {now: 1000}
+def now():
+    return clock.now
+
+log = []
+def say(text):
+    log[len(log) + 1] = text
+
+def settle(k, steps=60):
+    for i in range[1, steps]:
+        k:run_ready()
+        clock.now = clock.now + 100
+        k:tick()
+    k:run_ready()
+
+system = rules.subject("system", ["system"])
+
+# ---------------------------------------------------------------- манифесты и порядок
+m_a = services.normalize({name: "a", module: "x"})
+eq([m_a.restart, m_a.max_restarts, m_a.ready, m_a.timeout, m_a.enabled], ["on-failure", 5, "register", 10000, true], "manifest defaults")
+ok, err = pcall(services.normalize, {module: "x"}, "no-name.conf")
+eq(ok, false, "a service needs a name")
+ok, err = pcall(services.normalize, {name: "z"}, "z.conf")
+eq(ok, false, "a service needs a module")
+
+def mk(name, requires, after):
+    return services.normalize({name: name, module: "m", requires: requires ?? [], after: after ?? []})
+ordered, problems = services.order([mk("c", ["b"], nil), mk("b", ["a"], nil), mk("a", nil, nil), mk("d", nil, ["c"])])
+names = []
+for m in ordered:
+    names[len(names) + 1] = m.name
+eq(names, ["a", "b", "c", "d"], "dependencies first")
+eq(problems, [], "no problems")
+ordered, problems = services.order([mk("x", ["y"], nil), mk("y", ["x"], nil)])
+eq(len(problems) > 0 and string.find(problems[1], "cycle", 1, true) != nil, true, "cycle detected")
+ordered, problems = services.order([mk("p", ["ghost"], nil)])
+eq(string.find(problems[1], "unknown service", 1, true) != nil, true, "unknown requirement")
+
+# манифесты из файлов
+fsys = cfs.new({})
+fsys:mount("/", cfs.memory())
+fsys:mkdir(nil, "/cubeos/sys/services", {parents: true})
+fsys:write_file(nil, "/cubeos/sys/services/logd.conf", "{name: 'logd', module: 'svc.logd', // comment\n restart: 'always'}")
+fsys:write_file(nil, "/cubeos/sys/services/broken.conf", "{module: 'no name'}")
+fsys:write_file(nil, "/cubeos/sys/services/notes.txt", "ignored")
+loaded, load_errors = services.load_manifests(fsys)
+eq(len(loaded), 1, "one valid manifest")
+eq(loaded[1].name, "logd", "manifest name")
+eq(loaded[1].restart, "always", "manifest restart")
+eq(len(load_errors), 1, "one broken manifest reported")
+
+# ---------------------------------------------------------------- запуск, готовность, перезапуски
+def prog_a(sys, args):
+    say("start a")
+    sys.register("a")
+    while true:
+        sys.sleep(1)
+def prog_b(sys, args):
+    say("start b")
+    sys.sleep(0.25)
+    sys.register("b")
+    while true:
+        sys.sleep(1)
+def prog_crash(sys, args):
+    say("start c")
+    error("cannot start")
+def prog_after_crash(sys, args):
+    say("start d (must not happen)")
+    sys.register("d")
+def prog_quitter(sys, args):
+    say("start e")
+    sys.register("e")
+def prog_never_ready(sys, args):
+    say("start g")
+    while true:
+        sys.sleep(1)
+def prog_immediate(sys, args):
+    say("start h")
+    while true:
+        sys.sleep(1)
+
+states = []
+def on_state(name, state, error):
+    states[len(states) + 1] = name .. ":" .. state
+
+k = kernel.new({clock: now})
+mgr = services.new(k, {on_state: on_state, subject: system})
+mgr:add({name: "a", program: prog_a})
+mgr:add({name: "b", program: prog_b, requires: ["a"]})
+mgr:add({name: "c", program: prog_crash, requires: ["b"], max_restarts: 2, restart_delay: 200})
+mgr:add({name: "d", program: prog_after_crash, requires: ["c"]})
+mgr:add({name: "e", program: prog_quitter, restart: "always", max_restarts: 2, restart_delay: 100})
+mgr:add({name: "f", program: prog_a, enabled: false})
+mgr:add({name: "g", program: prog_never_ready, timeout: 500})
+mgr:add({name: "h", program: prog_immediate, ready: "immediate"})
+init_pid = k:spawn((sys, args) => mgr:run_init(sys, args), [], {name: "init", subject: system})
+settle(k, 80)
+
+eq(mgr:state("a"), "running", "a is running")
+eq(mgr:state("b"), "running", "b waited for its registration and runs")
+eq(mgr:state("c"), "failed", "c crashed too many times")
+eq(mgr:state("d"), "blocked", "d is blocked by the failed c")
+eq(mgr:state("f"), "disabled", "disabled service")
+eq(mgr:state("g"), "failed", "g was not ready in time")
+eq(mgr:state("h"), "running", "immediate readiness")
+eq(log[1], "start a", "a starts first")
+eq(log[2], "start b", "then b")
+eq(log[3], "start c", "then c")
+eq(string.find(table.concat(log, "|"), "start d", 1, true), nil, "blocked service is never started")
+starts_c = 0
+for line in log:
+    if line == "start c":
+        starts_c += 1
+eq(starts_c, 3, "c: first start and two restarts")
+starts_e = 0
+for line in log:
+    if line == "start e":
+        starts_e += 1
+eq(starts_e >= 2, true, "an always-restart service is restarted")
+eq(k:exit_info(init_pid).how, "exited", "init finished")
+listing = mgr:list()
+eq(listing[1].name, "a", "list is sorted")
+eq(listing[1].state, "running", "list state")
+
+# остановка в обратном порядке
+mgr:stop_all()
+settle(k, 80)
+eq(mgr:state("a"), "stopped", "a stopped")
+eq(mgr:state("b"), "stopped", "b stopped")
+eq(k:alive(mgr.status["a"].supervisor), false, "supervisor ended")
+eq(len(k:ps()), 0, "no processes left")
+print("done")

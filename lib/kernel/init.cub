@@ -16,6 +16,7 @@ import cfs.rules as rules_mod
 
 const INPUT_EVENTS = {key: true, key_up: true, char: true, paste: true, mouse_click: true, mouse_up: true,
     mouse_drag: true, mouse_scroll: true}
+const INTERNAL_EVENTS = {process_exit: true, service_ready: true}
 const MAX_QUEUE = 256
 const MAX_EXITED = 64
 
@@ -24,7 +25,7 @@ def _default_clock():
 
 def _matches(filter, name):
     if filter == nil:
-        return true
+        return not INTERNAL_EVENTS[name]
     for f in filter:
         if f == name:
             return true
@@ -200,6 +201,7 @@ export class Kernel:
                 self:_wake(other, {code: code, err: err})
         if self.on_exit != nil:
             self.on_exit(info)
+        self:feed("process_exit", proc.pid, how, code)
 
     # просьба завершиться (событие terminate) или немедленное завершение
     def kill(self, pid, mode="term"):
@@ -575,6 +577,7 @@ export class Kernel:
             if k.services[req.name] != nil and k.procs[k.services[req.name]] != nil:
                 return "value", {error: "service name is taken"}
             k.services[req.name] = proc.pid
+            k:feed("service_ready", req.name, proc.pid)
             return "value", {ok: true}
         h.register = register
 

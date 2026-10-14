@@ -1,0 +1,262 @@
+# boot.services: службы системы (демоны): запуск по зависимостям, ожидание готовности, перезапуск при сбое
+#
+# Манифест службы (JSON5), по файлу на службу в /cubeos/sys/services/<имя>.conf:
+#   {
+#     name: "netd",
+#     module: "svc.netd",             модуль, у которого есть main(sys, args); import даёт загрузчик
+#     requires: ["logd"],             запускается после этих служб и только если они работают
+#     after: [],                      только порядок, зависимость необязательна
+#     restart: "on-failure",          "on-failure" (по умолчанию), "always", "never"
+#     max_restarts: 5, restart_delay: 1000,
+#     ready: "register",              "register": готова, когда вызвала sys.register(имя); "immediate": сразу после запуска
+#     timeout: 10000,                 сколько ждать готовности (мс)
+#     enabled: true
+#   }
+#
+# Состояния: stopped, starting, running, failed (исчерпаны перезапуски или не стала готова), blocked (не запустились нужные службы),
+# disabled. Работает внутри процесса init (manager:run_init), надзор за каждой службой ведёт её надзиратель (отдельный процесс).
+
+import json5
+import cfs.rules as rules_mod
+
+export const SERVICES_DIR = "/cubeos/sys/services"
+
+def _list(value):
+    return value ?? []
+
+# разбирает манифест: добавляет значения по умолчанию, проверяет обязательные поля
+export def normalize(raw, source="?"):
+    if raw.name == nil or raw.name == "":
+        raise Error(source .. ": a service needs a name")
+    if raw.module == nil and raw.program == nil:
+        raise Error(source .. ": service " .. raw.name .. " needs a module")
+    return {name: raw.name, module: raw.module, program: raw.program, description: raw.description ?? "",
+        requires: _list(raw.requires), after: _list(raw.after), restart: raw.restart ?? "on-failure",
+        max_restarts: raw.max_restarts ?? 5, restart_delay: raw.restart_delay ?? 1000, ready: raw.ready ?? "register",
+        timeout: raw.timeout ?? 10000, enabled: raw.enabled != false}
+
+# читает все манифесты каталога; ошибочные пропускает и возвращает список ошибок вторым значением
+export def load_manifests(fsys, dir=nil):
+    path = dir ?? SERVICES_DIR
+    manifests = []
+    errors = []
+    if not fsys:exists(nil, path):
+        return manifests, errors
+    for entry in fsys:list(nil, path):
+        if entry.type == "file" and string.sub(entry.name, -5) == ".conf":
+            ok, result = pcall(() => normalize(json5.parse(fsys:read_file(nil, path .. "/" .. entry.name)), entry.name))
+            if ok:
+                manifests[len(manifests) + 1] = result
+            else:
+                errors[len(errors) + 1] = tostring(result)
+    return manifests, errors
+
+# порядок запуска: сначала то, от чего зависят (requires и after); циклы и неизвестные зависимости дают ошибку в списке
+export def order(manifests):
+    by_name = {}
+    for m in manifests:
+        by_name[m.name] = m
+    result = []
+    state = {}
+    problems = []
+    def visit(m, trail):
+        if state[m.name] == "done":
+            return
+        if state[m.name] == "visiting":
+            problems[len(problems) + 1] = "dependency cycle: " .. table.concat(trail, " -> ") .. " -> " .. m.name
+            return
+        state[m.name] = "visiting"
+        trail[len(trail) + 1] = m.name
+        deps = []
+        for d in m.requires:
+            deps[len(deps) + 1] = d
+        for d in m.after:
+            deps[len(deps) + 1] = d
+        for d in deps:
+            dep = by_name[d]
+            if dep == nil:
+                if string.find(table.concat(m.requires, ","), d, 1, true) != nil:
+                    problems[len(problems) + 1] = m.name .. " requires an unknown service: " .. d
+            else:
+                visit(dep, trail)
+        trail[len(trail)] = nil
+        state[m.name] = "done"
+        result[len(result) + 1] = m
+    names = []
+    for m in manifests:
+        names[len(names) + 1] = m.name
+    table.sort(names)
+    for name in names:
+        visit(by_name[name], [])
+    return result, problems
+
+export class ServiceManager:
+    # opts: import (функция(путь модуля) -> модуль), subject (субъект служб, по умолчанию система), on_state (функция(имя, состояние)),
+    #       clock, log (функция(текст))
+    def init(self, kernel, opts=nil):
+        o = opts ?? {}
+        self.kernel = kernel
+        self.importer = o.import
+        self.subject = o.subject ?? rules_mod.subject("system", ["system"])
+        self.on_state = o.on_state
+        self.log = o.log
+        self.manifests = {}
+        self.sequence = []
+        self.status = {}
+        self.stopping = false
+
+    def _say(self, text):
+        if self.log != nil:
+            self.log(text)
+        self.kernel:log(text)
+
+    def add(self, manifest):
+        m = normalize(manifest)
+        self.manifests[m.name] = m
+        self.status[m.name] = {state: m.enabled and "stopped" or "disabled", pid: nil, restarts: 0, supervisor: nil, error: nil}
+
+    def add_all(self, manifests):
+        for m in manifests:
+            self:add(m)
+
+    def _set(self, name, state, error=nil):
+        st = self.status[name]
+        st.state = state
+        st.error = error
+        self:_say("service " .. name .. ": " .. state .. (error != nil and (" (" .. tostring(error) .. ")") or ""))
+        if self.on_state != nil:
+            self.on_state(name, state, error)
+
+    def state(self, name):
+        st = self.status[name]
+        return st != nil and st.state or nil
+
+    # сведения о всех службах: {name, state, pid, restarts, error}
+    def list(self):
+        out = []
+        names = []
+        for name, st in self.status:
+            names[len(names) + 1] = name
+        table.sort(names)
+        for name in names:
+            st = self.status[name]
+            out[len(out) + 1] = {name: name, state: st.state, pid: st.pid, restarts: st.restarts, error: st.error}
+        return out
+
+    # ------------------------------------------------------------ программа службы
+
+    def _program(self, m):
+        if m.program != nil:
+            return m.program
+        if self.importer == nil:
+            raise Error("no module loader for service " .. m.name)
+        mod = self.importer(m.module)
+        if mod == nil or mod.main == nil:
+            raise Error("module " .. m.module .. " has no main(sys, args)")
+        return mod.main
+
+    # надзиратель: запускает службу, ждёт её конца, перезапускает по правилам; работает как процесс
+    def _supervise(self, sys, m):
+        let me = self
+        st = self.status[m.name]
+        while not self.stopping:
+            ok, program = pcall(() => me:_program(m))
+            if not ok:
+                self:_set(m.name, "failed", program)
+                return
+            pid = sys.spawn(program, [], {name: m.name, subject: self.subject, detached: true})
+            st.pid = pid
+            if m.ready == "immediate":
+                self:_set(m.name, "running")
+            code, err = sys.wait(pid)
+            st.pid = nil
+            if self.stopping or st.wanted == false:
+                self:_set(m.name, "stopped")
+                return
+            crashed = err != nil
+            wants_restart = m.restart == "always" or (m.restart == "on-failure" and crashed)
+            if not wants_restart:
+                self:_set(m.name, crashed and "failed" or "stopped", err)
+                return
+            st.restarts += 1
+            if st.restarts > m.max_restarts:
+                self:_set(m.name, "failed", "too many restarts")
+                return
+            self:_set(m.name, "starting", "restart " .. st.restarts)
+            sys.sleep(m.restart_delay / 1000)
+
+    # ------------------------------------------------------------ запуск
+
+    # ждёт готовности службы; возвращает true или false и причину
+    def _wait_ready(self, sys, m):
+        st = self.status[m.name]
+        if m.ready == "immediate":
+            return true
+        deadline = sys.now() + m.timeout
+        while true:
+            pid = sys.lookup(m.name)
+            if pid != nil:
+                return true
+            if st.state == "failed" or st.state == "stopped":
+                return false, st.error ?? "stopped before it was ready"
+            remaining = deadline - sys.now()
+            if remaining <= 0:
+                return false, "not ready after " .. m.timeout .. " ms"
+            sys.wait_event(["service_ready", "process_exit"], remaining / 1000)
+
+    # тело процесса init: запускает службы по порядку и ждёт готовности каждой
+    def run_init(self, sys, args=nil):
+        sequence, problems = order(self:_enabled_list())
+        for p in problems:
+            self:_say("service problem: " .. p)
+        self.sequence = sequence
+        for m in sequence:
+            st = self.status[m.name]
+            blocked = nil
+            for dep in m.requires:
+                if self.status[dep] == nil or self.status[dep].state != "running":
+                    blocked = dep
+            if blocked != nil:
+                self:_set(m.name, "blocked", "requires " .. blocked)
+            else:
+                self:_set(m.name, "starting")
+                st.wanted = true
+                st.supervisor = sys.spawn((s, a) => self:_supervise(s, m), [], {name: "svc-" .. m.name, detached: true, subject: self.subject})
+                ok, why = self:_wait_ready(sys, m)
+                if ok:
+                    if st.state != "running" and st.state != "failed":
+                        self:_set(m.name, "running")
+                else:
+                    if st.state != "failed":
+                        self:_set(m.name, "failed", why)
+        self:_say("services started")
+
+    def _enabled_list(self):
+        out = []
+        for name, m in self.manifests:
+            if m.enabled:
+                out[len(out) + 1] = m
+        return out
+
+    # ------------------------------------------------------------ остановка
+
+    # останавливает одну службу (просьба завершиться, затем принудительно)
+    def stop(self, name):
+        st = self.status[name]
+        if st == nil:
+            return false
+        st.wanted = false
+        if st.pid != nil:
+            self.kernel:kill(st.pid, "term")
+        return true
+
+    # останавливает все службы в обратном порядке запуска
+    def stop_all(self):
+        self.stopping = true
+        i = len(self.sequence)
+        while i >= 1:
+            self:stop(self.sequence[i].name)
+            i -= 1
+
+export def new(kernel, opts=nil):
+    return ServiceManager(kernel, opts)
