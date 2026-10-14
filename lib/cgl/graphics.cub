@@ -24,6 +24,8 @@ export class GraphicsDisplay:
         self.w, self.h = t.getSize(true)
         self.prev = nil
         self.stats = {frames: 0, pixels: 0, calls: 0, scan_ms: 0, send_ms: 0}
+        self.seen = nil
+        self.seen_rev = 0
         self.kind = "graphics"
         self.final = []
         if self.mode == 1:
@@ -93,6 +95,10 @@ export class GraphicsDisplay:
 
     # рисует кадр; возвращает число отправленных пикселей
     def present(self, s):
+        if self.prev != nil and self.seen == s and self.seen_rev == s.rev:
+            return 0
+        self.seen = s
+        self.seen_rev = s.rev
         t0 = os.epoch("utc")
         w = math.min(self.w, s.w)
         h = math.min(self.h, s.h)

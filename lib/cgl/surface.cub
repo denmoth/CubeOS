@@ -35,6 +35,9 @@ export class Surface:
         self.oy = 0
         self.clips = []
         self.origins = []
+        # rev растёт при любой записи: дисплей пропускает сравнение кадров, если поверхность не менялась. Код, который пишет
+        # прямо в px, обязан вызвать touch()
+        self.rev = 1
 
     # ------------------------------------------------------------ область отсечения и сдвиг
 
@@ -70,7 +73,11 @@ export class Surface:
 
     # ------------------------------------------------------------ пиксели
 
+    def touch(self):
+        self.rev += 1
+
     def set(self, x, y, c):
+        self.rev += 1
         x += self.ox
         y += self.oy
         if x >= self.cx0 and x <= self.cx1 and y >= self.cy0 and y <= self.cy1:
@@ -86,6 +93,7 @@ export class Surface:
 
     # заливает всю поверхность (отсечение и сдвиг не действуют)
     def clear(self, c=0):
+        self.rev += 1
         for i in range[1, self.w * self.h]:
             self.px[i] = c
 
@@ -121,6 +129,7 @@ export class Surface:
         y1 = math.min(y + self.oy + h - 1, self.cy1)
         if x0 > x1 or y0 > y1:
             return
+        self.rev += 1
         px = self.px
         stride = self.w
         for yy in range[y0, y1]:
@@ -157,12 +166,35 @@ export class Surface:
         sx = x0 < x1 and 1 or -1
         sy = y0 < y1 and 1 or -1
         err = dx + dy
+        if thickness <= 1:
+            # быстрый путь: пишем прямо в массив, границы проверяем по текущему отсечению
+            self.rev += 1
+            px = self.px
+            ox = self.ox
+            oy = self.oy
+            cx0 = self.cx0
+            cy0 = self.cy0
+            cx1 = self.cx1
+            cy1 = self.cy1
+            stride = self.w
+            while true:
+                ax = x0 + ox
+                ay = y0 + oy
+                if ax >= cx0 and ax <= cx1 and ay >= cy0 and ay <= cy1:
+                    px[ay * stride + ax + 1] = c
+                if x0 == x1 and y0 == y1:
+                    break
+                e2 = 2 * err
+                if e2 >= dy:
+                    err += dy
+                    x0 += sx
+                if e2 <= dx:
+                    err += dx
+                    y0 += sy
+            return
         half = (thickness - 1) // 2
         while true:
-            if thickness <= 1:
-                self:set(x0, y0, c)
-            else:
-                self:fill_rect(x0 - half, y0 - half, thickness, thickness, c)
+            self:fill_rect(x0 - half, y0 - half, thickness, thickness, c)
             if x0 == x1 and y0 == y1:
                 break
             e2 = 2 * err
@@ -414,11 +446,19 @@ export class Surface:
         y1 = math.min(ay + dh - 1, self.cy1)
         if x0 > x1 or y0 > y1:
             return
+        self.rev += 1
         spx = src.px
         dpx = self.px
         sstride = src.w
         dstride = self.w
         plain = scale_x == 1 and scale_y == 1 and not flip_x and not flip_y
+        cols = []
+        if not plain:
+            for xx in range[x0, x1]:
+                rx = _floor((xx - ax) / scale_x)
+                if flip_x:
+                    rx = sw - 1 - rx
+                cols[xx - x0 + 1] = rx
         for yy in range[y0, y1]:
             if plain:
                 srow = (sy0 + (yy - ay)) * sstride + 1 + sx0 - ax
@@ -436,10 +476,7 @@ export class Surface:
                 srow = (sy0 + ry) * sstride + 1 + sx0
                 drow = yy * dstride + 1
                 for xx in range[x0, x1]:
-                    rx = _floor((xx - ax) / scale_x)
-                    if flip_x:
-                        rx = sw - 1 - rx
-                    c = spx[srow + rx]
+                    c = spx[srow + cols[xx - x0 + 1]]
                     if c != skip:
                         if map != nil and map[c] != nil:
                             c = map[c]

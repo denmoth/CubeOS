@@ -25,11 +25,18 @@ local results = {}
 
 local function clock() return os.epoch("utc") / 1000 end
 
--- повторяет fn, пока не пройдёт 2 секунды (с уступкой управления), возвращает вызовов в секунду
+local TOTAL, DURATION = 14, 1.2
+
+-- повторяет fn, пока не пройдёт DURATION секунд (с уступкой управления); название и номер теста видны на экране
 local function bench(name, fn)
+  s:clear(15)
+  s:text(fnt, 2, 2, "CGL bench " .. (#results + 1) .. "/" .. TOTAL, 0)
+  s:text(fnt, 2, 12, name, 0)
+  screen:invalidate()
+  screen:present()
   local calls, start = 0, clock()
   local last_yield = start
-  while clock() - start < 2 do
+  while clock() - start < DURATION do
     fn(calls)
     calls = calls + 1
     if clock() - last_yield > 1 then
@@ -41,6 +48,7 @@ local function bench(name, fn)
   results[#results + 1] = string.format("%-34s %8.1f /s  (%.2f ms)", name, rate, 1000 / rate)
 end
 
+local function run()
 local ramp = pal:ramp({ { 0, 0, 0 }, { 255, 0, 0 }, { 255, 255, 255 } }, 24)
 local small = cgl.surface.new(math.ceil(w / 3), math.ceil(h / 3), 0)
 local plasma = fx.Plasma(small.w, small.h, ramp)
@@ -69,6 +77,11 @@ bench("set_colors 48 цветов", function(i)
   for k = 1, 48 do list[k] = { 200 + k, i % 255, k * 5, 100 } end
   screen:set_colors(list)
 end)
+
+end
+
+local ok, err = pcall(run)
+if not ok then results[#results + 1] = "ОШИБКА: " .. tostring(err) end
 
 local st = screen.display.stats
 results[#results + 1] = string.format("present всего: кадров %d, скан %d мс, отправка %d мс, вызовов %d", st.frames, st.scan_ms, st.send_ms, st.calls)
