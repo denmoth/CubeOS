@@ -33,6 +33,7 @@
 |---|---|
 | `src/cubic/` | Компилятор Cubic на Lua (лексер, парсер, checker, codegen, rt, tooling, `headers/*.cuh` с описаниями API CC и модов) |
 | `lib/` | Библиотеки на Cubic (ниже) |
+| `sys/` | Файлы, которые ставятся в компьютер вне библиотек: `startup.lua` и `sys/boot/` (`stage1`, `rescue`, `runtime`), см. [spec/boot.md](spec/boot.md) |
 | `tests/cases/` | Тесты (`lib_*.cub`, `.loader`, `.out`); запуск `tools/test.sh [фильтр]` |
 | `game/` | Lua-скрипты запуска в настоящем CC (`terminal.lua`, `ui_demo.lua`, `cgl_demo.lua`, `boot_demo.lua`, `kernel_demo.lua`, `bench.lua`, `runtests.lua`, ...) |
 | `examples/` | Примеры на Cubic (`ui_demo.cub`, `cgl_demo.cub`) |
