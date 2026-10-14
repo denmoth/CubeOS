@@ -1,5 +1,11 @@
-Fonts cube-5x8 and cube-8x16 are derived from Spleen (https://github.com/fcambus/spleen).
-Cyrillic glyphs of cube-5x8 and the Ukrainian Ye (U+0404, U+0454) of cube-8x16 were added by the CubeOS project.
+CubeOS fonts
+============
+
+cube-6x9 and cube-5x7: X11 "misc-fixed" fonts from the UCS fonts collection by Markus Kuhn
+(https://www.cl.cam.ac.uk/~mgk25/ucs-fonts.html). The collection is released into the public domain.
+
+cube-8x16: Spleen by Frederic Cambus (https://github.com/fcambus/spleen), BSD 2-Clause license below.
+The Ukrainian Ye (U+0404, U+0454) of cube-8x16 was added by the CubeOS project.
 
 Copyright (c) 2018-2026, Frederic Cambus
 All rights reserved.

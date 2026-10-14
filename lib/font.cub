@@ -13,6 +13,7 @@
 
 import unicode
 import pixelbuf
+import compress
 
 const BAD = 0xFFFD
 
@@ -32,7 +33,11 @@ def _varint(data, pos):
         shift = shift * 128
 
 export class Font:
-    def init(self, data):
+    def init(self, raw):
+        # файл может быть блоком сжатия (lib/compress): тогда сначала разворачиваем
+        data = raw
+        if string.sub(raw, 1, 4) != "CFN1" and string.byte(raw, 1) != nil and string.byte(raw, 1) <= 2:
+            data = compress.decompress(raw)
         if string.sub(data, 1, 4) != "CFN1":
             error("not a CubeOS font (bad magic)", 0)
         self.width = _byte(data, 5)

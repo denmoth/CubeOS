@@ -20,21 +20,25 @@ b:clear()
 b:blit(small_buf, 2, 1, 0)
 eq(b:to_text(), ["....", "..#.", "...."], "blit with transparency")
 
-# ---------------------------------------------------------------- шрифт 5x8
-f5 = font.from_file("/repo/assets/fonts/cube-5x8.font")
-eq(f5.width, 5, "5x8 width")
-eq(f5.height, 8, "5x8 height")
-eq(f5.ascent, 7, "5x8 ascent")
-eq(f5.glyph_count > 200, true, "5x8 has many glyphs")
-eq(string.find(f5.meta, "Spleen", 1, true) != nil, true, "5x8 credits Spleen")
-eq(f5:glyph_text(65), [".....", ".##..", "#..#.", "#..#.", "####.", "#..#.", "#..#.", "....."], "A")
-eq(f5:glyph_text(0x416), [".....", "#.#.#", "#.#.#", ".###.", "#.#.#", "#.#.#", "#.#.#", "....."], "Zhe")
-eq(f5:glyph_text(0x44F), [".....", ".....", ".###.", "#..#.", ".###.", ".#.#.", "#..#.", "....."], "ya")
-eq(f5:glyph_text(0x410), f5:glyph_text(65), "Cyrillic A shares the Latin shape")
-eq(f5:glyph_text(0x451)[1], ".#.#.", "yo has diaeresis dots")
-eq(f5:glyph_text(0x407)[1], ".#.#.", "Yi has diaeresis dots")
+# ---------------------------------------------------------------- шрифты
+f6 = font.from_file("/repo/assets/fonts/cube-6x9.font")
+f5 = font.from_file("/repo/assets/fonts/cube-5x7.font")
+f8 = font.from_file("/repo/assets/fonts/cube-8x16.font")
 
-# у каждой нужной буквы есть хотя бы один закрашенный пиксель (пустые глифы это поломка)
+eq([f6.width, f6.height, f6.ascent], [6, 9, 7], "6x9 metrics (the size of the native CC cell)")
+eq([f5.width, f5.height, f5.ascent], [5, 7, 6], "5x7 metrics")
+eq([f8.width, f8.height, f8.ascent], [8, 16, 12], "8x16 metrics")
+eq(string.find(f6.meta, "misc-fixed", 1, true) != nil, true, "6x9 credits the source")
+eq(string.find(f8.meta, "Spleen", 1, true) != nil, true, "8x16 credits Spleen")
+eq(f6.glyph_count > 700 and f5.glyph_count > 700 and f8.glyph_count > 500, true, "enough glyphs")
+
+# рисунки, сверенные с исходным BDF
+eq(f6:glyph_text(65), ["......", "..#...", ".#.#..", "#...#.", "#####.", "#...#.", "#...#.", "......", "......"], "6x9 A")
+eq(f6:glyph_text(0x416), ["......", "#.#.#.", "#.#.#.", ".###..", "#.#.#.", "#.#.#.", "#.#.#.", "......", "......"], "6x9 Zhe")
+eq(f6:glyph_text(0x42F), ["......", "..###.", ".#..#.", ".#..#.", "..###.", ".#..#.", ".#..#.", "......", "......"], "6x9 Ya")
+eq(f5:glyph_text(65), [".##..", "#..#.", "#..#.", "####.", "#..#.", "#..#.", "....."], "5x7 A")
+
+# буквы русского и украинского алфавитов есть во всех шрифтах и не пустые
 def has_ink(f, cp):
     for row in f:glyph_text(cp):
         if string.find(row, "#", 1, true) != nil:
@@ -45,64 +49,39 @@ for cp in range[0x410, 0x44F]:
     needed[len(needed) + 1] = cp
 for cp in [0x401, 0x451, 0x404, 0x454, 0x406, 0x456, 0x407, 0x457, 0x490, 0x491]:
     needed[len(needed) + 1] = cp
-blank = []
-for cp in needed:
-    if not has_ink(f5, cp):
-        blank[len(blank) + 1] = cp
-eq(blank, [], "no blank Russian or Ukrainian glyphs in 5x8")
+for pair in [["6x9", f6], ["5x7", f5], ["8x16", f8]]:
+    missing = []
+    for cp in needed:
+        if not pair[2]:has(cp) or not has_ink(pair[2], cp):
+            missing[len(missing) + 1] = cp
+    eq(missing, [], pair[1] .. ": all Russian and Ukrainian letters are present and drawn")
 
-all_ok = true
-for cp in range[0x410, 0x44F]:
-    if not f5:has(cp):
-        all_ok = false
-eq(all_ok, true, "all Russian letters present")
-for cp in [0x401, 0x451, 0x404, 0x454, 0x406, 0x456, 0x407, 0x457, 0x490, 0x491]:
-    eq(f5:has(cp), true, "Ukrainian and yo letter " .. cp)
-eq(f5:has(0x2500), true, "box drawing")
-eq(f5:has(0x2588), true, "block")
-eq(f5:has(0x2192), true, "arrow")
-eq(f5:has(0x65E5), false, "no CJK")
-
-# ---------------------------------------------------------------- шрифт 8x16
-f8 = font.from_file("/repo/assets/fonts/cube-8x16.font")
-eq(f8.width, 8, "8x16 width")
-eq(f8.height, 16, "8x16 height")
-all_ok = true
-for cp in range[0x410, 0x44F]:
-    if not f8:has(cp):
-        all_ok = false
-eq(all_ok, true, "8x16 Russian letters present")
-eq(f8:has(0x404) and f8:has(0x454), true, "8x16 Ukrainian Ye added")
-eq(f8:has(0x3B1), true, "Greek alpha")
-eq(f8:has(0x105), true, "Latin Extended-A")
-ye = f8:glyph_text(0x404)
-eq(len(ye), 16, "Ye rows")
-bar_rows = 0
-for row in ye:
-    if string.find(row, "###", 1, true) != nil:
-        bar_rows += 1
-eq(f8:glyph_text(0x404) != f8:glyph_text(0x421), true, "Ye differs from Es")
+for pair in [["6x9", f6], ["5x7", f5], ["8x16", f8]]:
+    f = pair[2]
+    eq(f:has(0x2500) and f:has(0x2588) and f:has(0x2192) and f:has(0x3B1) and f:has(0x105), true, pair[1] .. ": box, block, arrow, Greek, Latin Extended")
+    eq(f:has(0x65E5), false, pair[1] .. ": no CJK")
+    eq(f:has(0xFFFD), true, pair[1] .. ": replacement glyph")
 
 # ---------------------------------------------------------------- текст
-eq(f5:can_render("Hello, мир! Привіт, Їжак"), true, "can render mixed text")
-eq(f5:can_render("日本語"), false, "cannot render CJK")
-eq(f5:can_render("line\nbreak"), true, "newline is allowed")
-eq(f5:width_of("Привет"), 30, "width of six letters")
-eq(f5:width_of("Привет", 1), 35, "width with spacing")
-eq(f5:width_of(""), 0, "empty width")
+eq(f6:can_render("Hello, мир! Привіт, Їжак"), true, "can render mixed text")
+eq(f6:can_render("日本語"), false, "cannot render CJK")
+eq(f6:can_render("line\nbreak"), true, "newline is allowed")
+eq(f6:width_of("Привет"), 36, "6x9 width of six letters")
+eq(f5:width_of("Привет"), 30, "5x7 width")
+eq(f6:width_of("Привет", 1), 41, "width with spacing")
+eq(f6:width_of(""), 0, "empty width")
 eq(f8:width_of("Привет"), 48, "8x16 width")
-img = f5:render("Hi", 1)
-eq(img.width, 10, "render width")
-eq(img.height, 8, "render height")
-eq(img:to_text()[1], "..........", "render row 1")
-eq(img:to_text()[2], "#..#...#..", "render row 2")
-eq(img:to_text()[4], "####..##..", "render row 4")
+img = f6:render("Hi", 1)
+eq(img.width, 12, "render width")
+eq(img.height, 9, "render height")
+eq(img:to_text()[2], ".#..#...#...", "render row 2: stems of H and the dot of i")
+eq(img:to_text()[4], ".####..##...", "render row 4: bar of H, hook of i")
 # неизвестный символ рисуется заменителем, а не пропадает
-tofu = f5:render("日", 1)
-eq(tofu:to_text(), f5:glyph_text(0xFFFD), "fallback glyph")
-eq(f5:draw(pixelbuf.new(40, 8), 2, 0, "ab"), 12, "draw returns next x")
+tofu = f6:render("日", 1)
+eq(tofu:to_text(), f6:glyph_text(0xFFFD), "fallback glyph")
+eq(f6:draw(pixelbuf.new(40, 9), 2, 0, "ab"), 14, "draw returns next x")
 
-# размер файлов: оба шрифта вместе не больше 20 КБ
-total = fs.getSize("/repo/assets/fonts/cube-5x8.font") + fs.getSize("/repo/assets/fonts/cube-8x16.font")
-eq(total <= 20000, true, "fonts fit into 20 KB")
+# файлы шрифтов: сжатые блоки, вместе не больше 20 КБ
+total = fs.getSize("/repo/assets/fonts/cube-6x9.font") + fs.getSize("/repo/assets/fonts/cube-5x7.font") + fs.getSize("/repo/assets/fonts/cube-8x16.font")
+eq(total <= 20000, true, "fonts fit into 20 KB (" .. total .. " bytes)")
 print("done")
