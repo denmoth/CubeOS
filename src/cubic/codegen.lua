@@ -862,6 +862,12 @@ function M.generate(ast, file, opts)
     local label = "__cont" .. nextid()
     local lc = { kind = "loop", label = label, cont_used = false }
     ctx[#ctx + 1] = lc
+    if opts.yield then
+      -- автоматическая отдача управления: раз в 256 итераций проверяем, не пора ли уступить (см. rt.tick)
+      level = level + 1
+      emit("__s = __s + 1 if __s > 255 then __s = 0 __rt.tick() end")
+      level = level - 1
+    end
     return lc
   end
 
@@ -1243,6 +1249,7 @@ function M.generate(ast, file, opts)
   end
   emit("local __rt, __import = ...")
   emit("local __floor, __tostring, __tonumber, __error, __type = math.floor, tostring, tonumber, error, type")
+  if opts.yield then emit("local __s = 0") end
   emit("local __exports = {}")
   push_scope(true)
   ctx[#ctx + 1] = { kind = "module" }

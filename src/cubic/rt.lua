@@ -466,4 +466,53 @@ function rt.oget(o, k)
   return o[k]
 end
 
+---------------------------------------------------------------- автоматическая отдача управления
+
+-- Код, скомпилированный с опцией yield (--yield), вызывает rt.tick() каждые 256 итераций цикла.
+-- Два режима:
+--   * ядро CubeOS ставит rt.slice_hook: если с начала кванта (rt.slice_t0) прошло не меньше rt.slice_ms,
+--     вызывается hook(now): ядро уступает управление планировщику и само обновляет rt.slice_t0;
+--   * без ядра: если с последней отдачи прошло не меньше rt.sys_ms, управление отдаётся самому CC
+--     (иначе он убьёт программу за "Too long without yielding", предел около 7 секунд).
+rt.slice_ms = 50
+rt.sys_ms = 2500
+rt.native_yields = 0
+
+local function clock_ms()
+  if os.epoch then return os.epoch("utc") end
+  return os.clock() * 1000
+end
+rt.clock_ms = clock_ms
+rt.slice_t0 = clock_ms()
+rt.sys_t0 = rt.slice_t0
+
+-- отдаёт управление CC и возвращается; чужие события сохраняются и возвращаются в очередь
+function rt.native_yield()
+  rt.native_yields = rt.native_yields + 1
+  if not (os.queueEvent and os.pullEventRaw) then
+    rt.sys_t0 = clock_ms()
+    return
+  end
+  local stash = {}
+  os.queueEvent("cubic_yield")
+  while true do
+    local ev = table.pack(os.pullEventRaw())
+    if ev[1] == "cubic_yield" then break end
+    if ev[1] == "terminate" then error("Terminated", 0) end
+    stash[#stash + 1] = ev
+  end
+  for _, ev in ipairs(stash) do os.queueEvent(table.unpack(ev, 1, ev.n)) end
+  rt.sys_t0 = clock_ms()
+end
+
+function rt.tick()
+  local now = clock_ms()
+  local hook = rt.slice_hook
+  if hook then
+    if now - rt.slice_t0 >= rt.slice_ms then hook(now) end
+    return
+  end
+  if now - rt.sys_t0 >= rt.sys_ms then rt.native_yield() end
+end
+
 return rt

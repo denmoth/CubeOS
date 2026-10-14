@@ -1,5 +1,5 @@
 -- Консольная утилита Cubic. Запускается внутри CC / CraftOS-PC.
---   cubic compile <файл.cub> [вывод.lua] [--minify] [--keep-comments] [--map] [--strict] [--mods=a,b]
+--   cubic compile <файл.cub> [вывод.lua] [--minify] [--keep-comments] [--map] [--strict] [--yield] [--mods=a,b]
 --   cubic check   <файл.cub>
 --   cubic run     <файл.cub>
 --   Для редакторов (вывод JSON): language | grammar | tokens | symbols | diagnostics | complete | signature | hover
@@ -59,7 +59,7 @@ local cmd, input, output = args[1], args[2], args[3]
 local EDITOR_CMDS = { tokens = true, symbols = true, diagnostics = true, complete = true, signature = true, hover = true }
 local NO_INPUT = { language = true, grammar = true }
 if not cmd or (not input and not NO_INPUT[cmd]) then
-  say("usage: cubic compile|check|run <file.cub> [out.lua] [--minify] [--keep-comments] [--map] [--strict] [--mods=a,b]")
+  say("usage: cubic compile|check|run <file.cub> [out.lua] [--minify] [--keep-comments] [--map] [--strict] [--yield] [--mods=a,b]")
   say("       cubic language|grammar    |    cubic tokens|symbols|diagnostics|complete|signature|hover <file> [--line=N --col=M]")
   return finish(2)
 end
@@ -77,7 +77,7 @@ if not src then
 end
 
 local name = fs.getName(input)
-local opts = { minify = flags["minify"], keep_comments = flags["keep-comments"], strict = flags["strict"] }
+local opts = { minify = flags["minify"], keep_comments = flags["keep-comments"], strict = flags["strict"], yield = flags["yield"] }
 
 -- файл проекта cubic.json5 (ищется вверх от каталога исходника):
 --   { mods: ["advancedperipherals"], headers: ["api/game.cuh"], strict: true, minify: false }
