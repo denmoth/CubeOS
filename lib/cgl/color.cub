@@ -186,16 +186,6 @@ export class Palette:
             out[i + 1] = self:nearest(r, g, bl, first, last)
         return out
 
-    # таблица «цвет -> более тёмный цвет» для следов и затухания: каждый цвет сдвигается к (br, bg, bb) на долю amount (0..1);
-    # применяется fx.remap. Ступеней в палитре по умолчанию мало, для красивых следов нужна палитра с оттенками и ступенями яркости
-    def fade_map(self, amount, br=0, bg=0, bb=0, first=0, last=nil):
-        map = {}
-        top = last ?? (self.size - 1)
-        for i in range[first, top]:
-            r, g, b = self:get(i)
-            map[i] = self:nearest(_round(r + (br - r) * amount), _round(g + (bg - g) * amount), _round(b + (bb - b) * amount), first, top)
-        return map
-
     # цвет, смешанный из двух номеров
     def mix(self, a, b, t):
         r1, g1, b1 = self:get(a)
@@ -256,13 +246,3 @@ export def cc_index(value):
         v = v // 2
         n += 1
     return n
-
-# оттенок с n ступенями яркости от фона (br, bg, bb) к яркому цвету (r, g, b): список из n троек [r, g, b] (для set_colors и следов)
-export def shade_steps(r, g, b, n, br=0, bg=0, bb=0):
-    out = []
-    for i in range[0, n - 1]:
-        t = n == 1 and 1 or i / (n - 1)
-        # лёгкая гамма, чтобы тёмные ступени не сливались с фоном
-        k = t * t * 0.4 + t * 0.6
-        out[i + 1] = [_round(br + (r - br) * k), _round(bg + (g - bg) * k), _round(bb + (b - bb) * k)]
-    return out
