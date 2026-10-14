@@ -1,0 +1,123 @@
+import t
+import ui.cells as cells
+import ui.theme as theme
+import ui.text as text
+import ui.widget as w
+import unicode
+eq = t.eq
+
+# ---------------------------------------------------------------- текст
+eq(text.width("Привет"), 6, "width in characters")
+eq(text.wrap("aa bb cc dd", 5), ["aa bb", "cc dd"], "wrap by words")
+eq(text.wrap("abcdefgh", 3), ["abc", "def", "gh"], "wrap cuts long words")
+eq(text.wrap("a\n\nb", 10), ["a", "", "b"], "wrap keeps empty lines")
+eq(text.ellipsize("Привет мир", 8), "Привет …", "ellipsize")
+eq(text.ellipsize("abc", 5), "abc", "short text stays")
+eq(text.ellipsize("abcdef", 1), "…", "one cell")
+eq(text.pad("ab", 6, "center"), "  ab  ", "pad center")
+eq(text.pad("ab", 5, "right"), "   ab", "pad right")
+eq(text.pad("abcdef", 3), "abc", "pad cuts")
+eq(text.lines("a\nb"), ["a", "b"], "lines")
+eq(text.max_width("ab\nabcd"), 4, "max width")
+
+# ---------------------------------------------------------------- раскладка
+def rect(x):
+    return [x.x, x.y, x.w, x.h]
+
+a = w.label("aaa")
+b = w.label("bb")
+col = w.vbox([a, b])
+pw, ph = col:measure(40, 20)
+eq([pw, ph], [3, 2], "vbox size is the widest child and the sum of heights")
+col:layout(0, 0, 10, 5)
+eq(rect(a), [0, 0, 10, 1], "stretch: a child takes the full width")
+eq(rect(b), [0, 1, 10, 1], "next child below")
+
+row = w.hbox([w.label("ab"), w.label("cde")], {gap: 1})
+rw, rh = row:measure(40, 20)
+eq([rw, rh], [6, 1], "hbox size with a gap")
+row:layout(2, 3, 20, 2)
+eq(rect(row.children[1]), [2, 3, 2, 2], "first child in a row")
+eq(rect(row.children[2]), [5, 3, 3, 2], "second child after the gap")
+
+# растягивание
+f1 = w.label("a", {width: "fill"})
+f2 = w.label("b", {grow: 2})
+fx = w.label("x", {width: 4})
+r2 = w.hbox([f1, fx, f2])
+r2:layout(0, 0, 20, 1)
+eq(f1.w + fx.w + f2.w, 20, "flexible children fill the row")
+eq(fx.w, 4, "fixed child keeps its size")
+eq(f2.w > f1.w, true, "grow 2 gets more than grow 1")
+eq(f1.x + f1.w, fx.x, "children touch")
+
+# отступы, выравнивание, justify
+pad = w.vbox([w.label("ab")], {padding: 1})
+pw, ph = pad:measure(40, 20)
+eq([pw, ph], [4, 3], "padding adds to the size")
+pad:layout(0, 0, 10, 5)
+eq(rect(pad.children[1]), [1, 1, 8, 1], "child sits inside the padding")
+cen = w.vbox([w.label("ab")], {align: "center"})
+cen:layout(0, 0, 10, 3)
+eq([cen.children[1].x, cen.children[1].w], [4, 2], "align center on the cross axis")
+jc = w.vbox([w.label("a"), w.label("b")], {justify: "center"})
+jc:layout(0, 0, 5, 6)
+eq([jc.children[1].y, jc.children[2].y], [2, 3], "justify center on the main axis")
+jb = w.vbox([w.label("a"), w.label("b")], {justify: "space_between"})
+jb:layout(0, 0, 5, 6)
+eq([jb.children[1].y, jb.children[2].y], [0, 5], "space between")
+je = w.hbox([w.label("ab")], {justify: "end"})
+je:layout(0, 0, 10, 1)
+eq(je.children[1].x, 8, "justify end")
+
+# скрытые элементы и нехватка места
+hid = w.label("hidden", {visible: false})
+vis = w.label("x")
+hb = w.vbox([hid, vis])
+hb:layout(0, 0, 10, 4)
+eq(vis.y, 0, "hidden children take no space")
+pw, ph = hb:measure(40, 20)
+eq(ph, 1, "and do not count in the size")
+tight = w.vbox([w.label("a"), w.label("b"), w.label("c")])
+tight:layout(0, 0, 5, 2)
+eq([tight.children[1].h, tight.children[2].h, tight.children[3].h], [1, 1, 0], "too little room shrinks from the end")
+
+# перенос в надписи
+wl = w.label("aaa bbb ccc", {wrap: true})
+pw, ph = wl:measure(7, 20)
+eq([pw, ph], [7, 2], "wrapped label measures its lines")
+
+# ---------------------------------------------------------------- рамка и рисование
+fr = w.frame("Файлы", w.label("привет"))
+pw, ph = fr:measure(40, 20)
+eq([pw, ph], [11, 3], "frame adds the border and fits the title")
+fr:layout(0, 0, 12, 3)
+eq(rect(fr.children[1]), [1, 1, 10, 1], "child inside the frame")
+c = cells.new(12, 3)
+fr:draw(c, theme.get("cubeos"))
+eq(c:to_lines()[2], "│привет    │", "label drawn inside")
+eq(unicode.sub(c:to_lines()[1], 1, 3), "╭─ ", "rounded cubeos frame")
+sep = w.separator()
+sep:layout(0, 0, 5, 1)
+c2 = cells.new(5, 1)
+sep:draw(c2, theme.get("cubeos"))
+eq(c2:to_lines()[1], "─────", "separator")
+lab = w.label("abc", {align: "right", fg: theme.OK})
+lab:layout(0, 0, 6, 1)
+c3 = cells.new(6, 1)
+lab:draw(c3, theme.get("cubeos"))
+eq(c3:to_lines()[1], "   abc", "right aligned")
+eq(c3:colors_lines("fg")[1]:sub(4, 4), "9", "label color")
+
+# поиск и попадание
+leaf = w.label("leaf", {id: "leaf"})
+tree = w.vbox([w.hbox([leaf])])
+tree:layout(0, 0, 10, 3)
+eq(tree:find("leaf") == leaf, true, "find by id")
+eq(tree:find("none"), nil, "find nothing")
+eq(tree:hit(1, 0) == leaf, true, "hit test returns the deepest child")
+eq(tree:hit(50, 50), nil, "hit outside")
+tree:remove(tree.children[1])
+eq(len(tree.children), 0, "remove child")
+
+print("done")

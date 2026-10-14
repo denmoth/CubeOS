@@ -1,0 +1,496 @@
+# ui.widget: основа элементов интерфейса, раскладка (вертикальные и горизонтальные ряды), рамка, надпись
+#
+# Каждый элемент это Widget с прямоугольником (x, y, w, h) в клетках, детьми и обработчиками событий. Раскладка в два прохода:
+# measure (какой размер хочет элемент) и layout (какой размер ему дали). Рисует элемент в буфер клеток draw(cells, theme).
+#
+#   ui = vbox([label("Привет"), hbox([button("OK"), button("Отмена")], {gap: 2})], {padding: 1})
+#
+# Свойства (props): width, height (число клеток, "fill" растянуть, иначе нужный размер), grow (доля свободного места в ряду),
+# min_width, min_height, id, visible, padding (число или [слева, сверху, справа, снизу]), gap, align, justify.
+
+import ui.theme as th
+import ui.text as txt
+import ui.border as border
+
+# число или список -> слева, сверху, справа, снизу
+export def pad_of(p):
+    if p == nil:
+        return 0, 0, 0, 0
+    if type(p) == "number":
+        return p, p, p, p
+    if len(p) == 2:
+        return p[1], p[2], p[1], p[2]
+    return p[1], p[2], p[3], p[4]
+
+export class Widget:
+    def init(self, props=nil):
+        p = props ?? {}
+        self.x = 0
+        self.y = 0
+        self.w = 0
+        self.h = 0
+        self.parent = nil
+        self.children = []
+        self.ui = nil
+        self.id = p.id
+        self.visible = p.visible ?? true
+        self.focusable = false
+        self.focused = false
+        self.disabled = p.disabled ?? false
+        self.width = p.width
+        self.height = p.height
+        self.grow = p.grow ?? 0
+        self.min_width = p.min_width ?? 0
+        self.min_height = p.min_height ?? 0
+        self.handlers = {}
+        self.captures_text = false
+        self.tooltip = p.tooltip
+
+    # ------------------------------------------------------------ дерево
+
+    def add(self, child):
+        child.parent = self
+        self.children[len(self.children) + 1] = child
+        if self.ui != nil:
+            child:attach(self.ui)
+            self.ui:invalidate_layout()
+        return child
+
+    def remove(self, child):
+        for i, c in self.children:
+            if c == child:
+                table.remove(self.children, i)
+                child.parent = nil
+                if self.ui != nil:
+                    child:detach()
+                    self.ui:invalidate_layout()
+                return true
+        return false
+
+    def clear_children(self):
+        for c in self.children:
+            c.parent = nil
+            if self.ui != nil:
+                c:detach()
+        self.children = []
+        if self.ui != nil:
+            self.ui:invalidate_layout()
+
+    def attach(self, ui):
+        self.ui = ui
+        for c in self.children:
+            c:attach(ui)
+
+    def detach(self):
+        if self.ui != nil and self.ui.focus == self:
+            self.ui:focus_widget(nil)
+        self.ui = nil
+        for c in self.children:
+            c:detach()
+
+    # первый элемент с таким id в поддереве
+    def find(self, id):
+        if self.id == id:
+            return self
+        for c in self.children:
+            r = c:find(id)
+            if r != nil:
+                return r
+        return nil
+
+    # ------------------------------------------------------------ обработчики
+
+    def on(self, name, fn):
+        self.handlers[name] = fn
+        return self
+
+    def emit(self, name, a=nil, b=nil):
+        h = self.handlers[name]
+        if h != nil:
+            return h(self, a, b)
+        return nil
+
+    def invalidate(self):
+        if self.ui != nil:
+            self.ui:invalidate()
+
+    def set_visible(self, v):
+        if self.visible != v:
+            self.visible = v
+            if self.ui != nil:
+                self.ui:invalidate_layout()
+
+    # ------------------------------------------------------------ размеры
+
+    # нужный размер при доступной области; наследники переопределяют _measure
+    def measure(self, max_w, max_h):
+        w, h = self:_measure(max_w, max_h)
+        if type(self.width) == "number":
+            w = self.width
+        if type(self.height) == "number":
+            h = self.height
+        w = math.max(w, self.min_width)
+        h = math.max(h, self.min_height)
+        return w, h
+
+    def _measure(self, max_w, max_h):
+        return 0, 0
+
+    # даёт элементу прямоугольник; наследники с детьми переопределяют _layout
+    def layout(self, x, y, w, h):
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+        self:_layout()
+
+    def _layout(self):
+        for c in self.children:
+            if c.visible:
+                c:layout(self.x, self.y, self.w, self.h)
+
+    def contains(self, px, py):
+        return px >= self.x and px < self.x + self.w and py >= self.y and py < self.y + self.h
+
+    # самый глубокий видимый элемент под точкой
+    def hit(self, px, py):
+        if not self.visible or not self:contains(px, py):
+            return nil
+        for i in range[len(self.children), 1] step -1:
+            r = self.children[i]:hit(px, py)
+            if r != nil:
+                return r
+        return self
+
+    # ------------------------------------------------------------ рисование и события
+
+    def draw(self, c, t):
+        if self.visible:
+            self:_draw(c, t)
+            for ch in self.children:
+                ch:draw(c, t)
+
+    def _draw(self, c, t):
+        pass
+
+    # действие клавиатуры; true если обработано
+    def key(self, action, code):
+        return false
+
+    # введённый символ (строка из одного символа Unicode)
+    def char(self, ch):
+        return false
+
+    # kind: "down", "up", "drag", "scroll"; button: кнопка мыши или направление прокрутки (-1 вверх, 1 вниз)
+    def mouse(self, kind, mx, my, button):
+        return false
+
+    # подсказки подвала: список [клавиша, действие]
+    def hints(self):
+        return []
+
+    def on_focus(self):
+        self.focused = true
+        self:invalidate()
+
+    def on_blur(self):
+        self.focused = false
+        self:invalidate()
+
+    # все элементы, которые могут получить фокус, в порядке обхода
+    def focusables(self, out):
+        if not self.visible:
+            return out
+        if self.focusable and not self.disabled:
+            out[len(out) + 1] = self
+        for c in self.children:
+            c:focusables(out)
+        return out
+
+# ---------------------------------------------------------------- ряды
+
+export class Box(Widget):
+    # direction: "v" (сверху вниз) или "h" (слева направо)
+    def init(self, direction, children=nil, props=nil):
+        super.init(self, props)
+        p = props ?? {}
+        self.dir = direction
+        self.gap = p.gap ?? 0
+        self.pl, self.pt, self.pr, self.pb = pad_of(p.padding)
+        self.align = p.align ?? "stretch"
+        self.justify = p.justify ?? "start"
+        if children != nil:
+            for c in children:
+                self:add(c)
+
+    def _measure(self, max_w, max_h):
+        vertical = self.dir == "v"
+        main = 0
+        cross = 0
+        n = 0
+        inner_w = max_w - self.pl - self.pr
+        inner_h = max_h - self.pt - self.pb
+        for c in self.children:
+            if c.visible:
+                cw, ch = c:measure(inner_w, inner_h)
+                if vertical:
+                    main += ch
+                    cross = math.max(cross, cw)
+                else:
+                    main += cw
+                    cross = math.max(cross, ch)
+                n += 1
+        if n > 1:
+            main += self.gap * (n - 1)
+        if vertical:
+            return cross + self.pl + self.pr, main + self.pt + self.pb
+        return main + self.pl + self.pr, cross + self.pt + self.pb
+
+    def _layout(self):
+        vertical = self.dir == "v"
+        x0 = self.x + self.pl
+        y0 = self.y + self.pt
+        iw = math.max(0, self.w - self.pl - self.pr)
+        ih = math.max(0, self.h - self.pt - self.pb)
+        main_total = vertical and ih or iw
+        cross_total = vertical and iw or ih
+        visible = []
+        for c in self.children:
+            if c.visible:
+                visible[len(visible) + 1] = c
+        n = len(visible)
+        if n == 0:
+            return
+        sizes = []
+        weights = []
+        flex = 0
+        used = self.gap * (n - 1)
+        for i, c in visible:
+            cw, ch = c:measure(iw, ih)
+            pref = vertical and ch or cw
+            fixed = vertical and c.height or c.width
+            weight = c.grow
+            if fixed == "fill" and weight == 0:
+                weight = 1
+            if type(fixed) == "number":
+                pref = fixed
+                weight = c.grow
+            sizes[i] = pref
+            weights[i] = weight
+            if weight > 0:
+                flex += weight
+                # растущий элемент делит только свободное место: его нужный размер считается минимумом
+            used += pref
+        remain = main_total - used
+        if flex > 0:
+            # свободное место (или нехватка) делится по весам; нужный размер остаётся основой
+            share_left = remain
+            given = 0
+            for i, c in visible:
+                if weights[i] > 0:
+                    extra = math.floor(remain * weights[i] / flex)
+                    sizes[i] = math.max(0, sizes[i] + extra)
+                    given += extra
+            if given < remain:
+                # остаток от округления последнему растущему
+                for i in range[n, 1] step -1:
+                    if weights[i] > 0:
+                        sizes[i] += remain - given
+                        break
+        elif remain < 0:
+            # не помещается: сжимаем с конца
+            deficit = -remain
+            for i in range[n, 1] step -1:
+                cut = math.min(deficit, sizes[i])
+                sizes[i] -= cut
+                deficit -= cut
+                if deficit <= 0:
+                    break
+        # смещение для justify, если растущих нет
+        offset = 0
+        total = self.gap * (n - 1)
+        for i, c in visible:
+            total += sizes[i]
+        free = main_total - total
+        gap = self.gap
+        if flex == 0 and free > 0:
+            if self.justify == "center":
+                offset = math.floor(free / 2)
+            elif self.justify == "end":
+                offset = free
+            elif self.justify == "space_between" and n > 1:
+                gap = self.gap + math.floor(free / (n - 1))
+        pos = offset
+        for i, c in visible:
+            cw, ch = c:measure(iw, ih)
+            size = sizes[i]
+            cross_pref = vertical and cw or ch
+            fixed_cross = vertical and c.width or c.height
+            cross = cross_total
+            cross_off = 0
+            if type(fixed_cross) == "number":
+                cross = math.min(fixed_cross, cross_total)
+            elif self.align != "stretch" and fixed_cross != "fill":
+                cross = math.min(cross_pref, cross_total)
+            if cross < cross_total:
+                if self.align == "center":
+                    cross_off = math.floor((cross_total - cross) / 2)
+                elif self.align == "end":
+                    cross_off = cross_total - cross
+            if vertical:
+                c:layout(x0 + cross_off, y0 + pos, cross, size)
+            else:
+                c:layout(x0 + pos, y0 + cross_off, size, cross)
+            pos += size + gap
+
+export def vbox(children=nil, props=nil):
+    return Box("v", children, props)
+
+export def hbox(children=nil, props=nil):
+    return Box("h", children, props)
+
+# ---------------------------------------------------------------- рамка
+
+export class Frame(Widget):
+    # title, child (один элемент внутри), props: border (стиль или таблица), fill (место палитры для фона внутри), padding,
+    # title_align, focus_color (рамка окрашивается, когда внутри есть фокус)
+    def init(self, title, child=nil, props=nil):
+        super.init(self, props)
+        p = props ?? {}
+        self.title = title
+        self.border = p.border
+        self.fill = p.fill
+        self.title_align = p.title_align ?? "left"
+        self.pl, self.pt, self.pr, self.pb = pad_of(p.padding ?? 0)
+        if child != nil:
+            self:add(child)
+
+    def _measure(self, max_w, max_h):
+        cw = 0
+        ch = 0
+        for c in self.children:
+            if c.visible:
+                w, h = c:measure(max_w - 2 - self.pl - self.pr, max_h - 2 - self.pt - self.pb)
+                cw = math.max(cw, w)
+                ch = math.max(ch, h)
+        title_w = self.title != nil and txt.width(self.title) + 6 or 0
+        return math.max(cw + 2 + self.pl + self.pr, title_w), ch + 2 + self.pt + self.pb
+
+    def _layout(self):
+        for c in self.children:
+            if c.visible:
+                c:layout(self.x + 1 + self.pl, self.y + 1 + self.pt, math.max(0, self.w - 2 - self.pl - self.pr),
+                    math.max(0, self.h - 2 - self.pt - self.pb))
+
+    def _has_focus(self):
+        if self.ui == nil or self.ui.focus == nil:
+            return false
+        w = self.ui.focus
+        while w != nil:
+            if w == self:
+                return true
+            w = w.parent
+        return false
+
+    def _draw(self, c, t):
+        focus = self:_has_focus()
+        line = focus and th.ACCENT or th.LINE
+        title_fg = focus and th.BRIGHT or th.TEXT
+        bg = self.fill
+        border.draw(c, self.x, self.y, self.w, self.h, self.border ?? t.border, line, nil,
+            {title: self.title, title_fg: title_fg, title_align: self.title_align, fill: self.fill})
+
+# ---------------------------------------------------------------- надпись, пустое место, разделитель
+
+export class Label(Widget):
+    # text; props: fg, bg (места палитры), align ("left", "center", "right"), wrap (переносить по ширине), ellipsis (обрезать с …)
+    def init(self, text, props=nil):
+        super.init(self, props)
+        p = props ?? {}
+        self.text = text
+        self.fg = p.fg
+        self.bg = p.bg
+        self.align = p.align ?? "left"
+        self.wrap = p.wrap ?? false
+        self.ellipsis = p.ellipsis ?? false
+
+    def set_text(self, s):
+        if s != self.text:
+            self.text = s
+            self:invalidate()
+            if self.ui != nil:
+                self.ui:invalidate_layout()
+
+    def _lines(self, w):
+        if self.wrap and w > 0:
+            return txt.wrap(self.text, w)
+        return txt.lines(self.text)
+
+    def _measure(self, max_w, max_h):
+        ls = self:_lines(max_w)
+        w = 0
+        for l in ls:
+            w = math.max(w, txt.width(l))
+        if self.wrap:
+            w = math.min(w, max_w)
+        return w, len(ls)
+
+    def _draw(self, c, t):
+        ls = self:_lines(self.w)
+        fg = self.fg ?? th.TEXT
+        if self.disabled:
+            fg = th.MUTED
+        for i, l in ls:
+            if i > self.h:
+                break
+            line = l
+            if self.ellipsis:
+                line = txt.ellipsize(line, self.w)
+            if self.bg != nil:
+                c:fill(self.x, self.y + i - 1, self.w, 1, 32, nil, self.bg)
+            c:text(self.x + _align_offset(self.align, self.w, txt.width(line)), self.y + i - 1, line, fg, self.bg, self.w)
+
+def _align_offset(align, w, n):
+    if align == "center":
+        return math.max(0, math.floor((w - n) / 2))
+    if align == "right":
+        return math.max(0, w - n)
+    return 0
+
+export class Spacer(Widget):
+    def init(self, size=nil, props=nil):
+        super.init(self, props)
+        self.size = size ?? 1
+
+    def _measure(self, max_w, max_h):
+        return self.size, self.size
+
+# горизонтальная или вертикальная линия
+export class Separator(Widget):
+    def init(self, vertical=false, props=nil):
+        super.init(self, props)
+        self.vertical = vertical
+
+    def _measure(self, max_w, max_h):
+        if self.vertical:
+            return 1, 1
+        return 1, 1
+
+    def _draw(self, c, t):
+        s = border.style(t.border)
+        if self.vertical:
+            c:fill(self.x, self.y, 1, self.h, s.v, th.LINE, nil)
+        else:
+            c:fill(self.x, self.y, self.w, 1, s.h, th.LINE, nil)
+
+export def label(text, props=nil):
+    return Label(text, props)
+
+export def frame(title, child=nil, props=nil):
+    return Frame(title, child, props)
+
+export def spacer(size=nil, props=nil):
+    return Spacer(size, props)
+
+export def separator(vertical=false, props=nil):
+    return Separator(vertical, props)

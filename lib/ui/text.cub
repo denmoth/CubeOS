@@ -1,0 +1,77 @@
+# ui.text: работа с текстом в клетках (длина считается в символах, не в байтах)
+#
+#   text.width("Привет")                   6
+#   text.wrap("длинный текст", 10)          список строк не длиннее 10 клеток, по словам
+#   text.ellipsize("длинный текст", 8)      "длинный…" (с многоточием)
+#   text.pad("ab", 6, "center")             "  ab  "
+#   text.lines("a\nb")                      ["a", "b"]
+
+import unicode
+
+export def width(s):
+    return unicode.length(s)
+
+# строки по переводам строки (пустая строка остаётся)
+export def lines(s):
+    out = []
+    for line in string.gmatch(s .. "\n", "([^\n]*)\n"):
+        out[len(out) + 1] = line
+    return out
+
+# укорачивает до width клеток; при обрезке в конце стоит ending ("…")
+export def ellipsize(s, w, ending="…"):
+    if w <= 0:
+        return ""
+    if unicode.length(s) <= w:
+        return s
+    keep = w - unicode.length(ending)
+    if keep <= 0:
+        return unicode.sub(ending, 1, w)
+    return unicode.sub(s, 1, keep) .. ending
+
+# добивает пробелами до w клеток; align: "left", "center", "right". Длинное обрезается без многоточия
+export def pad(s, w, align="left"):
+    n = unicode.length(s)
+    if n >= w:
+        return unicode.sub(s, 1, w)
+    extra = w - n
+    if align == "right":
+        return string.rep(" ", extra) .. s
+    if align == "center":
+        left = math.floor(extra / 2)
+        return string.rep(" ", left) .. s .. string.rep(" ", extra - left)
+    return s .. string.rep(" ", extra)
+
+# перенос по словам; слишком длинное слово режется. Переводы строк сохраняются
+export def wrap(s, w):
+    out = []
+    if w <= 0:
+        return out
+    for paragraph in lines(s):
+        current = ""
+        count = 0
+        for word in string.gmatch(paragraph, "%S+"):
+            wl = unicode.length(word)
+            if count == 0:
+                current = word
+                count = wl
+            elif count + 1 + wl <= w:
+                current = current .. " " .. word
+                count = count + 1 + wl
+            else:
+                out[len(out) + 1] = current
+                current = word
+                count = wl
+            while count > w:
+                out[len(out) + 1] = unicode.sub(current, 1, w)
+                current = unicode.sub(current, w + 1)
+                count = unicode.length(current)
+        out[len(out) + 1] = current
+    return out
+
+# самая длинная строка текста в клетках
+export def max_width(s):
+    best = 0
+    for line in lines(s):
+        best = math.max(best, unicode.length(line))
+    return best
