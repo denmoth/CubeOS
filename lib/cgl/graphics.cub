@@ -23,6 +23,9 @@ export class GraphicsDisplay:
         self.frozen = o.frozen ?? true
         self.w, self.h = t.getSize(true)
         self.prev = nil
+        self.rows = nil
+        self.use_strings = false
+        self.want_strings = o.strings
         self.stats = {frames: 0, pixels: 0, calls: 0, scan_ms: 0, send_ms: 0}
         self.kind = "graphics"
         self.final = []
@@ -39,6 +42,8 @@ export class GraphicsDisplay:
         self.w, self.h = self.term.getSize(true)
         self:sync_palette()
         self.prev = nil
+        self.rows = nil
+        self.use_strings = self.mode == 2 and self.want_strings != false and self:_probe()
         self.opened = true
 
     def sync_palette(self):
@@ -52,6 +57,7 @@ export class GraphicsDisplay:
                 r, g, b = self.term_palette:get(i)
                 self.term.setPaletteColor(2 ** i, r / 255, g / 255, b / 255)
         self.prev = nil
+        self.rows = nil
 
     # меняет цвета палитры поверхности: список [номер, r, g, b]. В режиме 2 это только вызовы setPaletteColor, пиксели
     # кадра не трогаются (анимация палитры почти бесплатна); в режиме 1 цвета надо пересчитать, и кадр уйдёт заново
@@ -75,6 +81,7 @@ export class GraphicsDisplay:
     # следующий кадр целиком (например, после смены размера окна)
     def invalidate(self):
         self.prev = nil
+        self.rows = nil
 
     def size(self):
         return self.w, self.h
@@ -91,8 +98,146 @@ export class GraphicsDisplay:
             return v
         return 2 ** self.quant:pick(v, x, y)
 
+    # проверка: принимает ли терминал строки вместо таблиц чисел (в строке байт это номер цвета палитры)
+    def _probe(self):
+        t = self.term
+        if t.getPixel == nil or t.drawPixels == nil:
+            return false
+        def attempt():
+            t.drawPixels(0, 0, [string.char(1, 2, 3, 200)])
+            return t.getPixel(0, 0) == 1 and t.getPixel(1, 0) == 2 and t.getPixel(2, 0) == 3 and t.getPixel(3, 0) == 200
+        ok, good = pcall(attempt)
+        return ok and good == true
+
+    # строка из байтов-номеров цветов для px[from_i..to_i] (прозрачные пиксели идут как clear_color); string.char на пачках по
+    # 400 значений работает на скорости C, это в десятки раз быстрее цикла по пикселям
+    def _row_string(self, spx, from_i, to_i):
+        parts = []
+        i = from_i
+        while i <= to_i:
+            j = math.min(to_i, i + 399)
+            ok, chunk = pcall(string.char, table.unpack(spx, i, j))
+            if not ok:
+                tmp = []
+                for k in range[i, j]:
+                    v = spx[k]
+                    tmp[k - i + 1] = v < 0 and self.clear_color or v
+                chunk = string.char(table.unpack(tmp))
+            parts[len(parts) + 1] = chunk
+            i = j + 1
+        return table.concat(parts)
+
+    # кадр через строки: строка на каждый ряд, сравнение рядов как строк, различие ищется блоками
+    def _present_strings(self, s):
+        t0 = os.epoch("utc")
+        w = math.min(self.w, s.w)
+        h = math.min(self.h, s.h)
+        full = self.rows == nil
+        if full:
+            self.rows = []
+        rows = self.rows
+        x_lo = 0
+        y_lo = 0
+        x_hi = w - 1
+        y_hi = h - 1
+        if not full:
+            x_lo = math.max(0, s.dx0)
+            y_lo = math.max(0, s.dy0)
+            x_hi = math.min(w - 1, s.dx1)
+            y_hi = math.min(h - 1, s.dy1)
+        s:clean()
+        if x_lo > x_hi or y_lo > y_hi:
+            return 0
+        spx = s.px
+        sw = s.w
+        seg_len = x_hi - x_lo + 1
+        spans_a = []
+        spans_b = []
+        for y in range[y_lo, y_hi]:
+            seg = self:_row_string(spx, y * sw + x_lo + 1, y * sw + x_hi + 1)
+            old = rows[y + 1]
+            if old == nil:
+                # новый ряд целиком (первый кадр: seg это весь ряд)
+                rows[y + 1] = seg
+                spans_a[y + 1] = x_lo
+                spans_b[y + 1] = x_hi
+            else:
+                old_seg = seg_len == w and old or string.sub(old, x_lo + 1, x_hi + 1)
+                if old_seg != seg:
+                    # первое и последнее отличие: блоками по 32 символа, дальше по символам
+                    first = 1
+                    while first <= seg_len:
+                        last_i = math.min(seg_len, first + 31)
+                        if string.sub(seg, first, last_i) != string.sub(old_seg, first, last_i):
+                            while string.byte(seg, first) == string.byte(old_seg, first):
+                                first += 1
+                            break
+                        first = last_i + 1
+                    last = seg_len
+                    while last >= 1:
+                        first_i = math.max(1, last - 31)
+                        if string.sub(seg, first_i, last) != string.sub(old_seg, first_i, last):
+                            while string.byte(seg, last) == string.byte(old_seg, last):
+                                last -= 1
+                            break
+                        last = first_i - 1
+                    spans_a[y + 1] = x_lo + first - 1
+                    spans_b[y + 1] = x_lo + last - 1
+                    if seg_len == w:
+                        rows[y + 1] = seg
+                    else:
+                        rows[y + 1] = string.sub(old, 1, x_lo) .. seg .. string.sub(old, x_hi + 2)
+        self.stats.frames += 1
+        # прямоугольники из построчных промежутков (как в таблицах)
+        rects = []
+        open_rect = nil
+        for y in range[y_lo, y_hi]:
+            a = spans_a[y + 1]
+            b = spans_b[y + 1]
+            if a == nil:
+                if open_rect != nil:
+                    rects[len(rects) + 1] = open_rect
+                    open_rect = nil
+            elif open_rect == nil:
+                open_rect = {x0: a, x1: b, y0: y, y1: y, cells: b - a + 1}
+            else:
+                nx0 = math.min(open_rect.x0, a)
+                nx1 = math.max(open_rect.x1, b)
+                rcount = y - open_rect.y0 + 1
+                if (nx1 - nx0 + 1) * rcount <= (open_rect.cells + b - a + 1) * 1.5 + 16:
+                    open_rect.x0 = nx0
+                    open_rect.x1 = nx1
+                    open_rect.y1 = y
+                    open_rect.cells += b - a + 1
+                else:
+                    rects[len(rects) + 1] = open_rect
+                    open_rect = {x0: a, x1: b, y0: y, y1: y, cells: b - a + 1}
+        if open_rect != nil:
+            rects[len(rects) + 1] = open_rect
+        if len(rects) == 0:
+            return 0
+        if self.frozen and self.term.setFrozen != nil:
+            self.term.setFrozen(true)
+        t1 = os.epoch("utc")
+        self.stats.scan_ms += t1 - t0
+        sent = 0
+        for r in rects:
+            out = []
+            for y in range[r.y0, r.y1]:
+                out[y - r.y0 + 1] = string.sub(rows[y + 1], r.x0 + 1, r.x1 + 1)
+            self.term.drawPixels(r.x0, r.y0, out)
+            sent += (r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1)
+            self.stats.calls += 1
+        if self.frozen and self.term.setFrozen != nil:
+            self.term.setFrozen(false)
+        self.stats.pixels += sent
+        self.stats.send_ms += os.epoch("utc") - t1
+        return sent
+
     # рисует кадр; возвращает число отправленных пикселей
     def present(self, s):
+        if self.use_strings:
+            return self:_present_strings(s)
         t0 = os.epoch("utc")
         w = math.min(self.w, s.w)
         h = math.min(self.h, s.h)

@@ -35,10 +35,19 @@ class FakeTerm:
         self.log[len(self.log) + 1] = f and "freeze" or "thaw"
 
     def drawPixels(self, x, y, rows):
+        if type(rows[1]) == "string":
+            self.log[len(self.log) + 1] = "draw " .. x .. "," .. y .. " " .. len(rows[1]) .. "x" .. len(rows)
+            for j, row in rows:
+                for i in range[1, len(row)]:
+                    self.pix[(x + i - 1) .. "," .. (y + j - 1)] = string.byte(row, i)
+            return
         self.log[len(self.log) + 1] = "draw " .. x .. "," .. y .. " " .. len(rows[1]) .. "x" .. len(rows)
         for j, row in rows:
             for i, v in row:
                 self.pix[(x + i - 1) .. "," .. (y + j - 1)] = v
+
+    def getPixel(self, x, y):
+        return self.pix[x .. "," .. y]
 
     def setCursorPos(self, x, y):
         self.cx = x
@@ -60,20 +69,22 @@ class FakeTerm:
 
 
 # обычный стол функций, как настоящий term (вызовы через точку)
-def make_term(cols, rows):
-    o = FakeTerm(cols, rows)
+def make_term(cols, rows, pixel_mode=true, strings=false):
+    fake = FakeTerm(cols, rows)
     api = {}
-    api.getSize = (px) => o:getSize(px)
-    api.setGraphicsMode = (m) => o:setGraphicsMode(m)
-    api.setPaletteColor = (i, r, g, b) => o:setPaletteColor(i, r, g, b)
-    api.setFrozen = (f) => o:setFrozen(f)
-    api.drawPixels = (x, y, rr) => o:drawPixels(x, y, rr)
-    api.setCursorPos = (x, y) => o:setCursorPos(x, y)
-    api.blit = (a, b, c) => o:blit(a, b, c)
-    api.setBackgroundColor = (c) => o:setBackgroundColor(c)
-    api.setTextColor = (c) => o:setTextColor(c)
-    api.clear = () => o:clear()
-    return api, o
+    api.getSize = (px) => fake:getSize(px)
+    api.setGraphicsMode = (m) => fake:setGraphicsMode(m)
+    api.setPaletteColor = (i, r, g, b) => fake:setPaletteColor(i, r, g, b)
+    api.setFrozen = (f) => fake:setFrozen(f)
+    api.drawPixels = (x, y, rr) => fake:drawPixels(x, y, rr)
+    if strings:
+        api.getPixel = (x, y) => fake:getPixel(x, y)
+    api.setCursorPos = (x, y) => fake:setCursorPos(x, y)
+    api.blit = (a, b, c) => fake:blit(a, b, c)
+    api.setBackgroundColor = (c) => fake:setBackgroundColor(c)
+    api.setTextColor = (c) => fake:setTextColor(c)
+    api.clear = () => fake:clear()
+    return api, fake
 
 # ---------------------------------------------------------------- квантование
 pal = color.default_palette()
@@ -169,6 +180,57 @@ sp = sf.new(2, 2, 6)
 s:blit(sp, 40, 20)
 eq([s.dx0, s.dy0, s.dx1, s.dy1], [40, 20, 41, 21], "blit marks the destination")
 eq(d:present(s), 4, "blit pixels are sent")
+
+# строковый путь: те же пиксели на экране, что и у таблиц, при любых изменениях
+tm_s, o_s = make_term(10, 4, true, true)
+tm_t, o_t = make_term(10, 4, true, false)
+ds = graphics.new(tm_s, {mode: 2})
+dt = graphics.new(tm_t, {mode: 2})
+ds:open()
+dt:open()
+eq(ds.use_strings, true, "strings are detected when getPixel reads them back")
+eq(dt.use_strings, false, "no getPixel, no strings")
+# у каждого дисплея своя поверхность: дисплей забирает изменения (clean) у той, что показывает
+s_s = sf.new(60, 36, 3)
+s_t = sf.new(60, 36, 3)
+def same_screens(msg):
+    bad = 0
+    for k, v in o_t.pix:
+        if o_s.pix[k] != v:
+            bad += 1
+    eq(bad, 0, msg)
+def shapes(sur):
+    sur:fill_rect(5, 5, 30, 20, 7)
+    sur:circle(30, 18, 12, 9, true)
+    sur:set(59, 35, sf.CLEAR)
+    sur:line(0, 0, 59, 35, 200)
+def scattered(sur):
+    sur:set(0, 20, 250)
+    sur:set(59, 20, 251)
+def blitted(sur):
+    sur:blit(sf.new(8, 4, 33), 20, 30)
+ds:present(s_s)
+dt:present(s_t)
+same_screens("first full frame is identical")
+shapes(s_s)
+shapes(s_t)
+ds:present(s_s)
+dt:present(s_t)
+same_screens("shapes are identical")
+scattered(s_s)
+scattered(s_t)
+sent_s = ds:present(s_s)
+sent_t = dt:present(s_t)
+same_screens("scattered pixels are identical")
+eq(sent_s, sent_t, "both send the same number of pixels")
+blitted(s_s)
+blitted(s_t)
+ds:present(s_s)
+dt:present(s_t)
+same_screens("blit is identical")
+eq(ds:present(s_s), 0, "idle frame sends nothing")
+ds:invalidate()
+eq(ds:present(s_s), 60 * 36, "invalidate resends everything")
 
 # режим на 16 цветов
 tm, o = make_term(10, 4)
