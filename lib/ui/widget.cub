@@ -45,6 +45,8 @@ export class Widget:
         self.handlers = {}
         self.captures_text = false
         self.tooltip = p.tooltip
+        # stretch: false не растягивать поперёк ряда (кнопки и флажки занимают свою ширину)
+        self.stretch = true
 
     # ------------------------------------------------------------ дерево
 
@@ -330,7 +332,7 @@ export class Box(Widget):
             cross_off = 0
             if type(fixed_cross) == "number":
                 cross = math.min(fixed_cross, cross_total)
-            elif self.align != "stretch" and fixed_cross != "fill":
+            elif (self.align != "stretch" or not c.stretch) and fixed_cross != "fill":
                 cross = math.min(cross_pref, cross_total)
             if cross < cross_total:
                 if self.align == "center":

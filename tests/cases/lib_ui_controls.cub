@@ -1,0 +1,197 @@
+import t
+import ui.runtime as runtime
+import ui.widget as w
+import ui.controls as ctl
+import ui.theme as theme
+import unicode
+eq = t.eq
+
+class StubOut:
+    def init(self, cols, rows):
+        self.cols = cols
+        self.rows = rows
+        self.last = nil
+    def size(self):
+        return self.cols, self.rows
+    def present(self, c):
+        self.last = c:to_lines()
+        c:clean()
+        return 1
+    def to_cell(self, x, y):
+        return x - 1, y - 1
+    def open(self):
+        pass
+    def close(self):
+        pass
+    def set_theme(self, th):
+        pass
+    def invalidate(self):
+        pass
+    def tick(self, dt):
+        pass
+
+def make(root, cols=30, rows=8):
+    out = StubOut(cols, rows)
+    ui = runtime.new(out, {})
+    ui:set_root(root)
+    ui:render()
+    return ui, out
+
+def line(out, n):
+    return out.last[n]
+
+# ---------------------------------------------------------------- кнопка
+pressed = []
+b = ctl.button("Сохранить"):on("press", (wd) => table.insert(pressed, "b"))
+other = ctl.button("Отмена", {variant: "box"})
+ui, out = make(w.vbox([b, other]))
+eq(unicode.sub(line(out, 1), 1, 11), " Сохранить ", "solid button has padding")
+eq(unicode.sub(line(out, 2), 1, 10), "[ Отмена ]", "box button has brackets")
+eq(ui.cells:colors_lines("bg")[1]:sub(1, 2), "dd", "the focused button is drawn with the selection background (SEL_BG = d)")
+ui:handle("key", keys.enter)
+eq(pressed, ["b"], "Enter presses")
+eq(b.pressed, true, "pressed flash is on")
+ui:tick(0.2)
+eq(b.pressed, false, "the flash ends")
+ui:handle("key", keys.space)
+eq(pressed, ["b", "b"], "space presses too")
+ui:handle("mouse_click", 1, 1, 6)
+eq(pressed, ["b", "b"], "a click outside any button does nothing")
+b.disabled = true
+ui:handle("key", keys.enter)
+eq(len(pressed), 2, "a disabled button ignores presses")
+eq(b:hints()[1][1], "Enter", "hint")
+
+# ---------------------------------------------------------------- флажок и переключатель
+changes = []
+cb = ctl.checkbox("Автовход", false):on("change", (wd, v) => table.insert(changes, v))
+sw = ctl.switch("Анимации", true):on("change", (wd, v) => table.insert(changes, v))
+ui, out = make(w.vbox([cb, sw]))
+eq(unicode.sub(line(out, 1), 1, 12), "[ ] Автовход", "unchecked")
+eq(unicode.sub(line(out, 2), 1, 13), "Анимации  [ ■", "switch row starts with its label")
+ui:handle("key", keys.enter)
+eq(changes, [true], "checkbox toggled")
+ui:render()
+eq(unicode.sub(out.last[1], 1, 3), "[■]", "checked box")
+ui:handle("key", keys.down)
+ui:handle("key", keys.left)
+eq(changes, [true, false], "left turns the switch off")
+ui:handle("key", keys.left)
+eq(changes, [true, false], "left again does nothing")
+ui:handle("key", keys.right)
+eq(changes, [true, false, true], "right turns it on")
+ui:handle("mouse_click", 1, 3, 2)
+eq(changes[len(changes)], false, "click toggles the switch")
+
+# ---------------------------------------------------------------- ползунок
+vals = []
+sl = ctl.slider(0, 100, 50, {step: 10, width: 20}):on("change", (wd, v) => table.insert(vals, v))
+ui, out = make(w.vbox([sl]))
+eq(unicode.length(line(out, 1)) >= 20, true, "slider drawn")
+ui:handle("key", keys.right)
+eq(sl.value, 60, "right adds a step")
+ui:handle("key", keys.left)
+ui:handle("key", keys.left)
+eq(sl.value, 40, "left subtracts")
+ui:handle("key", keys.home)
+eq(sl.value, 0, "home")
+ui:handle("key", keys.left)
+eq(sl.value, 0, "clamped at the minimum")
+ui:handle("key", keys["end"])
+eq(sl.value, 100, "end")
+eq(vals[1], 60, "change events carry the value")
+ui:tick(1)
+ui:render()
+txt_line = line(out, 1)
+eq(string.find(txt_line, "100", 1, true) != nil, true, "value is shown")
+ui:handle("mouse_click", 1, 1, 1)
+eq(sl.value, 0, "click at the left end sets the minimum")
+ui:handle("mouse_click", 1, 17, 1)
+ui:handle("mouse_drag", 1, 8, 1)
+eq(sl.value > 0 and sl.value < 100, true, "drag sets a middle value")
+ui:handle("mouse_up", 1, 8, 1)
+
+# ---------------------------------------------------------------- поле ввода
+sub = []
+ch = []
+inp = ctl.input({placeholder: "Имя", width: 12}):on("submit", (wd, s) => table.insert(sub, s)):on("change", (wd, s) => table.insert(ch, s))
+ui, out = make(w.vbox([inp]))
+eq(inp.captures_text, true, "input captures text")
+ui:handle("char", "П")
+ui:handle("char", "р")
+ui:handle("char", "и")
+eq(inp:value(), "При", "characters are inserted")
+ui:handle("key", keys.left)
+ui:handle("char", "X")
+eq(inp:value(), "ПрXи", "insertion at the cursor")
+ui:handle("key", keys.backspace)
+eq(inp:value(), "При", "backspace")
+ui:handle("key", keys.home)
+ui:handle("key", keys.delete)
+eq(inp:value(), "ри", "delete")
+ui:handle("key", keys["end"])
+ui:handle("key", keys.enter)
+eq(sub, ["ри"], "enter submits")
+ui:handle("key", keys.space)
+eq(inp:value(), "ри", "space is not an action while typing (it arrives as a char)")
+ui:handle("char", " ")
+eq(inp:value(), "ри ", "space typed as a character")
+ui:handle("char", "w")
+eq(inp:value(), "ри w", "letters typed even when WASD would move")
+eq(ch[len(ch)], "ри w", "change event")
+ui:render()
+eq(unicode.sub(line(out, 1), 1, 4), "ри w", "text drawn")
+inp:set_text("")
+ui:render()
+ui:handle("key", keys.tab)
+eq(inp.captures_text, true, "still the only widget")
+long = ctl.input({text: "abcdefghijklmnop", width: 8})
+ui, out = make(w.vbox([long]))
+ui:render()
+eq(unicode.sub(line(out, 1), 1, 7), "klmnop ", "a long text scrolls so the cursor is visible")
+pw = ctl.input({text: "секрет", password: true, width: 10})
+ui, out = make(w.vbox([pw]))
+eq(unicode.sub(line(out, 1), 1, 6), "••••••", "password is masked")
+cap = ctl.input({max: 3})
+ui, out = make(w.vbox([cap]))
+for letter in ["a", "b", "c", "d"]:
+    ui:handle("char", letter)
+eq(cap:value(), "abc", "max length")
+ui:handle("mouse_click", 1, 2, 1)
+ui:handle("char", "Z")
+eq(cap:value(), "abc", "full input ignores more characters")
+
+# ---------------------------------------------------------------- прогресс
+pr = ctl.progress(0.5, {width: 20})
+ui, out = make(w.vbox([pr]))
+ui:tick(1)
+ui:render()
+bar = line(out, 1)
+eq(unicode.sub(bar, 1, 8), "███████▌", "half of a 15-cell bar is 7 and a half cells")
+eq(string.find(bar, "50%", 1, true) != nil, true, "percent label")
+pr:set_value(1)
+ui:tick(0.1)
+mid = pr.shown
+eq(mid > 0.5 and mid < 1, true, "the bar moves smoothly")
+ui:tick(1)
+eq(math.abs(pr.shown - 1) < 1e-9, true, "and arrives")
+frac = ctl.progress(0.53, {width: 10, label: false})
+ui, out = make(w.vbox([frac]))
+ui:render()
+eq(unicode.sub(line(out, 1), 6, 6), "▎", "a fractional cell uses an eighth block")
+ind = ctl.progress(0, {width: 12, indeterminate: true})
+ui, out = make(w.vbox([ind]))
+ui:render()
+eq(string.find(line(out, 1), "█", 1, true) != nil, true, "indeterminate progress shows a moving block")
+
+# ---------------------------------------------------------------- индикатор ожидания
+sp = ctl.spinner()
+ui, out = make(w.vbox([sp]))
+first = unicode.sub(line(out, 1), 1, 1)
+ui:tick(0.13)
+ui:render()
+eq(unicode.sub(line(out, 1), 1, 1) != first, true, "the spinner advances with time")
+ui.root:detach()
+eq(sp.timer, nil, "detaching stops the spinner timer")
+
+print("done")

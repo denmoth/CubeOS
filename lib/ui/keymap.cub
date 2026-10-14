@@ -10,7 +10,7 @@
 # Esc привязан и по имени, и по кодам 256 (новый CC) и 1 (старый): в разных сборках таблица keys отличается.
 
 const ARROW_KEYS = {
-    up: ["up"], down: ["down"], left: ["left"], right: ["right"], enter: ["enter", "numPadEnter"], back: ["escape", 256, 1],
+    up: ["up"], down: ["down"], left: ["left"], right: ["right"], enter: ["enter", "numPadEnter", "space"], back: ["escape", 256, 1],
     tab: ["tab"], home: ["home"], end: ["end"], page_up: ["pageUp"], page_down: ["pageDown"], delete: ["delete"],
     backspace: ["backspace"], menu: ["f10"], help: ["f1"]
 }
@@ -27,7 +27,7 @@ const LABELS = {up: "↑", down: "↓", left: "←", right: "→", enter: "Enter
 
 # клавиши-буквы: в режиме ввода текста они не должны превращаться в действия
 def _is_letter_key(name):
-    return string.len(name) == 1
+    return string.len(name) == 1 or name == "space"
 
 export class Keymap:
     # key_table: таблица keys из CC (в тестах можно подставить свою)

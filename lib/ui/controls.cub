@@ -1,0 +1,486 @@
+# ui.controls: кнопка, флажок, переключатель, ползунок, поле ввода, полоса прогресса, индикатор ожидания
+#
+#   b = button("Сохранить"):on("press", (w) => ...)
+#   c = checkbox("Автовход", false):on("change", (w, value) => ...)
+#   s = slider(0, 100, 70, {step: 5}):on("change", (w, value) => ...)
+#   i = input({placeholder: "Имя", password: false}):on("submit", (w, text) => ...)
+#
+# Все элементы берут цвета из темы. Управление: Enter и пробел нажимают, стрелки меняют значение, мышь работает.
+
+import ui.theme as th
+import ui.text as txt
+import ui.widget as widget
+import unicode
+
+# ---------------------------------------------------------------- кнопка
+
+export class Button(widget.Widget):
+    # text; props: variant ("solid" по умолчанию: цветная плашка, "box": в скобках, "flat": только текст), fg
+    def init(self, text, props=nil):
+        super.init(self, props)
+        p = props ?? {}
+        self.text = text
+        self.variant = p.variant ?? "solid"
+        self.focusable = true
+        self.stretch = false
+        self.pressed = false
+
+    def _measure(self, max_w, max_h):
+        extra = self.variant == "flat" and 0 or 2
+        if self.variant == "box":
+            extra = 4
+        return txt.width(self.text) + extra, 1
+
+    def press(self):
+        if self.disabled:
+            return
+        self.pressed = true
+        self:invalidate()
+        if self.ui != nil:
+            let me = self
+            self.ui:after(0.12, () => me:_release())
+        self:emit("press")
+
+    def _release(self):
+        self.pressed = false
+        self:invalidate()
+
+    def key(self, action, code):
+        if action == "enter":
+            self:press()
+            return true
+        return false
+
+    def mouse(self, kind, mx, my, button):
+        if kind == "down":
+            self:press()
+            return true
+        return false
+
+    def hints(self):
+        return [["Enter", "нажать"]]
+
+    def _draw(self, c, t):
+        fg = th.TEXT
+        bg = nil
+        label = self.text
+        if self.variant == "box":
+            label = "[ " .. self.text .. " ]"
+        elif self.variant == "solid":
+            label = " " .. self.text .. " "
+        if self.variant == "solid":
+            bg = th.RAISED
+        if self.focused:
+            fg = th.SEL_FG
+            bg = th.SEL_BG
+        if self.pressed:
+            fg = th.BG
+            bg = th.BRIGHT
+        if self.disabled:
+            fg = th.MUTED
+            bg = self.variant == "solid" and th.PANEL or nil
+        if self.variant == "box" and not self.focused and not self.pressed:
+            fg = th.ACCENT
+        c:fill(self.x, self.y, self.w, 1, 32, fg, bg)
+        c:text(self.x + _center(self.w, txt.width(label)), self.y, label, fg, bg, self.w)
+
+def _center(w, n):
+    return math.max(0, math.floor((w - n) / 2))
+
+# ---------------------------------------------------------------- флажок и переключатель
+
+export class Checkbox(widget.Widget):
+    def init(self, text, checked=false, props=nil):
+        super.init(self, props)
+        self.text = text
+        self.checked = checked
+        self.focusable = true
+        self.stretch = false
+
+    def _measure(self, max_w, max_h):
+        return txt.width(self.text) + 4, 1
+
+    def toggle(self):
+        if self.disabled:
+            return
+        self.checked = not self.checked
+        self:invalidate()
+        self:emit("change", self.checked)
+
+    def key(self, action, code):
+        if action == "enter":
+            self:toggle()
+            return true
+        return false
+
+    def mouse(self, kind, mx, my, button):
+        if kind == "down":
+            self:toggle()
+            return true
+        return false
+
+    def hints(self):
+        return [["Space", "переключить"]]
+
+    def _draw(self, c, t):
+        box_fg = self.checked and th.ACCENT or th.MUTED
+        text_fg = self.disabled and th.MUTED or th.TEXT
+        bg = self.focused and th.PANEL or nil
+        c:fill(self.x, self.y, self.w, 1, 32, text_fg, bg)
+        c:text(self.x, self.y, "[", box_fg, bg)
+        c:set(self.x + 1, self.y, self.checked and 0x25A0 or 32, box_fg, bg)
+        c:text(self.x + 2, self.y, "]", box_fg, bg)
+        c:text(self.x + 4, self.y, self.text, self.focused and th.BRIGHT or text_fg, bg, self.w - 4)
+
+export class Switch(widget.Widget):
+    # text слева, переключатель справа от него; значения on/off можно подписать: props.on_text, off_text
+    def init(self, text, on=false, props=nil):
+        super.init(self, props)
+        p = props ?? {}
+        self.text = text
+        self.on_state = on
+        self.on_text = p.on_text ?? "вкл"
+        self.off_text = p.off_text ?? "выкл"
+        self.focusable = true
+        self.stretch = false
+
+    def _measure(self, max_w, max_h):
+        return txt.width(self.text) + 2 + 4 + 1 + math.max(txt.width(self.on_text), txt.width(self.off_text)), 1
+
+    def toggle(self):
+        if self.disabled:
+            return
+        self.on_state = not self.on_state
+        self:invalidate()
+        self:emit("change", self.on_state)
+
+    def key(self, action, code):
+        if action == "enter" or action == "left" or action == "right":
+            if action == "enter" or (action == "left" and self.on_state) or (action == "right" and not self.on_state):
+                self:toggle()
+            return true
+        return false
+
+    def mouse(self, kind, mx, my, button):
+        if kind == "down":
+            self:toggle()
+            return true
+        return false
+
+    def hints(self):
+        return [["Space", "переключить"]]
+
+    def _draw(self, c, t):
+        bg = self.focused and th.PANEL or nil
+        c:fill(self.x, self.y, self.w, 1, 32, th.TEXT, bg)
+        c:text(self.x, self.y, self.text, self.focused and th.BRIGHT or th.TEXT, bg)
+        sx = self.x + txt.width(self.text) + 2
+        fg = self.on_state and th.OK or th.MUTED
+        c:text(sx, self.y, "[", fg, bg)
+        c:text(sx + 1, self.y, self.on_state and " " or " ", fg, bg)
+        # ползунок переключателя: блок слева (выкл) или справа (вкл)
+        c:set(sx + 1, self.y, self.on_state and 32 or 0x25A0, fg, bg)
+        c:set(sx + 2, self.y, self.on_state and 0x25A0 or 32, fg, bg)
+        c:text(sx + 3, self.y, "]", fg, bg)
+        c:text(sx + 5, self.y, self.on_state and self.on_text or self.off_text, fg, bg)
+
+# ---------------------------------------------------------------- ползунок
+
+export class Slider(widget.Widget):
+    # min_value, max_value, value; props: step (1), width (20), show_value (true), format (функция значение -> строка)
+    def init(self, min_value, max_value, value, props=nil):
+        super.init(self, props)
+        p = props ?? {}
+        self.min_value = min_value
+        self.max_value = max_value
+        self.value = math.max(min_value, math.min(max_value, value))
+        self.step = p.step ?? 1
+        self.show_value = p.show_value ?? true
+        self.format = p.format
+        self.track_w = 0
+        self.focusable = true
+        self.shown = self.value
+
+    def _measure(self, max_w, max_h):
+        return (type(self.width) == "number" and self.width or 24), 1
+
+    def _text(self):
+        if self.format != nil:
+            return self.format(self.value)
+        return string.format("%d", math.floor(self.value + 0.5))
+
+    def set_value(self, v):
+        v = math.max(self.min_value, math.min(self.max_value, v))
+        v = self.min_value + math.floor((v - self.min_value) / self.step + 0.5) * self.step
+        v = math.max(self.min_value, math.min(self.max_value, v))
+        if v != self.value:
+            self.value = v
+            if self.ui != nil:
+                self.ui:animate(self, "shown", v, 0.12, "out_quad")
+            else:
+                self.shown = v
+            self:invalidate()
+            self:emit("change", v)
+
+    def key(self, action, code):
+        span = self.max_value - self.min_value
+        if action == "left":
+            self:set_value(self.value - self.step)
+            return true
+        if action == "right":
+            self:set_value(self.value + self.step)
+            return true
+        if action == "home":
+            self:set_value(self.min_value)
+            return true
+        if action == "end":
+            self:set_value(self.max_value)
+            return true
+        if action == "page_up":
+            self:set_value(self.value + span / 10)
+            return true
+        if action == "page_down":
+            self:set_value(self.value - span / 10)
+            return true
+        return false
+
+    def mouse(self, kind, mx, my, button):
+        if (kind == "down" or kind == "drag") and self.track_w > 1:
+            k = (mx - self.x) / (self.track_w - 1)
+            self:set_value(self.min_value + (self.max_value - self.min_value) * math.max(0, math.min(1, k)))
+            return true
+        if kind == "scroll":
+            self:set_value(self.value - button * self.step)
+            return true
+        return false
+
+    def hints(self):
+        return [["←→", "значение"]]
+
+    def _draw(self, c, t):
+        label = self.show_value and self:_text() or ""
+        lw = self.show_value and txt.width(label) + 2 or 0
+        track = math.max(3, self.w - lw)
+        self.track_w = track
+        span = self.max_value - self.min_value
+        pos = span == 0 and 0 or math.floor((self.shown - self.min_value) / span * (track - 1) + 0.5)
+        accent = self.focused and th.ACCENT or th.ACCENT_DIM
+        for i in range[0, track - 1]:
+            if i < pos:
+                c:set(self.x + i, self.y, 0x2501, accent, nil)
+            elif i == pos:
+                c:set(self.x + i, self.y, 0x25CF, self.focused and th.BRIGHT or th.TEXT, nil)
+            else:
+                c:set(self.x + i, self.y, 0x2500, th.LINE, nil)
+        if self.show_value:
+            c:text(self.x + track + 2, self.y, label, self.focused and th.BRIGHT or th.TEXT)
+
+# ---------------------------------------------------------------- поле ввода
+
+export class Input(widget.Widget):
+    # props: text, placeholder, password (показывать • вместо символов), max (длина), width (по умолчанию 20)
+    def init(self, props=nil):
+        super.init(self, props)
+        p = props ?? {}
+        self.cps = unicode.codepoints(p.text ?? "")
+        self.cursor = len(self.cps)
+        self.placeholder = p.placeholder ?? ""
+        self.password = p.password ?? false
+        self.max = p.max ?? 256
+        self.scroll = 0
+        self.focusable = true
+        self.captures_text = true
+
+    def value(self):
+        return unicode.from_codepoints(self.cps)
+
+    def set_text(self, s):
+        self.cps = unicode.codepoints(s)
+        self.cursor = len(self.cps)
+        self.scroll = 0
+        self:invalidate()
+        self:emit("change", s)
+
+    def _measure(self, max_w, max_h):
+        return (type(self.width) == "number" and self.width or 20), 1
+
+    def _changed(self):
+        self:invalidate()
+        self:emit("change", self:value())
+
+    def char(self, ch):
+        if self.disabled or len(self.cps) >= self.max:
+            return true
+        cp = unicode.codepoints(ch)[1]
+        table.insert(self.cps, self.cursor + 1, cp)
+        self.cursor += 1
+        self:_changed()
+        return true
+
+    def key(self, action, code):
+        if action == "left":
+            self.cursor = math.max(0, self.cursor - 1)
+            return true
+        if action == "right":
+            self.cursor = math.min(len(self.cps), self.cursor + 1)
+            return true
+        if action == "home":
+            self.cursor = 0
+            return true
+        if action == "end":
+            self.cursor = len(self.cps)
+            return true
+        if action == "backspace":
+            if self.cursor > 0:
+                table.remove(self.cps, self.cursor)
+                self.cursor -= 1
+                self:_changed()
+            return true
+        if action == "delete":
+            if self.cursor < len(self.cps):
+                table.remove(self.cps, self.cursor + 1)
+                self:_changed()
+            return true
+        if action == "enter":
+            self:emit("submit", self:value())
+            return true
+        return false
+
+    def mouse(self, kind, mx, my, button):
+        if kind == "down" or kind == "drag":
+            self.cursor = math.max(0, math.min(len(self.cps), self.scroll + (mx - self.x)))
+            return true
+        return false
+
+    def hints(self):
+        return [["Enter", "готово"], ["Esc", "назад"]]
+
+    def _draw(self, c, t):
+        bg = self.focused and th.RAISED or th.PANEL
+        c:fill(self.x, self.y, self.w, 1, 32, th.TEXT, bg)
+        room = self.w - 1
+        if self.cursor < self.scroll:
+            self.scroll = self.cursor
+        if self.cursor > self.scroll + room - 1:
+            self.scroll = self.cursor - room + 1
+        if len(self.cps) == 0 and not self.focused:
+            c:text(self.x, self.y, txt.ellipsize(self.placeholder, self.w), th.MUTED, bg)
+            return
+        for i in range[0, room - 1]:
+            idx = self.scroll + i + 1
+            if idx <= len(self.cps):
+                cp = self.password and 0x2022 or self.cps[idx]
+                c:set(self.x + i, self.y, cp, self.disabled and th.MUTED or th.BRIGHT, bg)
+        if self.focused and (self.ui == nil or self.ui.blink):
+            ci = self.cursor - self.scroll
+            if ci >= 0 and ci < self.w:
+                c:set(self.x + ci, self.y, nil, th.SEL_FG, th.SEL_BG)
+
+    def on_focus(self):
+        super.on_focus(self)
+        if self.ui != nil:
+            self.ui.blink = true
+
+# ---------------------------------------------------------------- прогресс и ожидание
+
+# доли клетки: от 1/8 до 7/8 (левые блоки)
+const EIGHTHS = [0x258F, 0x258E, 0x258D, 0x258C, 0x258B, 0x258A, 0x2589]
+
+export class Progress(widget.Widget):
+    # value 0..1; props: label (показывать проценты, true), width, indeterminate (true: неопределённый прогресс, бегающий блок)
+    def init(self, value=0, props=nil):
+        super.init(self, props)
+        p = props ?? {}
+        self.value = value
+        if p.indeterminate:
+            self.value = nil
+        self.shown = value ?? 0
+        self.show_label = p.label ?? true
+        self.phase = 0
+
+    def _measure(self, max_w, max_h):
+        return (type(self.width) == "number" and self.width or 20), 1
+
+    def set_value(self, v):
+        self.value = v
+        if v == nil:
+            return
+        if self.ui != nil:
+            self.ui:animate(self, "shown", v, 0.25, "out_cubic")
+        else:
+            self.shown = v
+        self:invalidate()
+
+    def _draw(self, c, t):
+        label = ""
+        if self.value != nil and self.show_label:
+            label = string.format(" %3d%%", math.floor(self.shown * 100 + 0.5))
+        bar = math.max(2, self.w - txt.width(label))
+        c:fill(self.x, self.y, bar, 1, 32, th.ACCENT, th.RAISED)
+        if self.value == nil:
+            # неопределённый: блок бегает туда и обратно
+            t0 = (self.ui != nil and self.ui.time or 0) * 1.2
+            k = math.abs((t0 % 2) - 1)
+            start = math.floor(k * (bar - 4))
+            c:fill(self.x + start, self.y, 4, 1, 0x2588, th.ACCENT, th.RAISED)
+            return
+        total = self.shown * bar
+        full = math.floor(total)
+        frac = total - full
+        c:fill(self.x, self.y, full, 1, 0x2588, th.ACCENT, th.RAISED)
+        if full < bar and frac >= 0.125:
+            i = math.min(7, math.floor(frac * 8))
+            c:set(self.x + full, self.y, EIGHTHS[math.max(1, i)], th.ACCENT, th.RAISED)
+        if label != "":
+            c:text(self.x + bar, self.y, label, th.TEXT)
+
+export class Spinner(widget.Widget):
+    # frames: список кадров (по умолчанию - \ | /); тикает сам, пока элемент в дереве
+    def init(self, frames=nil, props=nil):
+        super.init(self, props)
+        self.frames = frames ?? ["-", "\\", "|", "/"]
+        self.index = 1
+        self.timer = nil
+        self.stretch = false
+
+    def _measure(self, max_w, max_h):
+        return 1, 1
+
+    def attach(self, ui):
+        super.attach(self, ui)
+        let me = self
+        if self.timer == nil:
+            self.timer = ui:every(0.12, () => me:_advance())
+
+    def detach(self):
+        if self.timer != nil:
+            self.timer.cancel()
+            self.timer = nil
+        super.detach(self)
+
+    def _advance(self):
+        self.index = self.index % len(self.frames) + 1
+
+    def _draw(self, c, t):
+        c:set(self.x, self.y, unicode.codepoints(self.frames[self.index])[1], th.ACCENT, nil)
+
+export def button(text, props=nil):
+    return Button(text, props)
+
+export def checkbox(text, checked=false, props=nil):
+    return Checkbox(text, checked, props)
+
+export def switch(text, on=false, props=nil):
+    return Switch(text, on, props)
+
+export def slider(min_value, max_value, value, props=nil):
+    return Slider(min_value, max_value, value, props)
+
+export def input(props=nil):
+    return Input(props)
+
+export def progress(value=0, props=nil):
+    return Progress(value, props)
+
+export def spinner(frames=nil, props=nil):
+    return Spinner(frames, props)
