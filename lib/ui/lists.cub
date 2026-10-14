@@ -1,0 +1,577 @@
+# ui.lists: списки, таблицы, вкладки, прокручиваемый текст, выпадающий выбор, меню
+#
+#   l = list(["Файлы", "Редактор", "Терминал"]):on("activate", (w, index, item) => ...)
+#   t = table_view([{title: "Имя", width: "fill"}, {title: "Размер", width: 8, align: "right"}], rows)
+#   v = tab_view([{title: "Вид", content: page1}, {title: "Звук", content: page2}])
+#   s = dropdown(["cubeos", "dark", "light"], 1):on("change", (w, index, value) => ...)
+#
+# Строка списка это строка или таблица {text, fg (место палитры), hint, data}. Выбранная строка залита цветом выбора, при
+# движении полоса плавно догоняет новую строку. Справа появляется полоса прокрутки, если строк больше, чем места.
+
+import ui.theme as th
+import ui.text as txt
+import ui.widget as widget
+import ui.border as border
+import unicode
+
+# ---------------------------------------------------------------- список
+
+export class List(widget.Widget):
+    # items; props: selected (1), max_rows (10: самая большая нужная высота), marker (true: ▸ перед выбранной), data
+    def init(self, items, props=nil):
+        super.init(self, props)
+        p = props ?? {}
+        self.items = items
+        self.selected = p.selected ?? 1
+        self.max_rows = p.max_rows ?? 10
+        self.marker = p.marker ?? true
+        self.top = 0
+        self.hl = self.selected - 1
+        self.focusable = true
+        self.rows_shown = 0
+
+    def _text_of(self, item):
+        if type(item) == "table":
+            return item.text ?? ""
+        return item
+    def _measure(self, max_w, max_h):
+        w = 0
+        for it in self.items:
+            w = math.max(w, txt.width(self:_text_of(it)))
+        return w + (self.marker and 2 or 0) + 1, math.min(len(self.items), self.max_rows)
+
+    def set_items(self, items, keep_selection=false):
+        self.items = items
+        if not keep_selection:
+            self.selected = 1
+            self.top = 0
+        self.selected = math.max(1, math.min(len(items), self.selected))
+        self.hl = self.selected - 1
+        self:invalidate()
+        if self.ui != nil:
+            self.ui:invalidate_layout()
+
+    def item(self):
+        return self.items[self.selected]
+
+    def select(self, index, silent=false):
+        n = len(self.items)
+        index = math.max(1, math.min(n, index))
+        if n == 0 or index == self.selected:
+            return
+        self.selected = index
+        self:_scroll_to_selection()
+        if self.ui != nil:
+            self.ui:animate(self, "hl", index - 1, 0.1, "out_quad")
+        else:
+            self.hl = index - 1
+        self:invalidate()
+        if not silent:
+            self:emit("select", index, self.items[index])
+
+    def _visible_rows(self):
+        return math.max(1, self.h)
+
+    def _scroll_to_selection(self):
+        rows = self:_visible_rows()
+        if self.selected - 1 < self.top:
+            self.top = self.selected - 1
+        if self.selected - 1 > self.top + rows - 1:
+            self.top = self.selected - rows
+        self.top = math.max(0, math.min(math.max(0, len(self.items) - rows), self.top))
+
+    def key(self, action, code):
+        rows = self:_visible_rows()
+        if action == "up":
+            if self.selected > 1:
+                self:select(self.selected - 1)
+                return true
+            return false
+        if action == "down":
+            if self.selected < len(self.items):
+                self:select(self.selected + 1)
+                return true
+            return false
+        if action == "home":
+            self:select(1)
+            return true
+        if action == "end":
+            self:select(len(self.items))
+            return true
+        if action == "page_up":
+            self:select(self.selected - rows)
+            return true
+        if action == "page_down":
+            self:select(self.selected + rows)
+            return true
+        if action == "enter":
+            if len(self.items) > 0:
+                self:emit("activate", self.selected, self.items[self.selected])
+            return true
+        return false
+
+    def mouse(self, kind, mx, my, button):
+        if kind == "down":
+            index = self.top + (my - self.y) + 1
+            if index >= 1 and index <= len(self.items):
+                if index == self.selected:
+                    self:emit("activate", index, self.items[index])
+                else:
+                    self:select(index)
+            return true
+        if kind == "scroll":
+            rows = self:_visible_rows()
+            self.top = math.max(0, math.min(math.max(0, len(self.items) - rows), self.top + button * 3))
+            self:invalidate()
+            return true
+        return false
+
+    def hints(self):
+        return [["↑↓", "выбор"], ["Enter", "открыть"]]
+
+    def _draw_row(self, c, y, index, item, selected, w):
+        text = self:_text_of(item)
+        fg = th.TEXT
+        bg = nil
+        if type(item) == "table" and item.fg != nil:
+            fg = item.fg
+        if selected:
+            fg = self.focused and th.SEL_FG or th.BRIGHT
+            bg = self.focused and th.SEL_BG or th.RAISED
+        c:fill(self.x, y, w, 1, 32, fg, bg)
+        mark = self.marker and (selected and "▸ " or "  ") or ""
+        c:text(self.x, y, mark, fg, bg)
+        right = ""
+        if type(item) == "table" and item.hint != nil:
+            right = item.hint
+        room = w - txt.width(mark)
+        if right != "":
+            c:text(self.x + w - txt.width(right), y, right, selected and fg or th.MUTED, bg)
+            room -= txt.width(right) + 1
+        c:text(self.x + txt.width(mark), y, txt.ellipsize(text, room), fg, bg)
+
+    def _draw(self, c, t):
+        rows = self:_visible_rows()
+        total = len(self.items)
+        scroll = total > rows
+        w = scroll and self.w - 1 or self.w
+        self:_scroll_to_selection()
+        glide = math.floor(self.hl + 0.5) + 1
+        for i in range[1, rows]:
+            index = self.top + i
+            if index > total:
+                break
+            self:_draw_row(c, self.y + i - 1, index, self.items[index], index == glide, w)
+        if scroll:
+            self:_draw_scrollbar(c, total, rows)
+
+    def _draw_scrollbar(self, c, total, rows):
+        x = self.x + self.w - 1
+        thumb = math.max(1, math.floor(rows * rows / total))
+        span = rows - thumb
+        pos = total - rows <= 0 and 0 or math.floor(self.top / (total - rows) * span + 0.5)
+        for i in range[0, rows - 1]:
+            on = i >= pos and i < pos + thumb
+            c:set(x, self.y + i, on and 0x2588 or 0x2591, on and th.ACCENT_DIM or th.LINE, nil)
+
+# ---------------------------------------------------------------- таблица
+
+export class Table(List):
+    # columns: [{title, width (число или "fill"), align}], rows: список строк (каждая список значений); props как у списка
+    def init(self, columns, rows, props=nil):
+        super.init(self, rows, props)
+        self.columns = columns
+        self.marker = false
+
+    def _measure(self, max_w, max_h):
+        w = 0
+        fill = 0
+        for col in self.columns:
+            if type(col.width) == "number":
+                w += col.width + 1
+            else:
+                w += math.max(8, txt.width(col.title)) + 1
+        return w, math.min(len(self.items), self.max_rows) + 1
+
+    def _visible_rows(self):
+        return math.max(1, self.h - 1)
+
+    def _widths(self, total):
+        widths = []
+        fixed = 0
+        flex = 0
+        for i, col in self.columns:
+            if type(col.width) == "number":
+                widths[i] = col.width
+                fixed += col.width + 1
+            else:
+                flex += 1
+        left = math.max(0, total - fixed)
+        for i, col in self.columns:
+            if type(col.width) != "number":
+                widths[i] = math.max(3, math.floor(left / flex) - 1)
+        return widths
+
+    def mouse(self, kind, mx, my, button):
+        if kind == "down":
+            index = self.top + (my - self.y - 1) + 1
+            if my - self.y >= 1 and index >= 1 and index <= len(self.items):
+                if index == self.selected:
+                    self:emit("activate", index, self.items[index])
+                else:
+                    self:select(index)
+            return true
+        return super.mouse(self, kind, mx, my, button)
+
+    def _row_text(self, widths, row):
+        parts = []
+        for i, col in self.columns:
+            cell = row[i] ?? ""
+            if type(cell) == "number":
+                cell = tostring(cell)
+            parts[i] = txt.pad(txt.ellipsize(cell, widths[i]), widths[i], col.align ?? "left")
+        return table.concat(parts, " ")
+
+    def _draw(self, c, t):
+        rows = self:_visible_rows()
+        total = len(self.items)
+        scroll = total > rows
+        w = scroll and self.w - 1 or self.w
+        widths = self:_widths(w)
+        # заголовок
+        header = {}
+        for i, col in self.columns:
+            header[i] = col.title
+        c:fill(self.x, self.y, self.w, 1, 32, th.MUTED, nil)
+        c:text(self.x, self.y, self:_row_text(widths, header), th.MUTED, nil, w)
+        self:_scroll_to_selection()
+        glide = math.floor(self.hl + 0.5) + 1
+        for i in range[1, rows]:
+            index = self.top + i
+            if index > total:
+                break
+            selected = index == glide
+            fg = th.TEXT
+            bg = nil
+            if selected:
+                fg = self.focused and th.SEL_FG or th.BRIGHT
+                bg = self.focused and th.SEL_BG or th.RAISED
+            y = self.y + i
+            c:fill(self.x, y, w, 1, 32, fg, bg)
+            c:text(self.x, y, self:_row_text(widths, self.items[index]), fg, bg, w)
+        if scroll:
+            x = self.x + self.w - 1
+            thumb = math.max(1, math.floor(rows * rows / total))
+            span = rows - thumb
+            pos = total - rows <= 0 and 0 or math.floor(self.top / (total - rows) * span + 0.5)
+            for i in range[0, rows - 1]:
+                on = i >= pos and i < pos + thumb
+                c:set(x, self.y + 1 + i, on and 0x2588 or 0x2591, on and th.ACCENT_DIM or th.LINE, nil)
+
+# ---------------------------------------------------------------- вкладки
+
+export class Tabs(widget.Widget):
+    def init(self, titles, selected=1, props=nil):
+        super.init(self, props)
+        self.titles = titles
+        self.selected = selected
+        self.focusable = true
+        self.ul = 0
+        self.ux = 0
+        self.uw = 0
+
+    def _measure(self, max_w, max_h):
+        w = 0
+        for t in self.titles:
+            w += txt.width(t) + 3
+        return w, 1
+
+    def select(self, index):
+        index = math.max(1, math.min(len(self.titles), index))
+        if index != self.selected:
+            self.selected = index
+            self:invalidate()
+            self:emit("change", index, self.titles[index])
+
+    def key(self, action, code):
+        if action == "left":
+            if self.selected > 1:
+                self:select(self.selected - 1)
+                return true
+            return false
+        if action == "right":
+            if self.selected < len(self.titles):
+                self:select(self.selected + 1)
+                return true
+            return false
+        return false
+
+    def mouse(self, kind, mx, my, button):
+        if kind == "down":
+            x = self.x
+            for i, tt in self.titles:
+                width = txt.width(tt) + 2
+                if mx >= x and mx < x + width:
+                    self:select(i)
+                    return true
+                x += width + 1
+            return true
+        return false
+
+    def hints(self):
+        return [["←→", "вкладка"]]
+
+    def _draw(self, c, t):
+        x = self.x
+        for i, tt in self.titles:
+            label = " " .. tt .. " "
+            width = txt.width(label)
+            if i == self.selected:
+                c:text(x, self.y, label, self.focused and th.SEL_FG or th.BRIGHT, self.focused and th.SEL_BG or th.RAISED)
+            else:
+                c:text(x, self.y, label, th.MUTED, nil)
+            x += width + 1
+
+# вкладки с содержимым: pages это список {title, content}; видна одна страница
+export class TabView(widget.Widget):
+    def init(self, pages, selected=1, props=nil):
+        super.init(self, props)
+        titles = []
+        for p in pages:
+            titles[len(titles) + 1] = p.title
+        self.pages = pages
+        self.tabs = Tabs(titles, selected)
+        self:add(self.tabs)
+        for i, p in pages:
+            p.content.visible = i == selected
+            self:add(p.content)
+        let me = self
+        self.tabs:on("change", (wd, index, title) => me:_show(index))
+
+    def _show(self, index):
+        for i, p in self.pages:
+            p.content.visible = i == index
+        if self.ui != nil:
+            self.ui:invalidate_layout()
+        self:emit("change", index)
+
+    def _measure(self, max_w, max_h):
+        w = 0
+        h = 0
+        for p in self.pages:
+            pw, ph = p.content:measure(max_w, max_h - 2)
+            w = math.max(w, pw)
+            h = math.max(h, ph)
+        tw, th_ = self.tabs:measure(max_w, 1)
+        return math.max(w, tw), h + 2
+
+    def _layout(self):
+        self.tabs:layout(self.x, self.y, self.w, 1)
+        for p in self.pages:
+            if p.content.visible:
+                p.content:layout(self.x, self.y + 2, self.w, math.max(0, self.h - 2))
+
+    def _draw(self, c, t):
+        s = border.style(t.border)
+        c:fill(self.x, self.y + 1, self.w, 1, s.h, th.LINE, nil)
+
+    def select(self, index):
+        self.tabs:select(index)
+
+# ---------------------------------------------------------------- прокручиваемый текст
+
+export class TextView(widget.Widget):
+    def init(self, text, props=nil):
+        super.init(self, props)
+        self.text = text
+        self.top = 0
+        self.focusable = true
+        self.lines_cache = nil
+        self.cache_w = -1
+
+    def set_text(self, s):
+        self.text = s
+        self.lines_cache = nil
+        self.top = 0
+        self:invalidate()
+
+    def _lines(self, w):
+        if self.lines_cache == nil or self.cache_w != w:
+            self.lines_cache = txt.wrap(self.text, math.max(1, w))
+            self.cache_w = w
+        return self.lines_cache
+
+    def _measure(self, max_w, max_h):
+        ls = txt.wrap(self.text, math.max(1, max_w - 1))
+        w = 0
+        for l in ls:
+            w = math.max(w, txt.width(l))
+        return w + 1, math.min(len(ls), math.max(1, max_h))
+
+    def _clamp(self):
+        ls = self:_lines(self.w - 1)
+        self.top = math.max(0, math.min(math.max(0, len(ls) - self.h), self.top))
+
+    def key(self, action, code):
+        if action == "up":
+            self.top -= 1
+        elif action == "down":
+            self.top += 1
+        elif action == "page_up":
+            self.top -= self.h
+        elif action == "page_down":
+            self.top += self.h
+        elif action == "home":
+            self.top = 0
+        elif action == "end":
+            self.top = 1e9
+        else:
+            return false
+        self:_clamp()
+        self:invalidate()
+        return true
+
+    def mouse(self, kind, mx, my, button):
+        if kind == "scroll":
+            self.top += button * 3
+            self:_clamp()
+            self:invalidate()
+            return true
+        return false
+
+    def hints(self):
+        return [["↑↓", "прокрутка"]]
+
+    def _draw(self, c, t):
+        ls = self:_lines(self.w - 1)
+        self:_clamp()
+        for i in range[1, self.h]:
+            l = ls[self.top + i]
+            if l == nil:
+                break
+            c:text(self.x, self.y + i - 1, l, th.TEXT, nil, self.w - 1)
+        if len(ls) > self.h:
+            thumb = math.max(1, math.floor(self.h * self.h / len(ls)))
+            span = self.h - thumb
+            pos = math.floor(self.top / math.max(1, len(ls) - self.h) * span + 0.5)
+            for i in range[0, self.h - 1]:
+                on = i >= pos and i < pos + thumb
+                c:set(self.x + self.w - 1, self.y + i, on and 0x2588 or 0x2591, on and th.ACCENT_DIM or th.LINE, nil)
+
+# ---------------------------------------------------------------- меню и выпадающий выбор
+
+# Окошко со списком поверх страницы. ui:open_overlay вызывает пользователь через popup_menu
+export class MenuBox(widget.Widget):
+    def init(self, items, selected=1, props=nil):
+        super.init(self, props)
+        self.list = List(items, {selected: selected, max_rows: (props != nil and props.max_rows) or 8})
+        self:add(self.list)
+        self.border = props != nil and props.border or nil
+        self.min_w = props != nil and props.min_w or 0
+
+    def _measure(self, max_w, max_h):
+        w, h = self.list:measure(max_w - 2, max_h - 2)
+        return math.max(w, self.min_w - 2) + 2, h + 2
+
+    def _layout(self):
+        self.list:layout(self.x + 1, self.y + 1, math.max(0, self.w - 2), math.max(0, self.h - 2))
+
+    def _draw(self, c, t):
+        c:fill(self.x, self.y, self.w, self.h, 32, th.TEXT, th.RAISED)
+        border.draw(c, self.x, self.y, self.w, self.h, self.border ?? t.border, th.ACCENT, th.RAISED)
+
+# открывает меню в точке (x, y); on_pick(index, item) вызывается при выборе. Возвращает слой
+export def popup_menu(ui, items, x, y, on_pick, selected=1, opts=nil):
+    o = opts ?? {}
+    box = MenuBox(items, selected, {min_w: o.min_w ?? 0, border: o.border})
+    layer = ui:open_overlay(box, {modal: true, dim: false, dismiss: true, anchor: "at", x: x, y: y, shadow: true})
+    let me_ui = ui
+    box.list:on("activate", (wd, index, item) => _pick(me_ui, layer, on_pick, index, item))
+    ui:focus_widget(box.list)
+    return layer
+
+def _pick(ui, layer, on_pick, index, item):
+    ui:close_overlay(layer)
+    on_pick(index, item)
+
+export class Select(widget.Widget):
+    # options: список строк; selected: номер; на вид: ‹ значение ›, стрелки листают, Enter открывает список
+    def init(self, options, selected=1, props=nil):
+        super.init(self, props)
+        self.options = options
+        self.selected = selected
+        self.focusable = true
+        self.stretch = false
+
+    def _measure(self, max_w, max_h):
+        w = 0
+        for o in self.options:
+            w = math.max(w, txt.width(o))
+        return w + 4, 1
+
+    def value(self):
+        return self.options[self.selected]
+
+    def set_index(self, index):
+        index = math.max(1, math.min(len(self.options), index))
+        if index != self.selected:
+            self.selected = index
+            self:invalidate()
+            self:emit("change", index, self.options[index])
+
+    def key(self, action, code):
+        if action == "left":
+            self:set_index(self.selected - 1)
+            return true
+        if action == "right":
+            self:set_index(self.selected + 1)
+            return true
+        if action == "enter":
+            self:open()
+            return true
+        return false
+
+    def open(self):
+        if self.ui == nil:
+            return
+        let me = self
+        popup_menu(self.ui, self.options, self.x, self.y + 1, (index, item) => me:set_index(index), self.selected, {min_w: self.w})
+
+    def mouse(self, kind, mx, my, button):
+        if kind == "down":
+            self:open()
+            return true
+        if kind == "scroll":
+            self:set_index(self.selected + button)
+            return true
+        return false
+
+    def hints(self):
+        return [["←→", "значение"], ["Enter", "список"]]
+
+    def _draw(self, c, t):
+        fg = self.focused and th.SEL_FG or th.TEXT
+        bg = self.focused and th.SEL_BG or th.RAISED
+        arrows = self.focused and th.SEL_FG or th.ACCENT
+        c:fill(self.x, self.y, self.w, 1, 32, fg, bg)
+        c:text(self.x, self.y, "‹", arrows, bg)
+        c:text(self.x + self.w - 1, self.y, "›", arrows, bg)
+        c:text(self.x + 2, self.y, txt.ellipsize(self.options[self.selected] ?? "", self.w - 4), fg, bg)
+
+export def list(items, props=nil):
+    return List(items, props)
+
+export def table_view(columns, rows, props=nil):
+    return Table(columns, rows, props)
+
+export def tabs(titles, selected=1, props=nil):
+    return Tabs(titles, selected, props)
+
+export def tab_view(pages, selected=1, props=nil):
+    return TabView(pages, selected, props)
+
+export def text_view(text, props=nil):
+    return TextView(text, props)
+
+export def dropdown(options, selected=1, props=nil):
+    return Select(options, selected, props)

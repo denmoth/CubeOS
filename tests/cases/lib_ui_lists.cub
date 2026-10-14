@@ -1,0 +1,170 @@
+import t
+import ui.runtime as runtime
+import ui.widget as w
+import ui.lists as lists
+import ui.theme as theme
+import unicode
+eq = t.eq
+
+class StubOut:
+    def init(self, cols, rows):
+        self.cols = cols
+        self.rows = rows
+        self.last = nil
+    def size(self):
+        return self.cols, self.rows
+    def present(self, c):
+        self.last = c:to_lines()
+        c:clean()
+        return 1
+    def to_cell(self, x, y):
+        return x - 1, y - 1
+    def open(self):
+        pass
+    def close(self):
+        pass
+    def set_theme(self, th):
+        pass
+    def invalidate(self):
+        pass
+    def tick(self, dt):
+        pass
+
+def make(root, cols=30, rows=10):
+    out = StubOut(cols, rows)
+    ui = runtime.new(out, {})
+    ui:set_root(root)
+    ui:render()
+    return ui, out
+
+# ---------------------------------------------------------------- список
+acts = []
+sels = []
+l = lists.list(["Файлы", "Редактор", "Терминал", "Настройки"], {max_rows: 3}):on("activate", (wd, i, it) => table.insert(acts, i .. it)):on("select", (wd, i, it) => table.insert(sels, i))
+ui, out = make(w.vbox([l]))
+eq(l.h, 3, "height limited by max_rows")
+eq(unicode.sub(out.last[1], 1, 8), "▸ Файлы ", "the selected row has the marker")
+eq(unicode.sub(out.last[2], 1, 10), "  Редактор", "other rows have none")
+eq(string.find(out.last[1], "█", 1, true) != nil or string.find(out.last[2], "░", 1, true) != nil, true, "a scrollbar appears when rows do not fit")
+ui:handle("key", keys.down)
+eq(l.selected, 2, "down selects the next row")
+eq(sels, [2], "select event")
+ui:handle("key", keys.down)
+ui:handle("key", keys.down)
+eq(l.selected, 4, "down to the end")
+ui:tick(1)
+ui:render()
+eq(l.top, 1, "the view scrolls to keep the selection visible")
+eq(unicode.sub(out.last[3], 1, 11), "▸ Настройки", "the last row is visible and selected")
+ui:handle("key", keys.down)
+eq(l.selected, 4, "down at the end stays")
+ui:handle("key", keys.enter)
+eq(acts, ["4Настройки"], "Enter activates")
+ui:handle("key", keys.home)
+eq(l.selected, 1, "home")
+ui:handle("key", keys["end"])
+eq(l.selected, 4, "end")
+ui:handle("key", keys.pageUp)
+eq(l.selected, 1, "page up jumps by the visible rows")
+ui:handle("mouse_click", 1, 3, 2)
+eq(l.selected, 2, "click selects the row")
+ui:handle("mouse_click", 1, 3, 2)
+eq(acts[len(acts)], "2Редактор", "click on the selected row activates it")
+ui:handle("mouse_scroll", 1, 3, 2)
+eq(l.top, 1, "wheel scrolls the view")
+
+# значки и подсказки в строках
+items = [{text: "notes.txt", hint: "2 КБ"}, {text: "plan.md", fg: theme.OK}]
+l2 = lists.list(items)
+ui, out = make(w.vbox([l2]), 20, 4)
+eq(unicode.sub(out.last[1], 15, 20), "  2 КБ", "hint on the right")
+eq(ui.cells:colors_lines("fg")[2]:sub(3, 3), "9", "item color")
+l2:set_items(["x", "y", "z"])
+ui:render()
+eq(unicode.sub(out.last[3], 1, 3), "  z", "set_items replaces the rows")
+eq(l2.selected, 1, "selection reset")
+
+# ---------------------------------------------------------------- таблица
+tb = lists.table_view([{title: "Имя", width: "fill"}, {title: "Размер", width: 7, align: "right"}], [["notes.txt", "2 КБ"], ["план.md", 8], ["скрипт.cub", "1 КБ"]])
+ui, out = make(w.vbox([tb]), 24, 6)
+eq(unicode.sub(out.last[1], 1, 3), "Имя", "header")
+eq(unicode.sub(out.last[1], 17, 24), " Размер ", "header of the right aligned column")
+eq(unicode.sub(out.last[2], 1, 9), "notes.txt", "first row")
+ui:handle("key", keys.down)
+eq(tb.selected, 2, "table selection")
+ui:handle("mouse_click", 1, 2, 4)
+eq(tb.selected, 3, "click on a table row")
+ui:handle("mouse_click", 1, 2, 1)
+eq(tb.selected, 3, "click on the header does nothing")
+
+# ---------------------------------------------------------------- вкладки
+tabsw = lists.tabs(["Вид", "Звук", "Сеть"])
+chg = []
+tabsw:on("change", (wd, i, title) => table.insert(chg, title))
+ui, out = make(w.vbox([tabsw]), 30, 3)
+eq(unicode.sub(out.last[1], 1, 12), " Вид   Звук ", "tab titles")
+ui:handle("key", keys.right)
+eq(chg, ["Звук"], "right switches the tab")
+ui:handle("key", keys.right)
+ui:handle("key", keys.right)
+eq(tabsw.selected, 3, "last tab")
+ui:handle("mouse_click", 1, 2, 1)
+eq(tabsw.selected, 1, "click on a title")
+p1 = w.label("Первая страница")
+p2 = w.label("Вторая страница")
+tv = lists.tab_view([{title: "Один", content: p1}, {title: "Два", content: p2}])
+ui, out = make(w.vbox([tv]), 30, 6)
+eq(string.find(out.last[3], "Первая", 1, true) != nil, true, "first page visible")
+eq(string.find(out.last[3], "Вторая", 1, true), nil, "second hidden")
+ui:handle("key", keys.right)
+ui:render()
+eq(string.find(out.last[3], "Вторая", 1, true) != nil, true, "second page visible after switching")
+
+# ---------------------------------------------------------------- текст
+long_text = "один два три четыре пять шесть семь восемь девять десять одиннадцать двенадцать"
+tx = lists.text_view(long_text, {height: 3})
+ui, out = make(w.vbox([tx]), 12, 3)
+eq(tx.h, 3, "fixed height")
+first = out.last[1]
+ui:handle("key", keys.down)
+ui:render()
+eq(out.last[1] != first, true, "the text scrolls")
+ui:handle("key", keys["end"])
+ui:handle("key", keys.pageUp)
+ui:handle("key", keys.home)
+eq(tx.top, 0, "home goes to the top")
+ui:handle("mouse_scroll", 1, 2, 1)
+eq(tx.top, 3, "wheel scrolls three lines")
+
+# ---------------------------------------------------------------- выпадающий выбор и меню
+picks = []
+sel = lists.dropdown(["cubeos", "dark", "light"], 1):on("change", (wd, i, v) => table.insert(picks, v))
+ui, out = make(w.vbox([sel]), 30, 8)
+eq(unicode.sub(out.last[1], 1, 10), "‹ cubeos ›", "select shows the current value")
+ui:handle("key", keys.right)
+eq(picks, ["dark"], "right changes the value")
+ui:handle("key", keys.left)
+ui:handle("key", keys.left)
+eq(sel.selected, 1, "left stops at the first")
+ui:handle("key", keys.enter)
+eq(len(ui.overlays), 1, "Enter opens a list below the select")
+ui:render()
+eq(string.find(out.last[3], "cubeos", 1, true) != nil, true, "list under the select")
+ui:handle("key", keys.down)
+ui:handle("key", keys.down)
+ui:handle("key", keys.enter)
+eq(len(ui.overlays), 0, "choosing closes the list")
+eq(sel:value(), "light", "chosen value")
+eq(picks[len(picks)], "light", "change event")
+ui:handle("key", keys.enter)
+ui:handle("key", keys.escape or 1)
+eq(len(ui.overlays), 0, "Esc closes the list without choosing")
+eq(sel:value(), "light", "value unchanged")
+chosen = []
+ui:render()
+lists.popup_menu(ui, ["a", "b"], 2, 2, (i, it) => table.insert(chosen, it))
+ui:handle("key", keys.down)
+ui:handle("key", keys.enter)
+eq(chosen, ["b"], "popup menu picks an item")
+
+print("done")
