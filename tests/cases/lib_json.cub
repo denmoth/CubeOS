@@ -1,0 +1,79 @@
+import t
+import json
+eq = t.eq
+
+def err_of(text):
+    try:
+        json.parse(text)
+    except Error as e:
+        return e.message
+    return nil
+
+def rejects(text, part, label):
+    msg = err_of(text)
+    ok = msg != nil and string.find(msg, part, 1, true) != nil
+    if not ok:
+        print("FAIL " .. label .. ": " .. tostring(msg))
+
+# ---- допустимый JSON
+v = json.parse('{"a": 1, "b": [true, false, null], "c": "x", "d": {"e": -2.5e1, "f": 0, "g": 1E+2}}')
+eq(v.a, 1, "num")
+eq(v.b, [true, false, json.null], "array")
+eq(v.c, "x", "string")
+eq(v.d, {e: -25, f: 0, g: 100}, "nested numbers")
+eq(json.parse('"\\u0041\\n\\t\\"\\\\\\/"'), 'A\n\t"\\/', "escapes")
+eq(json.parse('"\\uD83D\\uDE00"'), "\u{1F600}", "surrogates")
+eq(json.parse("  [1,\n 2 ]  "), [1, 2], "whitespace")
+eq(json.parse("[]"), [], "empty array")
+eq(json.parse("{}"), {}, "empty object")
+eq(json.parse("-0"), 0, "negative zero")
+eq(getmetatable(json.parse("[]")) == json.array_mt, true, "array marker")
+
+# ---- расширения JSON5 запрещены
+rejects("// c\n1", "comments are not allowed", "line comment")
+rejects("/* c */ 1", "comments are not allowed", "block comment")
+rejects("[1, 2,]", "trailing commas", "trailing comma array")
+rejects('{"a": 1,}', "trailing commas", "trailing comma object")
+rejects("{'a': 1}", "double-quoted", "single quoted key")
+rejects("{a: 1}", "double-quoted", "unquoted key")
+rejects("['a']", "unexpected character", "single quoted string")
+rejects("0x10", "invalid number", "hex")
+rejects("01", "leading zeros", "leading zero")
+rejects("+1", "unexpected character", "plus sign")
+rejects(".5", "unexpected character", "leading dot")
+rejects("5.", "invalid number", "trailing dot")
+rejects("Infinity", "unexpected character", "Infinity")
+rejects("NaN", "unexpected character", "NaN")
+rejects('"a\tb"', "control character", "raw tab")
+rejects('"\\x41"', "invalid escape", "hex escape")
+rejects('"\\v"', "invalid escape", "vertical tab escape")
+rejects("1 2", "unexpected characters", "trailing garbage")
+rejects("", "unexpected end", "empty")
+rejects('{"a" 1}', "expected ':'", "missing colon")
+eq(err_of("[1,\n 2,\n x]"), "json5: line 3, column 2: unexpected character 'x'", "position")
+
+# ---- запись
+eq(json.stringify({a: 1, b: [1, 2]}), '{"a":1,"b":[1,2]}', "compact")
+eq(json.stringify({a: 1, b: [1, 2]}, {indent: 2}), '{\n  "a": 1,\n  "b": [\n    1,\n    2\n  ]\n}', "pretty")
+eq(json.stringify("a\"b\n\\"), '"a\\"b\\n\\\\"', "string")
+eq(json.stringify([1.5, -2, 1e20]), "[1.5,-2,1e+20]", "numbers")
+eq(json.stringify(json.null), "null", "null")
+eq(json.stringify(json.array()), "[]", "empty array")
+eq(json.stringify({}), "{}", "empty object")
+eq(json.stringify({a: 1}, {json5: true, quote: "'"}), '{"a":1}', "json5 options are ignored")
+
+def encode_err(v):
+    try:
+        json.stringify(v)
+    except Error as e:
+        return e.message
+    return nil
+
+eq(encode_err(0 / 0), "json: NaN and Infinity cannot be encoded in JSON", "NaN")
+eq(encode_err(math.huge), "json: NaN and Infinity cannot be encoded in JSON", "Infinity")
+eq(encode_err(() => 1) != nil, true, "function")
+
+data = {name: "x", list: [1, 2, {k: "v"}], flag: true, nothing: json.null, n: 3.25, nested: {deep: [[]]}}
+eq(json.parse(json.stringify(data)), data, "roundtrip")
+eq(json.parse(json.stringify(data, {indent: 4})), data, "roundtrip pretty")
+print("done")

@@ -37,9 +37,16 @@ def _skip(st):
     s = st.s
     p = st.pos
     while true:
-        a, b = string.find(s, "^[ \t\r\n\v\f]*", p)
+        if st.strict:
+            a, b = string.find(s, "^[ \t\r\n]*", p)
+        else:
+            a, b = string.find(s, "^[ \t\r\n\v\f]*", p)
         p = b + 1
         c = string.sub(s, p, p)
+        if st.strict:
+            if c == "/":
+                _fail(st, p, "comments are not allowed in JSON")
+            break
         if c == "/":
             n = string.sub(s, p + 1, p + 1)
             if n == "/":
@@ -77,6 +84,10 @@ def _string(st):
     parts = []
     n = 0
     stop_set = "[\\" .. q .. "\n]"
+    if st.strict:
+        if q != '"':
+            _fail(st, st.pos, "strings must use double quotes in JSON")
+        stop_set = '[\\"%c]'
     while true:
         i = string.find(s, stop_set, p)
         if i == nil:
@@ -90,10 +101,14 @@ def _string(st):
             return table.concat(parts)
         if c == "\n":
             _fail(st, i, "unescaped newline in string")
+        if st.strict and c != "\\":
+            _fail(st, i, "control character in string")
         # escape
         e = string.sub(s, i + 1, i + 1)
         p = i + 2
         piece = nil
+        if st.strict and string.find(e, '^[ntrbfu"\\/]$') == nil:
+            _fail(st, i, "invalid escape in JSON string")
         if e == "n":
             piece = "\n"
         elif e == "t":
@@ -172,9 +187,32 @@ def _number(st):
         _fail(st, st.pos, "invalid number")
     return sign * tonumber(string.sub(s, p, b))
 
+def _number_strict(st):
+    s = st.s
+    p = st.pos
+    a, b = string.find(s, "^%-?0", p)
+    if a == nil:
+        a, b = string.find(s, "^%-?[1-9]%d*", p)
+    if a == nil:
+        _fail(st, p, "invalid number")
+    if string.sub(s, b, b) == "0" and string.find(string.sub(s, b + 1, b + 1), "%d") != nil:
+        _fail(st, p, "leading zeros are not allowed in JSON numbers")
+    fa, fb = string.find(s, "^%.%d+", b + 1)
+    if fa != nil:
+        b = fb
+    ea, eb = string.find(s, "^[eE][+-]?%d+", b + 1)
+    if ea != nil:
+        b = eb
+    st.pos = b + 1
+    if string.find(string.sub(s, st.pos, st.pos), "[%w_%.]") != nil:
+        _fail(st, st.pos, "invalid number")
+    return tonumber(string.sub(s, p, b))
+
 def _key(st):
     s = st.s
     c = string.sub(s, st.pos, st.pos)
+    if st.strict and c != '"':
+        _fail(st, st.pos, "object keys must be double-quoted strings in JSON")
     if c == '"' or c == "'":
         return _string(st)
     a, b = string.find(s, "^[%a_$\x80-\xFF][%w_$\x80-\xFF]*", st.pos)
@@ -208,6 +246,10 @@ def _object(st):
         c = string.sub(st.s, st.pos, st.pos)
         if c == ",":
             st.pos += 1
+            if st.strict:
+                _skip(st)
+                if string.sub(st.s, st.pos, st.pos) == "}":
+                    _fail(st, st.pos, "trailing commas are not allowed in JSON")
         elif c == "}":
             break
         else:
@@ -236,6 +278,10 @@ def _array(st):
         c = string.sub(st.s, st.pos, st.pos)
         if c == ",":
             st.pos += 1
+            if st.strict:
+                _skip(st)
+                if string.sub(st.s, st.pos, st.pos) == "]":
+                    _fail(st, st.pos, "trailing commas are not allowed in JSON")
         elif c == "]":
             break
         else:
@@ -257,8 +303,12 @@ def _value(st):
     if c == "[":
         return _array(st)
     v = nil
+    if st.strict and (c == "+" or c == "." or c == "'" or c == "I" or c == "N"):
+        _fail(st, p, "unexpected character '" .. c .. "' in JSON")
     if c == '"' or c == "'":
         v = _string(st)
+    elif st.strict and (c == "-" or string.find(c, "%d") != nil):
+        v = _number_strict(st)
     elif c == "-" or c == "+" or c == "." or string.find(c, "%d") != nil:
         v = _number(st)
     elif string.sub(s, p, p + 3) == "true":
@@ -283,8 +333,8 @@ def _value(st):
     return v, nil
 
 
-def _parse_text(text, track):
-    st = {s: text, pos: 1, track: track}
+def _parse_text(text, track, strict=false):
+    st = {s: text, pos: 1, track: track, strict: strict}
     v, node = _value(st)
     _skip(st)
     if st.pos <= len(text):
@@ -293,6 +343,11 @@ def _parse_text(text, track):
 
 export def parse(text):
     v = _parse_text(text, false)
+    return v
+
+# строгий разбор по RFC 8259: без комментариев, запятых в конце, одинарных кавычек, ключей без кавычек, hex
+export def parse_strict(text):
+    v = _parse_text(text, false, true)
     return v
 
 # ---------------------------------------------------------------- запись
@@ -343,7 +398,9 @@ def _sorted_keys(t, sort):
         table.sort(ks, _key_order)
     return ks
 
-def _number_text(v):
+def _number_text(v, strict=false):
+    if strict and (v != v or v == math.huge or v == -math.huge):
+        raise Error("json: NaN and Infinity cannot be encoded in JSON")
     if v != v:
         return "NaN"
     if v == math.huge:
@@ -365,7 +422,7 @@ def _encode(v, opts, level):
     if t == "boolean":
         return v and "true" or "false"
     if t == "number":
-        return _number_text(v)
+        return _number_text(v, opts.strict)
     if t == "string":
         return _quote(v, opts.quote)
     if t != "table":
@@ -398,7 +455,7 @@ def _encode(v, opts, level):
             else:
                 key_text = _quote(k, opts.quote)
         elif kt == "number":
-            key_text = _quote(_number_text(k), opts.quote)
+            key_text = _quote(_number_text(k, opts.strict), opts.quote)
         else:
             raise Error("json5: object keys must be strings or numbers")
         parts[i] = pad .. key_text .. key_sep .. _encode(v[k], opts, level + 1)
@@ -413,6 +470,10 @@ def _opts(o):
 
 export def stringify(value, options=nil):
     return _encode(value, _opts(options), 0)
+
+# низкоуровневая запись с уже готовым набором опций (используется модулем json)
+export def encode(value, full_options):
+    return _encode(value, full_options, 0)
 
 # ---------------------------------------------------------------- точечная правка
 

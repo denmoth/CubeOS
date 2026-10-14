@@ -1,0 +1,29 @@
+# json: обычный JSON (RFC 8259), строгий. Для конфигов с комментариями используйте json5.
+#
+#   json.parse(text)              -> значение; null становится json.null; ошибки с позицией
+#   json.stringify(value, opts)   -> текст; opts: indent (по умолчанию 0, в одну строку), sort_keys (true)
+#
+# Массивы и объекты: разобранные массивы помечены метатаблицей json.array_mt (пустой массив отличается от пустого объекта);
+# при записи таблица с ключами 1..n считается массивом, остальное объектом.
+
+import json5
+
+export null = json5.null
+export array_mt = json5.array_mt
+
+export def parse(text):
+    return json5.parse_strict(text)
+
+export def stringify(value, options=nil):
+    opts = {indent: 0, sort_keys: true, json5: false, quote: '"', strict: true}
+    if options != nil:
+        for k, v in options:
+            opts[k] = v
+        opts.json5 = false
+        opts.quote = '"'
+        opts.strict = true
+    return json5.encode(value, opts)
+
+# массив: пометка для пустых таблиц, которые должны записываться как []
+export def array(items=nil):
+    return setmetatable(items ?? {}, array_mt)
