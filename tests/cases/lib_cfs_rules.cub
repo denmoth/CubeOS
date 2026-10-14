@@ -1,0 +1,63 @@
+import t
+import cfs.rules as rules
+eq = t.eq
+
+ivan = rules.subject("ivan", ["user"])
+anna = rules.subject("anna", ["user"], ["staff"])
+root = rules.subject("root", ["admin"])
+kernel = rules.subject("kernel", ["system"])
+
+r = rules.new()
+r:add("/cubeos/sys/**", {system: "rwx", "*": "rx"})
+r:add("/cubeos/sys/sec/**", {system: "rw"})
+r:add("/cubeos/users/$user/**", {"*": "rwx"})
+r:add("/cubeos/users/*/public/**", {"*": "r"})
+r:add("/cubeos/shared/**", {"*": "rl", admin: "rwl"})
+r:add("/cubeos/shared/projects/**", {staff: "rwl"})
+
+eq(r:rights(kernel, "/anything"), "rwxl", "system unrestricted")
+eq(r:rights(nil, "/anything"), "rwxl", "nil is system")
+eq(r:allows(ivan, "/cubeos/sys/bin/ls", "r"), true, "user reads sys")
+eq(r:allows(ivan, "/cubeos/sys/bin/ls", "w"), false, "user cannot write sys")
+eq(r:allows(ivan, "/cubeos/sys/sec/shadow", "r"), false, "specific rule hides sec")
+eq(r:allows(kernel, "/cubeos/sys/sec/shadow", "rw"), true, "system reads sec")
+eq(r:allows(root, "/cubeos/sys/sec/shadow", "r"), false, "admin is not system")
+eq(r:allows(root, "/cubeos/sys/bin/ls", "r"), true, "admin reads sys")
+eq(r:allows(root, "/cubeos/sys/bin/ls", "w"), false, "admin cannot write sys")
+
+# $user в шаблоне: подставляется имя; правило для другого пользователя не даёт прав
+r2 = rules.new()
+r2:add("/cubeos/users/$user/**", {"*": "rwxl"})
+eq(r2:allows(ivan, "/cubeos/users/ivan/home/a.txt", "rw"), true, "own home")
+eq(r2:allows(ivan, "/cubeos/users/anna/home/a.txt", "r"), false, "other home")
+
+r3 = rules.new()
+r3:add("/cubeos/users/*/public/**", {"*": "r"})
+eq(r3:allows(ivan, "/cubeos/users/anna/public/x", "r"), true, "public read")
+eq(r3:allows(ivan, "/cubeos/users/anna/public/x", "w"), false, "public not writable")
+
+eq(r:allows(ivan, "/cubeos/shared/data/x", "rl"), true, "shared read")
+eq(r:allows(ivan, "/cubeos/shared/data/x", "w"), false, "shared not writable for user")
+eq(r:allows(root, "/cubeos/shared/data/x", "w"), true, "admin writes shared")
+eq(r:allows(anna, "/cubeos/shared/projects/p/a", "w"), true, "group writes projects")
+eq(r:allows(ivan, "/cubeos/shared/projects/p/a", "w"), false, "non-member cannot write projects")
+eq(r:allows(ivan, "/cubeos/shared/projects/p/a", "r"), false, "projects rule replaces shared rule")
+eq(r:allows(ivan, "/nothing/here", "r"), false, "no rule means closed")
+
+# одинаковая конкретность: права складываются
+r4 = rules.new()
+r4:add("/a/*", {ivan: "r"})
+r4:add("/*/x", {ivan: "w"})
+eq(r4:rights(ivan, "/a/x"), "rw", "equal specificity merges")
+
+# загрузка из JSON5
+r5 = rules.new()
+r5:load("[\n  // comment\n  {path: '/cubeos/shared/**', allow: {'*': 'rl'}},\n  {path: '/cubeos/users/$user/**', allow: {ivan: 'rwx'}},\n]")
+eq(r5:allows(ivan, "/cubeos/shared/a", "r"), true, "loaded rule")
+eq(r5:allows(ivan, "/cubeos/users/ivan/f", "x"), true, "loaded user rule")
+
+eq(rules.is_admin(root), true, "is_admin")
+eq(rules.is_admin(ivan), false, "user not admin")
+eq(rules.is_admin(kernel), true, "system counts as admin")
+eq(rules.is_system(root), false, "admin not system")
+print("done")

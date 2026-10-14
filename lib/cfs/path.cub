@@ -1,0 +1,182 @@
+# cfs.path: пути CFS, имена, алиасы $name, шаблоны
+#
+# Путь всегда с "/" в качестве разделителя. Абсолютный путь начинается с "/".
+
+import cfs.errors as errors
+
+export const MAX_NAME = 64
+const FORBIDDEN = "[\\:%*%?\"<>|%c]"
+
+# сворачивает ".", ".." и повторные слэши; ".." выше корня остаётся в корне
+export def normalize(p):
+    parts = []
+    n = 0
+    for seg in string.gmatch(p, "[^/]+"):
+        if seg == ".":
+            pass
+        elif seg == "..":
+            if n > 0:
+                parts[n] = nil
+                n -= 1
+        else:
+            n += 1
+            parts[n] = seg
+    return "/" .. table.concat(parts, "/")
+
+# список имён пути: "/a/b" -> ["a", "b"]
+export def split(p):
+    out = []
+    for seg in string.gmatch(normalize(p), "[^/]+"):
+        out[len(out) + 1] = seg
+    return out
+
+export def join_parts(parts):
+    return "/" .. table.concat(parts, "/")
+
+# склеивает пути: если второй абсолютный, он побеждает
+export def join(base, rel):
+    if rel == nil or rel == "":
+        return normalize(base)
+    if string.sub(rel, 1, 1) == "/":
+        return normalize(rel)
+    return normalize(base .. "/" .. rel)
+
+export def parent(p):
+    parts = split(p)
+    if len(parts) == 0:
+        return "/"
+    parts[len(parts)] = nil
+    return join_parts(parts)
+
+export def basename(p):
+    parts = split(p)
+    if len(parts) == 0:
+        return ""
+    return parts[len(parts)]
+
+export def extension(name):
+    ext = string.match(name, "^.+%.([^.]+)$")
+    return ext
+
+export def is_hidden(name):
+    return string.sub(name, 1, 1) == "."
+
+export def is_important_name(name):
+    return string.sub(name, 1, 1) == "!"
+
+# важный путь: любая часть начинается с "!"
+export def is_important(p):
+    for seg in string.gmatch(p, "[^/]+"):
+        if string.sub(seg, 1, 1) == "!":
+            return true
+    return false
+
+# true, если a находится внутри b или равно b
+export def is_inside(a, b):
+    a = normalize(a)
+    b = normalize(b)
+    if b == "/":
+        return true
+    return a == b or string.sub(a, 1, len(b) + 1) == b .. "/"
+
+# проверка имени одного элемента пути; возвращает nil, если имя допустимо, иначе текст причины
+export def name_problem(name):
+    if name == nil or name == "":
+        return "empty name"
+    if name == "." or name == "..":
+        return "reserved name"
+    if len(name) > MAX_NAME:
+        return "name is longer than " .. MAX_NAME .. " bytes"
+    if string.find(name, FORBIDDEN) != nil:
+        return "name contains a forbidden character (control characters and \\ : * ? \" < > |)"
+    last = string.sub(name, -1)
+    if last == " " or last == ".":
+        return "name must not end with a space or a dot"
+    return nil
+
+export def check_name(name, path=nil):
+    problem = name_problem(name)
+    if problem != nil:
+        errors.fail("ENAME", problem, path)
+
+# ---------------------------------------------------------------- алиасы $name
+
+# подставляет $алиасы (целым сегментом пути); aliases: {имя: значение}; значения могут содержать $
+export def expand(p, aliases, depth=0):
+    if string.find(p, "$", 1, true) == nil:
+        return p
+    if depth > 16:
+        errors.fail("ELOOP", "alias expansion is too deep (alias cycle?)", p)
+    absolute = string.sub(p, 1, 1) == "/"
+    built = absolute and "/" or ""
+    first = true
+    changed = false
+    for seg in string.gmatch(p, "[^/]+"):
+        piece = seg
+        name = string.match(seg, "^%$([%w_]+)$")
+        if name != nil:
+            value = aliases[name]
+            if value == nil:
+                errors.fail("EINVAL", "unknown alias $" .. name, p)
+            changed = true
+            piece = value
+        if first and not absolute:
+            built = piece
+        else:
+            if string.sub(piece, 1, 1) == "/":
+                piece = string.sub(piece, 2)
+            if built == "/" or built == "":
+                built = "/" .. piece
+            else:
+                built = built .. "/" .. piece
+        first = false
+    if changed:
+        return expand(built, aliases, depth + 1)
+    return p
+
+# ---------------------------------------------------------------- шаблоны
+
+# сопоставляет одно имя с шаблоном из * (любые символы) и ? (один байт)
+export def match_name(pattern, name):
+    if string.find(pattern, "[%*%?]") == nil:
+        return pattern == name
+    escaped = string.gsub(pattern, "[%^%$%(%)%%%.%[%]%+%-]", "%%%0")
+    escaped = string.gsub(escaped, "%*", ".*")
+    escaped = string.gsub(escaped, "%?", ".")
+    return string.find(name, "^" .. escaped .. "$") != nil
+
+# шаблон пути: сегменты, "**" любое число сегментов, "*" и "?" внутри сегмента
+export def match(pattern, p):
+    pat = split(pattern)
+    parts = split(p)
+    return _match_from(pat, 1, parts, 1)
+
+def _match_from(pat, i, parts, j):
+    while i <= len(pat):
+        seg = pat[i]
+        if seg == "**":
+            if i == len(pat):
+                return true
+            for k in range[j, len(parts) + 1]:
+                if _match_from(pat, i + 1, parts, k):
+                    return true
+            return false
+        if j > len(parts):
+            return false
+        if not match_name(seg, parts[j]):
+            return false
+        i += 1
+        j += 1
+    return j > len(parts)
+
+# насколько шаблон конкретен: число сегментов без подстановочных знаков (для выбора правила)
+export def specificity(pattern):
+    score = 0
+    for seg in string.gmatch(normalize(pattern), "[^/]+"):
+        if seg == "**":
+            score += 0
+        elif string.find(seg, "[%*%?]") != nil:
+            score += 1
+        else:
+            score += 3
+    return score

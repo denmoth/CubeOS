@@ -1,0 +1,86 @@
+import t
+import cfs.memory as memory
+import cfs.host as host
+import cfs.errors as errors
+eq = t.eq
+
+def code_of(f):
+    try:
+        f()
+    except Error as e:
+        return e.code
+    return nil
+
+# ---------------------------------------------------------------- память
+clock = {now: 1000}
+m = memory.new({limit: 100, now: () => clock.now})
+eq(m:stat("/"), {type: "dir", size: 0, modified: 1000}, "root stat")
+eq(m:stat("/nope"), nil, "missing stat")
+m:mkdir("/a")
+m:write("/a/f.txt", "hello")
+eq(m:read("/a/f.txt"), "hello", "read back")
+eq(m:stat("/a/f.txt").size, 5, "file size")
+eq(m:stat("/a/f.txt").type, "file", "file type")
+eq(m:list("/"), ["a"], "list root")
+eq(m:list("/a"), ["f.txt"], "list dir")
+eq(code_of(() => m:write("/missing/x", "1")), "ENOENT", "write into missing dir")
+eq(code_of(() => m:mkdir("/a")), "EEXIST", "mkdir existing")
+eq(code_of(() => m:read("/a")), "EISDIR", "read dir")
+eq(code_of(() => m:list("/a/f.txt")), "ENOTDIR", "list file")
+eq(code_of(() => m:read("/a/none")), "ENOENT", "read missing")
+eq(m:used(), 5, "used bytes")
+eq(m:free_space(), 95, "free space")
+m:write("/a/f.txt", "hi")
+eq(m:used(), 2, "used after overwrite")
+eq(code_of(() => m:write("/big", string.rep("x", 200))), "ENOSPC", "limit enforced")
+eq(m:used(), 2, "used unchanged after failed write")
+clock.now = 2000
+m:write("/a/g.txt", "second")
+eq(m:stat("/a/g.txt").modified, 2000, "modified uses clock")
+m:move("/a/g.txt", "/g2.txt")
+eq(m:read("/g2.txt"), "second", "moved")
+eq(m:stat("/a/g.txt"), nil, "moved away")
+eq(code_of(() => m:move("/g2.txt", "/a/f.txt")), "EEXIST", "move onto existing")
+eq(code_of(() => m:move("/a", "/a/sub")), "EINVAL", "move into itself")
+m:mkdir("/d")
+m:write("/d/x", "123")
+eq(m:used(), 2 + 6 + 3, "used with dir")
+m:remove("/d")
+eq(m:used(), 8, "used after dir remove")
+eq(m:stat("/d"), nil, "dir removed")
+m:set_modified("/g2.txt", 5)
+eq(m:stat("/g2.txt").modified, 5, "set_modified")
+ro = memory.new({readonly: true})
+eq(ro:is_readonly(), true, "readonly flag")
+
+# ---------------------------------------------------------------- настоящий диск
+base = "/repo/build/cfs_host_test"
+if fs.exists(base):
+    fs.delete(base)
+fs.makeDir(base)
+h = host.new(base)
+eq(h:stat("/"), {type: "dir", size: 0, modified: h:stat("/").modified}, "host root")
+h:mkdir("/docs")
+h:write("/docs/note.txt", "line1\nline2\n")
+eq(h:read("/docs/note.txt"), "line1\nline2\n", "host read")
+eq(h:stat("/docs/note.txt").size, 12, "host size")
+eq(h:list("/docs"), ["note.txt"], "host list")
+eq(code_of(() => h:read("/docs/none")), "ENOENT", "host missing")
+eq(code_of(() => h:mkdir("/docs")), "EEXIST", "host mkdir existing")
+eq(code_of(() => h:write("/nodir/x", "1")), "ENOENT", "host write missing dir")
+h:write("/docs/русский.txt", "привет")
+eq(h:read("/docs/русский.txt"), "привет", "host cyrillic name and data")
+# CraftOS-PC может искажать не-ASCII имена на диске хоста, поэтому проверяем только число записей
+eq(len(h:list("/docs")), 2, "host list count")
+h:copy("/docs/note.txt", "/docs/copy.txt")
+eq(h:read("/docs/copy.txt"), "line1\nline2\n", "host copy")
+h:move("/docs/copy.txt", "/moved.txt")
+eq(h:read("/moved.txt"), "line1\nline2\n", "host move")
+eq(code_of(() => h:move("/moved.txt", "/docs/note.txt")), "EEXIST", "host move onto existing")
+h:remove("/docs")
+eq(h:stat("/docs"), nil, "host remove dir")
+eq(h:free_space() > 0, true, "host free space")
+sub = host.new(base .. "/inner_missing")
+eq(code_of(() => sub:list("/")), "ENOENT", "host missing root")
+fs.delete(base)
+print("done")

@@ -1,0 +1,94 @@
+# cfs.rules: права доступа по правилам на префиксы путей
+#
+# Правило: {path: шаблон, allow: {субъект: "rwxl"}}.
+#   * побеждает самое конкретное совпавшее правило (остальные игнорируются целиком);
+#   * субъект правила: имя пользователя, роль, группа или "*" (все);
+#   * в шаблоне $user заменяется именем пользователя, ** любое число уровней, * внутри имени;
+#   * права: r чтение, w запись (создание, изменение, удаление), x выполнение, l список каталога;
+#   * явных запретов нет, пути без правил закрыты; роль system не ограничена.
+#
+# Субъект: {name: "ivan", roles: ["user"], groups: []}; nil означает систему.
+
+import cfs.path as paths
+import json5
+
+export def subject(name, roles=nil, groups=nil):
+    return {name: name, roles: roles ?? ["user"], groups: groups ?? []}
+
+export def is_system(sub):
+    if sub == nil:
+        return true
+    for role in sub.roles ?? []:
+        if role == "system":
+            return true
+    return false
+
+export def is_admin(sub):
+    if is_system(sub):
+        return true
+    for role in sub.roles ?? []:
+        if role == "admin":
+            return true
+    return false
+
+def _principals(sub):
+    out = ["*", sub.name]
+    for role in sub.roles ?? []:
+        out[len(out) + 1] = role
+    for group in sub.groups ?? []:
+        out[len(out) + 1] = group
+    return out
+
+def _has_all(have, need):
+    for i in range[1, len(need)]:
+        if string.find(have, string.sub(need, i, i), 1, true) == nil:
+            return false
+    return true
+
+export class Rules:
+    def init(self):
+        self.list = []
+
+    def add(self, path, allow):
+        self.list[len(self.list) + 1] = {path: path, allow: allow, score: paths.specificity(path)}
+
+    def clear(self):
+        self.list = []
+
+    # загружает правила из текста JSON5: [{path: "...", allow: {...}}, ...]
+    def load(self, text):
+        data = json5.parse(text)
+        for rule in data:
+            self:add(rule.path, rule.allow)
+
+    def rights(self, sub, path):
+        if is_system(sub):
+            return "rwxl"
+        best = -1
+        chosen = []
+        for rule in self.list:
+            pattern = string.gsub(rule.path, "%$user", sub.name)
+            if paths.match(pattern, path):
+                if rule.score > best:
+                    best = rule.score
+                    chosen = [rule]
+                elif rule.score == best:
+                    chosen[len(chosen) + 1] = rule
+        granted = ""
+        principals = _principals(sub)
+        for rule in chosen:
+            for who in principals:
+                r = rule.allow[who]
+                if r != nil:
+                    for i in range[1, len(r)]:
+                        ch = string.sub(r, i, i)
+                        if string.find(granted, ch, 1, true) == nil:
+                            granted = granted .. ch
+        return granted
+
+    # need: строка нужных прав, например "r" или "rw"
+    def allows(self, sub, path, need):
+        return _has_all(self:rights(sub, path), need)
+
+export def new():
+    return Rules()

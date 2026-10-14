@@ -1,0 +1,25 @@
+# cfs.errors: ошибки файловой системы CFS с кодами
+#
+#   try:
+#       v:read("$home/missing.txt")
+#   except Error as e:
+#       if e.code == "ENOENT": ...
+#
+# Коды: ENOENT нет такого пути, EEXIST уже есть, ENOTDIR не каталог, EISDIR это каталог, EACCES нет прав,
+# EINVAL неверный аргумент или имя, ENAME недопустимое имя, ENOSPC нет места, ELOOP слишком много ссылок,
+# ENOTEMPTY каталог не пуст, EROFS только для чтения, ECONFIRM нужно подтверждение, EBUSY занято,
+# EXDEV нельзя между дисками, EIO ошибка провайдера.
+
+export class CfsError(Error):
+    def init(self, code, message, path=nil):
+        super.init(self, code .. ": " .. message .. (path != nil and (" (" .. path .. ")") or ""))
+        self.code = code
+        self.detail = message
+        self.path = path
+
+export def fail(code, message, path=nil):
+    raise CfsError(code, message, path)
+
+# проверка, что e это ошибка CFS с данным кодом
+export def is_code(e, code):
+    return isinstance(e, CfsError) and e.code == code

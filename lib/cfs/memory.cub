@@ -1,0 +1,155 @@
+# cfs.memory: провайдер CFS в оперативной памяти (tmp, proc, run, тесты)
+#
+# Интерфейс провайдера (пути внутри провайдера абсолютные и нормализованные, например "/a/b"):
+#   stat(rel) -> nil | {type: "file"|"dir", size, modified}
+#   list(rel) -> список имён
+#   read(rel) -> строка
+#   write(rel, data)          создаёт или заменяет файл целиком (каталог-родитель должен существовать)
+#   mkdir(rel)                один уровень
+#   remove(rel)               файл или каталог целиком
+#   move(from, to)            внутри провайдера, назначения нет
+#   copy(from, to)            необязательно
+#   free_space() -> число или nil, capacity() -> число или nil, is_readonly() -> bool
+
+import cfs.path as paths
+import cfs.errors as errors
+
+def _default_now():
+    return os.epoch("utc")
+
+export class Memory:
+    # opts: {limit: байт, now: функция времени в мс, readonly: bool}
+    def init(self, opts=nil):
+        o = opts ?? {}
+        self.limit = o.limit
+        self.now = o.now ?? _default_now
+        self.readonly = o.readonly ?? false
+        self.root = {kind: "dir", children: {}, modified: self.now()}
+        self.used_bytes = 0
+
+    def _find(self, rel):
+        node = self.root
+        for seg in paths.split(rel):
+            if node.kind != "dir":
+                return nil
+            node = node.children[seg]
+            if node == nil:
+                return nil
+        return node
+
+    def _parent_and_name(self, rel):
+        parts = paths.split(rel)
+        if len(parts) == 0:
+            errors.fail("EINVAL", "the root has no parent", rel)
+        name = parts[len(parts)]
+        node = self:_find(paths.parent(rel))
+        if node == nil:
+            errors.fail("ENOENT", "no such directory", paths.parent(rel))
+        if node.kind != "dir":
+            errors.fail("ENOTDIR", "not a directory", paths.parent(rel))
+        return node, name
+
+    def is_readonly(self):
+        return self.readonly
+
+    def stat(self, rel):
+        node = self:_find(rel)
+        if node == nil:
+            return nil
+        if node.kind == "dir":
+            return {type: "dir", size: 0, modified: node.modified}
+        return {type: "file", size: len(node.data), modified: node.modified}
+
+    def list(self, rel):
+        node = self:_find(rel)
+        if node == nil:
+            errors.fail("ENOENT", "no such directory", rel)
+        if node.kind != "dir":
+            errors.fail("ENOTDIR", "not a directory", rel)
+        names = []
+        for name, child in node.children:
+            names[len(names) + 1] = name
+        table.sort(names)
+        return names
+
+    def read(self, rel):
+        node = self:_find(rel)
+        if node == nil:
+            errors.fail("ENOENT", "no such file", rel)
+        if node.kind == "dir":
+            errors.fail("EISDIR", "is a directory", rel)
+        return node.data
+
+    def write(self, rel, data):
+        parent, name = self:_parent_and_name(rel)
+        existing = parent.children[name]
+        if existing != nil and existing.kind == "dir":
+            errors.fail("EISDIR", "is a directory", rel)
+        old = existing != nil and len(existing.data) or 0
+        if self.limit != nil and self.used_bytes - old + len(data) > self.limit:
+            errors.fail("ENOSPC", "not enough space", rel)
+        t = self.now()
+        parent.children[name] = {kind: "file", data: data, modified: t}
+        parent.modified = t
+        self.used_bytes = self.used_bytes - old + len(data)
+
+    def mkdir(self, rel):
+        parent, name = self:_parent_and_name(rel)
+        if parent.children[name] != nil:
+            errors.fail("EEXIST", "already exists", rel)
+        t = self.now()
+        parent.children[name] = {kind: "dir", children: {}, modified: t}
+        parent.modified = t
+
+    def _size_of(self, node):
+        if node.kind == "file":
+            return len(node.data)
+        total = 0
+        for name, child in node.children:
+            total += self:_size_of(child)
+        return total
+
+    def remove(self, rel):
+        parent, name = self:_parent_and_name(rel)
+        node = parent.children[name]
+        if node == nil:
+            errors.fail("ENOENT", "no such file or directory", rel)
+        self.used_bytes -= self:_size_of(node)
+        parent.children[name] = nil
+        parent.modified = self.now()
+
+    def move(self, from_rel, to_rel):
+        sp, sname = self:_parent_and_name(from_rel)
+        node = sp.children[sname]
+        if node == nil:
+            errors.fail("ENOENT", "no such file or directory", from_rel)
+        if paths.is_inside(to_rel, from_rel):
+            errors.fail("EINVAL", "cannot move a directory into itself", from_rel)
+        dp, dname = self:_parent_and_name(to_rel)
+        if dp.children[dname] != nil:
+            errors.fail("EEXIST", "destination exists", to_rel)
+        sp.children[sname] = nil
+        dp.children[dname] = node
+        t = self.now()
+        sp.modified = t
+        dp.modified = t
+
+    def free_space(self):
+        if self.limit == nil:
+            return nil
+        return self.limit - self.used_bytes
+
+    def capacity(self):
+        return self.limit
+
+    def used(self):
+        return self.used_bytes
+
+    # изменение времени файла, нужно очистке tmp и тестам
+    def set_modified(self, rel, t):
+        node = self:_find(rel)
+        if node != nil:
+            node.modified = t
+
+export def new(opts=nil):
+    return Memory(opts)

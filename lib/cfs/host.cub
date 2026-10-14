@@ -1,0 +1,116 @@
+# cfs.host: провайдер CFS поверх настоящей файловой системы CC (fs) в заданном корне
+#
+#   cfs.host.new("/cubeos")        пути провайдера "/a/b" это "/cubeos/a/b" в fs
+# Интерфейс провайдера описан в cfs.memory.
+
+import cfs.path as paths
+import cfs.errors as errors
+
+export class Host:
+    def init(self, root="/", opts=nil):
+        self.root = paths.normalize(root)
+        o = opts ?? {}
+        self.readonly = o.readonly ?? false
+
+    def _real(self, rel):
+        r = paths.normalize(rel)
+        if self.root == "/":
+            return r
+        if r == "/":
+            return self.root
+        return self.root .. r
+
+    def is_readonly(self):
+        return self.readonly or fs.isReadOnly(self.root)
+
+    def stat(self, rel):
+        p = self:_real(rel)
+        if not fs.exists(p):
+            return nil
+        modified = 0
+        if fs.attributes != nil:
+            ok, attrs = pcall(fs.attributes, p)
+            if ok and attrs != nil:
+                modified = attrs.modified ?? 0
+        if fs.isDir(p):
+            return {type: "dir", size: 0, modified: modified}
+        return {type: "file", size: fs.getSize(p), modified: modified}
+
+    def list(self, rel):
+        p = self:_real(rel)
+        if not fs.exists(p):
+            errors.fail("ENOENT", "no such directory", rel)
+        if not fs.isDir(p):
+            errors.fail("ENOTDIR", "not a directory", rel)
+        names = fs.list(p)
+        table.sort(names)
+        return names
+
+    def read(self, rel):
+        p = self:_real(rel)
+        if not fs.exists(p):
+            errors.fail("ENOENT", "no such file", rel)
+        if fs.isDir(p):
+            errors.fail("EISDIR", "is a directory", rel)
+        h = fs.open(p, "rb")
+        if h == nil:
+            errors.fail("EIO", "cannot open for reading", rel)
+        data = h.readAll() ?? ""
+        h.close()
+        return data
+
+    def write(self, rel, data):
+        p = self:_real(rel)
+        if fs.exists(p) and fs.isDir(p):
+            errors.fail("EISDIR", "is a directory", rel)
+        parent = fs.getDir(p)
+        if not fs.exists(parent):
+            errors.fail("ENOENT", "no such directory", paths.parent(rel))
+        h, err = fs.open(p, "wb")
+        if h == nil:
+            errors.fail("EIO", "cannot open for writing: " .. tostring(err), rel)
+        h.write(data)
+        h.close()
+
+    def mkdir(self, rel):
+        p = self:_real(rel)
+        if fs.exists(p):
+            errors.fail("EEXIST", "already exists", rel)
+        if not fs.exists(fs.getDir(p)):
+            errors.fail("ENOENT", "no such directory", paths.parent(rel))
+        fs.makeDir(p)
+
+    def remove(self, rel):
+        p = self:_real(rel)
+        if not fs.exists(p):
+            errors.fail("ENOENT", "no such file or directory", rel)
+        fs.delete(p)
+
+    def move(self, from_rel, to_rel):
+        a = self:_real(from_rel)
+        b = self:_real(to_rel)
+        if not fs.exists(a):
+            errors.fail("ENOENT", "no such file or directory", from_rel)
+        if fs.exists(b):
+            errors.fail("EEXIST", "destination exists", to_rel)
+        fs.move(a, b)
+
+    def copy(self, from_rel, to_rel):
+        a = self:_real(from_rel)
+        b = self:_real(to_rel)
+        if not fs.exists(a):
+            errors.fail("ENOENT", "no such file or directory", from_rel)
+        if fs.exists(b):
+            errors.fail("EEXIST", "destination exists", to_rel)
+        fs.copy(a, b)
+
+    def free_space(self):
+        return fs.getFreeSpace(self.root)
+
+    def capacity(self):
+        if fs.getCapacity == nil:
+            return nil
+        return fs.getCapacity(self.root)
+
+export def new(root="/", opts=nil):
+    return Host(root, opts)
