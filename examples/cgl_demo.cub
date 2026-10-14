@@ -1,7 +1,7 @@
-# Демонстрация Cube Graphics Library: заставка, плазма, огонь, трёхмерная сцена, галерея фигур и окно, логотип.
+# Демонстрация Cube Graphics Library: заставка, плазма, трёхмерная сцена, галерея фигур и окно, логотип.
 # Запуск в игре: game/cgl_demo.lua (стрелки: сцена, D: дизеринг телетекста, M: смена вывода, Q: выход, мышь: частицы)
 #
-# main(opts): backend, term, auto (переключать сцены каждые N кадров и выйти, для проверок), wait, clock.
+# main(opts): backend, term (например, монитор), monitor (его имя для касаний), auto (переключать сцены каждые N кадров и выйти, для проверок), wait, clock.
 # Работает с CC: Graphics (пиксели 6x9 на клетку) и на обычном цветном терминале (телетекст, 2x3 пикселя на клетку).
 
 import cgl
@@ -61,7 +61,7 @@ class Intro:
                     mask.px[y * ctx.w + x + 1] = math.floor(x / self.band)
         self.mask = mask
         self.bg = ctx.pal:ramp([[18, 22, 30], [30, 40, 56]], 12, 0, self.base - 1)
-        self.cycle = 7
+        self.cycle = 3.6
         ctx.s:fill_gradient(0, 0, ctx.w, ctx.h, self.bg, "v")
         if self.palette_mode:
             # номера групп прямо в кадре: base + группа
@@ -75,10 +75,10 @@ class Intro:
     def group_color(self, g, u, w):
         x = g * self.band
         fade = w * 0.35
-        front_in = u / 2.4 * (w + fade) - fade
+        front_in = u / 1.2 * (w + fade) - fade
         k = math.max(0, math.min(1, (front_in - x) / fade))
-        if u > 4.6:
-            front_out = (u - 4.6) / 2.2 * (w + fade) - fade
+        if u > 2.4:
+            front_out = (u - 2.4) / 1.2 * (w + fade) - fade
             k = k * (1 - math.max(0, math.min(1, (front_out - x) / fade)))
         # блик на фронте проявления
         glow = math.max(0, 1 - math.abs(front_in - x) / (fade * 0.5)) * 0.6
@@ -182,27 +182,6 @@ class PlasmaScene:
         self.plasma:draw(self.small, t)
         ctx.s:blit(self.small, 0, 0, {scale: self.k})
         centered(ctx, "Plasma", math.floor(ctx.h / 2) - 5, ctx.white, _scale(ctx, 2, 1), ctx.black)
-
-# ---------------------------------------------------------------- сцена 3: огонь
-
-class FireScene:
-    def init(self, ctx):
-        self.k = _scale(ctx, 3, 1)
-        self.fw = math.ceil(ctx.w / self.k)
-        self.fh = math.ceil(ctx.h / self.k * 0.8)
-        ramp = ctx.pal:ramp([[0, 0, 0], [60, 0, 0], [180, 20, 0], [255, 110, 0], [255, 200, 40], [255, 255, 200], [255, 255, 255]], 28)
-        self.fire = fx.Fire(self.fw, self.fh, ramp)
-        self.small = sf.new(self.fw, self.fh, 0)
-        self.ramp = ramp
-
-    def draw(self, ctx, dt, t):
-        ctx.s:clear(ctx.black)
-        self.fire:set_fuel(0.7 + 0.3 * math.sin(t * 2))
-        self.fire:step()
-        self.fire:draw(self.small)
-        ctx.s:blit(self.small, 0, ctx.h - self.fh * self.k, {scale: self.k})
-        centered(ctx, "Fire", math.floor(ctx.h * 0.18), ctx.orange, _scale(ctx, 3, 1), ctx.black)
-        centered(ctx, "палитра, дизеринг, дифф кадров", math.floor(ctx.h * 0.18) + _scale(ctx, 30, 11), ctx.light_gray, 1, ctx.black)
 
 # ---------------------------------------------------------------- сцена 4: трёхмерная графика
 
@@ -336,8 +315,8 @@ export def main(opts=nil):
     ctx.blue = near(40, 70, 190)
     ctx.panel = near(34, 40, 66)
     ctx.waves = [near(250, 150, 90), near(220, 90, 130), near(150, 60, 150), near(80, 40, 120)]
-    classes = [Intro, Title, PlasmaScene, FireScene, Scene3D, Gallery, LogoScene]
-    names = ["Интро", "Заставка", "Плазма", "Огонь", "3D", "Фигуры", "Логотип"]
+    classes = [Intro, Title, PlasmaScene, Scene3D, Gallery, LogoScene]
+    names = ["Интро", "Заставка", "Плазма", "3D", "Фигуры", "Логотип"]
     state = {index: 1, scene: nil, quit: false, flip: false}
 
     def enter(i):
@@ -368,7 +347,14 @@ export def main(opts=nil):
         elif ev == "mouse_click" and state.scene.click != nil:
             px, py = ctx.screen:to_pixel(b, c)
             state.scene:click(ctx, px, py)
-        elif ev == "term_resize":
+        elif ev == "monitor_touch" and a == o.monitor and state.scene.click != nil:
+            # касание монитора приходит в клетках; в пиксельном режиме переводим клетку в пиксель её угла
+            if ctx.screen.kind == "graphics":
+                state.scene:click(ctx, (b - 1) * 6, (c - 1) * 9)
+            else:
+                px, py = ctx.screen:to_pixel(b, c)
+                state.scene:click(ctx, px, py)
+        elif ev == "term_resize" or (ev == "monitor_resize" and a == o.monitor):
             state.flip = true
             ctx.screen:stop()
         return state.quit

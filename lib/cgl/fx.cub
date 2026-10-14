@@ -1,4 +1,4 @@
-# cgl.fx: готовые эффекты для демо, заставок и фонов: плазма, звёздное поле, огонь, частицы
+# cgl.fx: готовые эффекты для демо, заставок и фонов: плазма, звёздное поле, частицы
 #
 # Эффекты считаются целыми числами и таблицами, чтобы укладываться в кадр на CC. Для экрана целиком считайте эффект в малом
 # размере и растяните blit'ом (opts.scale): 3 раза по каждой оси дают в 9 раз меньше работы.
@@ -7,7 +7,6 @@
 #   p:draw(small, time_seconds)          small: Surface 102x57
 #   screen.surface:blit(small, 0, 0, {scale: 3})
 #
-#   f = fx.Fire(80, 40, ramp); f:step(); f:draw(small)
 #   st = fx.Starfield(w, h, 80); st:update(dt); st:draw(surface, ramp)
 #   ps = fx.Particles(); ps:burst(x, y, 30, {color: 9}); ps:update(dt); ps:draw(surface)
 
@@ -49,55 +48,6 @@ export class Plasma:
             for x in range[0, w - 1]:
                 v = tab[(x * 2 + t1) % 256 + 1] + sy + tab[(dist[drow + x] + t3) % 256 + 1]
                 px[base + x] = ramp[v * n // 190 + 1]
-
-export class Fire:
-    # ramp: цвета от холодного к горячему
-    def init(self, w, h, ramp):
-        self.w = w
-        self.h = h
-        self.ramp = ramp
-        self.heat = []
-        for i in range[1, w * (h + 1)]:
-            self.heat[i] = 0
-        self.fuel = 1
-
-    # топливо 0..1: сила пламени у основания
-    def set_fuel(self, v):
-        self.fuel = v
-
-    def step(self):
-        w = self.w
-        h = self.h
-        heat = self.heat
-        n = len(self.ramp)
-        top = n - 1
-        # нижняя строка (скрытая): случайные вспышки
-        base = h * w
-        for x in range[1, w]:
-            heat[base + x] = math.random() < 0.55 * self.fuel + 0.2 and top or math.floor(top * 0.3 * self.fuel)
-        for y in range[0, h - 1]:
-            row = y * w
-            below = (y + 1) * w
-            for x in range[1, w]:
-                left = x > 1 and x - 1 or x
-                right = x < w and x + 1 or x
-                v = (heat[below + left] + heat[below + x] + heat[below + right] + heat[below + x]) / 4
-                v = v - 0.45 - (math.random() < 0.3 and 0.4 or 0)
-                if v < 0:
-                    v = 0
-                heat[row + x] = v
-
-    def draw(self, s, x0=0, y0=0):
-        n = len(self.ramp)
-        ramp = self.ramp
-        heat = self.heat
-        w = self.w
-        for y in range[0, self.h - 1]:
-            for x in range[1, w]:
-                idx = math.floor(heat[y * w + x] + 0.5)
-                if idx > n - 1:
-                    idx = n - 1
-                s:set(x0 + x - 1, y0 + y, ramp[idx + 1])
 
 export class Starfield:
     def init(self, w, h, count, opts=nil):

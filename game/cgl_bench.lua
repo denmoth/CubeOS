@@ -37,17 +37,15 @@ end
 local ramp = pal:ramp({ { 0, 0, 0 }, { 255, 0, 0 }, { 255, 255, 255 } }, 24)
 local small = cgl.surface.new(math.ceil(w / 3), math.ceil(h / 3), 0)
 local plasma = fx.Plasma(small.w, small.h, ramp)
-local fire = fx.Fire(small.w, small.h, ramp)
 local torus = g3d.torus(1, 0.4, 14, 8)
 
 bench("fill_rect весь экран", function(i) s:fill_rect(0, 0, w, h, i % 200) end)
 bench("fill_gradient вертикальный", function() s:fill_gradient(0, 0, w, h, ramp, "v") end)
-bench("circle залитый r=30", function(i) s:circle(w // 2, h // 2, 30, i % 200, true) end)
+bench("circle залитый r=30", function(i) s:circle(math.floor(w / 2), math.floor(h / 2), 30, i % 200, true) end)
 bench("line 100 штук", function(i) for k = 1, 100 do s:line(0, k, w - 1, h - 1 - k, k % 200) end end)
 bench("text 40 символов", function() s:text(fnt, 2, 2, "The quick brown fox jumps over the lazy dog", 15) end)
 bench("blit малой поверхности x3", function() s:blit(small, 0, 0, { scale = 3 }) end)
 bench("plasma (малый размер)", function(i) plasma:draw(small, i * 0.05) end)
-bench("fire step+draw", function() fire:step(); fire:draw(small) end)
 bench("3D тор flat", function(i) g3d.render(s, torus, { mode = "flat", ramp = ramp, rx = i * 0.1, z = 3.6, fov = h }) end)
 
 -- вывод на экран
