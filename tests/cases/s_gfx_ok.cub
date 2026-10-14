@@ -1,0 +1,10 @@
+#!strict
+def draw():
+    term.setGraphicsMode(1)
+    term.setFrozen(true)
+    for x in range[0, 63]:
+        term.setPixel(x, x // 2, colors.red)
+    w, h = term.getSize(true)
+    term.drawPixels(0, 0, 5, w, 4)
+    term.setGraphicsMode(false)
+print("ok")

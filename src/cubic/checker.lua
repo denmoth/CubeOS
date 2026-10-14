@@ -1660,12 +1660,19 @@ function M.check(ast, file, genv, hdr, opts)
     -- первый проход: оболочки классов и псевдонимы типов
     for _, s in ipairs(stmts) do
       if s.tag == "ClassDef" then
-        local cls = new_class(s.name, nil, false)
-        cls.open = s.open == true
-        types[s.name] = mk_inst(cls)
-        genv.types[s.name] = types[s.name]
-        target_vars[s.name] = mk_classobj(cls)
-        s._cls = cls
+        local existing = target_vars[s.name]
+        if existing and existing.k == "classobj" then
+          -- redeclaring a class in a later header extends it
+          s._cls = existing.cls
+          if s.open then existing.cls.open = true end
+        else
+          local cls = new_class(s.name, nil, false)
+          cls.open = s.open == true
+          types[s.name] = mk_inst(cls)
+          genv.types[s.name] = types[s.name]
+          target_vars[s.name] = mk_classobj(cls)
+          s._cls = cls
+        end
       end
     end
     for _, s in ipairs(stmts) do
@@ -1691,10 +1698,14 @@ function M.check(ast, file, genv, hdr, opts)
           elseif m.tag == "FuncDef" then cls.methods[m.name] = fn_from_def(m, true) end
         end
       elseif tag == "Namespace" then
-        local members = {}
+        local existing = target_vars[s.name]
+        local reuse = existing and existing.k == "ns"
+        local members = reuse and existing.members or {}
         load_header_body(s.body, members)
         if s.name == "peripheral_types" then
           for pname, pty in pairs(members) do genv.periph[pname] = pty end
+        elseif reuse then
+          if s.open then existing.open = true end
         else
           target_vars[s.name] = { k = "ns", name = s.name, members = members, open = s.open }
         end

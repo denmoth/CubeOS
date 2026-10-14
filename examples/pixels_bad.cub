@@ -1,0 +1,4 @@
+#!strict
+term.setPixel("a", 1, colors.red)
+term.setGraphicsMode(1)
+term.setFrozen(1)

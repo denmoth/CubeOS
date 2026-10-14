@@ -1,0 +1,2 @@
+#!strict
+term.setPixel("a", 1, colors.red)

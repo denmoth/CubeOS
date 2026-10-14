@@ -1,0 +1,11 @@
+#!strict
+# Пиксельный режим CC: Graphics (нужен --mods=ccgraphics)
+term.setGraphicsMode(1)
+term.setFrozen(true)
+for x in range[0, 63]:
+    term.setPixel(x, x // 2, colors.red)
+term.drawPixels(10, 10, 5, 8, 4)
+term.setFrozen(false)
+w, h = term.getSize(true)
+mode = term.getGraphicsMode()
+term.setGraphicsMode(false)
