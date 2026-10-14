@@ -1,0 +1,149 @@
+import t
+import ui.runtime as runtime
+import ui.widget as w
+import ui.controls as ctl
+import ui.dialogs as dialogs
+import unicode
+eq = t.eq
+
+class StubOut:
+    def init(self, cols, rows):
+        self.cols = cols
+        self.rows = rows
+        self.last = nil
+    def size(self):
+        return self.cols, self.rows
+    def present(self, c):
+        self.last = c:to_lines()
+        c:clean()
+        return 1
+    def to_cell(self, x, y):
+        return x - 1, y - 1
+    def open(self):
+        pass
+    def close(self):
+        pass
+    def set_theme(self, th):
+        pass
+    def invalidate(self):
+        pass
+    def tick(self, dt):
+        pass
+
+def make(cols=40, rows=14):
+    out = StubOut(cols, rows)
+    ui = runtime.new(out, {})
+    ui:set_root(w.vbox([ctl.button("страница")]))
+    ui:render()
+    return ui, out
+
+def all_text(out):
+    return table.concat(out.last, "\n")
+
+# ---------------------------------------------------------------- сообщение
+ui, out = make()
+res = []
+dialogs.message(ui, {title: "Готово", text: "Файл сохранён", buttons: ["OK"], on_choice: (i, name) => table.insert(res, i .. ":" .. name)})
+ui:tick(0.3)
+ui:render()
+eq(string.find(all_text(out), "Файл сохранён", 1, true) != nil, true, "text shown")
+eq(string.find(all_text(out), "Готово", 1, true) != nil, true, "title shown")
+eq(string.find(all_text(out), "OK", 1, true) != nil, true, "button shown")
+eq(len(ui.overlays), 1, "one overlay")
+ui:handle("key", keys.enter)
+eq(res, ["1:OK"], "Enter on the focused button chooses it")
+eq(len(ui.overlays), 0, "closed")
+
+# Esc закрывает без выбора
+res = []
+dialogs.message(ui, {title: "x", text: "y", buttons: ["Да", "Нет"], on_choice: (i, name) => table.insert(res, i == nil and "esc" or name)})
+ui:handle("key", keys.escape or 1)
+eq(res, ["esc"], "Esc reports nil")
+eq(len(ui.overlays), 0, "closed by Esc")
+
+# выбор второй кнопки
+res = []
+dialogs.message(ui, {title: "x", text: "y", buttons: ["Да", "Нет"], on_choice: (i, name) => table.insert(res, name)})
+ui:handle("key", keys.tab)
+ui:handle("key", keys.enter)
+eq(res, ["Нет"], "Tab moves to the second button")
+
+# рост окна
+ui:tick(1)
+res = []
+dialogs.message(ui, {title: "x", text: "y"})
+layer = ui:top_overlay()
+eq(layer.grow < 1, true, "the dialog starts small")
+ui:tick(0.05)
+ui:render()
+small_w = layer.widget.w
+ui:tick(0.3)
+ui:render()
+eq(layer.widget.w > small_w, true, "and grows to full size")
+eq(layer.grow, 1, "grown")
+ui:close_overlay(layer)
+
+# без анимаций сразу полный размер
+ui.animations = false
+dialogs.message(ui, {title: "x", text: "y"})
+eq(ui:top_overlay().grow, 1, "no animation: full size at once")
+ui:close_overlay(ui:top_overlay())
+ui.animations = true
+
+# длинный текст переносится
+dialogs.message(ui, {title: "Длинное", text: "очень длинный текст который не помещается в одну строку диалога и переносится", width: 20})
+ui:tick(1)
+ui:render()
+eq(layer.widget.w <= 40, true, "wrapped dialog fits the screen")
+eq(string.find(all_text(out), "переносится", 1, true) != nil, true, "all words are shown")
+ui:close_overlay(ui:top_overlay())
+
+# ---------------------------------------------------------------- подтверждение и запрос
+answers = []
+dialogs.confirm(ui, "Удалить?", "notes.txt уйдёт в корзину.", (yes) => table.insert(answers, yes), {yes: "Удалить", no: "Отмена"})
+ui:tick(1)
+ui:render()
+eq(string.find(all_text(out), "Удалить", 1, true) != nil, true, "custom button labels")
+ui:handle("key", keys.enter)
+eq(answers, [true], "first button is yes")
+dialogs.confirm(ui, "Q", "t", (yes) => table.insert(answers, yes))
+ui:handle("key", keys.escape or 1)
+eq(answers, [true, false], "Esc is no")
+
+named = []
+dialogs.prompt(ui, "Имя", "Как назвать файл?", "notes.txt", (text) => table.insert(named, text == nil and "cancel" or text))
+ui:tick(1)
+ui:render()
+eq(string.find(all_text(out), "notes.txt", 1, true) != nil, true, "default text in the field")
+ui:handle("char", "!")
+ui:handle("key", keys.enter)
+eq(named, ["notes.txt!"], "Enter in the field submits the text")
+dialogs.prompt(ui, "Имя", "?", "", (text) => table.insert(named, text == nil and "cancel" or text))
+ui:handle("key", keys.escape or 1)
+eq(named[len(named)], "cancel", "Esc cancels the prompt")
+
+# ---------------------------------------------------------------- уведомления
+ui2, out2 = make(40, 14)
+dialogs.toast(ui2, "Сохранено", {kind: "ok", secs: 2})
+ui2:tick(0.5)
+ui2:render()
+eq(string.find(all_text(out2), "Сохранено", 1, true) != nil, true, "toast shown")
+eq(len(ui2.overlays), 1, "toast is an overlay")
+eq(ui2.focus.text, "страница", "a toast does not take the focus")
+dialogs.toast(ui2, "Второе", {secs: 5})
+ui2:tick(0.5)
+ui2:render()
+eq(len(ui2.toasts), 2, "two toasts stack")
+y1 = ui2.toasts[1].widget.y
+y2 = ui2.toasts[2].widget.y
+eq(y2 < y1, true, "the second toast sits above the first")
+ui2:tick(1.1)
+ui2:tick(0.3)
+eq(len(ui2.toasts), 1, "the first toast leaves after its time")
+ui2:render()
+eq(ui2.toasts[1].widget.y > y2, true, "the remaining toast slides down")
+ui2:tick(10)
+eq(len(ui2.toasts), 0, "all toasts are gone")
+eq(len(ui2.overlays), 0, "and no overlays are left")
+
+print("done")

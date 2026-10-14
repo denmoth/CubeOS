@@ -270,7 +270,9 @@ export class Box(Widget):
         for i, c in visible:
             cw, ch = c:measure(iw, ih)
             pref = vertical and ch or cw
-            fixed = vertical and c.height or c.width
+            fixed = c.width
+            if vertical:
+                fixed = c.height
             weight = c.grow
             if fixed == "fill" and weight == 0:
                 weight = 1
@@ -327,7 +329,9 @@ export class Box(Widget):
             cw, ch = c:measure(iw, ih)
             size = sizes[i]
             cross_pref = vertical and cw or ch
-            fixed_cross = vertical and c.width or c.height
+            fixed_cross = c.height
+            if vertical:
+                fixed_cross = c.width
             cross = cross_total
             cross_off = 0
             if type(fixed_cross) == "number":
@@ -363,6 +367,8 @@ export class Frame(Widget):
         self.border = p.border
         self.fill = p.fill
         self.title_align = p.title_align ?? "left"
+        # accent: цвет рамки, когда внутри есть фокус (по умолчанию ACCENT; диалогам ошибок ERR и т. д.)
+        self.accent = p.accent ?? th.ACCENT
         self.pl, self.pt, self.pr, self.pb = pad_of(p.padding ?? 0)
         if child != nil:
             self:add(child)
@@ -396,7 +402,7 @@ export class Frame(Widget):
 
     def _draw(self, c, t):
         focus = self:_has_focus()
-        line = focus and th.ACCENT or th.LINE
+        line = focus and self.accent or th.LINE
         title_fg = focus and th.BRIGHT or th.TEXT
         bg = self.fill
         border.draw(c, self.x, self.y, self.w, self.h, self.border ?? t.border, line, nil,
@@ -429,6 +435,8 @@ export class Label(Widget):
         return txt.lines(self.text)
 
     def _measure(self, max_w, max_h):
+        if type(self.width) == "number":
+            max_w = math.min(max_w, self.width)
         ls = self:_lines(max_w)
         w = 0
         for l in ls:

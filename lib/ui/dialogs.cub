@@ -1,0 +1,129 @@
+# ui.dialogs: диалоги и уведомления поверх страницы
+#
+#   dialogs.message(ui, {title: "Готово", text: "Файл сохранён", kind: "info"})
+#   dialogs.confirm(ui, "Удалить?", "notes.txt уйдёт в корзину.", (yes) => ..., {yes: "Удалить", no: "Отмена"})
+#   dialogs.prompt(ui, "Имя файла", "Как назвать файл?", "notes.txt", (text) => ...)
+#   dialogs.toast(ui, "Сохранено", {kind: "ok", secs: 2})
+#
+# Диалог модальный: страница затемняется, ввод только в нём, Esc закрывает (вызывается on_choice(nil)). Окно вырастает из центра;
+# уведомления выезжают снизу и сами уходят. Всё это без блокирующих циклов: среда продолжает работать.
+
+import ui.theme as th
+import ui.text as txt
+import ui.widget as widget
+import ui.controls as ctl
+
+const KIND_COLOR = {info: th.ACCENT, ok: th.OK, warn: th.WARN, error: th.ERR, question: th.ACCENT}
+const KIND_MARK = {info: "i", ok: "✓", warn: "!", error: "✗", question: "?"}
+
+# opts: title, text, buttons (["OK"]), kind, width (44), on_choice(index, label): index nil при закрытии клавишей Esc.
+# Возвращает слой
+export def message(ui, opts):
+    o = opts
+    buttons = o.buttons ?? ["OK"]
+    kind = o.kind ?? "info"
+    text = o.text ?? ""
+    width = math.min(o.width ?? 44, ui.cols - 6)
+    width = math.max(12, math.min(width, math.max(txt.max_width(text), 12)))
+    row = widget.hbox([], {gap: 2, justify: "center"})
+    body = widget.vbox([widget.label(text, {wrap: true, width: width}), widget.spacer(1), row], {padding: [2, 1]})
+    frame = widget.frame(o.title ?? "", body, {fill: th.RAISED, accent: KIND_COLOR[kind] ?? th.ACCENT, title_align: "left"})
+    state = {chosen: false}
+    layer = ui:open_overlay(frame, {modal: true, dismiss: true, pop: true, shadow: true,
+        on_close: (l) => _closed(state, o)})
+    for i, name in buttons:
+        b = ctl.button(name)
+        b:on("press", (wd) => _choose(ui, layer, state, o, i, name))
+        row:add(b)
+    ui:invalidate_layout()
+    ui:focus_first()
+    return layer
+
+def _choose(ui, layer, state, o, index, name):
+    state.chosen = true
+    ui:close_overlay(layer)
+    if o.on_choice != nil:
+        o.on_choice(index, name)
+
+def _closed(state, o):
+    if not state.chosen and o.on_choice != nil:
+        state.chosen = true
+        o.on_choice(nil, nil)
+
+# вопрос «да или нет»: on_result(true) или on_result(false) (Esc это «нет»)
+export def confirm(ui, title, text, on_result, opts=nil):
+    o = opts ?? {}
+    return message(ui, {title: title, text: text, kind: o.kind ?? "question", buttons: [o.yes ?? "Да", o.no ?? "Нет"],
+        width: o.width, on_choice: (i, name) => on_result(i == 1)})
+
+# запрос строки: on_submit(text) при Enter или кнопке OK, on_submit(nil) при отмене
+export def prompt(ui, title, text, default, on_submit, opts=nil):
+    o = opts ?? {}
+    field = ctl.input({text: default ?? "", width: 30, password: o.password ?? false, placeholder: o.placeholder ?? ""})
+    body = widget.vbox([widget.label(text, {wrap: true, width: 30}), widget.spacer(1), field,
+        widget.spacer(1), widget.hbox([ctl.button("OK"), ctl.button("Отмена")], {gap: 2, justify: "center"})], {padding: [2, 1]})
+    frame = widget.frame(title, body, {fill: th.RAISED})
+    state = {done: false}
+    layer = ui:open_overlay(frame, {modal: true, dismiss: true, pop: true, shadow: true,
+        on_close: (l) => _prompt_closed(state, on_submit)})
+    field:on("submit", (wd, value) => _prompt_done(ui, layer, state, on_submit, value))
+    buttons = body.children[5].children
+    buttons[1]:on("press", (wd) => _prompt_done(ui, layer, state, on_submit, field:value()))
+    buttons[2]:on("press", (wd) => _prompt_done(ui, layer, state, on_submit, nil))
+    ui:focus_widget(field)
+    return layer
+
+def _prompt_done(ui, layer, state, on_submit, value):
+    state.done = true
+    ui:close_overlay(layer)
+    on_submit(value)
+
+def _prompt_closed(state, on_submit):
+    if not state.done:
+        state.done = true
+        on_submit(nil)
+
+# ---------------------------------------------------------------- уведомления
+
+class ToastBox(widget.Widget):
+    def init(self, text, kind):
+        super.init(self, {})
+        self.text = text
+        self.kind = kind
+
+    def _measure(self, max_w, max_h):
+        return math.min(max_w, txt.width(self.text) + 6), 1
+
+    def _draw(self, c, t):
+        color = KIND_COLOR[self.kind] ?? th.ACCENT
+        c:fill(self.x, self.y, self.w, 1, 32, th.BRIGHT, th.RAISED)
+        c:text(self.x, self.y, " " .. (KIND_MARK[self.kind] ?? "i") .. " ", th.BG, color)
+        c:text(self.x + 4, self.y, txt.ellipsize(self.text, self.w - 5), th.BRIGHT, th.RAISED)
+
+# уведомление выезжает снизу и уходит через secs секунд. opts: kind ("info", "ok", "warn", "error"), secs (2.5)
+export def toast(ui, text, opts=nil):
+    o = opts ?? {}
+    box = ToastBox(text, o.kind ?? "info")
+    slot = len(ui.toasts ?? [])
+    if ui.toasts == nil:
+        ui.toasts = []
+    layer = ui:open_overlay(box, {modal: false, dim: false, dismiss: false, anchor: "bottom", margin: 2 + slot * 2})
+    layer.dy = ui.animations and 4 or 0
+    ui:animate(layer, "dy", 0, 0.25, "out_back")
+    ui.toasts[len(ui.toasts) + 1] = layer
+    ui:after(o.secs ?? 2.5, () => _toast_leave(ui, layer))
+    return layer
+
+def _toast_leave(ui, layer):
+    ui:animate(layer, "dy", 4, 0.2, "in_cubic", () => _toast_close(ui, layer))
+
+def _toast_close(ui, layer):
+    ui:close_overlay(layer)
+    for i, l in ui.toasts:
+        if l == layer:
+            table.remove(ui.toasts, i)
+            break
+    # оставшиеся сдвигаются вниз
+    for i, l in ui.toasts:
+        l.margin = 2 + (i - 1) * 2
+    ui:invalidate_layout()

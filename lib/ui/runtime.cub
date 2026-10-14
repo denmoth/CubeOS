@@ -26,6 +26,7 @@ export class Ui:
         self.keymap = o.keymap ?? keymap_mod.new(o.keys ?? "arrows")
         self.root = nil
         self.overlays = []
+        self.toasts = []
         self.focus = nil
         self.animator = anim.Animator()
         self.timers = []
@@ -90,6 +91,11 @@ export class Ui:
         w, h = wd:measure(self.cols - 2, self.rows - 2)
         w = math.min(w, self.cols)
         h = math.min(h, self.rows)
+        full_w = w
+        full_h = h
+        if o.grow < 1:
+            w = math.max(3, math.floor(w * o.grow))
+            h = math.max(3, math.floor(h * o.grow))
         x = 0
         y = 0
         if o.anchor == "at":
@@ -110,6 +116,10 @@ export class Ui:
             y = math.floor((self.rows - h) / 2)
         x = math.max(0, x)
         y = math.max(0, y)
+        if o.grow < 1:
+            # растущее окно остаётся по центру своего конечного места
+            x += math.floor((full_w - w) / 2)
+            y += math.floor((full_h - h) / 2)
         wd:layout(x + (o.dx ?? 0), y + (o.dy ?? 0), w, h)
 
     def draw(self):
@@ -122,6 +132,9 @@ export class Ui:
         for o in self.overlays:
             if o.modal and o.dim:
                 c:remap(0, 0, self.cols, self.rows, t.dim)
+            if o.laid_grow != o.grow or o.dy != nil:
+                self:_layout_overlay(o)
+                o.laid_grow = o.grow
             if o.shadow:
                 wd = o.widget
                 c:fill(wd.x + 1, wd.y + 1, wd.w, wd.h, 0x2591, th.SHADOW, th.BG)
@@ -232,8 +245,12 @@ export class Ui:
         o = opts ?? {}
         layer = {widget: wd, modal: o.modal ?? true, dim: o.dim ?? (o.modal ?? true), dismiss: o.dismiss ?? true,
             anchor: o.anchor ?? "center", x: o.x ?? 0, y: o.y ?? 0, dx: o.dx, dy: o.dy, margin: o.margin, shadow: o.shadow ?? false,
-            on_close: o.on_close, saved_focus: self.focus}
+            on_close: o.on_close, saved_focus: self.focus, grow: 1}
         self.overlays[len(self.overlays) + 1] = layer
+        if o.pop and self.animations:
+            # появление: окно вырастает из центра за 0.14 с
+            layer.grow = 0.2
+            self:animate(layer, "grow", 1, 0.14, "out_cubic")
         wd:attach(self)
         if layer.modal:
             self:focus_first()
@@ -465,7 +482,6 @@ export class Ui:
     # проходит время dt секунд; возвращает true, если что-то поменялось и надо перерисовать
     def tick(self, dt):
         self.time += dt
-        self.animator:update(dt * self.speed)
         keep = []
         for tm in self.timers:
             if tm.active and self.time >= tm.at:
@@ -478,6 +494,7 @@ export class Ui:
             if tm.active:
                 keep[len(keep) + 1] = tm
         self.timers = keep
+        self.animator:update(dt * self.speed)
         if self.focus != nil and self.focus.captures_text:
             self.blink_time += dt
             if self.blink_time >= 0.5:
