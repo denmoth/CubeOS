@@ -1,0 +1,115 @@
+import t
+import term.vterm as vterm
+import compat.env as compat_env
+import compat.proc as compat_proc
+eq = t.eq
+
+def rows(vt):
+    out = []
+    for y in range[1, vt.h]:
+        out[y] = vt:line_text(y)
+    return out
+
+def trim(s):
+    return string.gsub(s, "%s+$", "")
+
+# ---------------------------------------------------------------- shell.lua из ROM с командой: echo
+vt = vterm.new(40, 10)
+env = compat_env.new({vterm: vt})
+p = compat_proc.new(env, "rom/programs/shell.lua", ["type", "rom/programs/list.lua"])
+p:start()
+eq(p:alive(), false, "the shell ran the command and exited")
+eq(trim(vt:line_text(1)), "file", "the type program printed through our print on the virtual terminal")
+
+# list: колонки программ
+vt2 = vterm.new(30, 8)
+env2 = compat_env.new({vterm: vt2})
+p2 = compat_proc.new(env2, "rom/programs/shell.lua", ["list", "rom"])
+p2:start()
+eq(p2:alive(), false, "list finished")
+text = table.concat(rows(vt2), " ")
+eq(string.find(text, "programs", 1, true) != nil and string.find(text, "apis", 1, true) != nil, true, "list shows the ROM directories")
+
+# ---------------------------------------------------------------- интерактивный shell: ввод по событиям
+def type_text(proc, text):
+    for i in range[1, string.len(text)]:
+        proc:feed("char", string.sub(text, i, i))
+
+vt3 = vterm.new(40, 12)
+env3 = compat_env.new({vterm: vt3})
+p3 = compat_proc.new(env3, "rom/programs/shell.lua")
+p3:start()
+eq(p3:alive(), true, "the interactive shell waits for input")
+text = table.concat(rows(vt3), "\n")
+eq(string.find(text, "CraftOS", 1, true) != nil, true, "the shell prints its banner")
+eq(string.find(text, "> ", 1, true) != nil, true, "and a prompt")
+type_text(p3, "type rom")
+p3:feed("key", keys.enter)
+text = table.concat(rows(vt3), "\n")
+eq(string.find(text, "directory", 1, true) != nil, true, "a typed command runs and prints its result")
+type_text(p3, "type nothing_here")
+p3:feed("key", keys.enter)
+text = table.concat(rows(vt3), "\n")
+eq(string.find(text, "No such", 1, true) != nil, true, "an error is shown")
+cx, cy = vt3:getCursorPos()
+eq(cx, 3, "the cursor is back at the prompt")
+
+# история: стрелка вверх возвращает прошлую команду
+p3:feed("key", keys.up)
+line_with_prompt = trim(vt3:line_text(cy))
+eq(string.find(line_with_prompt, "type nothing_here", 1, true) != nil, true, "Up brings the previous command back")
+
+# lua REPL
+vt4 = vterm.new(40, 10)
+env4 = compat_env.new({vterm: vt4})
+p4 = compat_proc.new(env4, "rom/programs/lua.lua")
+p4:start()
+type_text(p4, "6 * 7")
+p4:feed("key", keys.enter)
+text = table.concat(rows(vt4), "\n")
+eq(string.find(text, "42", 1, true) != nil, true, "the Lua REPL evaluates expressions")
+type_text(p4, "print(string.rep(\"ab\", 3))")
+p4:feed("key", keys.enter)
+text = table.concat(rows(vt4), "\n")
+eq(string.find(text, "ababab", 1, true) != nil, true, "and prints through our print")
+type_text(p4, "term.setCursorPos(1, 1)")
+p4:feed("key", keys.enter)
+type_text(p4, "exit()")
+p4:feed("key", keys.enter)
+eq(p4:alive(), false, "exit() ends the program")
+
+# таймеры: sleep ждёт реального события timer, которое хозяин отдаёт процессу
+vt5 = vterm.new(20, 3)
+env5 = compat_env.new({vterm: vt5})
+src = "sleep(0.05) print('woke')"
+f = fs.open("/repo/build/compat_sleep_test.lua", "w")
+f.write(src)
+f.close()
+p5 = compat_proc.new(env5, "/repo/build/compat_sleep_test.lua")
+p5:start()
+eq(p5:alive(), true, "sleep waits")
+got = false
+for i in range[1, 40]:
+    ev, id = os.pullEvent("timer")
+    if p5:owns_timer(id):
+        p5:feed("timer", id)
+        got = true
+        break
+eq(got, true, "the timer belongs to the process that started it")
+eq(p5:alive(), false, "the process continues after its timer")
+eq(trim(vt5:line_text(1)), "woke", "and prints")
+fs.delete("/repo/build/compat_sleep_test.lua")
+
+# os.queueEvent идёт в очередь процесса
+vt6 = vterm.new(20, 3)
+env6 = compat_env.new({vterm: vt6})
+f = fs.open("/repo/build/compat_queue_test.lua", "w")
+f.write("os.queueEvent('ping', 1, nil, 3) local e, a, b, c = os.pullEvent('ping') print(e, a, b, c)")
+f.close()
+p6 = compat_proc.new(env6, "/repo/build/compat_queue_test.lua")
+p6:start()
+eq(p6:alive(), false, "an event queued by the program reaches it without the host")
+eq(trim(vt6:line_text(1)), "ping	1	nil	3", "with nil values kept")
+fs.delete("/repo/build/compat_queue_test.lua")
+
+print("done")

@@ -1,0 +1,338 @@
+# compat.bios: глобальные функции CraftOS для legacy-программ: write, print, printError, read, sleep, loadfile, dofile, os.run, os.loadAPI...
+#
+#   bios.install(env)        дописывает в таблицу окружения env всё, что обычно делает bios CC (кроме ROM-библиотек, их грузит compat.env)
+#
+# Окружение env это таблица, которая служит _ENV legacy-программы: у неё свои term, fs, os, и т. д. Функции здесь берут term и os
+# из env при каждом вызове, поэтому term.redirect действует. События программа получает через coroutine.yield: хозяин
+# (compat.proc) возобновляет её корутину событиями; os.pullEventRaw это и есть yield.
+#
+# Это независимая реализация по описанию API CC (поведение write с переносом слов, редактор строки read с историей и дополнением,
+# sleep, loadfile/dofile, os.run, loadAPI), не копия bios.lua.
+
+import compat.vararg as va
+
+# ---------------------------------------------------------------- вывод
+
+# write: выводит текст с переносом по словам и прокруткой; возвращает число напечатанных строк
+export def write_text(env, text):
+    term = env.term
+    text = tostring(text)
+    w, h = term.getSize()
+    x, y = term.getCursorPos()
+    lines = 0
+    def new_line():
+        if y + 1 <= h:
+            term.setCursorPos(1, y + 1)
+        else:
+            term.setCursorPos(1, h)
+            term.scroll(1)
+        x, y = term.getCursorPos()
+        lines += 1
+    while string.len(text) > 0:
+        space = string.match(text, "^[ \t]+")
+        if space != nil:
+            term.write(space)
+            x, y = term.getCursorPos()
+            text = string.sub(text, string.len(space) + 1)
+        nl = string.match(text, "^\n")
+        if nl != nil:
+            new_line()
+            text = string.sub(text, 2)
+        word = string.match(text, "^[^ \t\n]+")
+        if word != nil:
+            text = string.sub(text, string.len(word) + 1)
+            if string.len(word) > w:
+                # слово длиннее строки режется по строкам
+                while string.len(word) > 0:
+                    if x > w:
+                        new_line()
+                    term.write(word)
+                    word = string.sub(word, w - x + 2)
+                    x, y = term.getCursorPos()
+            else:
+                if x + string.len(word) - 1 > w:
+                    new_line()
+                term.write(word)
+                x, y = term.getCursorPos()
+    return lines
+
+export def print_text(env, args, count):
+    parts = {}
+    for i in range[1, count]:
+        parts[i] = tostring(args[i])
+    term = env.term
+    lines = write_text(env, table.concat(parts, "\t"))
+    w, h = term.getSize()
+    x, y = term.getCursorPos()
+    if y + 1 <= h:
+        term.setCursorPos(1, y + 1)
+    else:
+        term.setCursorPos(1, h)
+        term.scroll(1)
+    return lines + 1
+
+export def print_error(env, args, count):
+    term = env.term
+    color = term.isColor()
+    if color:
+        old = term.getTextColor()
+        term.setTextColor(env.colors.red)
+    print_text(env, args, count)
+    if color:
+        term.setTextColor(old)
+
+# ---------------------------------------------------------------- события и время
+
+export const pull_event_raw = va.pull_event_raw
+export const pull_event = va.pull_event
+
+export def sleep_for(env, seconds):
+    os_api = env.os
+    timer = os_api.startTimer(seconds ?? 0)
+    while true:
+        ev, id = os_api.pullEvent("timer")
+        if id == timer:
+            return
+
+# ---------------------------------------------------------------- редактор строки
+
+# read(replace_char, history, complete, default): строка с курсором, историей (стрелки вверх и вниз), дополнением (Tab), вставкой
+export def read_line(env, replace_char=nil, history=nil, complete=nil, default=nil):
+    term = env.term
+    os_api = env.os
+    keys_api = env.keys
+    term.setCursorBlink(true)
+    line = default ?? ""
+    pos = string.len(line)
+    scroll = 0
+    sx, sy = term.getCursorPos()
+    w, h = term.getSize()
+    history_index = nil
+    saved_line = nil
+    completions = {}
+    completion_index = 0
+    if replace_char != nil:
+        replace_char = string.sub(replace_char, 1, 1)
+    def shown(s):
+        if replace_char != nil:
+            return string.rep(replace_char, string.len(s))
+        return s
+    def redraw(clear_char=nil):
+        w, h = term.getSize()
+        room = w - sx + 1
+        if pos < scroll:
+            scroll = pos
+        elif pos > scroll + room - 1:
+            scroll = pos - room + 1
+        term.setCursorPos(sx, sy)
+        text = clear_char != nil and string.rep(clear_char, string.len(line)) or shown(line)
+        visible = string.sub(text, scroll + 1, scroll + room)
+        term.write(visible .. string.rep(" ", room - string.len(visible)))
+        if completion_index > 0 and clear_char == nil and complete != nil:
+            ghost = completions[completion_index]
+            if ghost != nil and pos == string.len(line):
+                gx = sx + string.len(line) - scroll
+                if gx <= w:
+                    old_fg = term.getTextColor()
+                    if term.isColor():
+                        term.setTextColor(env.colors.gray)
+                    term.setCursorPos(gx, sy)
+                    term.write(string.sub(ghost, 1, w - gx + 1))
+                    term.setTextColor(old_fg)
+        term.setCursorPos(sx + pos - scroll, sy)
+    def recompute_completions():
+        completions = {}
+        completion_index = 0
+        if complete != nil and pos == string.len(line):
+            result = complete(line)
+            if result != nil:
+                completions = result
+                if len(completions) > 0:
+                    completion_index = 1
+    recompute_completions()
+    redraw()
+    while true:
+        ev, a, b, c = os_api.pullEvent()
+        if ev == "char":
+            line = string.sub(line, 1, pos) .. a .. string.sub(line, pos + 1)
+            pos += string.len(a)
+            recompute_completions()
+            redraw()
+        elif ev == "paste":
+            text = string.gsub(a, "\n.*$", "")
+            line = string.sub(line, 1, pos) .. text .. string.sub(line, pos + 1)
+            pos += string.len(text)
+            recompute_completions()
+            redraw()
+        elif ev == "key":
+            if a == keys_api.enter or a == keys_api.numPadEnter:
+                if completion_index > 0 and completions[completion_index] != nil and pos == string.len(line) and false:
+                    pass
+                break
+            elif a == keys_api.left:
+                if pos > 0:
+                    pos -= 1
+                    recompute_completions()
+                    redraw()
+            elif a == keys_api.right:
+                if pos < string.len(line):
+                    pos += 1
+                    recompute_completions()
+                    redraw()
+                elif completion_index > 0 and completions[completion_index] != nil:
+                    # вправо в конце строки принимает дополнение
+                    line = line .. completions[completion_index]
+                    pos = string.len(line)
+                    recompute_completions()
+                    redraw()
+            elif a == keys_api.home:
+                pos = 0
+                redraw()
+            elif a == keys_api["end"]:
+                pos = string.len(line)
+                recompute_completions()
+                redraw()
+            elif a == keys_api.backspace:
+                if pos > 0:
+                    redraw(" ")
+                    line = string.sub(line, 1, pos - 1) .. string.sub(line, pos + 1)
+                    pos -= 1
+                    recompute_completions()
+                    redraw()
+            elif a == keys_api.delete:
+                if pos < string.len(line):
+                    redraw(" ")
+                    line = string.sub(line, 1, pos) .. string.sub(line, pos + 2)
+                    recompute_completions()
+                    redraw()
+            elif a == keys_api.up or a == keys_api.down:
+                if completion_index > 0 and len(completions) > 1:
+                    completion_index += a == keys_api.up and -1 or 1
+                    if completion_index < 1:
+                        completion_index = len(completions)
+                    if completion_index > len(completions):
+                        completion_index = 1
+                    redraw()
+                elif history != nil:
+                    redraw(" ")
+                    if a == keys_api.up:
+                        if history_index == nil:
+                            saved_line = line
+                            history_index = len(history)
+                        elif history_index > 1:
+                            history_index -= 1
+                        if history[history_index] != nil:
+                            line = history[history_index]
+                    else:
+                        if history_index != nil:
+                            history_index += 1
+                            if history[history_index] != nil:
+                                line = history[history_index]
+                            else:
+                                history_index = nil
+                                line = saved_line ?? ""
+                    pos = string.len(line)
+                    recompute_completions()
+                    redraw()
+            elif a == keys_api.tab:
+                if completion_index > 0 and completions[completion_index] != nil and pos == string.len(line):
+                    line = line .. completions[completion_index]
+                    pos = string.len(line)
+                    recompute_completions()
+                    redraw()
+        elif ev == "mouse_click":
+            if b >= sx and c == sy:
+                pos = math.max(0, math.min(string.len(line), scroll + b - sx))
+                redraw()
+        elif ev == "term_resize":
+            redraw()
+    term.setCursorBlink(false)
+    x, y = term.getCursorPos()
+    w, h = term.getSize()
+    term.setCursorPos(w + 1, y)
+    # перевод строки после ввода
+    print_text(env, va.pack(), 0)
+    return line
+
+# ---------------------------------------------------------------- загрузка кода
+
+export def load_file(env, path, mode=nil, load_env=nil):
+    f = env.fs.open(path, "rb") ?? env.fs.open(path, "r")
+    if f == nil:
+        return nil, "File not found"
+    data = f.readAll()
+    f.close()
+    return load(data, "@" .. env.fs.combine(path), mode ?? "t", load_env ?? env)
+
+export def do_file(env, path):
+    fn, err = load_file(env, path, "t", env)
+    if fn == nil:
+        error(err, 0)
+    return fn()
+
+# ---------------------------------------------------------------- установка в окружение
+
+export def install(env):
+    env._G = env
+    env._ENV = nil
+    env._HOST = env._HOST ?? "ComputerCraft 1.115 (CubeOS compatibility layer)"
+    env.write = (text) => write_text(env, text)
+    env.print = va.variadic(env, print_text)
+    env.printError = va.variadic(env, print_error)
+    env.read = (replace_char, history, complete, default) => read_line(env, replace_char, history, complete, default)
+    env.sleep = (seconds) => sleep_for(env, seconds)
+    env.loadfile = (path, mode, load_env) => load_file(env, path, mode, load_env)
+    env.dofile = (path) => do_file(env, path)
+    env.loadstring = (text, name) => load(text, name ?? "=(loadstring)", "t", env)
+    env.load = (chunk, name, mode, load_env) => load(chunk, name, mode, load_env ?? env)
+    os_table = env.os
+    os_table.pullEventRaw = pull_event_raw
+    os_table.pullEvent = pull_event
+    os_table.sleep = env.sleep
+    os_table.version = () => "CraftOS 1.9"
+    os_table.run = va.runner(env, run_program)
+    os_table.loadAPI = (path) => load_api(env, path)
+    os_table.unloadAPI = (name) => unload_api(env, name)
+
+# запускает программу как os.run: окружение run_env, ошибка печатается, возвращает успех
+export def run_program(env, run_env, path, args):
+    setmetatable(run_env, {__index: env})
+    fn, err = load_file(env, path, "t", run_env)
+    if fn == nil:
+        if err != nil and err != "":
+            print_error(env, va.pack(err), 1)
+        return false
+    ok, perr = pcall(va.call, fn, args)
+    if not ok:
+        if perr != nil and perr != "" and perr != "Terminated":
+            print_error(env, va.pack(perr), 1)
+        return false
+    return true
+
+# os.loadAPI: выполняет файл в своей среде (чтение из env), переменные файла становятся таблицей env[имя файла без .lua]
+export def load_api(env, path):
+    name = env.fs.getName(path)
+    name = string.gsub(name, "%.lua$", "")
+    if env.fs.isDir(path):
+        return false
+    api_env = {isAPI: true}
+    setmetatable(api_env, {__index: env})
+    fn, err = load_file(env, path, "t", api_env)
+    if fn == nil:
+        if err != nil:
+            print_error(env, va.pack(err), 1)
+        return false
+    ok, perr = pcall(fn)
+    if not ok:
+        print_error(env, va.pack(perr), 1)
+        return false
+    api = {}
+    for k, v in api_env:
+        if type(k) != "string" or string.sub(k, 1, 1) != "_":
+            api[k] = v
+    env[name] = api
+    return true
+
+export def unload_api(env, name):
+    if name != "_G":
+        env[name] = nil

@@ -1,0 +1,156 @@
+# compat.proc: legacy-процесс (классическая программа CC) в своей корутине
+#
+#   p = proc.new(env, "rom/programs/shell.lua", ["echo", "hi"])
+#   p:start()                              запускает до первого ожидания события
+#   p:feed("key", keys.a)                  отдаёт событие программе (с учётом фильтра, который она ждёт)
+#   p:alive()                              жива ли программа
+#
+# Программа ждёт события через coroutine.yield (os.pullEvent); хозяин (окно терминала, ядро) решает, какие события ей отдать:
+# ввод только сфокусированной, таймеры по номеру, прочее всем. События, которые программа поставила сама (os.queueEvent), идут в её
+# собственную очередь и доставляются раньше внешних. Таймеры и будильники запоминают номера (owns_timer), чтобы хозяин мог
+# отдать «timer» только владельцу.
+
+import compat.bios as bios
+import compat.vararg as va
+
+# событие как таблица с числом значений без лишних nil в конце
+def _event(name, a, b, c, d, e):
+    ev = va.pack(name, a, b, c, d, e)
+    n = 6
+    while n > 1 and ev[n] == nil:
+        n -= 1
+    ev.n = n
+    return ev
+
+export class LegacyProc:
+    # args: список аргументов программы; opts: name, on_exit(proc, ok, err), on_shutdown(proc, reboot)
+    def init(self, env, path, args=nil, opts=nil):
+        o = opts ?? {}
+        self.env = env
+        self.path = path
+        self.args = args ?? []
+        self.name = o.name ?? path
+        self.on_exit = o.on_exit
+        self.on_shutdown = o.on_shutdown
+        self.queue = []
+        self.timers = {}
+        self.alarms = {}
+        self.filter = nil
+        self.started = false
+        self.finished = false
+        self.ok = nil
+        self.err = nil
+        self.co = nil
+        self:_hook()
+
+    # подменяет в os окружения функции, которые зависят от процесса
+    def _hook(self):
+        env = self.env
+        os_table = env.os
+        let me = self
+        real = _G.os
+        os_table.queueEvent = (name, a, b, c, d, e) => me:_queue(name, a, b, c, d, e)
+        os_table.startTimer = (t) => me:_start_timer(t, real)
+        os_table.cancelTimer = (id) => me:_cancel_timer(id, real)
+        os_table.setAlarm = (t) => me:_set_alarm(t, real)
+        os_table.cancelAlarm = (id) => me:_cancel_alarm(id, real)
+        os_table.shutdown = () => me:_shutdown(false)
+        os_table.reboot = () => me:_shutdown(true)
+        env.proc = self
+
+    def _queue(self, name, a, b, c, d, e):
+        self.queue[len(self.queue) + 1] = _event(name, a, b, c, d, e)
+
+    def _start_timer(self, t, real):
+        id = real.startTimer(t)
+        self.timers[id] = true
+        return id
+
+    def _cancel_timer(self, id, real):
+        self.timers[id] = nil
+        real.cancelTimer(id)
+
+    def _set_alarm(self, t, real):
+        id = real.setAlarm(t)
+        self.alarms[id] = true
+        return id
+
+    def _cancel_alarm(self, id, real):
+        self.alarms[id] = nil
+        real.cancelAlarm(id)
+
+    def _shutdown(self, reboot):
+        if self.on_shutdown != nil:
+            self.on_shutdown(self, reboot)
+        # завершает программу: ошибка "Terminated" не печатается
+        error("Terminated", 0)
+
+    def owns_timer(self, id):
+        return self.timers[id] == true
+
+    def owns_alarm(self, id):
+        return self.alarms[id] == true
+
+    def alive(self):
+        return not self.finished
+
+    # запускает программу: выполняется до первого ожидания события
+    def start(self):
+        if self.started:
+            return
+        self.started = true
+        let me = self
+        path = self.path
+        env = self.env
+        args = va.pack(table.unpack(self.args))
+        fn = () => bios.run_program(env, {}, path, args)
+        self.co = coroutine.create(fn)
+        self:_resume(nil)
+        self:drain()
+
+    def _resume(self, ev):
+        if self.finished:
+            return
+        ok = nil
+        result = nil
+        if ev == nil:
+            ok, result = coroutine.resume(self.co)
+        else:
+            ok, result = coroutine.resume(self.co, table.unpack(ev, 1, ev.n))
+        if coroutine.status(self.co) == "dead":
+            self.finished = true
+            self.ok = ok
+            if not ok:
+                self.err = result
+            if self.on_exit != nil:
+                self.on_exit(self, ok, result)
+        else:
+            self.filter = result
+
+    # доставляет события собственной очереди программы, пока они есть
+    def drain(self):
+        while not self.finished and len(self.queue) > 0:
+            ev = table.remove(self.queue, 1)
+            self:_deliver(ev)
+
+    def _deliver(self, ev):
+        if self.finished:
+            return
+        if self.filter == nil or ev[1] == self.filter or ev[1] == "terminate":
+            self:_resume(ev)
+
+    # внешнее событие; возвращает true, если программа его взяла
+    def feed(self, name, a=nil, b=nil, c=nil, d=nil, e=nil):
+        if self.finished:
+            return false
+        if not self.started:
+            self:start()
+        ev = _event(name, a, b, c, d, e)
+        if self.filter == nil or name == self.filter or name == "terminate":
+            self:_resume(ev)
+            self:drain()
+            return true
+        return false
+
+export def new(env, path, args=nil, opts=nil):
+    return LegacyProc(env, path, args, opts)
