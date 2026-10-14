@@ -146,6 +146,30 @@ for l in o.log:
         draws[len(draws) + 1] = l
 eq(draws, ["draw 10,10 5x8"], "a block is a single draw")
 
+# изменённая область: сканируется только она
+tm, o = make_term(10, 4, true)
+d = graphics.new(tm, {mode: 2})
+d:open()
+s = sf.new(60, 36, 0)
+d:present(s)
+eq([s.dx0 > s.dx1], [true], "surface is clean after a present")
+s:set(20, 12, 5)
+eq([s.dx0, s.dy0, s.dx1, s.dy1], [20, 12, 20, 12], "set marks one pixel")
+eq(d:present(s), 1, "only the touched pixel is sent")
+s.px[5 * 60 + 5 + 1] = 9
+eq(d:present(s), 0, "a direct write without touch() is not noticed")
+s:touch()
+eq(d:present(s), 1, "touch() makes the display compare everything")
+s:fill_rect(3, 4, 5, 2, 7)
+eq([s.dx0, s.dy0, s.dx1, s.dy1], [3, 4, 7, 5], "fill_rect marks its rectangle")
+s:line(0, 30, 10, 35, 8)
+eq([s.dx0, s.dy0, s.dx1, s.dy1], [0, 4, 10, 35], "line extends the dirty rectangle")
+d:present(s)
+sp = sf.new(2, 2, 6)
+s:blit(sp, 40, 20)
+eq([s.dx0, s.dy0, s.dx1, s.dy1], [40, 20, 41, 21], "blit marks the destination")
+eq(d:present(s), 4, "blit pixels are sent")
+
 # режим на 16 цветов
 tm, o = make_term(10, 4)
 d = graphics.new(tm, {mode: 1})

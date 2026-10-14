@@ -31,8 +31,6 @@ export class TeletextDisplay:
         self.enc_count = 0
         self.spare = nil
         self.stats = {frames: 0, pixels: 0, calls: 0, scan_ms: 0, send_ms: 0}
-        self.seen = nil
-        self.seen_rev = 0
         self.kind = "teletext"
         self.opened = false
 
@@ -145,10 +143,6 @@ export class TeletextDisplay:
 
     # рисует кадр; возвращает число изменившихся клеток
     def present(self, s):
-        if self.prev != nil and self.seen == s and self.seen_rev == s.rev:
-            return 0
-        self.seen = s
-        self.seen_rev = s.rev
         t0 = os.epoch("utc")
         send = 0
         cols = math.min(self.cols, s.w // 2)
@@ -158,18 +152,33 @@ export class TeletextDisplay:
         clear = q.clear
         dither = q.dither
         full = self.prev == nil
-        prev = self.prev ?? {}
-        cur = self.spare ?? {}
+        if full:
+            self.prev = {}
+        # постоянный массив сигнатур клеток (что сейчас на экране); сканируем только клетки изменённой области
+        prev = self.prev
+        cur = prev
+        cx_lo = 0
+        cy_lo = 0
+        cx_hi = cols - 1
+        cy_hi = rows - 1
+        if not full:
+            cx_lo = math.max(0, s.dx0 // 2)
+            cy_lo = math.max(0, s.dy0 // 3)
+            cx_hi = math.min(cols - 1, s.dx1 // 2)
+            cy_hi = math.min(rows - 1, s.dy1 // 3)
+        s:clean()
+        if cx_lo > cx_hi or cy_lo > cy_hi:
+            return 0
         spx = s.px
         sw = s.w
         changed = 0
         term = self.term
-        for cy in range[0, rows - 1]:
+        for cy in range[cy_lo, cy_hi]:
             first_x = nil
             last_x = nil
             y = cy * 3
             kbase = cy * cols + 1
-            for cx in range[0, cols - 1]:
+            for cx in range[cx_lo, cx_hi]:
                 x = cx * 2
                 i1 = y * sw + x + 1
                 i2 = i1 + sw
@@ -196,8 +205,8 @@ export class TeletextDisplay:
                     p6 = main[spx[i3 + 1] + 2] ?? clear
                 sig = p1 + p2 * 16 + p3 * 256 + p4 * 4096 + p5 * 65536 + p6 * 1048576
                 k = kbase + cx
-                cur[k] = sig
                 if full or prev[k] != sig:
+                    cur[k] = sig
                     if first_x == nil:
                         first_x = cx
                     last_x = cx
@@ -218,8 +227,6 @@ export class TeletextDisplay:
                 term.blit(table.concat(chars), table.concat(fgs), table.concat(bgs))
                 send += os.epoch("utc") - ts
                 self.stats.calls += 1
-        self.spare = prev != nil and prev or nil
-        self.prev = cur
         self.stats.frames += 1
         self.stats.pixels += changed * 6
         self.stats.send_ms += send

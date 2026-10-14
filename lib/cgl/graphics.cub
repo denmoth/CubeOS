@@ -24,8 +24,6 @@ export class GraphicsDisplay:
         self.w, self.h = t.getSize(true)
         self.prev = nil
         self.stats = {frames: 0, pixels: 0, calls: 0, scan_ms: 0, send_ms: 0}
-        self.seen = nil
-        self.seen_rev = 0
         self.kind = "graphics"
         self.final = []
         if self.mode == 1:
@@ -95,17 +93,26 @@ export class GraphicsDisplay:
 
     # рисует кадр; возвращает число отправленных пикселей
     def present(self, s):
-        if self.prev != nil and self.seen == s and self.seen_rev == s.rev:
-            return 0
-        self.seen = s
-        self.seen_rev = s.rev
         t0 = os.epoch("utc")
         w = math.min(self.w, s.w)
         h = math.min(self.h, s.h)
+        full = self.prev == nil
+        if full:
+            self.prev = []
+        # один постоянный буфер: что сейчас на экране; сравнение и запись идут только в изменённой области поверхности
         prev = self.prev
-        full = prev == nil
-        # два буфера по очереди: прошлый кадр и текущий, без новых таблиц на каждый кадр
-        cur = self.spare ?? []
+        x_lo = 0
+        y_lo = 0
+        x_hi = w - 1
+        y_hi = h - 1
+        if not full:
+            x_lo = math.max(0, s.dx0)
+            y_lo = math.max(0, s.dy0)
+            x_hi = math.min(w - 1, s.dx1)
+            y_hi = math.min(h - 1, s.dy1)
+        s:clean()
+        if x_lo > x_hi or y_lo > y_hi:
+            return 0
         spans_a = []
         spans_b = []
         spx = s.px
@@ -113,7 +120,7 @@ export class GraphicsDisplay:
         mode2 = self.mode == 2
         clear_color = self.clear_color
         quant_obj = self.quant
-        for y in range[0, h - 1]:
+        for y in range[y_lo, y_hi]:
             base = y * w + 1
             sbase = y * sw + 1
             a = nil
@@ -124,38 +131,37 @@ export class GraphicsDisplay:
                     if mode2:
                         if v < 0:
                             v = clear_color
-                        cur[base + x] = v
+                        prev[base + x] = v
                     else:
-                        cur[base + x] = 2 ** quant_obj:pick(v, x, y)
+                        prev[base + x] = 2 ** quant_obj:pick(v, x, y)
                 a = 0
                 b = w - 1
             elif mode2:
-                for x in range[0, w - 1]:
+                for x in range[x_lo, x_hi]:
                     v = spx[sbase + x]
                     if v < 0:
                         v = clear_color
-                    cur[base + x] = v
                     if prev[base + x] != v:
+                        prev[base + x] = v
                         if a == nil:
                             a = x
                         b = x
             else:
-                for x in range[0, w - 1]:
+                for x in range[x_lo, x_hi]:
                     v = 2 ** quant_obj:pick(spx[sbase + x], x, y)
-                    cur[base + x] = v
                     if prev[base + x] != v:
+                        prev[base + x] = v
                         if a == nil:
                             a = x
                         b = x
             spans_a[y + 1] = a
             spans_b[y + 1] = b
-        self.spare = prev
-        self.prev = cur
+        cur = prev
         self.stats.frames += 1
         # прямоугольники из построчных промежутков
         rects = []
         open_rect = nil
-        for y in range[0, h - 1]:
+        for y in range[y_lo, y_hi]:
             a = spans_a[y + 1]
             b = spans_b[y + 1]
             if a == nil:
