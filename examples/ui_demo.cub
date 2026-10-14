@@ -12,6 +12,7 @@ import ui.theme as themes
 import ui.dialogs as dialogs
 import ui.lists as lists
 import unicode
+import term.app as term_app
 
 # ---------------------------------------------------------------- Главная
 
@@ -316,6 +317,7 @@ export def register_all(sh):
     sh:register(stopwatch_app(sh))
     sh:register(player_app(sh))
     sh:register(widgets_app(sh))
+    sh:register(term_app.spec())
     for entry in toys.all():
         sh:register(toy_app(entry))
 
