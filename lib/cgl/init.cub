@@ -1,0 +1,133 @@
+# cgl: Cube Graphics Library, графическая библиотека CubeOS
+#
+#   import cgl
+#   screen = cgl.open()                    сам выбирает вывод: пиксели CC: Graphics, иначе телетекст 2x3 на обычном терминале
+#   s = screen.surface                     поверхность размером с экран в пикселях (screen.w x screen.h)
+#   s:fill_gradient(0, 0, screen.w, screen.h, cgl.palette_ramp(screen.palette, 20, 26, 8), "v")
+#   s:text(font, 10, 10, "Привет", 15)
+#   screen:present()                       показать кадр (отправляются только изменения)
+#   screen:run((dt, frame) => ..., {fps: 20, on_event: (ev) => ...})   цикл кадров
+#   screen:close()
+#
+# Части: cgl.surface (рисование), cgl.color (палитры), cgl.anim (кривые и твины), cgl.cimg (изображения), cgl.fx (эффекты),
+# cgl.g3d (простая трёхмерная графика), cgl.graphics и cgl.teletext (выводы). Подробности в docs/spec/cgl.md.
+
+import cgl.surface as surface_mod
+import cgl.color as color_mod
+import cgl.anim as anim_mod
+import cgl.graphics as graphics_mod
+import cgl.teletext as teletext_mod
+
+export const surface = surface_mod
+export const color = color_mod
+export const anim = anim_mod
+export const CLEAR = surface_mod.CLEAR
+
+def _now():
+    return os.epoch("utc") / 1000
+
+# ступени цвета от from_index до to_index (n номеров) в палитре, смешивание в RGB
+export def palette_ramp(palette, from_index, to_index, n):
+    return palette:gradient(from_index, to_index, n)
+
+export class Screen:
+    def init(self, display, palette):
+        self.display = display
+        self.palette = palette
+        self.w, self.h = display:size()
+        self.surface = surface_mod.new(self.w, self.h, 0)
+        self.kind = display.kind
+        self.frame = 0
+        self.fps = 0
+        self.running = false
+
+    def clear(self, c=0):
+        self.surface:clear(c)
+
+    # показывает кадр; возвращает сколько пикселей (графика) или клеток (телетекст) отправлено
+    def present(self):
+        self.frame += 1
+        return self.display:present(self.surface)
+
+    # событие мыши (клетки в телетексте, пиксели в графике) -> пиксель поверхности
+    def to_pixel(self, x, y):
+        return self.display:to_pixel(x, y)
+
+    # размер экрана мог измениться (терминал, окно): пересоздаёт поверхность
+    def resize(self):
+        self.display:open()
+        self.w, self.h = self.display:size()
+        self.surface = surface_mod.new(self.w, self.h, 0)
+
+    def close(self):
+        self.display:close()
+
+    # цикл кадров. update(dt, frame): рисует в screen.surface, возвращает false для выхода. opts: fps (по умолчанию 20),
+    # on_event(имя, a, b, c): вызывается для событий между кадрами, true завершает цикл; clock (функция времени в секундах);
+    # wait(секунды) -> имя события...: свой способ ожидания (ядро CubeOS)
+    def run(self, update, opts=nil):
+        o = opts ?? {}
+        interval = 1 / (o.fps ?? 20)
+        clock = o.clock ?? _now
+        last = clock()
+        self.running = true
+        counted = 0
+        count_start = last
+        while self.running:
+            frame_start = clock()
+            dt = math.min(frame_start - last, 0.25)
+            last = frame_start
+            if update(dt, self.frame) == false:
+                break
+            self:present()
+            counted += 1
+            if frame_start - count_start >= 1:
+                self.fps = counted / (frame_start - count_start)
+                counted = 0
+                count_start = frame_start
+            if o.wait == nil:
+                if self:_wait_default(clock, frame_start + interval, o.on_event):
+                    break
+            elif o.wait(math.max(0, frame_start + interval - clock())) == true:
+                break
+        self.running = false
+
+    def stop(self):
+        self.running = false
+
+    # ждёт до момента until, передавая события; true: выйти
+    def _wait_default(self, clock, until, on_event):
+        remaining = until - clock()
+        timer = nil
+        if remaining >= 0.05:
+            timer = os.startTimer(remaining)
+        else:
+            os.queueEvent("cgl_tick")
+        while true:
+            ev, a, b, c = os.pullEventRaw()
+            if ev == "terminate":
+                return true
+            if ev == "timer" and a == timer:
+                return false
+            if ev == "cgl_tick":
+                return false
+            if on_event != nil and on_event(ev, a, b, c) == true:
+                return true
+
+# открывает экран. opts: term (по умолчанию term), backend ("auto", "graphics", "teletext"), mode (1 или 2, только для
+# графики), palette (палитра поверхности), dither (для 16 цветов), clear (цвет под прозрачными пикселями)
+export def open(opts=nil):
+    o = opts ?? {}
+    t = o.term ?? term
+    palette = o.palette ?? color_mod.default_palette()
+    backend = o.backend ?? "auto"
+    if backend == "auto":
+        backend = (t.setGraphicsMode != nil and t.drawPixels != nil) and "graphics" or "teletext"
+    display = nil
+    if backend == "graphics":
+        display = graphics_mod.new(t, {mode: o.mode ?? 2, palette: palette, dither: o.dither, clear: o.clear})
+    else:
+        display = teletext_mod.new(t, {palette: palette, dither: o.dither ?? true, clear: o.clear,
+            terminal_palette: o.terminal_palette})
+    display:open()
+    return Screen(display, palette)

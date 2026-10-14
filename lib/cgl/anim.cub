@@ -1,0 +1,284 @@
+# cgl.anim: функции плавности, твины и шкала времени
+#
+#   anim.ease("out_cubic", 0.5)                значение кривой в точке t (0..1)
+#   tw = anim.tween({from: 0, to: 100, time: 1.5, ease: "out_bounce", on_update: (v) => ..., on_done: () => ...})
+#   a = anim.Animator()
+#   a:add(tw); a:add(anim.sequence([tw1, anim.wait(0.5), tw2])); a:update(dt)
+#
+# Время везде в секундах (дробное). Всё считается от переданного dt, часов внутри нет: поведение детерминировано и легко
+# тестируется. Имена кривых: linear, in_/out_/in_out_ + quad, cubic, quart, sine, expo, circ, back, elastic, bounce.
+
+const PI = math.pi
+
+def _clamp01(t):
+    if t < 0:
+        return 0
+    if t > 1:
+        return 1
+    return t
+
+def _bounce_out(t):
+    n1 = 7.5625
+    d1 = 2.75
+    if t < 1 / d1:
+        return n1 * t * t
+    elif t < 2 / d1:
+        t = t - 1.5 / d1
+        return n1 * t * t + 0.75
+    elif t < 2.5 / d1:
+        t = t - 2.25 / d1
+        return n1 * t * t + 0.9375
+    t = t - 2.625 / d1
+    return n1 * t * t + 0.984375
+
+const BACK = 1.70158
+
+# только «in»-кривые, остальные получаются зеркалением
+const IN = {
+    linear: (t) => t,
+    quad: (t) => t * t,
+    cubic: (t) => t * t * t,
+    quart: (t) => t * t * t * t,
+    sine: (t) => 1 - math.cos(t * PI / 2),
+    expo: (t) => t == 0 and 0 or 2 ** (10 * t - 10),
+    circ: (t) => 1 - math.sqrt(1 - t * t),
+    back: (t) => (BACK + 1) * t * t * t - BACK * t * t,
+    elastic: (t) => (t == 0 or t == 1) and t or -(2 ** (10 * t - 10)) * math.sin((t * 10 - 10.75) * (2 * PI / 3)),
+    bounce: (t) => 1 - _bounce_out(1 - t)
+}
+
+def _ease_in(name, t):
+    return IN[name](t)
+
+def _ease_out(name, t):
+    return 1 - IN[name](1 - t)
+
+def _ease_in_out(name, t):
+    if t < 0.5:
+        return IN[name](t * 2) / 2
+    return 1 - IN[name]((1 - t) * 2) / 2
+
+# список названий кривых
+export def names():
+    out = ["linear"]
+    keys = []
+    for k, v in IN:
+        if k != "linear":
+            keys[len(keys) + 1] = k
+    table.sort(keys)
+    for k in keys:
+        out[len(out) + 1] = "in_" .. k
+        out[len(out) + 1] = "out_" .. k
+        out[len(out) + 1] = "in_out_" .. k
+    return out
+
+# значение кривой name в точке t (t вне 0..1 обрезается)
+export def ease(name, t):
+    t = _clamp01(t)
+    if name == "linear" or name == nil:
+        return t
+    if name == "out_bounce":
+        return _bounce_out(t)
+    if name == "in_bounce":
+        return 1 - _bounce_out(1 - t)
+    base = string.match(name, "^in_out_(%w+)$")
+    if base != nil and IN[base] != nil:
+        if base == "bounce":
+            if t < 0.5:
+                return (1 - _bounce_out(1 - 2 * t)) / 2
+            return (1 + _bounce_out(2 * t - 1)) / 2
+        return _ease_in_out(base, t)
+    base = string.match(name, "^out_(%w+)$")
+    if base != nil and IN[base] != nil:
+        return _ease_out(base, t)
+    base = string.match(name, "^in_(%w+)$")
+    if base != nil and IN[base] != nil:
+        return _ease_in(base, t)
+    raise Error("unknown easing: " .. tostring(name))
+
+export def lerp(a, b, t):
+    return a + (b - a) * t
+
+# пружина: плавно догоняет цель без фиксированного времени. state {v, vel}; возвращает новое значение
+export def spring(state, target, dt, stiffness=120, damping=14):
+    force = (target - state.v) * stiffness - state.vel * damping
+    state.vel += force * dt
+    state.v += state.vel * dt
+    return state.v
+
+# ------------------------------------------------------------ твины
+
+# Базовый класс анимаций: update(dt) возвращает true, пока анимация идёт
+export class Tween:
+    # opts: from, to (числа или списки чисел), time, ease, delay, repeat (число повторов или -1), yoyo, on_update(v), on_done()
+    def init(self, opts):
+        self.from_v = opts.from ?? 0
+        self.to_v = opts.to ?? 1
+        self.time = opts.time ?? 1
+        self.ease_name = opts.ease ?? "linear"
+        self.delay = opts.delay ?? 0
+        self.repeat_count = opts.repeat ?? 0
+        self.yoyo = opts.yoyo ?? false
+        self.on_update = opts.on_update
+        self.on_done = opts.on_done
+        self.elapsed = 0
+        self.wait_left = self.delay
+        self.cycle = 0
+        self.done = false
+        self.value = self.from_v
+        self.paused = false
+        self.overflow = 0
+
+    def _blend(self, k):
+        if type(self.from_v) == "table":
+            out = []
+            for i, a in self.from_v:
+                out[i] = a + (self.to_v[i] - a) * k
+            return out
+        return self.from_v + (self.to_v - self.from_v) * k
+
+    def pause(self):
+        self.paused = true
+
+    def resume(self):
+        self.paused = false
+
+    def stop(self):
+        self.done = true
+
+    def reset(self):
+        self.elapsed = 0
+        self.wait_left = self.delay
+        self.cycle = 0
+        self.done = false
+        self.value = self.from_v
+
+    # продвигает на dt секунд; возвращает true, пока идёт
+    def update(self, dt):
+        if self.done:
+            return false
+        if self.paused:
+            return true
+        if self.wait_left > 0:
+            self.wait_left -= dt
+            if self.wait_left > 0:
+                return true
+            dt = -self.wait_left
+            self.wait_left = 0
+        self.elapsed += dt
+        while self.elapsed >= self.time and self.time > 0:
+            # цикл закончен
+            if self.repeat_count == -1 or self.cycle < self.repeat_count:
+                self.cycle += 1
+                self.elapsed -= self.time
+            else:
+                self.overflow = self.elapsed - self.time
+                self.elapsed = self.time
+                break
+        k = self.time <= 0 and 1 or math.min(1, self.elapsed / self.time)
+        if self.yoyo and self.cycle % 2 == 1:
+            k = 1 - k
+        self.value = self:_blend(ease(self.ease_name, k))
+        if self.on_update != nil:
+            self.on_update(self.value)
+        finished = self.elapsed >= self.time and not (self.repeat_count == -1 or self.cycle < self.repeat_count)
+        if self.time <= 0:
+            finished = true
+            self.overflow = dt
+        if finished:
+            self.done = true
+            if self.on_done != nil:
+                self.on_done()
+            return false
+        return true
+
+export def tween(opts):
+    return Tween(opts)
+
+# пауза в секундах (для последовательностей)
+export def wait(seconds):
+    return Tween({time: seconds, from: 0, to: 0})
+
+# вызывает функцию один раз в момент своей очереди
+export def call(fn):
+    return Tween({time: 0, on_done: fn})
+
+# ------------------------------------------------------------ группы
+
+export class Sequence:
+    # items: список анимаций, идут по очереди
+    def init(self, items):
+        self.items = items
+        self.index = 1
+        self.done = false
+
+    def update(self, dt):
+        if self.done:
+            return false
+        while self.index <= len(self.items):
+            item = self.items[self.index]
+            if item:update(dt):
+                return true
+            # элемент закончился: остаток времени отдаём следующему
+            self.index += 1
+            dt = item.overflow ?? 0
+        self.done = true
+        return false
+
+    def stop(self):
+        self.done = true
+
+export def sequence(items):
+    return Sequence(items)
+
+export class Parallel:
+    def init(self, items):
+        self.items = items
+        self.done = false
+
+    def update(self, dt):
+        if self.done:
+            return false
+        alive = false
+        for item in self.items:
+            if item:update(dt):
+                alive = true
+        if not alive:
+            self.done = true
+        return alive
+
+    def stop(self):
+        self.done = true
+
+export def parallel(items):
+    return Parallel(items)
+
+# ------------------------------------------------------------ управление
+
+export class Animator:
+    def init(self):
+        self.items = []
+
+    def add(self, item):
+        self.items[len(self.items) + 1] = item
+        return item
+
+    def clear(self):
+        self.items = []
+
+    def count(self):
+        return len(self.items)
+
+    # продвигает все анимации; законченные убираются
+    def update(self, dt):
+        keep = []
+        for item in self.items:
+            if item:update(dt):
+                keep[len(keep) + 1] = item
+        self.items = keep
+
+    def busy(self):
+        return len(self.items) > 0
+
+export def animator():
+    return Animator()

@@ -1,0 +1,106 @@
+# cgl.cimg: формат изображения CubeOS (.cimg) с палитрой и прозрачностью
+#
+# Файл:  "CIM1", ширина u16, высота u16, флаги u8 (1: есть прозрачные пиксели, 2: есть своя палитра), [число цветов u16 и
+#        r g b по каждому], затем блок lib/compress с данными: w*h байтов номеров цветов, а при прозрачности ещё w*h байтов
+#        маски (1: пиксель прозрачный). Все числа little endian.
+#
+#   data = cimg.encode(surface, palette)     palette можно не передавать (тогда подразумевается палитра по умолчанию)
+#   surface, palette = cimg.decode(data)     palette это nil, если в файле её нет
+#   cimg.write_file("/путь.cimg", surface, palette); surface = cimg.read_file("/путь.cimg")
+#
+# Картинки из PNG делает tools/png2cimg.py (с подбором палитры и прозрачностью по альфа-каналу).
+
+import cgl.surface as surface
+import cgl.color as color
+import compress
+
+const MAGIC = "CIM1"
+
+def _u16(n):
+    return string.char(n % 256, (n // 256) % 256)
+
+export def encode(s, palette=nil, mode="auto"):
+    flags = 0
+    has_clear = false
+    for i in range[1, s.w * s.h]:
+        if s.px[i] < 0:
+            has_clear = true
+            break
+    if has_clear:
+        flags += 1
+    if palette != nil:
+        flags += 2
+    head = [MAGIC, _u16(s.w), _u16(s.h), string.char(flags)]
+    if palette != nil:
+        head[len(head) + 1] = _u16(palette.size)
+        for i in range[0, palette.size - 1]:
+            r, g, b = palette:get(i)
+            head[len(head) + 1] = string.char(r, g, b)
+    pixels = []
+    mask = []
+    # по частям, чтобы не упереться в лимит string.char
+    for i in range[1, s.w * s.h]:
+        v = s.px[i]
+        pixels[i] = v < 0 and 0 or v
+        mask[i] = v < 0 and 1 or 0
+    parts = []
+    chunk = 200
+    i = 1
+    n = s.w * s.h
+    while i <= n:
+        last = math.min(n, i + chunk - 1)
+        parts[len(parts) + 1] = string.char(table.unpack(pixels, i, last))
+        i = last + 1
+    if has_clear:
+        i = 1
+        while i <= n:
+            last = math.min(n, i + chunk - 1)
+            parts[len(parts) + 1] = string.char(table.unpack(mask, i, last))
+            i = last + 1
+    return table.concat(head) .. compress.compress(table.concat(parts), mode)
+
+# возвращает поверхность и палитру (или nil)
+export def decode(data):
+    if string.sub(data, 1, 4) != MAGIC:
+        raise Error("cimg: not an image")
+    w = string.byte(data, 5) + string.byte(data, 6) * 256
+    h = string.byte(data, 7) + string.byte(data, 8) * 256
+    flags = string.byte(data, 9)
+    pos = 10
+    palette = nil
+    if flags // 2 % 2 == 1:
+        count = string.byte(data, pos) + string.byte(data, pos + 1) * 256
+        pos += 2
+        palette = color.Palette()
+        for i in range[0, count - 1]:
+            r, g, b = string.byte(data, pos, pos + 2)
+            palette:set(i, r, g, b)
+            pos += 3
+    body = compress.decompress(string.sub(data, pos))
+    n = w * h
+    expected = (flags % 2 == 1) and n * 2 or n
+    if len(body) != expected:
+        raise Error("cimg: wrong data size")
+    s = surface.new(w, h, 0)
+    for i in range[1, n]:
+        s.px[i] = string.byte(body, i)
+    if flags % 2 == 1:
+        for i in range[1, n]:
+            if string.byte(body, n + i) == 1:
+                s.px[i] = surface.CLEAR
+    return s, palette
+
+export def write_file(path, s, palette=nil):
+    f = fs.open(path, "wb")
+    if f == nil:
+        raise Error("cimg: cannot write " .. path)
+    f.write(encode(s, palette))
+    f.close()
+
+export def read_file(path):
+    f = fs.open(path, "rb")
+    if f == nil:
+        raise Error("cimg: cannot read " .. path)
+    data = f.readAll()
+    f.close()
+    return decode(data)

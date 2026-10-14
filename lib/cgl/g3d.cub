@@ -1,0 +1,228 @@
+# cgl.g3d: небольшая трёхмерная графика: сетки, вращение, перспектива, проволока и закрашенные грани с освещением
+#
+#   m = g3d.cube(1)                          сетка: verts (список [x, y, z]), faces (список [i, j, k] по часовой стрелке снаружи)
+#   g3d.render(surface, m, {rx: a, ry: b, rz: 0, z: 4, mode: "flat", ramp: ramp})
+#
+# Камера смотрит вдоль оси z из начала координат, ось y вниз (как пиксели), сетка отодвигается на opts.z. Режимы: "wire"
+# (рёбра), "flat" (грани с освещением и скрытием обратных сторон, дальние рисуются раньше), "points" (вершины).
+# Освещение: ramp это список цветов от тёмного к светлому, интенсивность по косинусу угла между нормалью и направлением на свет
+# opts.light (вектор от предмета к источнику; по умолчанию слева сверху спереди).
+
+export class Mesh:
+    def init(self, verts, faces):
+        self.verts = verts
+        self.faces = faces
+
+    # переворачивает грани так, чтобы нормаль (b-a)x(c-a) смотрела наружу. center(x, y, z) -> x, y, z даёт точку «внутри» для грани
+    # (по умолчанию начало координат); подходит для выпуклых тел и тел вращения
+    def orient(self, center=nil):
+        for fi, f in self.faces:
+            a = self.verts[f[1]]
+            b = self.verts[f[2]]
+            c = self.verts[f[3]]
+            nx = (b[2] - a[2]) * (c[3] - a[3]) - (b[3] - a[3]) * (c[2] - a[2])
+            ny = (b[3] - a[3]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[3] - a[3])
+            nz = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1])
+            gx = 0
+            gy = 0
+            gz = 0
+            for vi in f:
+                gx += self.verts[vi][1] / len(f)
+                gy += self.verts[vi][2] / len(f)
+                gz += self.verts[vi][3] / len(f)
+            rx = 0
+            ry = 0
+            rz = 0
+            if center != nil:
+                rx, ry, rz = center(gx, gy, gz)
+            if nx * (gx - rx) + ny * (gy - ry) + nz * (gz - rz) < 0:
+                rev = []
+                for k in range[1, len(f)]:
+                    rev[k] = f[len(f) + 1 - k]
+                self.faces[fi] = rev
+        return self
+
+    # рёбра без повторов: список [i, j]
+    def edges(self):
+        seen = {}
+        out = []
+        for f in self.faces:
+            for k in range[1, len(f)]:
+                a = f[k]
+                b = f[k % len(f) + 1]
+                lo = math.min(a, b)
+                hi = math.max(a, b)
+                key = lo * 100000 + hi
+                if seen[key] == nil:
+                    seen[key] = true
+                    out[len(out) + 1] = [lo, hi]
+        return out
+
+export def cube(size=1):
+    h = size / 2
+    verts = [[-h, -h, -h], [h, -h, -h], [h, h, -h], [-h, h, -h], [-h, -h, h], [h, -h, h], [h, h, h], [-h, h, h]]
+    faces = [[1, 2, 3, 4], [5, 6, 7, 8], [1, 2, 6, 5], [4, 3, 7, 8], [1, 4, 8, 5], [2, 3, 7, 6]]
+    return Mesh(verts, faces):orient()
+
+export def pyramid(size=1):
+    h = size / 2
+    verts = [[-h, h, -h], [h, h, -h], [h, h, h], [-h, h, h], [0, -h, 0]]
+    faces = [[1, 2, 5], [2, 3, 5], [3, 4, 5], [4, 1, 5], [1, 2, 3, 4]]
+    return Mesh(verts, faces):orient()
+
+# сфера из полос: rings по широте, segments по долготе
+export def sphere(radius=1, rings=8, segments=12):
+    verts = []
+    faces = []
+    for i in range[0, rings]:
+        phi = math.pi * i / rings
+        for j in range[0, segments - 1]:
+            theta = math.pi * 2 * j / segments
+            verts[len(verts) + 1] = [radius * math.sin(phi) * math.cos(theta), -radius * math.cos(phi),
+                radius * math.sin(phi) * math.sin(theta)]
+    for i in range[0, rings - 1]:
+        for j in range[0, segments - 1]:
+            a = i * segments + j + 1
+            b = i * segments + (j + 1) % segments + 1
+            c = (i + 1) * segments + j + 1
+            d = (i + 1) * segments + (j + 1) % segments + 1
+            if i == 0:
+                faces[len(faces) + 1] = [a, c, d]
+            elif i == rings - 1:
+                faces[len(faces) + 1] = [a, b, c]
+            else:
+                faces[len(faces) + 1] = [a, b, d, c]
+    return Mesh(verts, faces):orient()
+
+def torus_center(major, x, y, z):
+    l = math.sqrt(x * x + z * z)
+    if l == 0:
+        return 0, 0, 0
+    return x / l * major, 0, z / l * major
+
+export def torus(major=1, minor=0.4, u=14, v=8):
+    verts = []
+    faces = []
+    for i in range[0, u - 1]:
+        a = math.pi * 2 * i / u
+        for j in range[0, v - 1]:
+            b = math.pi * 2 * j / v
+            r = major + minor * math.cos(b)
+            verts[len(verts) + 1] = [r * math.cos(a), minor * math.sin(b), r * math.sin(a)]
+    for i in range[0, u - 1]:
+        for j in range[0, v - 1]:
+            p = i * v + j + 1
+            q = i * v + (j + 1) % v + 1
+            r2 = ((i + 1) % u) * v + j + 1
+            s2 = ((i + 1) % u) * v + (j + 1) % v + 1
+            faces[len(faces) + 1] = [p, q, s2, r2]
+    # внутренняя точка грани это центр трубки в её месте
+    let ring = major
+    return Mesh(verts, faces):orient((x, y, z) => torus_center(ring, x, y, z))
+
+# поворот вокруг осей x, y, z (радианы), возвращает новый список вершин
+export def rotate(verts, rx, ry, rz):
+    sx = math.sin(rx)
+    cx = math.cos(rx)
+    sy = math.sin(ry)
+    cy = math.cos(ry)
+    sz = math.sin(rz)
+    cz = math.cos(rz)
+    out = []
+    for i, v in verts:
+        x = v[1]
+        y = v[2]
+        z = v[3]
+        y, z = y * cx - z * sx, y * sx + z * cx
+        x, z = x * cy + z * sy, -x * sy + z * cy
+        x, y = x * cz - y * sz, x * sz + y * cz
+        out[i] = [x, y, z]
+    return out
+
+# рисует сетку. opts: rx, ry, rz, x, y, z (смещение; z это расстояние до камеры), fov (масштаб, по умолчанию высота поверхности),
+# cx, cy (центр экрана), mode ("wire", "flat", "points"), color (номер для wire/points), ramp (для flat), light ([x, y, z]),
+# edge (цвет контура граней в flat, по умолчанию нет)
+export def render(s, mesh, opts=nil):
+    o = opts ?? {}
+    verts = rotate(mesh.verts, o.rx ?? 0, o.ry ?? 0, o.rz ?? 0)
+    ox = o.x ?? 0
+    oy = o.y ?? 0
+    oz = o.z ?? 4
+    fov = o.fov ?? s.h
+    cx = o.cx ?? s.w / 2
+    cy = o.cy ?? s.h / 2
+    mode = o.mode ?? "wire"
+    proj = []
+    for i, v in verts:
+        z = v[3] + oz
+        k = z > 0.01 and fov / z or 0
+        proj[i] = [cx + (v[1] + ox) * k, cy + (v[2] + oy) * k, z]
+    if mode == "points":
+        for i, p in proj:
+            if p[3] > 0.01:
+                s:set(math.floor(p[1] + 0.5), math.floor(p[2] + 0.5), o.color ?? 1)
+        return
+    if mode == "wire":
+        c = o.color ?? 1
+        for e in mesh:edges():
+            a = proj[e[1]]
+            b = proj[e[2]]
+            if a[3] > 0.01 and b[3] > 0.01:
+                s:line(math.floor(a[1] + 0.5), math.floor(a[2] + 0.5), math.floor(b[1] + 0.5), math.floor(b[2] + 0.5), c)
+        return
+    ramp = o.ramp ?? [1]
+    n = len(ramp)
+    light = o.light ?? [-0.4, -0.6, -0.7]
+    ll = math.sqrt(light[1] * light[1] + light[2] * light[2] + light[3] * light[3])
+    lx = light[1] / ll
+    ly = light[2] / ll
+    lz = light[3] / ll
+    visible = []
+    for fi, f in mesh.faces:
+        a = verts[f[1]]
+        b = verts[f[2]]
+        c = verts[f[3]]
+        ux = b[1] - a[1]
+        uy = b[2] - a[2]
+        uz = b[3] - a[3]
+        vx = c[1] - a[1]
+        vy = c[2] - a[2]
+        vz = c[3] - a[3]
+        nx = uy * vz - uz * vy
+        ny = uz * vx - ux * vz
+        nz = ux * vy - uy * vx
+        nl = math.sqrt(nx * nx + ny * ny + nz * nz)
+        if nl > 0:
+            nx = nx / nl
+            ny = ny / nl
+            nz = nz / nl
+            # вектор от грани к камере: камера в (-ox, -oy, -oz) относительно сетки
+            tx = -(a[1] + ox)
+            ty = -(a[2] + oy)
+            tz = -(a[3] + oz)
+            if nx * tx + ny * ty + nz * tz > 0:
+                depth = 0
+                for k in range[1, len(f)]:
+                    depth += proj[f[k]][3]
+                intensity = nx * lx + ny * ly + nz * lz
+                visible[len(visible) + 1] = {face: f, depth: depth / len(f), light: intensity}
+    table.sort(visible, (p, q) => p.depth > q.depth)
+    ambient = o.ambient ?? 0.2
+    for item in visible:
+        k = ambient + (1 - ambient) * math.max(0, item.light)
+        idx = math.floor(k * (n - 1) + 1.5)
+        if idx < 1:
+            idx = 1
+        if idx > n:
+            idx = n
+        pts = []
+        ok = true
+        for vi in item.face:
+            p = proj[vi]
+            if p[3] <= 0.01:
+                ok = false
+            pts[len(pts) + 1] = [math.floor(p[1] + 0.5), math.floor(p[2] + 0.5)]
+        if ok:
+            s:polygon(pts, ramp[idx], true)
+            if o.edge != nil:
+                s:polygon(pts, o.edge, false)

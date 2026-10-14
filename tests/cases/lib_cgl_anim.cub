@@ -1,0 +1,108 @@
+import t
+import cgl.anim as anim
+eq = t.eq
+
+def push(list, value):
+    list[len(list) + 1] = value
+
+def near(a, b):
+    return math.abs(a - b) < 1e-9
+
+# ---------------------------------------------------------------- кривые
+for name in anim.names():
+    if name != "linear":
+        eq(near(anim.ease(name, 0), 0), true, name .. " starts at 0")
+        eq(near(anim.ease(name, 1), 1), true, name .. " ends at 1")
+eq(anim.ease("linear", 0.25), 0.25, "linear")
+eq(anim.ease("in_quad", 0.5), 0.25, "in_quad")
+eq(anim.ease("out_quad", 0.5), 0.75, "out_quad")
+eq(anim.ease("in_out_quad", 0.25), 0.125, "in_out_quad first half")
+eq(anim.ease("in_out_quad", 0.75), 0.875, "in_out_quad second half")
+eq(anim.ease("out_cubic", -1), 0, "clamped below")
+eq(anim.ease("out_cubic", 5), 1, "clamped above")
+eq(anim.ease("in_back", 0.5) < 0, true, "in_back dips below zero")
+eq(anim.ease("out_back", 0.5) > 0.5, true, "out_back overshoots")
+eq(anim.ease("out_bounce", 0.5) > 0.7, true, "bounce")
+eq(near(anim.ease("in_out_bounce", 0.5), 0.5), true, "in_out_bounce middle")
+ok, err = pcall(anim.ease, "nonsense", 0.5)
+eq(ok, false, "unknown easing raises")
+eq(anim.lerp(10, 20, 0.25), 12.5, "lerp")
+
+# ---------------------------------------------------------------- твины
+seen = []
+done = []
+tw = anim.tween({from: 0, to: 10, time: 1, on_update: (v) => push(seen, v), on_done: () => push(done, true)})
+eq(tw:update(0.5), true, "running")
+eq(tw.value, 5, "halfway")
+eq(tw:update(0.5), false, "finished")
+eq(tw.value, 10, "final value")
+eq(len(done), 1, "done callback once")
+eq(tw:update(1), false, "stays finished")
+eq(len(done), 1, "no second callback")
+
+tw = anim.tween({from: 0, to: 10, time: 1, delay: 1})
+tw:update(0.5)
+eq(tw.value, 0, "delay holds the start value")
+tw:update(1)
+eq(tw.value, 5, "delay passes, remainder applied")
+
+tw = anim.tween({from: [0, 100], to: [10, 0], time: 2})
+tw:update(1)
+eq(tw.value, [5, 50], "list tween")
+
+tw = anim.tween({from: 0, to: 1, time: 1, repeat: 1, yoyo: true})
+tw:update(1.5)
+eq(tw.value, 0.5, "yoyo runs backward on the second cycle")
+eq(tw:update(0.5), false, "repeat then finish")
+eq(tw.value, 0, "yoyo ends at the start")
+
+tw = anim.tween({from: 0, to: 1, time: 1, repeat: -1})
+tw:update(10.25)
+eq(near(tw.value, 0.25), true, "endless repeat")
+eq(tw.done, false, "never finishes")
+tw:pause()
+tw:update(5)
+eq(near(tw.value, 0.25), true, "paused")
+tw:stop()
+eq(tw:update(1), false, "stopped")
+
+# ---------------------------------------------------------------- последовательности
+log = []
+a = anim.tween({time: 1, on_done: () => push(log, "a")})
+b = anim.tween({time: 1, on_done: () => push(log, "b")})
+seq = anim.sequence([a, anim.wait(0.5), anim.call(() => push(log, "call")), b])
+eq(seq:update(0.9), true, "sequence runs")
+eq(log, [], "nothing finished yet")
+seq:update(0.2)
+eq(log, ["a"], "first finished")
+seq:update(0.4)
+eq(log, ["a", "call"], "wait finished and call fired")
+eq(seq:update(1), false, "sequence done")
+eq(log, ["a", "call", "b"], "order")
+
+log = []
+p = anim.parallel([anim.tween({time: 1, on_done: () => push(log, "x")}), anim.tween({time: 2, on_done: () => push(log, "y")})])
+eq(p:update(1), true, "parallel alive")
+eq(log, ["x"], "short one finished")
+eq(p:update(1), false, "parallel done")
+eq(log, ["x", "y"], "both finished")
+
+# ---------------------------------------------------------------- аниматор
+an = anim.animator()
+v = []
+an:add(anim.tween({time: 1, on_update: (x) => push(v, x)}))
+an:add(anim.tween({time: 2}))
+eq(an:count(), 2, "two animations")
+an:update(1)
+eq(an:count(), 1, "finished one removed")
+eq(v[len(v)], 1, "final value delivered")
+an:update(1)
+eq(an:busy(), false, "all done")
+
+# ---------------------------------------------------------------- пружина
+st = {v: 0, vel: 0}
+for i in range[1, 400]:
+    anim.spring(st, 10, 0.02)
+eq(math.abs(st.v - 10) < 0.01, true, "spring settles on the target")
+
+print("done")

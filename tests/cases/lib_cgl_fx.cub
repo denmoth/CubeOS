@@ -1,0 +1,150 @@
+import t
+import cgl
+import cgl.surface as sf
+import cgl.color as color
+import cgl.fx as fx
+import cgl.g3d as g3d
+eq = t.eq
+
+def count_colors(s):
+    seen = {}
+    n = 0
+    for i in range[1, s.w * s.h]:
+        v = s.px[i]
+        if v > 0 and seen[v] == nil:
+            seen[v] = true
+            n += 1
+    return n
+
+def count_ink(s):
+    n = 0
+    for i in range[1, s.w * s.h]:
+        if s.px[i] != 0:
+            n += 1
+    return n
+
+# ---------------------------------------------------------------- сетки
+cube = g3d.cube(1)
+eq(len(cube.verts), 8, "cube verts")
+eq(len(cube.faces), 6, "cube faces")
+eq(len(cube:edges()), 12, "cube edges")
+eq(len(g3d.pyramid(1):edges()), 8, "pyramid edges")
+
+# нормали направлены наружу
+def outward(mesh, center):
+    bad = 0
+    for fi, f in mesh.faces:
+        a = mesh.verts[f[1]]
+        b = mesh.verts[f[2]]
+        c = mesh.verts[f[3]]
+        nx = (b[2] - a[2]) * (c[3] - a[3]) - (b[3] - a[3]) * (c[2] - a[2])
+        ny = (b[3] - a[3]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[3] - a[3])
+        nz = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1])
+        gx = 0
+        gy = 0
+        gz = 0
+        for vi in f:
+            gx += mesh.verts[vi][1] / len(f)
+            gy += mesh.verts[vi][2] / len(f)
+            gz += mesh.verts[vi][3] / len(f)
+        rx, ry, rz = center(gx, gy, gz)
+        if nx * (gx - rx) + ny * (gy - ry) + nz * (gz - rz) <= 0:
+            bad += 1
+    return bad
+
+def origin(x, y, z):
+    return 0, 0, 0
+
+eq(outward(g3d.cube(2), origin), 0, "cube faces point outward")
+eq(outward(g3d.pyramid(2), origin), 0, "pyramid faces point outward")
+eq(outward(g3d.sphere(1, 6, 8), origin), 0, "sphere faces point outward")
+def ring(x, y, z):
+    l = math.sqrt(x * x + z * z)
+    return x / l, 0, z / l
+
+eq(outward(g3d.torus(1, 0.4, 10, 6), ring), 0, "torus faces point outward")
+
+# ---------------------------------------------------------------- отрисовка
+s = sf.new(60, 40, 0)
+g3d.render(s, cube, {mode: "flat", ramp: [1, 2, 3], z: 4, fov: 40})
+eq(s:get(30, 20) > 0, true, "front face covers the center")
+eq(s:get(0, 0), 0, "corner stays empty")
+eq(count_colors(s), 1, "head-on view sees one face of the cube")
+s:clear(0)
+g3d.render(s, cube, {mode: "flat", ramp: [1, 2, 3, 4, 5, 6], z: 4, fov: 40, ry: 0.6, rx: 0.4})
+eq(count_colors(s) >= 2, true, "turned cube shows several shades")
+s:clear(0)
+g3d.render(s, cube, {mode: "wire", color: 7, z: 4, fov: 40, ry: 0.5, rx: 0.3})
+eq(count_ink(s) > 40, true, "wireframe draws lines")
+s:clear(0)
+g3d.render(s, cube, {mode: "points", color: 7, z: 4, fov: 40})
+s:clear(0)
+g3d.render(s, g3d.sphere(1, 8, 12), {mode: "flat", ramp: [1, 2, 3, 4, 5, 6, 7, 8], z: 4, fov: 40})
+eq(count_colors(s) >= 4, true, "sphere is shaded")
+s:clear(0)
+g3d.render(s, g3d.torus(1, 0.4, 14, 8), {mode: "flat", ramp: [1, 2, 3, 4, 5, 6], z: 4, fov: 30, rx: 1})
+eq(count_ink(s) > 100, true, "torus draws")
+s:clear(0)
+g3d.render(s, cube, {mode: "flat", ramp: [1, 2, 3], z: -2})
+eq(count_ink(s), 0, "nothing is drawn behind the camera")
+
+# ---------------------------------------------------------------- эффекты
+pal = color.default_palette()
+ramp = pal:gradient(15, 0, 8)
+p = fx.Plasma(30, 20, ramp)
+s = sf.new(30, 20, -1)
+p:draw(s, 0)
+ok = true
+inramp = {}
+for c in ramp:
+    inramp[c] = true
+for i in range[1, 30 * 20]:
+    if inramp[s.px[i]] == nil:
+        ok = false
+eq(ok, true, "plasma uses only ramp colors")
+before = s:checksum()
+p:draw(s, 1.7)
+eq(s:checksum() != before, true, "plasma moves")
+
+f = fx.Fire(20, 16, [0, 1, 2, 3, 4, 5, 6, 7])
+for i in range[1, 40]:
+    f:step()
+fs_surface = sf.new(20, 16, 0)
+f:draw(fs_surface)
+eq(fs_surface:get(10, 15) > fs_surface:get(10, 0), true, "fire is hotter at the bottom")
+eq(count_ink(fs_surface) > 0, true, "fire burns")
+f:set_fuel(0)
+for i in range[1, 60]:
+    f:step()
+fs_surface:clear(0)
+f:draw(fs_surface)
+eq(fs_surface:get(10, 5), 0, "fire dies without fuel")
+
+st = fx.Starfield(40, 30, 25)
+eq(len(st.stars), 25, "stars")
+for i in range[1, 20]:
+    st:update(0.1)
+eq(len(st.stars), 25, "stars are recycled")
+s = sf.new(40, 30, 0)
+st:draw(s, [8, 7, 6, 1])
+eq(count_ink(s) > 5, true, "stars are drawn")
+
+ps = fx.Particles({gravity: 0})
+ps:burst(10, 10, 12, {life: 1, speed: 20, color: [3, 4]})
+eq(ps:count(), 12, "particles")
+ps:update(0.2)
+eq(ps:count(), 12, "still alive")
+ps:update(2)
+eq(ps:count(), 0, "particles expire")
+ps2 = fx.Particles({gravity: 100})
+ps2:emit(5, 5, 0, 0, 5, 9)
+ps2:update(0.5)
+eq(ps2.items[1].y > 5, true, "gravity pulls particles down")
+
+# ---------------------------------------------------------------- remap
+s = sf.new(3, 1, 0)
+s:set(1, 0, 5)
+fx.remap(s, {5: 6})
+eq(s:to_text(), [".6."], "remap")
+
+print("done")

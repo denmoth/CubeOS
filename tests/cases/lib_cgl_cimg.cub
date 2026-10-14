@@ -1,0 +1,38 @@
+import t
+import cgl.surface as sf
+import cgl.color as color
+import cgl.cimg as cimg
+eq = t.eq
+
+s = sf.new(40, 30, 0)
+s:circle(20, 15, 10, 200, true)
+s:line(0, 0, 39, 29, 255)
+s:set(3, 3, sf.CLEAR)
+data = cimg.encode(s)
+eq(string.sub(data, 1, 4), "CIM1", "magic")
+back, pal = cimg.decode(data)
+eq(pal, nil, "no palette stored")
+eq(back:equals(s), true, "roundtrip with transparency")
+eq(back:get(3, 3), sf.CLEAR, "transparent pixel survives")
+
+p = color.default_palette()
+p:set(5, 1, 2, 3)
+s2 = sf.new(7, 3, 5)
+s2:set(6, 2, 17)
+data2 = cimg.encode(s2, p)
+back2, pal2 = cimg.decode(data2)
+eq(back2:equals(s2), true, "roundtrip with palette")
+eq(pal2:hex(5), "#010203", "palette color survives")
+eq(pal2.size, 256, "palette size")
+eq(len(data2) < 7 * 3 + 256 * 3 + 100, true, "small image stays small")
+
+ok, err = pcall(cimg.decode, "nope")
+eq(ok, false, "bad data raises")
+
+big = sf.new(120, 80, 0)
+big:fill_gradient(0, 0, 120, 80, [1, 2, 3, 4, 5, 6], "v")
+bb = cimg.decode(cimg.encode(big))
+eq(bb:equals(big), true, "larger image")
+eq(len(cimg.encode(big)) < 120 * 80 / 4, true, "gradients compress well")
+
+print("done")

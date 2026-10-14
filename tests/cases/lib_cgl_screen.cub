@@ -1,0 +1,94 @@
+import t
+import cgl
+eq = t.eq
+
+def push(list, value):
+    list[len(list) + 1] = value
+
+# терминал-заглушка в виде обычной таблицы функций; log копит вызовы
+def make_term(cols, rows, pixel_mode):
+    log = []
+    api = {}
+    def get_size(px):
+        if px:
+            return cols * 6, rows * 9
+        return cols, rows
+    api.getSize = get_size
+    api.setBackgroundColor = (c) => push(log, "bg")
+    api.setTextColor = (c) => push(log, "fg")
+    api.clear = () => push(log, "clear")
+    api.setCursorPos = (x, y) => push(log, "pos " .. x .. "," .. y)
+    api.blit = (a, b, c) => push(log, "blit " .. len(a))
+    api.setPaletteColor = (i, r, g, b) => push(log, "pal")
+    if pixel_mode:
+        api.setGraphicsMode = (m) => push(log, "mode " .. tostring(m))
+        api.drawPixels = (x, y, rr) => push(log, "draw " .. len(rr))
+        api.setFrozen = (f) => push(log, f and "freeze" or "thaw")
+    return api, log
+
+# автовыбор: пиксельный режим есть
+tm, log = make_term(10, 4, true)
+sc = cgl.open({term: tm})
+eq(sc.kind, "graphics", "graphics backend picked")
+eq([sc.w, sc.h], [60, 36], "screen size in pixels")
+eq(log[1], "mode 2", "mode 2 requested first")
+sc.surface:set(1, 1, 5)
+n = sc:present()
+eq(n, 60 * 36, "first frame is full")
+eq(sc.frame, 1, "frame counter")
+eq(sc:present(), 0, "identical frame sends nothing")
+sc:close()
+eq(log[len(log)], "mode false", "close leaves the pixel mode")
+
+# автовыбор: только телетекст
+tm, log = make_term(10, 4, false)
+sc = cgl.open({term: tm})
+eq(sc.kind, "teletext", "teletext fallback")
+eq([sc.w, sc.h], [20, 12], "teletext pixel size")
+eq(sc:to_pixel(3, 2), 4, "mouse cell to pixel")
+sc.surface:fill_rect(0, 0, 4, 3, 14)
+eq(sc:present(), 40, "first teletext frame covers every cell")
+sc:close()
+
+# явный выбор
+tm, log = make_term(10, 4, true)
+sc = cgl.open({term: tm, backend: "teletext"})
+eq(sc.kind, "teletext", "explicit backend")
+
+# цикл кадров: свои часы и свой wait
+tm, log = make_term(10, 4, true)
+sc = cgl.open({term: tm})
+now = 0
+frames = []
+def clock():
+    return now
+def update(dt, frame):
+    push(frames, dt)
+    sc.surface:set(frame % 50, 0, frame % 200 + 1)
+def wait(seconds):
+    now += seconds
+    return len(frames) >= 4
+sc:run(update, {fps: 10, clock: clock, wait: wait})
+eq(len(frames), 4, "four frames")
+eq(frames[1], 0, "first dt is zero")
+eq(math.abs(frames[2] - 0.1) < 1e-9, true, "fixed step from the clock")
+eq(sc.frame, 4, "presented each frame")
+
+# update возвращает false
+tm, log = make_term(10, 4, true)
+sc = cgl.open({term: tm})
+count = 0
+def update2(dt, frame):
+    count += 1
+    if count == 3:
+        return false
+sc:run(update2, {clock: clock, wait: (s) => false})
+eq(count, 3, "update can stop the loop")
+
+# своя палитра и 16 цветов
+tm, log = make_term(10, 4, true)
+sc = cgl.open({term: tm, mode: 1, dither: true})
+eq(log[1], "mode 1", "mode 1 requested")
+sc:close()
+
+print("done")
