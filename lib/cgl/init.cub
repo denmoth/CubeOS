@@ -9,6 +9,7 @@
 #   screen:run((dt, frame) => ..., {fps: 20, on_event: (ev) => ...})   цикл кадров
 #   screen:close()
 #
+# cgl.open({term: монитор1, mirror: [монитор2, монитор3]}) показывает одну картинку на нескольких выводах (cgl.mirror).
 # Части: cgl.surface (рисование), cgl.color (палитры), cgl.anim (кривые и твины), cgl.cimg (изображения), cgl.fx (эффекты),
 # cgl.g3d (простая трёхмерная графика), cgl.graphics и cgl.teletext (выводы). Подробности в docs/spec/cgl.md.
 
@@ -17,6 +18,7 @@ import cgl.color as color_mod
 import cgl.anim as anim_mod
 import cgl.graphics as graphics_mod
 import cgl.teletext as teletext_mod
+import cgl.mirror as mirror_mod
 
 export const surface = surface_mod
 export const color = color_mod
@@ -122,20 +124,26 @@ export class Screen:
             if on_event != nil and on_event(ev, a, b, c) == true:
                 return true
 
-# открывает экран. opts: term (по умолчанию term), backend ("auto", "graphics", "teletext"), mode (1 или 2, только для
-# графики), palette (палитра поверхности), dither (для 16 цветов), clear (цвет под прозрачными пикселями)
+def _make_display(t, o, palette):
+    backend = o.backend ?? "auto"
+    if backend == "auto":
+        backend = (t.setGraphicsMode != nil and t.drawPixels != nil) and "graphics" or "teletext"
+    if backend == "graphics":
+        return graphics_mod.new(t, {mode: o.mode ?? 2, palette: palette, dither: o.dither, clear: o.clear})
+    return teletext_mod.new(t, {palette: palette, dither: o.dither ?? false, clear: o.clear, terminal_palette: o.terminal_palette})
+
+# открывает экран. opts: term (по умолчанию term), mirror (список ещё терминалов или мониторов с той же картинкой: размеры должны
+# совпадать), backend ("auto", "graphics", "teletext"), mode (1 или 2, только для графики), palette (палитра поверхности),
+# dither (для 16 цветов), clear (цвет под прозрачными пикселями)
 export def open(opts=nil):
     o = opts ?? {}
     t = o.term ?? term
     palette = o.palette ?? color_mod.default_palette()
-    backend = o.backend ?? "auto"
-    if backend == "auto":
-        backend = (t.setGraphicsMode != nil and t.drawPixels != nil) and "graphics" or "teletext"
-    display = nil
-    if backend == "graphics":
-        display = graphics_mod.new(t, {mode: o.mode ?? 2, palette: palette, dither: o.dither, clear: o.clear})
-    else:
-        display = teletext_mod.new(t, {palette: palette, dither: o.dither ?? false, clear: o.clear,
-            terminal_palette: o.terminal_palette})
+    display = _make_display(t, o, palette)
+    if o.mirror != nil and len(o.mirror) > 0:
+        list = [display]
+        for m in o.mirror:
+            list[len(list) + 1] = _make_display(m, o, palette)
+        display = mirror_mod.new(list)
     display:open()
     return Screen(display, palette)

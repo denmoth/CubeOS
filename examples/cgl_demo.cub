@@ -387,7 +387,11 @@ export def main(opts=nil):
                 enter(state.index + 1)
         ctx.s = ctx.screen.surface
         state.scene:draw(ctx, dt, ctx.t)
-        label(ctx, 2, ctx.h - 10, names[state.index] .. "  " .. math.floor(ctx.screen.fps + 0.5) .. " fps  [" .. ctx.screen.kind .. "]", ctx.white)
+        # подпись на своём фоне: сцены вроде «Интро» не перерисовывают кадр, и цифры fps иначе накладывались бы друг на друга
+        info = names[state.index] .. "  " .. math.floor(ctx.screen.fps + 0.5) .. " fps  [" .. ctx.screen.kind .. "]"
+        info = sf.ellipsize(ctx.font, info, ctx.w - 3, "..")
+        ctx.s:fill_rect(0, ctx.h - 11, sf.measure(ctx.font, info) + 4, 11, ctx.black)
+        label(ctx, 2, ctx.h - 10, info, ctx.white)
         return not state.quit
 
     enter(1)

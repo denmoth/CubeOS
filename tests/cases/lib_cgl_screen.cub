@@ -7,24 +7,24 @@ def push(list, value):
 
 # терминал-заглушка в виде обычной таблицы функций; log копит вызовы
 def make_term(cols, rows, pixel_mode):
-    log = []
+    calls = []
     api = {}
     def get_size(px):
         if px:
             return cols * 6, rows * 9
         return cols, rows
     api.getSize = get_size
-    api.setBackgroundColor = (c) => push(log, "bg")
-    api.setTextColor = (c) => push(log, "fg")
-    api.clear = () => push(log, "clear")
-    api.setCursorPos = (x, y) => push(log, "pos " .. x .. "," .. y)
-    api.blit = (a, b, c) => push(log, "blit " .. len(a))
-    api.setPaletteColor = (i, r, g, b) => push(log, "pal")
+    api.setBackgroundColor = (c) => push(calls, "bg")
+    api.setTextColor = (c) => push(calls, "fg")
+    api.clear = () => push(calls, "clear")
+    api.setCursorPos = (x, y) => push(calls, "pos " .. x .. "," .. y)
+    api.blit = (a, b, c) => push(calls, "blit " .. len(a))
+    api.setPaletteColor = (i, r, g, b) => push(calls, "pal")
     if pixel_mode:
-        api.setGraphicsMode = (m) => push(log, "mode " .. tostring(m))
-        api.drawPixels = (x, y, rr) => push(log, "draw " .. len(rr))
-        api.setFrozen = (f) => push(log, f and "freeze" or "thaw")
-    return api, log
+        api.setGraphicsMode = (m) => push(calls, "mode " .. tostring(m))
+        api.drawPixels = (x, y, rr) => push(calls, "draw " .. len(rr))
+        api.setFrozen = (f) => push(calls, f and "freeze" or "thaw")
+    return api, calls
 
 # автовыбор: пиксельный режим есть
 tm, log = make_term(10, 4, true)
@@ -102,5 +102,32 @@ eq(len(log) - log2, 2, "two palette calls")
 eq(log[len(log)], "pal", "palette call")
 eq(sc:present(), 0, "palette change leaves the frame untouched")
 eq(sc.palette:hex(200), "#ff0000", "surface palette follows")
+
+# зеркало: одна картинка на двух выводах, оба получают все изменения
+tm1, log1 = make_term(10, 4, true)
+tm2, log2 = make_term(10, 4, true)
+sc = cgl.open({term: tm1, mirror: [tm2]})
+eq(sc.kind, "graphics", "mirror keeps the primary kind")
+eq([sc.w, sc.h], [60, 36], "mirror size")
+sc.surface:set(3, 3, 5)
+sc:present()
+def count_draws(log):
+    n = 0
+    for l in log:
+        if string.sub(l, 1, 4) == "draw":
+            n += 1
+    return n
+eq(count_draws(log1), count_draws(log2), "both outputs drew the first frame")
+before1 = count_draws(log1)
+before2 = count_draws(log2)
+sc.surface:set(10, 10, 6)
+sc:present()
+eq(count_draws(log1) - before1, 1, "primary got the change")
+eq(count_draws(log2) - before2, 1, "mirror got the same change")
+sc:set_colors([[200, 1, 2, 3]])
+eq(log1[len(log1)], "pal", "palette reaches the primary")
+eq(log2[len(log2)], "pal", "palette reaches the mirror")
+sc:close()
+eq(log2[len(log2)], "mode false", "mirror closed too")
 
 print("done")

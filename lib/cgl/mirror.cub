@@ -1,0 +1,60 @@
+# cgl.mirror: одна картинка на несколько выводов сразу (несколько мониторов, монитор и терминал)
+#
+#   m = mirror.new([display1, display2, display3])     первый главный: от него размер и тип; остальные показывают то же самое
+#   screen = cgl.open({term: mon1, mirror: [mon2, mon3]})     то же через cgl.open
+#
+# Поверхность одна. Дисплей при показе забирает у неё прямоугольник изменений, поэтому перед каждым выводом прямоугольник
+# возвращается, и каждый дисплей получает все изменения кадра. Выводы должны быть одного размера (мониторы одинаковых размеров
+# с одним масштабом текста); у большего лишнее остаётся пустым. Нагрузка растёт примерно линейно с числом выводов: монитор это
+# вызовы через игровой тик.
+
+export class MirrorDisplay:
+    def init(self, displays):
+        self.displays = displays
+        self.primary = displays[1]
+        self.kind = self.primary.kind
+        self.mode = self.primary.mode
+        self.quant = self.primary.quant
+        self.stats = self.primary.stats
+        self.w, self.h = self.primary:size()
+
+    def open(self):
+        for d in self.displays:
+            d:open()
+        self.w, self.h = self.primary:size()
+
+    def close(self):
+        for d in self.displays:
+            d:close()
+
+    def size(self):
+        return self.w, self.h
+
+    def to_pixel(self, x, y):
+        return self.primary:to_pixel(x, y)
+
+    def invalidate(self):
+        for d in self.displays:
+            d:invalidate()
+
+    def set_colors(self, list):
+        for d in self.displays:
+            d:set_colors(list)
+
+    # показывает кадр на всех выводах, возвращает сумму отправленного
+    def present(self, s):
+        x0 = s.dx0
+        y0 = s.dy0
+        x1 = s.dx1
+        y1 = s.dy1
+        total = 0
+        for d in self.displays:
+            s.dx0 = x0
+            s.dy0 = y0
+            s.dx1 = x1
+            s.dy1 = y1
+            total += d:present(s)
+        return total
+
+export def new(displays):
+    return MirrorDisplay(displays)
