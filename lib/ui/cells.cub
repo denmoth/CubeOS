@@ -1,0 +1,292 @@
+# ui.cells: буфер клеток текстового интерфейса (символ, цвет текста, цвет фона на каждую клетку)
+#
+#   c = cells.new(51, 19)
+#   c:text(2, 1, "Привет", 7, 0)          текст (символы Unicode, длина по символам, не по байтам)
+#   c:fill(0, 0, 10, 3, 32, 7, 1)         заливка прямоугольника символом
+#   c:set(5, 5, 0x2588, 4, nil)           одна клетка; nil в цвете или символе оставляет прежнее значение
+#
+# Цвета это номера 0..15 из палитры темы (как цвета CC). Координаты с нуля. Каждый метод учитывает область отсечения
+# (push_clip) и сдвиг начала координат (push_origin). Буфер помнит прямоугольник изменений (dx0..dx1, dy0..dy1), и вывод
+# сравнивает с экраном только его (так же, как cgl.surface).
+
+import unicode
+
+export class Cells:
+    def init(self, width, height):
+        self.w = width
+        self.h = height
+        self.cp = []
+        self.fg = []
+        self.bg = []
+        for i in range[1, width * height]:
+            self.cp[i] = 32
+            self.fg[i] = 7
+            self.bg[i] = 0
+        self.cx0 = 0
+        self.cy0 = 0
+        self.cx1 = width - 1
+        self.cy1 = height - 1
+        self.ox = 0
+        self.oy = 0
+        self.clips = []
+        self.origins = []
+        self.dx0 = 0
+        self.dy0 = 0
+        self.dx1 = width - 1
+        self.dy1 = height - 1
+
+    # ------------------------------------------------------------ изменённая область
+
+    def touch(self):
+        self.dx0 = 0
+        self.dy0 = 0
+        self.dx1 = self.w - 1
+        self.dy1 = self.h - 1
+
+    def mark(self, x0, y0, x1, y1):
+        if x0 < self.dx0:
+            self.dx0 = x0
+        if y0 < self.dy0:
+            self.dy0 = y0
+        if x1 > self.dx1:
+            self.dx1 = x1
+        if y1 > self.dy1:
+            self.dy1 = y1
+
+    def clean(self):
+        self.dx0 = self.w
+        self.dy0 = self.h
+        self.dx1 = -1
+        self.dy1 = -1
+
+    def is_dirty(self):
+        return self.dx0 <= self.dx1 and self.dy0 <= self.dy1
+
+    # ------------------------------------------------------------ отсечение и сдвиг
+
+    # сужает область рисования до пересечения с (x, y, w, h) в текущих координатах
+    def push_clip(self, x, y, w, h):
+        self.clips[len(self.clips) + 1] = [self.cx0, self.cy0, self.cx1, self.cy1]
+        x0 = x + self.ox
+        y0 = y + self.oy
+        self.cx0 = math.max(self.cx0, x0)
+        self.cy0 = math.max(self.cy0, y0)
+        self.cx1 = math.min(self.cx1, x0 + w - 1)
+        self.cy1 = math.min(self.cy1, y0 + h - 1)
+
+    def pop_clip(self):
+        c = table.remove(self.clips)
+        if c != nil:
+            self.cx0 = c[1]
+            self.cy0 = c[2]
+            self.cx1 = c[3]
+            self.cy1 = c[4]
+
+    def push_origin(self, dx, dy):
+        self.origins[len(self.origins) + 1] = [self.ox, self.oy]
+        self.ox += dx
+        self.oy += dy
+
+    def pop_origin(self):
+        o = table.remove(self.origins)
+        if o != nil:
+            self.ox = o[1]
+            self.oy = o[2]
+
+    # ------------------------------------------------------------ клетки
+
+    # одна клетка; nil оставляет прежнее значение (символа, цвета текста или фона)
+    def set(self, x, y, cp, fg=nil, bg=nil):
+        x += self.ox
+        y += self.oy
+        if x >= self.cx0 and x <= self.cx1 and y >= self.cy0 and y <= self.cy1:
+            i = y * self.w + x + 1
+            if cp != nil:
+                self.cp[i] = cp
+            if fg != nil:
+                self.fg[i] = fg
+            if bg != nil:
+                self.bg[i] = bg
+            if x < self.dx0:
+                self.dx0 = x
+            if x > self.dx1:
+                self.dx1 = x
+            if y < self.dy0:
+                self.dy0 = y
+            if y > self.dy1:
+                self.dy1 = y
+
+    # символ, цвет текста, цвет фона клетки или nil вне буфера (не учитывает отсечение, учитывает сдвиг)
+    def get(self, x, y):
+        x += self.ox
+        y += self.oy
+        if x < 0 or y < 0 or x >= self.w or y >= self.h:
+            return nil
+        i = y * self.w + x + 1
+        return self.cp[i], self.fg[i], self.bg[i]
+
+    # пишет строку; возвращает x за последним символом. max ограничивает число символов
+    def text(self, x, y, s, fg=nil, bg=nil, max=nil):
+        n = 0
+        for cp in unicode.codepoints(s):
+            if max != nil and n >= max:
+                break
+            self:set(x + n, y, cp, fg, bg)
+            n += 1
+        return x + n
+
+    def fill(self, x, y, w, h, cp=32, fg=nil, bg=nil):
+        self:_fill(x, y, w, h, cp, fg, bg)
+
+    # то же, но nil в символе или цвете оставляет прежнее значение
+    def _fill(self, x, y, w, h, cp, fg, bg):
+        x0 = math.max(x + self.ox, self.cx0)
+        y0 = math.max(y + self.oy, self.cy0)
+        x1 = math.min(x + self.ox + w - 1, self.cx1)
+        y1 = math.min(y + self.oy + h - 1, self.cy1)
+        if x0 > x1 or y0 > y1:
+            return
+        self:mark(x0, y0, x1, y1)
+        stride = self.w
+        for yy in range[y0, y1]:
+            base = yy * stride + 1
+            for xx in range[x0, x1]:
+                if cp != nil:
+                    self.cp[base + xx] = cp
+                if fg != nil:
+                    self.fg[base + xx] = fg
+                if bg != nil:
+                    self.bg[base + xx] = bg
+
+    def hline(self, x, y, length, cp, fg=nil, bg=nil):
+        self:fill(x, y, length, 1, cp, fg, bg)
+
+    def vline(self, x, y, length, cp, fg=nil, bg=nil):
+        self:fill(x, y, 1, length, cp, fg, bg)
+
+    # перекрашивает прямоугольник, не трогая символы
+    def recolor(self, x, y, w, h, fg=nil, bg=nil):
+        self:_fill(x, y, w, h, nil, fg, bg)
+
+    # заменяет цвета по таблице map (номер -> номер) в прямоугольнике: затемнение фона под диалогом
+    def remap(self, x, y, w, h, map):
+        x0 = math.max(x + self.ox, self.cx0)
+        y0 = math.max(y + self.oy, self.cy0)
+        x1 = math.min(x + self.ox + w - 1, self.cx1)
+        y1 = math.min(y + self.oy + h - 1, self.cy1)
+        if x0 > x1 or y0 > y1:
+            return
+        self:mark(x0, y0, x1, y1)
+        for yy in range[y0, y1]:
+            base = yy * self.w + 1
+            for xx in range[x0, x1]:
+                f = map[self.fg[base + xx]]
+                if f != nil:
+                    self.fg[base + xx] = f
+                b = map[self.bg[base + xx]]
+                if b != nil:
+                    self.bg[base + xx] = b
+
+    # копирует прямоугольник другого буфера (sx, sy, sw, sh) в точку (x, y); без параметров всё целиком
+    def blit(self, src, x, y, sx=0, sy=0, sw=nil, sh=nil):
+        sw = sw ?? (src.w - sx)
+        sh = sh ?? (src.h - sy)
+        ax = x + self.ox
+        ay = y + self.oy
+        x0 = math.max(ax, self.cx0)
+        y0 = math.max(ay, self.cy0)
+        x1 = math.min(ax + sw - 1, self.cx1)
+        y1 = math.min(ay + sh - 1, self.cy1)
+        if x0 > x1 or y0 > y1:
+            return
+        self:mark(x0, y0, x1, y1)
+        for yy in range[y0, y1]:
+            sy_row = sy + (yy - ay)
+            if sy_row >= 0 and sy_row < src.h:
+                srow = sy_row * src.w + 1
+                drow = yy * self.w + 1
+                for xx in range[x0, x1]:
+                    sx_col = sx + (xx - ax)
+                    if sx_col >= 0 and sx_col < src.w:
+                        self.cp[drow + xx] = src.cp[srow + sx_col]
+                        self.fg[drow + xx] = src.fg[srow + sx_col]
+                        self.bg[drow + xx] = src.bg[srow + sx_col]
+
+    def clear(self, fg=7, bg=0):
+        self:touch()
+        for i in range[1, self.w * self.h]:
+            self.cp[i] = 32
+            self.fg[i] = fg
+            self.bg[i] = bg
+
+    # меняет размер, сохраняя содержимое в общей части
+    def resize(self, width, height):
+        ncp = []
+        nfg = []
+        nbg = []
+        for y in range[0, height - 1]:
+            for x in range[0, width - 1]:
+                i = y * width + x + 1
+                if x < self.w and y < self.h:
+                    j = y * self.w + x + 1
+                    ncp[i] = self.cp[j]
+                    nfg[i] = self.fg[j]
+                    nbg[i] = self.bg[j]
+                else:
+                    ncp[i] = 32
+                    nfg[i] = 7
+                    nbg[i] = 0
+        self.w = width
+        self.h = height
+        self.cp = ncp
+        self.fg = nfg
+        self.bg = nbg
+        self.clips = []
+        self.origins = []
+        self.ox = 0
+        self.oy = 0
+        self.cx0 = 0
+        self.cy0 = 0
+        self.cx1 = width - 1
+        self.cy1 = height - 1
+        self:touch()
+
+    def copy(self):
+        c = Cells(self.w, self.h)
+        for i in range[1, self.w * self.h]:
+            c.cp[i] = self.cp[i]
+            c.fg[i] = self.fg[i]
+            c.bg[i] = self.bg[i]
+        return c
+
+    def equals(self, other):
+        if self.w != other.w or self.h != other.h:
+            return false
+        for i in range[1, self.w * self.h]:
+            if self.cp[i] != other.cp[i] or self.fg[i] != other.fg[i] or self.bg[i] != other.bg[i]:
+                return false
+        return true
+
+    # строки символов для тестов и отладки (прозрачных цветов тут нет)
+    def to_lines(self):
+        out = []
+        for y in range[0, self.h - 1]:
+            parts = []
+            for x in range[0, self.w - 1]:
+                parts[x + 1] = unicode.char(self.cp[y * self.w + x + 1])
+            out[y + 1] = table.concat(parts)
+        return out
+
+    # цвета текста или фона построчно цифрами/буквами (0..9, a..f) для тестов
+    def colors_lines(self, which="fg"):
+        out = []
+        source = which == "bg" and self.bg or self.fg
+        for y in range[0, self.h - 1]:
+            parts = []
+            for x in range[0, self.w - 1]:
+                parts[x + 1] = string.format("%x", source[y * self.w + x + 1])
+            out[y + 1] = table.concat(parts)
+        return out
+
+export def new(width, height):
+    return Cells(width, height)

@@ -1,0 +1,110 @@
+import t
+import ui.cells as cells
+import ui.theme as theme
+import ui.border as border
+import ui.keymap as keymap
+import unicode
+eq = t.eq
+
+# ---------------------------------------------------------------- темы
+names = theme.names()
+for n in ["amber", "contrast", "cubeos", "dark", "hacker", "light", "retro"]:
+    eq(theme.has(n), true, "theme " .. n .. " exists")
+cube = theme.get("cubeos")
+eq(len(cube.palette), 16, "sixteen colors")
+eq(cube:hex(theme.ACCENT), "#4c99b2", "cubeos accent is the cyan of the old CubeOS")
+eq(cube:hex(theme.BG), "#111111", "cubeos background")
+eq(theme.get("nonexistent").name, "cubeos", "unknown name falls back to cubeos")
+eq(theme.get("retro").effects.scanlines, true, "retro has scanlines")
+eq(theme.get("cubeos").effects.scanlines, false, "cubeos has none")
+eq(theme.get("light").dark, false, "light theme is light")
+dd = cube:derive({border: "double"})
+eq([dd.border, cube.border], ["double", "rounded"], "derive does not change the original")
+eq(dd:hex(theme.TEXT), cube:hex(theme.TEXT), "derive keeps the colors")
+applied = []
+theme.apply(cube, (i, r, g, b) => table.insert(applied, [i, r, g, b]))
+eq(len(applied), 16, "apply sets all sixteen colors")
+eq(applied[8][1], 7, "slot index")
+eq(math.abs(applied[8][2] - 0x4c / 255) < 1e-9, true, "slot red channel in 0..1")
+# яркость текста выше фона во всех тёмных темах, ниже во всех светлых
+def luma(c):
+    return 0.2126 * c[1] + 0.7152 * c[2] + 0.0722 * c[3]
+for n in theme.names():
+    th = theme.get(n)
+    bg = luma(th.palette[theme.BG + 1])
+    tx = luma(th.palette[theme.TEXT + 1])
+    eq(th.dark and tx > bg or (not th.dark and tx < bg), true, n .. ": text contrasts with the background")
+
+# ---------------------------------------------------------------- рамки
+c = cells.new(8, 4)
+ix, iy, iw, ih = border.draw(c, 0, 0, 8, 4, "single", 5, 0)
+eq(c:to_lines(), ["┌──────┐", "│      │", "│      │", "└──────┘"], "single frame")
+eq([ix, iy, iw, ih], [1, 1, 6, 2], "inner rectangle")
+c:clear()
+border.draw(c, 0, 0, 8, 4, "rounded", 5, 0)
+eq(c:to_lines()[1], "╭──────╮", "rounded corners")
+c:clear()
+border.draw(c, 0, 0, 8, 4, "double", 5, 0)
+eq(c:to_lines()[4], "╚══════╝", "double")
+c:clear()
+border.draw(c, 0, 0, 8, 4, "ascii", 5, 0)
+eq(c:to_lines(), ["+------+", "|      |", "|      |", "+------+"], "ascii frame")
+c:clear()
+border.draw(c, 0, 0, 8, 4, "heavy", 5, 0, {fill: 1})
+eq(c:colors_lines("bg")[2], "01111110", "fill paints the inside only")
+eq(c:to_lines()[1], "┏━━━━━━┓", "heavy")
+
+# заголовок
+d = cells.new(14, 3)
+border.draw(d, 0, 0, 14, 3, "single", 5, 0, {title: "Файлы"})
+eq(d:to_lines()[1], "┌─ Файлы ────┐", "title on the top line")
+d:clear()
+border.draw(d, 0, 0, 14, 3, "single", 5, 0, {title: "Файлы", title_align: "center"})
+eq(d:to_lines()[1], "┌── Файлы ───┐", "centered title")
+d:clear()
+border.draw(d, 0, 0, 14, 3, "single", 5, 0, {title: "Очень длинное название", title_fg: 6})
+eq(unicode.length(d:to_lines()[1]), 14, "a long title is cut to the frame")
+eq(d:colors_lines("fg")[1]:sub(3, 3), "6", "title color")
+
+# разделитель и свой стиль
+e = cells.new(8, 3)
+border.draw(e, 0, 0, 8, 3, "single", 5, 0)
+border.divider(e, 0, 1, 8, "single", 3, 0)
+eq(e:to_lines()[2], "├──────┤", "divider joins the frame")
+border.register("моя", {h: 61, v: 33})
+f = cells.new(5, 3)
+border.draw(f, 0, 0, 5, 3, "моя", 5, 0)
+eq(f:to_lines(), ["┌===┐", "!   !", "└===┘"], "custom style falls back to single for missing keys")
+eq(border.style({tl: 65}).tr, 0x2510, "a table can be used as a style directly")
+eq(border.style("unknown").tl, 0x250C, "unknown style is single")
+tiny = cells.new(3, 3)
+ix, iy, iw, ih = border.draw(tiny, 0, 0, 1, 1, "single", 5, 0)
+eq(iw, 0, "too small to draw")
+
+# ---------------------------------------------------------------- раскладки
+fake = {up: 200, down: 208, left: 203, right: 205, enter: 28, escape: 1, tab: 15, w: 17, s: 31, a: 30, d: 32, q: 16, k: 37, j: 36,
+    h: 35, l: 38, g: 34, backspace: 14, home: 199, end: 207, pageUp: 201, pageDown: 209, delete: 211, f1: 59, f10: 68, numPadEnter: 156}
+ar = keymap.new("arrows", fake)
+eq(ar:action(200), "up", "arrow up")
+eq(ar:action(17), nil, "W does nothing in the arrows layout")
+eq(ar:action(28), "enter", "enter")
+eq(ar:action(1), "back", "escape is back")
+eq(ar:action(16), "back", "Q is back everywhere")
+wasd = keymap.new("wasd", fake)
+eq(wasd:action(17), "up", "W is up in WASD")
+eq(wasd:action(30), "left", "A is left in WASD")
+eq(wasd:action(200), "up", "arrows still work in WASD")
+eq(wasd:action(17, true), nil, "letter bindings are off while typing text")
+eq(wasd:action(200, true), "up", "arrows still work while typing")
+vim = keymap.new("vim", fake)
+eq(vim:action(36), "down", "J is down in Vim")
+eq(vim:label("down"), "J", "Vim label")
+eq(wasd:label("up"), "W", "WASD label")
+eq(ar:label("up"), "↑", "arrow label")
+eq(ar:label("enter"), "Enter", "enter label")
+ar:bind("menu", "g")
+eq(ar:action(34), "menu", "custom binding")
+ar:unbind("g")
+eq(ar:action(34), nil, "unbound")
+
+print("done")

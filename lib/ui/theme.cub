@@ -1,0 +1,128 @@
+# ui.theme: темы интерфейса. Тема это 16 цветов палитры с названными местами (роли), стиль рамок и плотность.
+#
+# Места палитры (номера в клетках ui.cells):
+#   BG     фон страницы              PANEL   фон панели       RAISED  фон диалога и выпадающих списков
+#   LINE   линии и разделители       MUTED   тихий текст      TEXT    обычный текст       BRIGHT  заголовки
+#   ACCENT главный цвет              ACCENT_DIM  его тёмный вариант (рамка в фокусе)
+#   OK, WARN, ERR, INFO              цвета состояний
+#   SEL_BG, SEL_FG                   полоса выбора (фон и текст на ней)
+#   SHADOW                           тень под диалогом
+#
+# Пример:  t = theme.get("cubeos");  cells:text(1, 1, "Файлы", theme.BRIGHT, theme.BG)
+# Тему можно менять на ходу: перерисовка не нужна, меняется только палитра (в пиксельном режиме и на терминалах с setPaletteColor).
+
+export const BG = 0
+export const PANEL = 1
+export const RAISED = 2
+export const LINE = 3
+export const MUTED = 4
+export const TEXT = 5
+export const BRIGHT = 6
+export const ACCENT = 7
+export const ACCENT_DIM = 8
+export const OK = 9
+export const WARN = 10
+export const ERR = 11
+export const INFO = 12
+export const SEL_BG = 13
+export const SEL_FG = 14
+export const SHADOW = 15
+
+def _rgb(hex):
+    r = tonumber(string.sub(hex, 2, 3), 16)
+    g = tonumber(string.sub(hex, 4, 5), 16)
+    b = tonumber(string.sub(hex, 6, 7), 16)
+    return [r, g, b]
+
+def _palette(list):
+    out = []
+    for i, h in list:
+        out[i] = _rgb(h)
+    return out
+
+# затемнение фона под диалогом: роль -> более тихая роль
+const DEFAULT_DIM = {5: 4, 6: 5, 7: 8, 9: 4, 10: 4, 11: 4, 12: 4, 13: 3, 14: 4, 1: 0, 2: 1, 3: 0, 4: 3}
+
+export class Theme:
+    # colors: список из 16 строк "#rrggbb" по местам палитры; opts: border, density, effects, dim, description
+    def init(self, name, colors, opts=nil):
+        o = opts ?? {}
+        self.name = name
+        self.description = o.description ?? name
+        self.palette = _palette(colors)
+        self.border = o.border ?? "rounded"
+        self.density = o.density ?? "normal"
+        self.dim = o.dim ?? DEFAULT_DIM
+        # эффекты: scanlines (строки пикселей через одну темнее), flicker (мерцание яркости 0..1), только в пиксельном выводе
+        self.effects = o.effects ?? {scanlines: false, flicker: 0}
+        self.dark = o.dark ?? true
+
+    def rgb(self, role):
+        return self.palette[role + 1]
+
+    def hex(self, role):
+        c = self.palette[role + 1]
+        return string.format("#%02x%02x%02x", c[1], c[2], c[3])
+
+    # копия темы с изменёнными полями (например, другая рамка)
+    def derive(self, changes):
+        t = Theme(self.name, [], {})
+        t.palette = self.palette
+        t.border = self.border
+        t.density = self.density
+        t.dim = self.dim
+        t.effects = self.effects
+        t.dark = self.dark
+        t.description = self.description
+        for k, v in changes:
+            t[k] = v
+        return t
+
+const THEMES = {}
+
+def _add(t):
+    THEMES[t.name] = t
+
+# твоя любимая тема из старого CubeOS: чёрный фон, бирюзовые заголовки, серые линии, бирюзовая полоса выбора
+_add(Theme("cubeos", ["#111111", "#16191f", "#2b2f38", "#4c4c4c", "#6e6e6e", "#9a9a9a", "#f0f0f0", "#4c99b2", "#2c5c6c", "#57a64e", "#f2b233", "#cc4c4c", "#99b2f2", "#4c99b2", "#111111", "#070707"],
+    {description: "CubeOS: чёрный с бирюзовым", border: "rounded"}))
+_add(Theme("dark", ["#14161a", "#1b1e24", "#2a2e37", "#3d424d", "#6b7280", "#aab0bd", "#f3f4f6", "#6aa0ff", "#34528c", "#5fbf7a", "#e6b450", "#e06c75", "#7fc4ff", "#6aa0ff", "#10131a", "#0a0b0d"],
+    {description: "Тёмная нейтральная", border: "single"}))
+_add(Theme("light", ["#f4f4f1", "#e9e9e4", "#ffffff", "#bdbdb5", "#8a8a82", "#33332f", "#000000", "#2d6cdf", "#9bb8ee", "#2e8b57", "#b7791f", "#c0392b", "#1f6fb2", "#2d6cdf", "#ffffff", "#c9c9c2"],
+    {description: "Светлая", border: "single", dark: false,
+     dim: {5: 4, 6: 5, 7: 8, 9: 4, 10: 4, 11: 4, 12: 4, 13: 8, 14: 3, 0: 1, 1: 3, 2: 1, 3: 4, 4: 3}}))
+_add(Theme("retro", ["#020a03", "#04140a", "#082414", "#0f5a2b", "#1f9a46", "#35f06b", "#b8ffcc", "#35f06b", "#1a7a3a", "#35f06b", "#d8ff5a", "#ff6b4a", "#7dffb4", "#35f06b", "#020a03", "#000000"],
+    {description: "Ретро: зелёный люминофор", border: "double", effects: {scanlines: true, flicker: 0.04}}))
+_add(Theme("hacker", ["#000000", "#001a05", "#003311", "#006622", "#00aa33", "#00dd44", "#b3ffc8", "#00ff55", "#007722", "#00ff55", "#ccff33", "#ff3b3b", "#66ffaa", "#00ff55", "#000000", "#000000"],
+    {description: "Хакерская: матрица", border: "ascii"}))
+_add(Theme("amber", ["#0a0500", "#150b00", "#241300", "#6b3d00", "#b86e00", "#ffb000", "#ffe2a0", "#ffb000", "#8a5200", "#ffd24a", "#ffffff", "#ff5a3a", "#ffcf70", "#ffb000", "#0a0500", "#000000"],
+    {description: "Янтарный терминал", border: "heavy", effects: {scanlines: true, flicker: 0.03}}))
+_add(Theme("contrast", ["#000000", "#000000", "#1a1a1a", "#ffffff", "#c0c0c0", "#ffffff", "#ffffff", "#00e5ff", "#008899", "#00ff00", "#ffff00", "#ff3030", "#00e5ff", "#ffff00", "#000000", "#000000"],
+    {description: "Высокая контрастность", border: "double"}))
+
+export def get(name):
+    return THEMES[name] ?? THEMES["cubeos"]
+
+export def has(name):
+    return THEMES[name] != nil
+
+# названия всех тем по алфавиту
+export def names():
+    out = []
+    for k, v in THEMES:
+        out[len(out) + 1] = k
+    table.sort(out)
+    return out
+
+export def register(t):
+    THEMES[t.name] = t
+
+# таблица «место палитры -> цвет терминала CC» для текстового вывода: место i это цвет 2^i
+export def cc_color(role):
+    return 2 ** role
+
+# применяет палитру темы к выводу, у которого есть setPaletteColor(цвет, r, g, b) (в долях 0..1); first_color: функция номер -> цвет
+export def apply(t, set_color):
+    for i in range[0, 15]:
+        c = t.palette[i + 1]
+        set_color(i, c[1] / 255, c[2] / 255, c[3] / 255)

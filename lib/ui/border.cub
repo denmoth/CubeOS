@@ -1,0 +1,95 @@
+# ui.border: рамки. Стиль это таблица символов; своё оформление задаётся такой же таблицей.
+#
+#   border.draw(cells, x, y, w, h, "rounded", fg, bg, {title: "Файлы", title_fg: 6, fill: 1})
+#   border.style("double")                    таблица символов стиля
+#   border.register("моя", {tl: 0x250F, tr: ..., h: ..., ...})     свой стиль; пропущенные символы берутся из "single"
+#
+# Ключи стиля: tl tr bl br (углы), h v (линии), lt rt tt bt (тройники: лево, право, верх, низ), x (крест),
+# top bottom left right (необязательно: отдельные символы для сторон; по умолчанию h и v).
+# Стили: single, double, rounded, heavy, dashed, ascii, block, none.
+
+import unicode
+
+const SINGLE = {tl: 0x250C, tr: 0x2510, bl: 0x2514, br: 0x2518, h: 0x2500, v: 0x2502, lt: 0x251C, rt: 0x2524, tt: 0x252C, bt: 0x2534, x: 0x253C}
+
+const STYLES = {
+    single: SINGLE,
+    double: {tl: 0x2554, tr: 0x2557, bl: 0x255A, br: 0x255D, h: 0x2550, v: 0x2551, lt: 0x2560, rt: 0x2563, tt: 0x2566, bt: 0x2569, x: 0x256C},
+    rounded: {tl: 0x256D, tr: 0x256E, bl: 0x2570, br: 0x256F, h: 0x2500, v: 0x2502, lt: 0x251C, rt: 0x2524, tt: 0x252C, bt: 0x2534, x: 0x253C},
+    heavy: {tl: 0x250F, tr: 0x2513, bl: 0x2517, br: 0x251B, h: 0x2501, v: 0x2503, lt: 0x2523, rt: 0x252B, tt: 0x2533, bt: 0x253B, x: 0x254B},
+    dashed: {tl: 0x250C, tr: 0x2510, bl: 0x2514, br: 0x2518, h: 0x2504, v: 0x2506, lt: 0x251C, rt: 0x2524, tt: 0x252C, bt: 0x2534, x: 0x253C},
+    ascii: {tl: 43, tr: 43, bl: 43, br: 43, h: 45, v: 124, lt: 43, rt: 43, tt: 43, bt: 43, x: 43},
+    block: {tl: 0x259B, tr: 0x259C, bl: 0x2599, br: 0x259F, h: 0x2580, v: 0x258C, lt: 0x258C, rt: 0x2590, tt: 0x2580, bt: 0x2584, x: 0x2588, bottom: 0x2584, right: 0x2590},
+    none: {tl: 32, tr: 32, bl: 32, br: 32, h: 32, v: 32, lt: 32, rt: 32, tt: 32, bt: 32, x: 32}
+}
+
+export def names():
+    out = []
+    for k, v in STYLES:
+        out[len(out) + 1] = k
+    table.sort(out)
+    return out
+
+# таблица символов стиля (имя или своя таблица); пропущенные ключи берутся из single
+export def style(s):
+    base = nil
+    if type(s) == "table":
+        base = s
+    else:
+        base = STYLES[s] ?? SINGLE
+    out = {}
+    for k, v in SINGLE:
+        out[k] = base[k] ?? v
+    out.top = base.top ?? out.h
+    out.bottom = base.bottom ?? out.h
+    out.left = base.left ?? out.v
+    out.right = base.right ?? out.v
+    return out
+
+export def register(name, chars):
+    STYLES[name] = chars
+
+# рисует рамку (только линии); opts: title, title_fg, title_bg, title_align ("left", "center", "right"), fill (цвет фона внутри:
+# заливка). Возвращает x, y, w, h внутренней области
+export def draw(c, x, y, w, h, st, fg, bg=nil, opts=nil):
+    o = opts ?? {}
+    if w < 2 or h < 2:
+        return x, y, 0, 0
+    s = style(st)
+    if o.fill != nil:
+        c:fill(x + 1, y + 1, w - 2, h - 2, 32, nil, o.fill)
+    c:set(x, y, s.tl, fg, bg)
+    c:set(x + w - 1, y, s.tr, fg, bg)
+    c:set(x, y + h - 1, s.bl, fg, bg)
+    c:set(x + w - 1, y + h - 1, s.br, fg, bg)
+    if w > 2:
+        c:fill(x + 1, y, w - 2, 1, s.top, fg, bg)
+        c:fill(x + 1, y + h - 1, w - 2, 1, s.bottom, fg, bg)
+    if h > 2:
+        c:fill(x, y + 1, 1, h - 2, s.left, fg, bg)
+        c:fill(x + w - 1, y + 1, 1, h - 2, s.right, fg, bg)
+    if o.title != nil and w > 6:
+        label = " " .. o.title .. " "
+        room = w - 4
+        n = unicode.length(label)
+        if n > room:
+            label = unicode.sub(label, 1, room)
+            n = room
+        tx = x + 2
+        if o.title_align == "center":
+            tx = x + math.floor((w - n) / 2)
+        elif o.title_align == "right":
+            tx = x + w - 2 - n
+        c:text(tx, y, label, o.title_fg ?? fg, o.title_bg ?? bg)
+    return x + 1, y + 1, w - 2, h - 2
+
+# горизонтальный разделитель в строке y от x шириной w; joined: тройники по краям (внутри рамки), иначе обычная линия
+export def divider(c, x, y, w, st, fg, bg=nil, joined=true):
+    s = style(st)
+    c:fill(x + 1, y, w - 2, 1, s.h, fg, bg)
+    if joined:
+        c:set(x, y, s.lt, fg, bg)
+        c:set(x + w - 1, y, s.rt, fg, bg)
+    else:
+        c:set(x, y, s.h, fg, bg)
+        c:set(x + w - 1, y, s.h, fg, bg)

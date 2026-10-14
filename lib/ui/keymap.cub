@@ -1,0 +1,80 @@
+# ui.keymap: действия вместо кодов клавиш. Элементы интерфейса понимают действия (up, down, enter, back...), а какие клавиши
+# к ним привязаны, решает раскладка управления: стрелки, WASD или Vim. Подсказки для подвала строятся из той же таблицы.
+#
+#   km = keymap.new("arrows")           или "wasd", "vim"; km:bind("back", "q") добавляет свою привязку
+#   km:action(code, text_mode)          действие по коду клавиши или nil; в режиме ввода текста буквенные привязки отключены
+#   km:label("up")                      подпись для подсказки: "↑", "W", "K"
+#
+# Действия: up down left right enter back tab home end page_up page_down delete backspace menu help.
+# Сочетания с Ctrl, Alt и Shift обрабатывает среда (runtime), сюда приходит чистая клавиша.
+
+const ARROW_KEYS = {
+    up: ["up"], down: ["down"], left: ["left"], right: ["right"], enter: ["enter", "numPadEnter"], back: ["escape"],
+    tab: ["tab"], home: ["home"], end: ["end"], page_up: ["pageUp"], page_down: ["pageDown"], delete: ["delete"],
+    backspace: ["backspace"], menu: ["f10"], help: ["f1"]
+}
+
+const EXTRA = {
+    wasd: {up: ["w"], down: ["s"], left: ["a"], right: ["d"], back: ["q"]},
+    vim: {up: ["k"], down: ["j"], left: ["h"], right: ["l"], back: ["q"], home: ["g"]},
+    arrows: {back: ["q"]}
+}
+
+# подписи для подсказок
+const LABELS = {up: "↑", down: "↓", left: "←", right: "→", enter: "Enter", back: "Esc", tab: "Tab", home: "Home", end: "End",
+    page_up: "PgUp", page_down: "PgDn", delete: "Del", backspace: "Bksp", menu: "F10", help: "F1"}
+
+# клавиши-буквы: в режиме ввода текста они не должны превращаться в действия
+def _is_letter_key(name):
+    return string.len(name) == 1
+
+export class Keymap:
+    # key_table: таблица keys из CC (в тестах можно подставить свою)
+    def init(self, preset="arrows", key_table=nil):
+        self.preset = preset
+        self.keys = key_table ?? keys
+        self.by_code = {}
+        self.names = {}
+        for action, list in ARROW_KEYS:
+            for n in list:
+                self:bind(action, n)
+        extra = EXTRA[preset] ?? EXTRA.arrows
+        for action, list in extra:
+            for n in list:
+                self:bind(action, n)
+
+    # привязывает клавишу (имя из таблицы keys, например "q", или код) к действию
+    def bind(self, action, key_name):
+        code = type(key_name) == "number" and key_name or self.keys[key_name]
+        if code != nil:
+            self.by_code[code] = action
+            if type(key_name) == "string":
+                self.names[code] = key_name
+
+    def unbind(self, key_name):
+        code = type(key_name) == "number" and key_name or self.keys[key_name]
+        self.by_code[code] = nil
+
+    # действие по коду клавиши или nil
+    def action(self, code, text_mode=false):
+        a = self.by_code[code]
+        if a == nil:
+            return nil
+        if text_mode:
+            n = self.names[code]
+            if n != nil and _is_letter_key(n):
+                return nil
+        return a
+
+    # подпись действия для подвала: стрелки как символы, буквы заглавными
+    def label(self, action):
+        if self.preset != "arrows":
+            for code, a in self.by_code:
+                if a == action:
+                    n = self.names[code]
+                    if n != nil and _is_letter_key(n) and n != "q":
+                        return string.upper(n)
+        return LABELS[action] ?? action
+
+export def new(preset="arrows", key_table=nil):
+    return Keymap(preset, key_table)
