@@ -77,7 +77,9 @@ export class Screen:
     # wait(секунды) -> имя события...: свой способ ожидания (ядро CubeOS)
     def run(self, update, opts=nil):
         o = opts ?? {}
-        interval = 1 / (o.fps ?? 20)
+        # fps 0: без ограничения (для замеров), иначе кадр не чаще заданного; терминал всё равно обновляется раз в игровой тик (20 раз)
+        fps = o.fps ?? 20
+        interval = fps > 0 and 1 / fps or 0
         clock = o.clock ?? _now
         last = clock()
         self.running = true
@@ -109,7 +111,7 @@ export class Screen:
     def _wait_default(self, clock, until, on_event):
         remaining = until - clock()
         timer = nil
-        if remaining >= 0.05:
+        if remaining > 0.005:
             timer = os.startTimer(remaining)
         else:
             os.queueEvent("cgl_tick")

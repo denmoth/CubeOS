@@ -1,7 +1,7 @@
 # Демонстрация Cube Graphics Library: заставка, плазма, трёхмерная сцена, галерея фигур и окно, логотип.
 # Запуск в игре: game/cgl_demo.lua (стрелки: сцена, D: дизеринг телетекста, M: смена вывода, Q: выход, мышь: частицы)
 #
-# main(opts): backend, term (например, монитор), monitor (его имя для касаний), log_path (файл со средним fps по сценам), auto (переключать сцены каждые N кадров и выйти, для проверок), wait, clock.
+# main(opts): fps (по умолчанию 20, 0 без ограничения), backend, term (например, монитор), monitor (его имя для касаний), log_path (файл со средним fps по сценам), auto (переключать сцены каждые N кадров и выйти, для проверок), wait, clock.
 # Работает с CC: Graphics (пиксели 6x9 на клетку) и на обычном цветном терминале (телетекст, 2x3 пикселя на клетку).
 
 import cgl
@@ -397,7 +397,7 @@ export def main(opts=nil):
     enter(1)
     while not state.quit:
         state.flip = false
-        ctx.screen:run(update, {fps: 20, on_event: on_event, wait: o.wait, clock: o.clock})
+        ctx.screen:run(update, {fps: o.fps ?? 20, on_event: on_event, wait: o.wait, clock: o.clock})
         if state.flip and not state.quit:
             kind = ctx.screen.kind == "graphics" and "teletext" or "graphics"
             ctx.screen:close()
