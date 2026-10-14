@@ -102,8 +102,27 @@ local compiled
 timed("compile (plain)", function() compiled = cubic.compile(src, "json5.cub", {}) end)
 timed("compile (plain, second run)", function() cubic.compile(src, "json5.cub", {}) end)
 timed("compile (--minify)", function() cubic.compile(src, "json5.cub", { minify = true }) end)
-timed("compile (--strict, first: headers)", function() cubic.compile(src, "json5.cub", { strict = true }) end)
-timed("compile (--strict, second)", function() cubic.compile(src, "json5.cub", { strict = true }) end)
+local strict_src = table.concat({
+  "#!strict",
+  "class Account:",
+  "    def init(self, owner: str, balance: num = 0):",
+  "        self.owner = owner",
+  "        self.balance = balance",
+  "    def deposit(self, amount: num) -> num:",
+  "        self.balance = self.balance + amount",
+  "        return self.balance",
+  "def total(accounts: list[Account]) -> num:",
+  "    sum: num = 0",
+  "    for a in accounts:",
+  "        sum = sum + a.balance",
+  "    return sum",
+  "m = peripheral.find(\"monitor\")",
+  "if m != nil:",
+  "    m.write(\"x\")",
+  "print(total([Account(\"a\", 5), Account(\"b\")]))",
+}, "\n") .. "\n"
+timed("compile (strict sample, first: headers)", function() assert(cubic.compile(strict_src, "strict.cub", {})) end)
+timed("compile (strict sample, second)", function() assert(cubic.compile(strict_src, "strict.cub", {})) end)
 say("compiled size: " .. tostring(compiled and #compiled) .. " bytes")
 local m2 = mem()
 say("memory after compiles: " .. tostring(m2 and math.floor(m2)) .. " KB")

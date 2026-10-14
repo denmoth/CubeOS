@@ -87,6 +87,14 @@ local function run_case(name, label, force)
       for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
       buf[#buf + 1] = table.concat(parts, "\t")
     end,
+    -- тесты не должны трогать настоящую периферию (в игре у компьютера есть монитор, колонка, принтер)
+    peripheral = {
+      find = function() return nil end,
+      wrap = function() return nil end,
+      getNames = function() return {} end,
+      getType = function() return nil end,
+      isPresent = function() return false end,
+    },
   }, { __index = _G })
   opts.import = function(p) return { path = p } end
   if fs.exists(base .. ".loader") then
