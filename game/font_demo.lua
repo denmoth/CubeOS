@@ -14,6 +14,8 @@ if not term.setGraphicsMode then
 end
 
 local f6 = font.from_file(ROOT .. "/assets/fonts/cube-6x9.font")
+-- личный шрифт Minecraft (см. tools/import_mc_font.py), если он собран на этой машине
+local mc = fs.exists(ROOT .. "/assets/private/cube-mc-6x9.font") and font.from_file(ROOT .. "/assets/private/cube-mc-6x9.font") or nil
 local f5 = font.from_file(ROOT .. "/assets/fonts/cube-5x7.font")
 local f8 = font.from_file(ROOT .. "/assets/fonts/cube-8x16.font")
 
@@ -33,6 +35,24 @@ local function show(draw_fn)
   end
   term.drawPixels(0, 0, out)
   os.pullEvent("key")
+end
+
+-- экран 0 (если шрифт собран): личный шрифт в стиле Minecraft
+if mc then
+  show(function(buf)
+    local lines = {
+      "cube-mc-6x9 (личный): шрифт Minecraft в клетке 6x9",
+      "The quick brown fox jumps over the lazy dog 0123",
+      "Привет, мир! Съешь ещё этих мягких булок, да выпей",
+      "ПРИВЕТ, МИР! ЪЫЬЭЮЯ ёЁ йЙ жЖ шШ щЩ",
+      "Українська: Є є, І і, Ї ї, Ґ ґ. Їжак із Харкова",
+      "┌──────┬──────┐ ╔══════╦══════╗ █▓▒░ ← ↑ → ↓",
+      "│ Файл │ Вид  │ ║ OK   ║ Нет  ║ α β γ δ π Ω ∞ ≠",
+    }
+    for i, text in ipairs(lines) do
+      mc:draw(buf, 0, (i - 1) * 9, text, 1)
+    end
+  end)
 end
 
 -- экран 1: cube-6x9 на сетке родного терминала (клетка 6x9, строки на шаге 9)
