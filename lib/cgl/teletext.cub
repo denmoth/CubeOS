@@ -49,6 +49,13 @@ export class TeletextDisplay:
         self.quant:rebuild()
         self.prev = nil
 
+    # меняет цвета палитры поверхности: список [номер, r, g, b]; квантование пересчитывается, кадр уходит заново
+    def set_colors(self, list):
+        for e in list:
+            self.palette:set(e[1], e[2], e[3], e[4])
+        self.quant:rebuild()
+        self.prev = nil
+
     def close(self):
         if self.opened:
             self.term.setBackgroundColor(32768)

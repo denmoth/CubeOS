@@ -53,6 +53,20 @@ export class GraphicsDisplay:
                 self.term.setPaletteColor(2 ** i, r / 255, g / 255, b / 255)
         self.prev = nil
 
+    # меняет цвета палитры поверхности: список [номер, r, g, b]. В режиме 2 это только вызовы setPaletteColor, пиксели
+    # кадра не трогаются (анимация палитры почти бесплатна); в режиме 1 цвета надо пересчитать, и кадр уйдёт заново
+    def set_colors(self, list):
+        for e in list:
+            self.palette:set(e[1], e[2], e[3], e[4])
+        if self.mode == 2:
+            if self.opened:
+                for e in list:
+                    r, g, b = self.palette:get(e[1])
+                    self.term.setPaletteColor(e[1], r / 255, g / 255, b / 255)
+        else:
+            self.quant:rebuild()
+            self.prev = nil
+
     def close(self):
         if self.opened:
             self.term.setGraphicsMode(false)

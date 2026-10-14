@@ -41,6 +41,10 @@ export class Screen:
         self.fps = 0
         self.running = false
 
+    # меняет цвета палитры: список [номер, r, g, b]. На пиксельном режиме 2 стоит почти ничего: перерисовывать кадр не нужно
+    def set_colors(self, list):
+        self.display:set_colors(list)
+
     def clear(self, c=0):
         self.surface:clear(c)
 

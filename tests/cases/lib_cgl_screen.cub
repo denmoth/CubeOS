@@ -91,4 +91,16 @@ sc = cgl.open({term: tm, mode: 1, dither: true})
 eq(log[1], "mode 1", "mode 1 requested")
 sc:close()
 
+# анимация палитры: режим 2 меняет только палитру терминала
+tm, log = make_term(10, 4, true)
+sc = cgl.open({term: tm})
+sc.surface:set(0, 0, 200)
+sc:present()
+log2 = len(log)
+sc:set_colors([[200, 255, 0, 0], [201, 0, 255, 0]])
+eq(len(log) - log2, 2, "two palette calls")
+eq(log[len(log)], "pal", "palette call")
+eq(sc:present(), 0, "palette change leaves the frame untouched")
+eq(sc.palette:hex(200), "#ff0000", "surface palette follows")
+
 print("done")

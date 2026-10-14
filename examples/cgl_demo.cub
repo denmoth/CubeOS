@@ -29,6 +29,86 @@ def centered(ctx, msg, y, c, scale, outline=nil):
 def label(ctx, x, y, msg, c):
     ctx.s:text(ctx.font, x, y, msg, c, {outline: ctx.black})
 
+# ---------------------------------------------------------------- сцена 0: проявление логотипа анимацией палитры
+
+# Надпись нарисована один раз номерами «групп столбцов»; волна проявления меняет только цвета этих номеров в палитре
+# (на пиксельном режиме 2 это десятки вызовов setPaletteColor в кадр и ни одного пикселя). На других выводах группы
+# перекрашиваются через blit с таблицей замены.
+class Intro:
+    def init(self, ctx):
+        self.band = math.max(1, math.ceil(ctx.w / 48))
+        self.groups = math.ceil(ctx.w / self.band)
+        self.base = 256 - self.groups
+        self.palette_mode = ctx.screen.kind == "graphics" and ctx.screen.display.mode == 2
+        self.saved = []
+        for g in range[0, self.groups - 1]:
+            r, gg, b = ctx.pal:get(self.base + g)
+            self.saved[g + 1] = [self.base + g, r, gg, b]
+        # маска: каждому пикселю надписи номер группы по его столбцу
+        mask = sf.new(ctx.w, ctx.h, sf.CLEAR)
+        ink = sf.new(ctx.w, ctx.h, 0)
+        scale = math.max(1, math.floor(ctx.w / 80))
+        title = "CGL"
+        tw = sf.measure(ctx.font, title, scale, scale)
+        ty = math.floor(ctx.h * 0.3)
+        ink:text(ctx.font, math.floor((ctx.w - tw) / 2), ty, title, 1, {scale: scale, spacing: scale})
+        sub = "Cube Graphics Library"
+        sw = sf.measure(ctx.font, sub, 0, 1)
+        ink:text(ctx.font, math.floor((ctx.w - sw) / 2), ty + 9 * scale + 6, sub, 1)
+        for y in range[0, ctx.h - 1]:
+            for x in range[0, ctx.w - 1]:
+                if ink.px[y * ctx.w + x + 1] == 1:
+                    mask.px[y * ctx.w + x + 1] = math.floor(x / self.band)
+        self.mask = mask
+        self.bg = ctx.pal:ramp([[18, 22, 30], [30, 40, 56]], 12, 0, self.base - 1)
+        self.cycle = 7
+        ctx.s:fill_gradient(0, 0, ctx.w, ctx.h, self.bg, "v")
+        if self.palette_mode:
+            # номера групп прямо в кадре: base + группа
+            for i in range[1, ctx.w * ctx.h]:
+                if mask.px[i] != sf.CLEAR:
+                    mask.px[i] = mask.px[i] + self.base
+            ctx.s:blit(mask, 0, 0)
+        self.last = nil
+
+    # цвет группы g в момент u цикла (0..cycle): проявление слева направо, пауза, угасание слева направо
+    def group_color(self, g, u, w):
+        x = g * self.band
+        fade = w * 0.35
+        front_in = u / 2.4 * (w + fade) - fade
+        k = math.max(0, math.min(1, (front_in - x) / fade))
+        if u > 4.6:
+            front_out = (u - 4.6) / 2.2 * (w + fade) - fade
+            k = k * (1 - math.max(0, math.min(1, (front_out - x) / fade)))
+        # блик на фронте проявления
+        glow = math.max(0, 1 - math.abs(front_in - x) / (fade * 0.5)) * 0.6
+        hr, hg, hb = color.hsv_to_rgb((x / w * 220 + 170 + u * 20) % 360, 0.55, 1)
+        r = 24 + (hr - 24) * k + glow * 80
+        gr = 30 + (hg - 30) * k + glow * 80
+        b = 40 + (hb - 40) * k + glow * 80
+        return math.min(255, r), math.min(255, gr), math.min(255, b)
+
+    def draw(self, ctx, dt, t):
+        u = t % self.cycle
+        entries = []
+        for g in range[0, self.groups - 1]:
+            r, gg, b = self:group_color(g, u, ctx.w)
+            entries[g + 1] = [self.base + g, r, gg, b]
+        if self.palette_mode:
+            ctx.screen:set_colors(entries)
+        else:
+            map = {}
+            ctx.s:fill_gradient(0, 0, ctx.w, ctx.h, self.bg, "v")
+            for g in range[0, self.groups - 1]:
+                e = entries[g + 1]
+                map[g] = ctx.pal:nearest(e[2], e[3], e[4], 0, self.base - 1)
+            ctx.s:blit(self.mask, 0, 0, {map: map})
+        if u < 1:
+            label(ctx, 2, 2, "палитра меняется, пиксели нет", ctx.light_gray)
+
+    def leave(self, ctx):
+        ctx.screen:set_colors(self.saved)
+
 # ---------------------------------------------------------------- сцена 1: заставка
 
 class Title:
@@ -237,25 +317,32 @@ export def main(opts=nil):
     fnt = fontlib.default(ROOT .. "/assets")
     ctx = {screen: screen, s: screen.surface, w: screen.w, h: screen.h, font: fnt, pal: screen.palette, t: 0}
     p = screen.palette
-    ctx.black = p:nearest(0, 0, 0)
-    ctx.white = p:nearest(255, 255, 255)
-    ctx.deep = p:nearest(6, 8, 24)
-    ctx.dark_gray = p:nearest(60, 60, 70)
-    ctx.gray = p:nearest(110, 110, 120)
-    ctx.light_gray = p:nearest(190, 190, 200)
-    ctx.yellow = p:nearest(255, 220, 60)
-    ctx.orange = p:nearest(255, 140, 30)
-    ctx.red = p:nearest(230, 60, 60)
-    ctx.green = p:nearest(70, 220, 90)
-    ctx.cyan = p:nearest(70, 200, 230)
-    ctx.blue = p:nearest(40, 70, 190)
-    ctx.panel = p:nearest(34, 40, 66)
-    ctx.waves = [p:nearest(250, 150, 90), p:nearest(220, 90, 130), p:nearest(150, 60, 150), p:nearest(80, 40, 120)]
-    classes = [Title, PlasmaScene, FireScene, Scene3D, Gallery, LogoScene]
-    names = ["Заставка", "Плазма", "Огонь", "3D", "Фигуры", "Логотип"]
+
+    # цвета интерфейса берутся из первых 208 номеров: последние отданы анимации палитры в интро
+    def near(r, g, b):
+        return p:nearest(r, g, b, 0, 207)
+
+    ctx.black = near(0, 0, 0)
+    ctx.white = near(255, 255, 255)
+    ctx.deep = near(6, 8, 24)
+    ctx.dark_gray = near(60, 60, 70)
+    ctx.gray = near(110, 110, 120)
+    ctx.light_gray = near(190, 190, 200)
+    ctx.yellow = near(255, 220, 60)
+    ctx.orange = near(255, 140, 30)
+    ctx.red = near(230, 60, 60)
+    ctx.green = near(70, 220, 90)
+    ctx.cyan = near(70, 200, 230)
+    ctx.blue = near(40, 70, 190)
+    ctx.panel = near(34, 40, 66)
+    ctx.waves = [near(250, 150, 90), near(220, 90, 130), near(150, 60, 150), near(80, 40, 120)]
+    classes = [Intro, Title, PlasmaScene, FireScene, Scene3D, Gallery, LogoScene]
+    names = ["Интро", "Заставка", "Плазма", "Огонь", "3D", "Фигуры", "Логотип"]
     state = {index: 1, scene: nil, quit: false, flip: false}
 
     def enter(i):
+        if state.scene != nil and state.scene.leave != nil:
+            state.scene:leave(ctx)
         state.index = i
         state.scene = classes[i](ctx)
 
@@ -278,7 +365,7 @@ export def main(opts=nil):
     def on_event(ev, a, b, c):
         if ev == "key":
             key(a)
-        elif ev == "mouse_click" and state.index == 5 and state.scene.click != nil:
+        elif ev == "mouse_click" and state.scene.click != nil:
             px, py = ctx.screen:to_pixel(b, c)
             state.scene:click(ctx, px, py)
         elif ev == "term_resize":
