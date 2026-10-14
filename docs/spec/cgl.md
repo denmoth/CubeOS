@@ -68,6 +68,8 @@ screen:close()
 
 ## Анимация
 
+Анимация палитры: `screen:set_colors([[номер, r, g, b], ...])`. На пиксельном режиме 2 это только вызовы `term.setPaletteColor`, кадр не перерисовывается и не отправляется (пример: сцена «Интро» в `examples/cgl_demo.cub`, волна проявления логотипа). На других выводах кадр пересчитывается.
+
 `anim.ease("out_bounce", t)`: 31 кривая (`linear` и `in_`, `out_`, `in_out_` для quad, cubic, quart, sine, expo, circ, back, elastic, bounce). `anim.tween({from, to, time, ease, delay, repeat, yoyo, on_update, on_done})` работает с числами и списками чисел. `sequence`, `parallel`, `wait`, `call` собирают сценарии; `Animator:update(dt)` продвигает всё и убирает законченное; `anim.spring` догоняет цель без фиксированного времени. Часов внутри нет: всё считается от `dt`, поведение детерминировано.
 
 ## Изображения
