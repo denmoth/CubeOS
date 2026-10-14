@@ -1,0 +1,90 @@
+# vec: векторы и прямоугольники для игр и интерфейса
+
+export class Vec2:
+    def init(self, x=0, y=0):
+        self.x = x
+        self.y = y
+
+    def __add(self, o): return Vec2(self.x + o.x, self.y + o.y)
+    def __sub(self, o): return Vec2(self.x - o.x, self.y - o.y)
+    def __unm(self): return Vec2(-self.x, -self.y)
+    def __eq(self, o): return self.x == o.x and self.y == o.y
+    def __tostring(self): return "(" .. self.x .. ", " .. self.y .. ")"
+
+    def scale(self, k): return Vec2(self.x * k, self.y * k)
+    def dot(self, o): return self.x * o.x + self.y * o.y
+    def length(self): return math.sqrt(self.x * self.x + self.y * self.y)
+
+    def dist(self, o):
+        dx = self.x - o.x
+        dy = self.y - o.y
+        return math.sqrt(dx * dx + dy * dy)
+
+    def normalized(self):
+        n = self:length()
+        if n == 0:
+            return Vec2(0, 0)
+        return Vec2(self.x / n, self.y / n)
+
+    def rotated(self, radians):
+        c = math.cos(radians)
+        s = math.sin(radians)
+        return Vec2(self.x * c - self.y * s, self.x * s + self.y * c)
+
+export class Vec3:
+    def init(self, x=0, y=0, z=0):
+        self.x = x
+        self.y = y
+        self.z = z
+
+    def __add(self, o): return Vec3(self.x + o.x, self.y + o.y, self.z + o.z)
+    def __sub(self, o): return Vec3(self.x - o.x, self.y - o.y, self.z - o.z)
+    def __eq(self, o): return self.x == o.x and self.y == o.y and self.z == o.z
+    def __tostring(self): return "(" .. self.x .. ", " .. self.y .. ", " .. self.z .. ")"
+
+    def scale(self, k): return Vec3(self.x * k, self.y * k, self.z * k)
+    def dot(self, o): return self.x * o.x + self.y * o.y + self.z * o.z
+
+    def cross(self, o):
+        return Vec3(self.y * o.z - self.z * o.y, self.z * o.x - self.x * o.z, self.x * o.y - self.y * o.x)
+
+    def length(self): return math.sqrt(self:dot(self))
+
+    def manhattan(self, o):
+        return math.abs(self.x - o.x) + math.abs(self.y - o.y) + math.abs(self.z - o.z)
+
+# прямоугольник: x, y, ширина, высота; границы включены слева/сверху, исключены справа/снизу
+export class Rect:
+    def init(self, x, y, w, h):
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+
+    def contains(self, px, py):
+        return px >= self.x and px < self.x + self.w and py >= self.y and py < self.y + self.h
+
+    def intersects(self, o):
+        return self.x < o.x + o.w and o.x < self.x + self.w and self.y < o.y + o.h and o.y < self.y + self.h
+
+    def center(self):
+        return Vec2(self.x + self.w / 2, self.y + self.h / 2)
+
+    def intersection(self, o):
+        if not self:intersects(o):
+            return nil
+        x1 = math.max(self.x, o.x)
+        y1 = math.max(self.y, o.y)
+        x2 = math.min(self.x + self.w, o.x + o.w)
+        y2 = math.min(self.y + self.h, o.y + o.h)
+        return Rect(x1, y1, x2 - x1, y2 - y1)
+
+export def clamp(v, lo, hi):
+    if v < lo:
+        return lo
+    if v > hi:
+        return hi
+    return v
+
+export def lerp(a, b, t):
+    return a + (b - a) * t

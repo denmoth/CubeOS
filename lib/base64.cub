@@ -1,0 +1,63 @@
+# base64: RFC 4648. encode(data, url_safe=false), decode(text). url_safe использует - и _ вместо + и /.
+
+ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+ALPHABET_URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+def _tables(alphabet):
+    enc = []
+    dec = {}
+    for i in range[1, 64]:
+        let ch = string.sub(alphabet, i, i)
+        enc[i] = ch
+        dec[ch] = i - 1
+    return enc, dec
+
+enc_std, dec_std = _tables(ALPHABET)
+enc_url, dec_url = _tables(ALPHABET_URL)
+
+export def encode(data, url_safe=false, pad=true):
+    enc = url_safe and enc_url or enc_std
+    out = []
+    n = 0
+    total = len(data)
+    for i in range[1, total] step 3:
+        a, b, c = string.byte(data, i, i + 2)
+        v = a * 65536 + (b or 0) * 256 + (c or 0)
+        c1 = math.floor(v / 262144)
+        c2 = math.floor(v / 4096) % 64
+        c3 = math.floor(v / 64) % 64
+        c4 = v % 64
+        n += 1
+        if b == nil:
+            out[n] = enc[c1 + 1] .. enc[c2 + 1] .. (pad and "==" or "")
+        elif c == nil:
+            out[n] = enc[c1 + 1] .. enc[c2 + 1] .. enc[c3 + 1] .. (pad and "=" or "")
+        else:
+            out[n] = enc[c1 + 1] .. enc[c2 + 1] .. enc[c3 + 1] .. enc[c4 + 1]
+    return table.concat(out)
+
+export def decode(text, url_safe=false):
+    dec = url_safe and dec_url or dec_std
+    text = string.gsub(text, "[%s=]", "")
+    out = []
+    n = 0
+    total = len(text)
+    if total % 4 == 1:
+        raise Error("base64: bad length")
+    for i in range[1, total] step 4:
+        v = 0
+        count = 0
+        for k in range[0, 3]:
+            ch = string.sub(text, i + k, i + k)
+            if ch == "":
+                v = v * 64
+            else:
+                d = dec[ch]
+                if d == nil:
+                    raise Error("base64: invalid character '" .. ch .. "'")
+                v = v * 64 + d
+                count += 1
+        n += 1
+        piece = string.char(math.floor(v / 65536), math.floor(v / 256) % 256, v % 256)
+        out[n] = string.sub(piece, 1, count - 1)
+    return table.concat(out)

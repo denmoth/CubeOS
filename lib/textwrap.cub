@@ -1,0 +1,82 @@
+# textwrap: перенос и выравнивание текста по ширине (ширина в символах UTF-8)
+import unicode
+
+# слова по пробелам; возвращает список строк не длиннее width. Пустая строка в тексте разделяет абзацы.
+export def wrap(text, width):
+    lines = []
+    n = 0
+    for paragraph in string.gmatch(text .. "\n", "([^\n]*)\n"):
+        if paragraph == "":
+            n += 1
+            lines[n] = ""
+        else:
+            current = ""
+            current_len = 0
+            for word in string.gmatch(paragraph, "%S+"):
+                wlen = unicode.length(word)
+                # слишком длинное слово режем на куски
+                while wlen > width:
+                    if current_len > 0:
+                        n += 1
+                        lines[n] = current
+                        current = ""
+                        current_len = 0
+                    n += 1
+                    lines[n] = unicode.sub(word, 1, width)
+                    word = unicode.sub(word, width + 1)
+                    wlen = unicode.length(word)
+                if current_len == 0:
+                    current = word
+                    current_len = wlen
+                elif current_len + 1 + wlen <= width:
+                    current = current .. " " .. word
+                    current_len += 1 + wlen
+                else:
+                    n += 1
+                    lines[n] = current
+                    current = word
+                    current_len = wlen
+            if current_len > 0:
+                n += 1
+                lines[n] = current
+    # убираем завершающую пустую строку от добавленного перевода строки
+    if n > 0 and lines[n] == "":
+        lines[n] = nil
+    return lines
+
+export def fill(text, width):
+    return table.concat(wrap(text, width), "\n")
+
+export def indent(text, prefix):
+    out = []
+    for i, line in wrap(text, 1000000):
+        out[i] = prefix .. line
+    return table.concat(out, "\n")
+
+# обрезает до width символов, добавляя ending (по умолчанию "...")
+export def truncate(text, width, ending="..."):
+    if unicode.length(text) <= width:
+        return text
+    keep = width - unicode.length(ending)
+    if keep < 0:
+        keep = 0
+    return unicode.sub(text, 1, keep) .. ending
+
+export def pad_right(text, width, fill_char=" "):
+    missing = width - unicode.length(text)
+    if missing <= 0:
+        return text
+    return text .. string.rep(fill_char, missing)
+
+export def pad_left(text, width, fill_char=" "):
+    missing = width - unicode.length(text)
+    if missing <= 0:
+        return text
+    return string.rep(fill_char, missing) .. text
+
+export def center(text, width, fill_char=" "):
+    missing = width - unicode.length(text)
+    if missing <= 0:
+        return text
+    left = missing // 2
+    return string.rep(fill_char, left) .. text .. string.rep(fill_char, missing - left)

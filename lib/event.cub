@@ -1,0 +1,64 @@
+# event: простая шина событий (on, once, off, emit) для интерфейса и сервисов.
+# Обработчики с большим priority вызываются раньше; если обработчик вернул false, цепочка прерывается.
+
+export class Emitter:
+    def init(self):
+        self.handlers = {}
+        self.counter = 0
+
+    # возвращает номер подписки для off
+    def on(self, name, fn, priority=0):
+        self.counter += 1
+        list_ = self.handlers[name]
+        if list_ == nil:
+            list_ = []
+            self.handlers[name] = list_
+        list_[len(list_) + 1] = {id: self.counter, fn: fn, priority: priority, once: false}
+        table.sort(list_, (a, b) => a.priority > b.priority or (a.priority == b.priority and a.id < b.id))
+        return self.counter
+
+    def once(self, name, fn, priority=0):
+        id = self:on(name, fn, priority)
+        for h in self.handlers[name]:
+            if h.id == id:
+                h.once = true
+        return id
+
+    # off(name, id): снять одну подписку; off(name): снять все обработчики события
+    def off(self, name, id=nil):
+        list_ = self.handlers[name]
+        if list_ == nil:
+            return false
+        if id == nil:
+            self.handlers[name] = nil
+            return true
+        for i, h in list_:
+            if h.id == id:
+                table.remove(list_, i)
+                return true
+        return false
+
+    # возвращает число вызванных обработчиков
+    def emit(self, name, *args):
+        list_ = self.handlers[name]
+        if list_ == nil:
+            return 0
+        snapshot = copy(list_)
+        called = 0
+        for h in snapshot:
+            called += 1
+            if h.once:
+                self:off(name, h.id)
+            result = h.fn(unpack(args))
+            if result == false:
+                break
+        return called
+
+    def count(self, name):
+        list_ = self.handlers[name]
+        if list_ == nil:
+            return 0
+        return len(list_)
+
+export def new():
+    return Emitter()

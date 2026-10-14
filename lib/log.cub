@@ -1,0 +1,87 @@
+# log: журнал с уровнями и приёмниками.
+#
+#   l = log.new("kernel", "info")       уровни: debug < info < warn < error < fatal
+#   l:info("started"); l:warn("low space: " .. free)
+#   l:add_sink(log.ring(200))           кольцевой буфер последних записей
+#   l:add_sink(log.file_sink("/cubeos/var/log/kernel.log"))
+#   ring:lines() -> список отформатированных строк
+
+LEVELS = {debug: 1, info: 2, warn: 3, error: 4, fatal: 5}
+NAMES = ["DEBUG", "INFO", "WARN", "ERROR", "FATAL"]
+
+export def format_record(record):
+    seconds = record.time // 1000
+    clock = string.format("%02d:%02d:%02d", (seconds // 3600) % 24, (seconds // 60) % 60, seconds % 60)
+    return "[" .. clock .. "] " .. NAMES[record.level] .. " " .. record.name .. ": " .. record.message
+
+# кольцевой буфер: хранит последние capacity записей
+export class Ring:
+    def init(self, capacity=100):
+        self.capacity = capacity
+        self.records = []
+        self.first = 1
+        self.count = 0
+
+    def write(self, record):
+        index = self.first + self.count
+        self.records[index] = record
+        self.count += 1
+        if self.count > self.capacity:
+            self.records[self.first] = nil
+            self.first += 1
+            self.count -= 1
+
+    def entries(self):
+        out = []
+        for i in range[1, self.count]:
+            out[i] = self.records[self.first + i - 1]
+        return out
+
+    def lines(self):
+        out = []
+        for i, record in self:entries():
+            out[i] = format_record(record)
+        return out
+
+export def ring(capacity=100):
+    return Ring(capacity)
+
+# приёмник, дописывающий строки в файл
+export def file_sink(path):
+    return {write: (self, record) => _append(path, format_record(record) .. "\n")}
+
+def _append(path, text):
+    h = fs.open(path, "a")
+    if h != nil:
+        h.write(text)
+        h.close()
+
+export class Logger:
+    def init(self, name, level="info"):
+        self.name = name
+        self.level = LEVELS[level] ?? 2
+        self.sinks = []
+
+    def add_sink(self, sink):
+        self.sinks[len(self.sinks) + 1] = sink
+
+    def set_level(self, level):
+        self.level = LEVELS[level] ?? self.level
+
+    def log(self, level, message):
+        n = LEVELS[level]
+        if n == nil or n < self.level:
+            return false
+        record = {time: os.epoch("utc"), level: n, name: self.name, message: tostring(message)}
+        for sink in self.sinks:
+            sink:write(record)
+        return true
+
+    def debug(self, message): return self:log("debug", message)
+    def info(self, message): return self:log("info", message)
+    def warn(self, message): return self:log("warn", message)
+    def error(self, message): return self:log("error", message)
+    def fatal(self, message): return self:log("fatal", message)
+
+export def new(name, level="info"):
+    return Logger(name, level)

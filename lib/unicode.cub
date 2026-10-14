@@ -1,0 +1,150 @@
+# unicode: UTF-8 строки (в CC строки это байты; кириллица занимает 2 байта на букву)
+#
+#   unicode.length("Привет") -> 6      unicode.sub("Привет", 2, 4) -> "рив"
+#   unicode.upper / lower: латиница, Latin-1, кириллица (русская, украинская), греческий
+#   unicode.chars(s) -> список символов, unicode.codepoints(s) -> список кодовых точек
+
+export def char(cp):
+    if cp < 128:
+        return string.char(cp)
+    if cp < 2048:
+        return string.char(192 + cp // 64, 128 + cp % 64)
+    if cp < 65536:
+        return string.char(224 + cp // 4096, 128 + (cp // 64) % 64, 128 + cp % 64)
+    return string.char(240 + cp // 262144, 128 + (cp // 4096) % 64, 128 + (cp // 64) % 64, 128 + cp % 64)
+
+# список кодовых точек; неверные байты превращаются в 65533 (U+FFFD)
+export def codepoints(s):
+    out = []
+    n = 0
+    i = 1
+    total = len(s)
+    while i <= total:
+        b = string.byte(s, i)
+        cp = 65533
+        size = 1
+        if b < 128:
+            cp = b
+        elif b >= 194 and b < 224 and i + 1 <= total:
+            b2 = string.byte(s, i + 1)
+            if b2 >= 128 and b2 < 192:
+                cp = (b - 192) * 64 + (b2 - 128)
+                size = 2
+        elif b >= 224 and b < 240 and i + 2 <= total:
+            b2, b3 = string.byte(s, i + 1, i + 2)
+            if b2 >= 128 and b2 < 192 and b3 >= 128 and b3 < 192:
+                cp = (b - 224) * 4096 + (b2 - 128) * 64 + (b3 - 128)
+                size = 3
+        elif b >= 240 and b < 245 and i + 3 <= total:
+            b2, b3, b4 = string.byte(s, i + 1, i + 3)
+            if b2 >= 128 and b2 < 192 and b3 >= 128 and b3 < 192 and b4 >= 128 and b4 < 192:
+                cp = (b - 240) * 262144 + (b2 - 128) * 4096 + (b3 - 128) * 64 + (b4 - 128)
+                size = 4
+        n += 1
+        out[n] = cp
+        i += size
+    return out
+
+export def from_codepoints(cps):
+    out = []
+    for i, cp in cps:
+        out[i] = char(cp)
+    return table.concat(out)
+
+export def chars(s):
+    out = []
+    for i, cp in codepoints(s):
+        out[i] = char(cp)
+    return out
+
+# число символов
+export def length(s):
+    return len(codepoints(s))
+
+# подстрока по номерам символов (с 1, включая обе границы; отрицательные считаются от конца)
+export def sub(s, i, j=nil):
+    cs = chars(s)
+    n = len(cs)
+    last = j ?? n
+    first = i
+    if first < 0:
+        first = n + 1 + first
+    if last < 0:
+        last = n + 1 + last
+    if first < 1:
+        first = 1
+    if last > n:
+        last = n
+    out = []
+    k = 0
+    for p in range[first, last]:
+        k += 1
+        out[k] = cs[p]
+    return table.concat(out)
+
+export def reverse(s):
+    cs = chars(s)
+    n = len(cs)
+    out = []
+    for i in range[1, n]:
+        out[i] = cs[n - i + 1]
+    return table.concat(out)
+
+# ---- регистр
+def _lower_cp(cp):
+    if cp >= 65 and cp <= 90:
+        return cp + 32
+    if cp >= 192 and cp <= 222 and cp != 215:
+        return cp + 32
+    if cp >= 1040 and cp <= 1071:
+        return cp + 32
+    if cp >= 1024 and cp <= 1039:
+        return cp + 80
+    if cp >= 913 and cp <= 937 and cp != 930:
+        return cp + 32
+    if cp == 1168:
+        return 1169
+    return cp
+
+def _upper_cp(cp):
+    if cp >= 97 and cp <= 122:
+        return cp - 32
+    if cp >= 224 and cp <= 254 and cp != 247:
+        return cp - 32
+    if cp >= 1072 and cp <= 1103:
+        return cp - 32
+    if cp >= 1104 and cp <= 1119:
+        return cp - 80
+    if cp >= 945 and cp <= 969 and cp != 962:
+        return cp - 32
+    if cp == 1169:
+        return 1168
+    return cp
+
+export def lower(s):
+    cps = codepoints(s)
+    for i, cp in cps:
+        cps[i] = _lower_cp(cp)
+    return from_codepoints(cps)
+
+export def upper(s):
+    cps = codepoints(s)
+    for i, cp in cps:
+        cps[i] = _upper_cp(cp)
+    return from_codepoints(cps)
+
+export def capitalize(s):
+    cs = chars(s)
+    if len(cs) == 0:
+        return s
+    return upper(cs[1]) .. lower(sub(s, 2))
+
+export def is_valid(s):
+    for cp in codepoints(s):
+        if cp == 65533:
+            return false
+    return true
+
+# ширина строки в клетках терминала (каждый символ одна клетка)
+export def width(s):
+    return length(s)

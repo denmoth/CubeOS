@@ -1,0 +1,212 @@
+# collections: Stack, Queue, Set, Heap (очередь с приоритетом), LRU (кеш с вытеснением старого)
+
+export class Stack:
+    def init(self):
+        self.items = []
+        self.n = 0
+
+    def push(self, v):
+        self.n += 1
+        self.items[self.n] = v
+
+    def pop(self):
+        if self.n == 0:
+            return nil
+        v = self.items[self.n]
+        self.items[self.n] = nil
+        self.n -= 1
+        return v
+
+    def peek(self):
+        return self.items[self.n]
+
+    def size(self):
+        return self.n
+
+    def is_empty(self):
+        return self.n == 0
+
+# очередь FIFO с двумя индексами (O(1) на операцию)
+export class Queue:
+    def init(self):
+        self.items = {}
+        self.head = 1
+        self.tail = 0
+
+    def push(self, v):
+        self.tail += 1
+        self.items[self.tail] = v
+
+    def pop(self):
+        if self.head > self.tail:
+            return nil
+        v = self.items[self.head]
+        self.items[self.head] = nil
+        self.head += 1
+        return v
+
+    def peek(self):
+        return self.items[self.head]
+
+    def size(self):
+        return self.tail - self.head + 1
+
+    def is_empty(self):
+        return self.head > self.tail
+
+export class Set:
+    def init(self, items=nil):
+        self.map = {}
+        self.count = 0
+        if items != nil:
+            for v in items:
+                self:add(v)
+
+    def add(self, v):
+        if self.map[v] == nil:
+            self.map[v] = true
+            self.count += 1
+            return true
+        return false
+
+    def remove(self, v):
+        if self.map[v] != nil:
+            self.map[v] = nil
+            self.count -= 1
+            return true
+        return false
+
+    def has(self, v):
+        return self.map[v] != nil
+
+    def size(self):
+        return self.count
+
+    def to_list(self):
+        out = []
+        n = 0
+        for k, flag in self.map:
+            n += 1
+            out[n] = k
+        return out
+
+    def union(self, other):
+        r = Set(self:to_list())
+        for v in other:to_list():
+            r:add(v)
+        return r
+
+    def intersection(self, other):
+        r = Set()
+        for v in self:to_list():
+            if other:has(v):
+                r:add(v)
+        return r
+
+    def difference(self, other):
+        r = Set()
+        for v in self:to_list():
+            if not other:has(v):
+                r:add(v)
+        return r
+
+# двоичная куча; less(a, b) true, если a должен выйти раньше b (по умолчанию меньшее раньше)
+export class Heap:
+    def init(self, less=nil):
+        self.less = less ?? ((a, b) => a < b)
+        self.items = []
+        self.n = 0
+
+    def push(self, v):
+        self.n += 1
+        items = self.items
+        items[self.n] = v
+        i = self.n
+        while i > 1:
+            parent = i // 2
+            if self.less(items[i], items[parent]):
+                items[i], items[parent] = items[parent], items[i]
+                i = parent
+            else:
+                break
+
+    def pop(self):
+        if self.n == 0:
+            return nil
+        items = self.items
+        top = items[1]
+        items[1] = items[self.n]
+        items[self.n] = nil
+        self.n -= 1
+        i = 1
+        while true:
+            l = i * 2
+            r = l + 1
+            best = i
+            if l <= self.n and self.less(items[l], items[best]):
+                best = l
+            if r <= self.n and self.less(items[r], items[best]):
+                best = r
+            if best == i:
+                break
+            items[i], items[best] = items[best], items[i]
+            i = best
+        return top
+
+    def peek(self):
+        return self.items[1]
+
+    def size(self):
+        return self.n
+
+    def is_empty(self):
+        return self.n == 0
+
+# кеш на capacity записей; при переполнении удаляется давно не использованная
+export class LRU:
+    def init(self, capacity, on_evict=nil):
+        self.capacity = capacity
+        self.on_evict = on_evict
+        self.values = {}
+        self.stamp = {}
+        self.clock = 0
+        self.count = 0
+
+    def touch(self, key):
+        self.clock += 1
+        self.stamp[key] = self.clock
+
+    def get(self, key):
+        v = self.values[key]
+        if v != nil:
+            self:touch(key)
+        return v
+
+    def put(self, key, value):
+        if self.values[key] == nil:
+            self.count += 1
+        self.values[key] = value
+        self:touch(key)
+        while self.count > self.capacity:
+            self:evict_one()
+
+    def evict_one(self):
+        oldest = nil
+        oldest_stamp = nil
+        for k, s in self.stamp:
+            if oldest_stamp == nil or s < oldest_stamp:
+                oldest = k
+                oldest_stamp = s
+        if oldest != nil:
+            v = self.values[oldest]
+            self.values[oldest] = nil
+            self.stamp[oldest] = nil
+            self.count -= 1
+            if self.on_evict != nil:
+                self.on_evict(oldest, v)
+
+    def has(self, key):
+        return self.values[key] != nil
+
+    def size(self):
+        return self.count

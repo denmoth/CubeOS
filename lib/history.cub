@@ -1,0 +1,87 @@
+# history: отмена и возврат действий (undo/redo) для редакторов и файлового менеджера.
+#
+#   h = history.new(100)
+#   h:run({label: "вставка", redo: () => ..., undo: () => ...})   выполняет redo и запоминает действие
+#   h:undo()  h:redo()  h:can_undo()  h:can_redo()  h:clear()
+#   склейка: h:run(action, "typing") подряд идущие действия с одним ключом в пределах window мс становятся одним шагом
+
+# функция, которая вызывает first, потом second
+def _chain(first, second):
+    def run():
+        first()
+        second()
+    return run
+
+export class History:
+    def init(self, limit=100, window=1000):
+        self.limit = limit
+        self.window = window
+        self.undo_stack = []
+        self.redo_stack = []
+        self.last_key = nil
+        self.last_time = 0
+
+    def now(self):
+        return os.epoch("utc")
+
+    def run(self, action, key=nil):
+        action.redo()
+        self.redo_stack = []
+        t = self:now()
+        top = self.undo_stack[len(self.undo_stack)]
+        if key != nil and top != nil and self.last_key == key and t - self.last_time <= self.window:
+            # склеиваем: отмена откатывает обе правки, возврат повторяет обе
+            first_undo = top.undo
+            second_undo = action.undo
+            first_redo = top.redo
+            second_redo = action.redo
+            top.undo = _chain(second_undo, first_undo)
+            top.redo = _chain(first_redo, second_redo)
+        else:
+            self.undo_stack[len(self.undo_stack) + 1] = action
+            if len(self.undo_stack) > self.limit:
+                table.remove(self.undo_stack, 1)
+        self.last_key = key
+        self.last_time = t
+
+    def can_undo(self):
+        return len(self.undo_stack) > 0
+
+    def can_redo(self):
+        return len(self.redo_stack) > 0
+
+    def undo(self):
+        n = len(self.undo_stack)
+        if n == 0:
+            return false
+        action = self.undo_stack[n]
+        self.undo_stack[n] = nil
+        action.undo()
+        self.redo_stack[len(self.redo_stack) + 1] = action
+        self.last_key = nil
+        return true
+
+    def redo(self):
+        n = len(self.redo_stack)
+        if n == 0:
+            return false
+        action = self.redo_stack[n]
+        self.redo_stack[n] = nil
+        action.redo()
+        self.undo_stack[len(self.undo_stack) + 1] = action
+        self.last_key = nil
+        return true
+
+    def clear(self):
+        self.undo_stack = []
+        self.redo_stack = []
+        self.last_key = nil
+
+    def labels(self):
+        out = []
+        for i, a in self.undo_stack:
+            out[i] = a.label ?? "?"
+        return out
+
+export def new(limit=100, window=1000):
+    return History(limit, window)

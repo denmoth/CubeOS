@@ -1,0 +1,109 @@
+import t
+import collections as c
+import textwrap as tw
+import argparse as ap
+import history
+import log
+import event
+import vec
+eq = t.eq
+
+s = c.Stack()
+s:push(1)
+s:push(2)
+eq(s:pop(), 2, "stack pop")
+eq(s:peek(), 1, "stack peek")
+eq(s:size(), 1, "stack size")
+q = c.Queue()
+q:push("a")
+q:push("b")
+eq(q:pop(), "a", "queue fifo")
+eq(q:size(), 1, "queue size")
+st = c.Set([1, 2, 3])
+st:add(3)
+st:add(4)
+eq(st:size(), 4, "set size")
+eq(st:has(2), true, "set has")
+st:remove(2)
+eq(st:has(2), false, "set remove")
+h = c.Heap()
+for v in [5, 1, 4, 2, 3]:
+    h:push(v)
+out = []
+while not h:is_empty():
+    out[len(out) + 1] = h:pop()
+eq(out, [1, 2, 3, 4, 5], "heap order")
+l = c.LRU(2)
+l:put("a", 1)
+l:put("b", 2)
+l:get("a")
+l:put("c", 3)
+eq(l:has("b"), false, "lru evict")
+eq(l:has("a"), true, "lru keep")
+
+eq(tw.wrap("aaa bbb ccc", 7), ["aaa bbb", "ccc"], "wrap")
+eq(tw.truncate("abcdefghij", 6), "abc...", "truncate")
+eq(tw.pad_right("ab", 4), "ab  ", "pad r")
+eq(tw.pad_left("ab", 4), "  ab", "pad l")
+eq(tw.center("ab", 6), "  ab  ", "center")
+
+spec = {name: "x", options: [{long: "minify", short: "m", flag: true}, {long: "level", short: "l", number: true, default: 6}, {long: "mods", list: true}], positionals: [{name: "input"}, {name: "output", optional: true}]}
+a = ap.parse(spec, ["-m", "in.cub", "--level", "9", "--mods=a,b"])
+eq(a.minify, true, "ap flag")
+eq(a.input, "in.cub", "ap pos")
+eq(a.level, 9, "ap num")
+eq(a.mods, ["a", "b"], "ap list")
+a = ap.parse(spec, ["in.cub"])
+eq(a.level, 6, "ap default")
+eq(a.minify, false, "ap flag default")
+ok, err = pcall(ap.parse, spec, [])
+eq(ok, false, "ap missing")
+
+hh = history.new(10, 1000)
+val = {n: 0}
+def inc():
+    val.n += 1
+def dec():
+    val.n -= 1
+hh:run({label: "inc", redo: inc, undo: dec})
+hh:run({label: "inc", redo: inc, undo: dec})
+eq(val.n, 2, "hist run")
+hh:undo()
+eq(val.n, 1, "hist undo")
+hh:redo()
+eq(val.n, 2, "hist redo")
+eq(hh:can_redo(), false, "hist can_redo")
+
+lg = log.new("t", "info")
+ring = log.ring(2)
+lg:add_sink(ring)
+lg:debug("no")
+lg:info("one")
+lg:warn("two")
+lg:error("three")
+eq(len(ring:entries()), 2, "ring cap")
+eq(ring:entries()[1].message, "two", "ring order")
+
+em = event.new()
+seen = []
+def rec(tag):
+    return (v) => table.insert(seen, tag .. v)
+em:on("x", rec("low:"), 0)
+em:on("x", rec("high:"), 10)
+em:once("x", rec("once:"), 5)
+eq(em:emit("x", 1), 3, "emit count")
+eq(seen, ["high:1", "once:1", "low:1"], "emit order")
+eq(em:emit("x", 2), 2, "emit after once")
+
+a = vec.Vec2(3, 4)
+eq(a:length(), 5, "vec len")
+b = a + vec.Vec2(1, 1)
+eq(b.x, 4, "vec add")
+eq(vec.Vec3(1, 0, 0):cross(vec.Vec3(0, 1, 0)).z, 1, "cross")
+r1 = vec.Rect(0, 0, 10, 10)
+r2 = vec.Rect(5, 5, 10, 10)
+eq(r1:intersects(r2), true, "rect int")
+eq(r1:intersection(r2).w, 5, "rect inter w")
+eq(r1:contains(10, 5), false, "rect contains edge")
+eq(vec.clamp(5, 0, 3), 3, "clamp")
+print("done")

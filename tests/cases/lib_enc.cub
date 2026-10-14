@@ -1,0 +1,46 @@
+import t
+import base64 as b64
+import url
+import unicode as u
+import rand
+eq = t.eq
+
+for pair in [["", ""], ["f", "Zg=="], ["fo", "Zm8="], ["foo", "Zm9v"], ["foob", "Zm9vYg=="], ["fooba", "Zm9vYmE="], ["foobar", "Zm9vYmFy"]]:
+    eq(b64.encode(pair[1]), pair[2], "b64 enc " .. pair[1])
+    eq(b64.decode(pair[2]), pair[1], "b64 dec " .. pair[1])
+eq(b64.encode("\251\255"), "+/8=", "b64 std")
+eq(b64.encode("\251\255", true), "-_8=", "b64 urlsafe")
+eq(b64.encode("f", true, false), "Zg", "b64 nopad")
+eq(b64.decode("-_8=", true), "\251\255", "b64 dec urlsafe")
+
+eq(url.encode("a b&c/d?é~-_."), "a%20b%26c%2Fd%3F%C3%A9~-_.", "url enc")
+eq(url.decode("a%20b%26c"), "a b&c", "url dec")
+eq(url.decode("a+b", true), "a b", "url plus")
+q = url.query_parse("a=1&b=x%20y&c")
+eq(q.a, "1", "q a")
+eq(q.b, "x y", "q b")
+
+eq(u.length("Привет"), 6, "ulen")
+eq(u.upper("привет"), "ПРИВЕТ", "upper")
+eq(u.lower("ПРИВЕТ"), "привет", "lower")
+eq(u.reverse("абв"), "вба", "reverse")
+eq(u.sub("абвгд", 2, 3), "бв", "usub")
+eq(u.is_valid("abc"), true, "valid")
+eq(u.codepoints("aб"), [97, 1073], "cps")
+eq(u.from_codepoints([97, 1073]), "aб", "from cps")
+
+eq(rand.seed_from_string("hello"), 1335831723, "fnv hello")
+eq(rand.seed_from_string(""), 2166136261, "fnv empty")
+eq(rand.seed_from_string("a"), 3826002220, "fnv a")
+r = rand.new(1)
+eq([r:u32(), r:u32(), r:u32()], [270369, 67634689, 2647435461], "xorshift")
+r = rand.new(12345)
+got = []
+for i in range[1, 8]:
+    got[i] = r:int(1, 100)
+eq(got, [78, 40, 66, 46, 17, 77, 100, 86], "int seq")
+r = rand.new(42)
+items = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+r:shuffle(items)
+eq(items, [8, 3, 5, 4, 2, 7, 9, 10, 6, 1], "shuffle")
+print("done")

@@ -1,0 +1,67 @@
+# url: процентное кодирование, разбор адресов и строк запроса
+
+# кодирует всё, кроме A-Z a-z 0-9 - . _ ~
+export def encode(s):
+    return (string.gsub(s, "[^%w%-%._~]", (c) => string.format("%%%02X", string.byte(c))))
+
+# plus_as_space: '+' в запросах формы означает пробел
+export def decode(s, plus_as_space=false):
+    if plus_as_space:
+        s = string.gsub(s, "%+", " ")
+    return (string.gsub(s, "%%(%x%x)", (h) => string.char(tonumber(h, 16))))
+
+# "a=1&b=2&a=3" -> {a: "3", b: "2"} (последнее значение побеждает); без "=" значение пустая строка
+export def query_parse(q):
+    out = {}
+    if q == nil or q == "":
+        return out
+    for pair in string.gmatch(q, "[^&]+"):
+        k, v = string.match(pair, "^([^=]*)=?(.*)$")
+        out[decode(k, true)] = decode(v, true)
+    return out
+
+export def query_build(params):
+    keys = []
+    n = 0
+    for k, v in params:
+        n += 1
+        keys[n] = k
+    table.sort(keys)
+    parts = []
+    for i, k in keys:
+        parts[i] = encode(tostring(k)) .. "=" .. encode(tostring(params[k]))
+    return table.concat(parts, "&")
+
+# "https://user:pw@host:8080/a/b?x=1#top" -> {scheme, user, host, port, path, query, fragment, params}
+export def parse(url):
+    rest = url
+    out = {}
+    frag = nil
+    i = string.find(rest, "#", 1, true)
+    if i != nil:
+        out.fragment = string.sub(rest, i + 1)
+        rest = string.sub(rest, 1, i - 1)
+    q = string.find(rest, "?", 1, true)
+    if q != nil:
+        out.query = string.sub(rest, q + 1)
+        rest = string.sub(rest, 1, q - 1)
+        out.params = query_parse(out.query)
+    scheme, after = string.match(rest, "^(%a[%w%+%-%.]*)://(.*)$")
+    if scheme != nil:
+        out.scheme = string.lower(scheme)
+        authority, path = string.match(after, "^([^/]*)(.*)$")
+        userinfo, hostport = string.match(authority, "^(.*)@(.*)$")
+        if userinfo == nil:
+            hostport = authority
+        else:
+            out.user = userinfo
+        host, port = string.match(hostport, "^(.*):(%d+)$")
+        if host == nil:
+            host = hostport
+        else:
+            out.port = tonumber(port)
+        out.host = host
+        out.path = path == "" and "/" or path
+    else:
+        out.path = rest
+    return out

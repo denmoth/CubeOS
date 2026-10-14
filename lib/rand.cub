@@ -1,0 +1,58 @@
+# rand: детерминированный генератор псевдослучайных чисел (xorshift32). Одинаковое зерно даёт одинаковую
+# последовательность на любой машине: нужно для слова дня, повторяемых игр и тестов.
+#
+#   g = rand.new(42)         g:int(1, 100)    g:float()    g:choice(list)    g:shuffle(list)    g:sample(list, n)
+#   rand.seed_from_string("2026-10-14")  -> число 32 бита (FNV-1a)
+
+bxor = bit32.bxor
+lshift = bit32.lshift
+rshift = bit32.rshift
+
+# FNV-1a 32 бита
+export def seed_from_string(s):
+    h = 2166136261
+    for i in range[1, len(s)]:
+        h = bxor(h, string.byte(s, i))
+        h = (lshift(h, 24) + h * 403) % 4294967296
+    return h
+
+export class Rand:
+    def init(self, seed=nil):
+        self.state = (seed ?? os.epoch("utc")) % 4294967296
+        if self.state == 0:
+            self.state = 0x6D2B79F5
+
+    def u32(self):
+        x = self.state
+        x = bxor(x, lshift(x, 13))
+        x = bxor(x, rshift(x, 17))
+        x = bxor(x, lshift(x, 5))
+        self.state = x
+        return x
+
+    # число в [0, 1)
+    def float(self):
+        return self:u32() / 4294967296
+
+    # целое в [lo, hi], границы включены
+    def int(self, lo, hi):
+        return lo + math.floor(self:float() * (hi - lo + 1))
+
+    def choice(self, items):
+        return items[self:int(1, len(items))]
+
+    # перемешивает список на месте (Фишер-Йетс) и возвращает его
+    def shuffle(self, items):
+        for i in range[len(items), 2] step -1:
+            j = self:int(1, i)
+            items[i], items[j] = items[j], items[i]
+        return items
+
+    # n разных элементов
+    def sample(self, items, n):
+        pool = copy(items)
+        self:shuffle(pool)
+        return pool[1:n]
+
+export def new(seed=nil):
+    return Rand(seed)
