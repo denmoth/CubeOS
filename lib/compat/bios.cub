@@ -10,6 +10,7 @@
 # sleep, loadfile/dofile, os.run, loadAPI), не копия bios.lua.
 
 import compat.vararg as va
+import term.chars as chars
 
 # ---------------------------------------------------------------- вывод
 
@@ -28,29 +29,29 @@ export def write_text(env, text):
             term.scroll(1)
         x, y = term.getCursorPos()
         lines += 1
-    while string.len(text) > 0:
+    while chars.length(text) > 0:
         space = string.match(text, "^[ \t]+")
         if space != nil:
             term.write(space)
             x, y = term.getCursorPos()
-            text = string.sub(text, string.len(space) + 1)
+            text = chars.sub(text, chars.length(space) + 1)
         nl = string.match(text, "^\n")
         if nl != nil:
             new_line()
-            text = string.sub(text, 2)
+            text = chars.sub(text, 2)
         word = string.match(text, "^[^ \t\n]+")
         if word != nil:
-            text = string.sub(text, string.len(word) + 1)
-            if string.len(word) > w:
+            text = chars.sub(text, chars.length(word) + 1)
+            if chars.length(word) > w:
                 # слово длиннее строки режется по строкам
-                while string.len(word) > 0:
+                while chars.length(word) > 0:
                     if x > w:
                         new_line()
                     term.write(word)
-                    word = string.sub(word, w - x + 2)
+                    word = chars.sub(word, w - x + 2)
                     x, y = term.getCursorPos()
             else:
-                if x + string.len(word) - 1 > w:
+                if x + chars.length(word) - 1 > w:
                     new_line()
                 term.write(word)
                 x, y = term.getCursorPos()
@@ -103,7 +104,7 @@ export def read_line(env, replace_char=nil, history=nil, complete=nil, default=n
     keys_api = env.keys
     term.setCursorBlink(true)
     line = default ?? ""
-    pos = string.len(line)
+    pos = chars.length(line)
     scroll = 0
     sx, sy = term.getCursorPos()
     w, h = term.getSize()
@@ -112,10 +113,10 @@ export def read_line(env, replace_char=nil, history=nil, complete=nil, default=n
     completions = {}
     completion_index = 0
     if replace_char != nil:
-        replace_char = string.sub(replace_char, 1, 1)
+        replace_char = chars.sub(replace_char, 1, 1)
     def shown(s):
         if replace_char != nil:
-            return string.rep(replace_char, string.len(s))
+            return string.rep(replace_char, chars.length(s))
         return s
     def redraw(clear_char=nil):
         w, h = term.getSize()
@@ -125,25 +126,25 @@ export def read_line(env, replace_char=nil, history=nil, complete=nil, default=n
         elif pos > scroll + room - 1:
             scroll = pos - room + 1
         term.setCursorPos(sx, sy)
-        text = clear_char != nil and string.rep(clear_char, string.len(line)) or shown(line)
-        visible = string.sub(text, scroll + 1, scroll + room)
-        term.write(visible .. string.rep(" ", room - string.len(visible)))
+        text = clear_char != nil and string.rep(clear_char, chars.length(line)) or shown(line)
+        visible = chars.sub(text, scroll + 1, scroll + room)
+        term.write(visible .. string.rep(" ", room - chars.length(visible)))
         if completion_index > 0 and clear_char == nil and complete != nil:
             ghost = completions[completion_index]
-            if ghost != nil and pos == string.len(line):
-                gx = sx + string.len(line) - scroll
+            if ghost != nil and pos == chars.length(line):
+                gx = sx + chars.length(line) - scroll
                 if gx <= w:
                     old_fg = term.getTextColor()
                     if term.isColor():
                         term.setTextColor(env.colors.gray)
                     term.setCursorPos(gx, sy)
-                    term.write(string.sub(ghost, 1, w - gx + 1))
+                    term.write(chars.sub(ghost, 1, w - gx + 1))
                     term.setTextColor(old_fg)
         term.setCursorPos(sx + pos - scroll, sy)
     def recompute_completions():
         completions = {}
         completion_index = 0
-        if complete != nil and pos == string.len(line):
+        if complete != nil and pos == chars.length(line):
             result = complete(line)
             if result != nil:
                 completions = result
@@ -154,19 +155,19 @@ export def read_line(env, replace_char=nil, history=nil, complete=nil, default=n
     while true:
         ev, a, b, c = os_api.pullEvent()
         if ev == "char":
-            line = string.sub(line, 1, pos) .. a .. string.sub(line, pos + 1)
-            pos += string.len(a)
+            line = chars.sub(line, 1, pos) .. a .. chars.sub(line, pos + 1)
+            pos += chars.length(a)
             recompute_completions()
             redraw()
         elif ev == "paste":
             text = string.gsub(a, "\n.*$", "")
-            line = string.sub(line, 1, pos) .. text .. string.sub(line, pos + 1)
-            pos += string.len(text)
+            line = chars.sub(line, 1, pos) .. text .. chars.sub(line, pos + 1)
+            pos += chars.length(text)
             recompute_completions()
             redraw()
         elif ev == "key":
             if a == keys_api.enter or a == keys_api.numPadEnter:
-                if completion_index > 0 and completions[completion_index] != nil and pos == string.len(line) and false:
+                if completion_index > 0 and completions[completion_index] != nil and pos == chars.length(line) and false:
                     pass
                 break
             elif a == keys_api.left:
@@ -175,34 +176,34 @@ export def read_line(env, replace_char=nil, history=nil, complete=nil, default=n
                     recompute_completions()
                     redraw()
             elif a == keys_api.right:
-                if pos < string.len(line):
+                if pos < chars.length(line):
                     pos += 1
                     recompute_completions()
                     redraw()
                 elif completion_index > 0 and completions[completion_index] != nil:
                     # вправо в конце строки принимает дополнение
                     line = line .. completions[completion_index]
-                    pos = string.len(line)
+                    pos = chars.length(line)
                     recompute_completions()
                     redraw()
             elif a == keys_api.home:
                 pos = 0
                 redraw()
             elif a == keys_api["end"]:
-                pos = string.len(line)
+                pos = chars.length(line)
                 recompute_completions()
                 redraw()
             elif a == keys_api.backspace:
                 if pos > 0:
                     redraw(" ")
-                    line = string.sub(line, 1, pos - 1) .. string.sub(line, pos + 1)
+                    line = chars.sub(line, 1, pos - 1) .. chars.sub(line, pos + 1)
                     pos -= 1
                     recompute_completions()
                     redraw()
             elif a == keys_api.delete:
-                if pos < string.len(line):
+                if pos < chars.length(line):
                     redraw(" ")
-                    line = string.sub(line, 1, pos) .. string.sub(line, pos + 2)
+                    line = chars.sub(line, 1, pos) .. chars.sub(line, pos + 2)
                     recompute_completions()
                     redraw()
             elif a == keys_api.up or a == keys_api.down:
@@ -231,18 +232,18 @@ export def read_line(env, replace_char=nil, history=nil, complete=nil, default=n
                             else:
                                 history_index = nil
                                 line = saved_line ?? ""
-                    pos = string.len(line)
+                    pos = chars.length(line)
                     recompute_completions()
                     redraw()
             elif a == keys_api.tab:
-                if completion_index > 0 and completions[completion_index] != nil and pos == string.len(line):
+                if completion_index > 0 and completions[completion_index] != nil and pos == chars.length(line):
                     line = line .. completions[completion_index]
-                    pos = string.len(line)
+                    pos = chars.length(line)
                     recompute_completions()
                     redraw()
         elif ev == "mouse_click":
             if b >= sx and c == sy:
-                pos = math.max(0, math.min(string.len(line), scroll + b - sx))
+                pos = math.max(0, math.min(chars.length(line), scroll + b - sx))
                 redraw()
         elif ev == "term_resize":
             redraw()

@@ -9,10 +9,15 @@
 
 import ui.widget as widget
 import term.chars as chars
+import input.layout as layout_mod
+import unicode
 
 export class TermView(widget.Widget):
+    # props.layouts: раскладки по кругу (по умолчанию en, ru, uk), Ctrl+Shift или Alt+Shift переключает
     def init(self, vt, props=nil):
         super.init(self, props)
+        self.kbd = layout_mod.new((props ?? {}).layouts ?? ["en", "ru", "uk"])
+        self.flash = false
         self.vt = vt
         self.focusable = true
         self.raw_input = true
@@ -32,6 +37,11 @@ export class TermView(widget.Widget):
 
     def raw_event(self, name, a, b):
         # Ctrl+T это прерывание программы (событие terminate), как в CC
+        if name == "key":
+            if self.kbd:key(a):
+                self:_show_layout()
+        elif name == "key_up":
+            self.kbd:key_up(a)
         if name == "key" and (a == keys.leftCtrl or a == keys.rightCtrl):
             self.ctrl = true
         elif name == "key_up" and (a == keys.leftCtrl or a == keys.rightCtrl):
@@ -43,8 +53,20 @@ export class TermView(widget.Widget):
         return true
 
     def char(self, ch):
-        self:emit("event", "char", ch)
+        self:emit("event", "char", self.kbd:translate(ch))
         return true
+
+    # индикатор раскладки в правом верхнем углу на 1.5 секунды после переключения
+    def _show_layout(self):
+        self.flash = true
+        self:invalidate()
+        if self.ui != nil:
+            let me = self
+            self.ui:after(1.5, () => me:_hide_layout())
+
+    def _hide_layout(self):
+        self.flash = false
+        self:invalidate()
 
     def mouse(self, kind, mx, my, button):
         x = mx - self.x + 1
@@ -82,6 +104,10 @@ export class TermView(widget.Widget):
             bb = vt.bg[y]
             for x in range[1, cols]:
                 c:set(self.x + x - 1, self.y + y - 1, chars.to_cp(tt[x]), 32 + ff[x], 32 + bb[x])
+        if self.flash:
+            label = " " .. self.kbd:label() .. " "
+            for i, cp in unicode.codepoints(label):
+                c:set(self.x + self.w - 4 + i - 1, self.y, cp, 0, 7)
         if vt.blink and self.focused and (self.ui == nil or self.ui.blink):
             if vt.cx >= 1 and vt.cx <= cols and vt.cy >= 1 and vt.cy <= rows:
                 cx = self.x + vt.cx - 1

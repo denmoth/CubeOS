@@ -1,0 +1,68 @@
+import t
+import input.layout as layout
+import term.chars as chars
+import term.vterm as vterm
+import unicode
+eq = t.eq
+
+lay = layout.new(["en", "ru", "uk"])
+eq(lay:label(), "EN", "starts in English")
+eq(lay:translate("q"), "q", "English keeps the symbol")
+
+# переключение Ctrl+Shift любым порядком
+eq(lay:key(keys.leftCtrl), false, "Ctrl alone does not switch")
+eq(lay:key(keys.leftShift), true, "Ctrl then Shift switches")
+eq(lay:label(), "RU", "now Russian")
+lay:key_up(keys.leftShift)
+lay:key_up(keys.leftCtrl)
+eq(lay:key(keys.leftShift), false, "Shift alone does not switch")
+eq(lay:key(keys.leftAlt), true, "Shift then Alt switches")
+eq(lay:label(), "UK", "now Ukrainian")
+lay:key_up(keys.leftShift)
+lay:key_up(keys.leftAlt)
+lay:key(keys.leftCtrl)
+lay:key(keys.rightShift)
+eq(lay:label(), "EN", "the order is a cycle")
+lay:key_up(keys.leftCtrl)
+lay:key_up(keys.rightShift)
+
+# ЙЦУКЕН
+lay:set("ru")
+src = "ghbdtn"
+out = ""
+for i in range[1, string.len(src)]:
+    out = out .. lay:translate(string.sub(src, i, i))
+eq(out, "привет", "ghbdtn typed in Russian layout is привет")
+eq(lay:translate("Q"), "Й", "capital letters follow the case")
+eq(lay:translate(","), "б", "comma key is б")
+eq(lay:translate("/"), ".", "slash key is the period")
+eq(lay:translate("5"), "5", "digits stay")
+lay:set("uk")
+eq(lay:translate("s"), "і", "Ukrainian і")
+eq(lay:translate("]"), "ї", "Ukrainian ї")
+eq(lay:translate("'"), "є", "Ukrainian є")
+
+# декодирование UTF-8 в клетки и обратно
+cells = chars.decode("aé я\x80")
+eq(len(cells), 5, "four characters plus a stray byte")
+eq(cells[2], chars.LATIN + 233, "é from UTF-8 is a marked Latin-1 cell")
+eq(cells[4], 1103, "я is a code point")
+eq(cells[5], 128, "an invalid byte stays a byte")
+eq(chars.encode(cells), "aé я\x80", "encoding returns the same string")
+eq(chars.length("привет"), 6, "length in characters")
+eq(chars.sub("привет", 2, 4), "рив", "sub in characters")
+eq(chars.sub("abc", 2), "bc", "ASCII fast path")
+eq(chars.to_cp(1103), 1103, "wide cells map to themselves")
+eq(chars.to_cp(chars.LATIN + 233), 233, "marked Latin-1 maps back")
+
+# виртуальный терминал: кириллица это по одной клетке
+vt = vterm.new(10, 2, {})
+vt:write("при")
+x, y = vt:getCursorPos()
+eq(x, 4, "three Russian letters move the cursor by three")
+eq(vt.text[1][1], 1087, "п is stored as a code point")
+text = vt:getLine(1)
+eq(string.len(text), 10, "getLine keeps the terminal width")
+eq(string.sub(text, 1, 3), "???", "CC-style line text shows wide cells as ?")
+
+print("done")

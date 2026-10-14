@@ -12,6 +12,7 @@
 # Изменения копятся в dirty (по строкам) и rev: хозяин терминала (окно, вид) перерисовывает только их.
 
 import unicode
+import term.chars as chars
 
 # значения цветов CC (степени двойки) -> номера 0..15
 const COLOR_INDEX = {1: 0, 2: 1, 4: 2, 8: 3, 16: 4, 32: 5, 64: 6, 128: 7, 256: 8, 512: 9, 1024: 10, 2048: 11, 4096: 12,
@@ -136,7 +137,8 @@ export class VTerm:
 
     def write(self, s):
         s = _check_string(s, 1)
-        n = string.len(s)
+        cells = chars.decode(s)
+        n = len(cells)
         y = self.cy
         if y >= 1 and y <= self.h and n > 0:
             tt = self.text[y]
@@ -145,7 +147,7 @@ export class VTerm:
             for i in range[1, n]:
                 x = self.cx + i - 1
                 if x >= 1 and x <= self.w:
-                    tt[x] = string.byte(s, i)
+                    tt[x] = cells[i]
                     ff[x] = self.fgc
                     bb[x] = self.bgc
             self:_touch(y)
@@ -291,7 +293,10 @@ export class VTerm:
         parts = {}
         tt = self.text[y]
         for x in range[1, self.w]:
-            parts[x] = string.char(tt[x])
+            v = tt[x]
+            if v >= chars.LATIN:
+                v -= chars.LATIN
+            parts[x] = v < 256 and string.char(v) or "?"
         return table.concat(parts)
 
     def line_blit(self, y, which):

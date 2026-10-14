@@ -1,0 +1,111 @@
+# input.layout: раскладки клавиатуры для текста. CC присылает события char только в английской раскладке (коды 32..255), поэтому
+# русский и украинский текст получается заменой клавиш по их месту на клавиатуре (ЙЦУКЕН).
+#
+#   lay = layout.new(["en", "ru", "uk"])
+#   lay:translate("q")           -> "й" (пока включена русская раскладка)
+#   lay:key(keys.leftShift) / lay:key_up(code)       следят за Ctrl, Alt и Shift; key возвращает true, когда раскладка переключилась
+#   lay:label()                   -> "RU" (для индикатора)
+#
+# Переключение: Ctrl+Shift или Alt+Shift (любым порядком). Заглавные буквы и Caps Lock работают сами: смотрим на регистр символа.
+
+import unicode
+
+# место на клавиатуре (английская раскладка), без Shift и с Shift
+const BASE = "qwertyuiop[]asdfghjkl;'zxcvbnm,./`"
+const SHIFTED = "QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>?~"
+
+const RU_BASE = "йцукенгшщзхъфывапролджэячсмитьбю.ё"
+const RU_SHIFTED = "ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ,Ё"
+# цифровой ряд с Shift отличается
+const RU_EXTRA = {"@": "\"", "#": "№", "$": ";", "^": ":", "&": "?"}
+
+const UK_BASE = "йцукенгшщзхїфівапролджєячсмитьбю.ґ"
+const UK_SHIFTED = "ЙЦУКЕНГШЩЗХЇФІВАПРОЛДЖЄЯЧСМИТЬБЮ,Ґ"
+const UK_EXTRA = {"@": "\"", "#": "№", "$": ";", "^": ":", "&": "?"}
+
+const NAMES = {en: "EN", ru: "RU", uk: "UK"}
+
+def _make(eng, native, extra):
+    out = {}
+    e = unicode.chars(eng)
+    n = unicode.chars(native)
+    for i in range[1, len(e)]:
+        out[e[i]] = n[i]
+    for k, v in extra:
+        out[k] = v
+    return out
+
+def _table(name):
+    if name == "ru":
+        m = _make(BASE, RU_BASE, RU_EXTRA)
+        s = _make(SHIFTED, RU_SHIFTED, {})
+        for k, v in s:
+            m[k] = v
+        return m
+    if name == "uk":
+        m = _make(BASE, UK_BASE, UK_EXTRA)
+        s = _make(SHIFTED, UK_SHIFTED, {})
+        for k, v in s:
+            m[k] = v
+        return m
+    return nil
+
+export class Layout:
+    # order: список раскладок по кругу (по умолчанию en, ru); start: с какой начать
+    def init(self, order=nil, start=nil):
+        self.order = order ?? ["en", "ru"]
+        self.index = 1
+        if start != nil:
+            for i in range[1, len(self.order)]:
+                if self.order[i] == start:
+                    self.index = i
+        self.tables = {}
+        for name in self.order:
+            self.tables[name] = _table(name)
+        self.mods = {ctrl: false, alt: false, shift: false}
+
+    def name(self):
+        return self.order[self.index]
+
+    def label(self):
+        return NAMES[self:name()] ?? string.upper(self:name())
+
+    def next(self):
+        self.index = self.index % len(self.order) + 1
+
+    def set(self, name):
+        for i in range[1, len(self.order)]:
+            if self.order[i] == name:
+                self.index = i
+
+    # символ как его печатает текущая раскладка (чужие символы остаются как есть)
+    def translate(self, ch):
+        t = self.tables[self:name()]
+        if t == nil:
+            return ch
+        return t[ch] ?? ch
+
+    def _track(self, code, down):
+        if code == keys.leftShift or code == keys.rightShift:
+            self.mods.shift = down
+        elif code == keys.leftCtrl or code == keys.rightCtrl:
+            self.mods.ctrl = down
+        elif code == keys.leftAlt or code == keys.rightAlt:
+            self.mods.alt = down
+
+    # нажатие клавиши; true, если раскладка переключилась (Ctrl+Shift или Alt+Shift)
+    def key(self, code):
+        was = self.mods.shift and (self.mods.ctrl or self.mods.alt)
+        self:_track(code, true)
+        now = self.mods.shift and (self.mods.ctrl or self.mods.alt)
+        is_mod = code == keys.leftShift or code == keys.rightShift or code == keys.leftCtrl or code == keys.rightCtrl or code == keys.leftAlt or code == keys.rightAlt
+        if now and not was and is_mod and len(self.order) > 1:
+            self:next()
+            return true
+        return false
+
+    def key_up(self, code):
+        self:_track(code, false)
+
+export def new(order=nil, start=nil):
+    return Layout(order, start)

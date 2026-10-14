@@ -20,8 +20,99 @@ const LOW = {
     23: 0x21A8, 24: 0x2191, 25: 0x2193, 26: 0x2192, 27: 0x2190, 28: 0x221F, 29: 0x2194, 30: 0x25B2, 31: 0x25BC
 }
 
+# Терминал CC хранит байты, а нам нужна кириллица. Строки UTF-8 разбираются в клетки: правильная последовательность UTF-8 это
+# один код символа, всё остальное (в том числе байты 128..159 телетекста и одиночные байты Latin-1) это байт как есть. Символы
+# 128..255 из правильной UTF-8 хранятся как LATIN + код, чтобы кодирование обратно вернуло именно их.
+export const LATIN = 0x200000
+
+# строка -> список клеток (байты 0..255, коды Unicode, LATIN + код)
+export def decode(s):
+    out = []
+    n = 0
+    if string.find(s, "[^ -~]") == nil:
+        for i in range[1, string.len(s)]:
+            out[i] = string.byte(s, i)
+        return out
+    i = 1
+    total = string.len(s)
+    while i <= total:
+        b = string.byte(s, i)
+        need = 0
+        cp = 0
+        if b >= 0xC2 and b <= 0xDF:
+            need = 1
+            cp = b - 0xC0
+        elif b >= 0xE0 and b <= 0xEF:
+            need = 2
+            cp = b - 0xE0
+        elif b >= 0xF0 and b <= 0xF4:
+            need = 3
+            cp = b - 0xF0
+        ok = need > 0 and i + need <= total
+        if ok:
+            for k in range[1, need]:
+                c = string.byte(s, i + k)
+                if c < 0x80 or c > 0xBF:
+                    ok = false
+                    break
+                cp = cp * 64 + (c - 0x80)
+        n += 1
+        if ok:
+            out[n] = cp < 256 and LATIN + cp or cp
+            i += need + 1
+        else:
+            out[n] = b
+            i += 1
+    return out
+
+# список клеток -> строка (обратное к decode)
+export def encode(cells):
+    parts = []
+    for i in range[1, len(cells)]:
+        v = cells[i]
+        if v >= LATIN:
+            v -= LATIN
+            parts[i] = unicode.char(v)
+        elif v >= 256:
+            parts[i] = unicode.char(v)
+        else:
+            parts[i] = string.char(v)
+    return table.concat(parts)
+
+# длина строки в клетках и подстрока по клеткам (с 1, включая границы), для строк с кириллицей
+export def length(s):
+    if string.find(s, "[^ -~]") == nil:
+        return string.len(s)
+    return len(decode(s))
+
+export def sub(s, i, j=nil):
+    if string.find(s, "[^ -~]") == nil:
+        return string.sub(s, i, j)
+    cs = decode(s)
+    n = len(cs)
+    first = i
+    last = j ?? n
+    if first < 0:
+        first = n + 1 + first
+    if last < 0:
+        last = n + 1 + last
+    if first < 1:
+        first = 1
+    if last > n:
+        last = n
+    part = []
+    k = 0
+    for p in range[first, last]:
+        k += 1
+        part[k] = cs[p]
+    return encode(part)
+
 # байт CC -> код символа
 export def to_cp(b):
+    if b >= LATIN:
+        return b - LATIN
+    if b >= 256:
+        return b
     if b >= 32 and b < 127:
         return b
     if b >= 160:
