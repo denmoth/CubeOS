@@ -23,10 +23,12 @@ def _scale(ctx, graphics_value, text_value):
 
 # текст по центру с контуром и тенью
 def centered(ctx, msg, y, c, scale, outline=nil):
+    msg = sf.ellipsize(ctx.font, msg, ctx.w - 2, "..", 0, scale)
     w = sf.measure(ctx.font, msg, 0, scale)
     ctx.s:text(ctx.font, math.floor((ctx.w - w) / 2), y, msg, c, {scale: scale, outline: outline, shadow: outline == nil and {color: ctx.black, dx: 1, dy: 1} or nil})
 
 def label(ctx, x, y, msg, c):
+    msg = sf.ellipsize(ctx.font, msg, ctx.w - x - 1, "..")
     ctx.s:text(ctx.font, x, y, msg, c, {outline: ctx.black})
 
 # ---------------------------------------------------------------- сцена 0: проявление логотипа анимацией палитры
@@ -52,7 +54,7 @@ class Intro:
         tw = sf.measure(ctx.font, title, scale, scale)
         ty = math.floor(ctx.h * 0.3)
         ink:text(ctx.font, math.floor((ctx.w - tw) / 2), ty, title, 1, {scale: scale, spacing: scale})
-        sub = "Cube Graphics Library"
+        sub = sf.ellipsize(ctx.font, "Cube Graphics Library", ctx.w - 2, "..")
         sw = sf.measure(ctx.font, sub, 0, 1)
         ink:text(ctx.font, math.floor((ctx.w - sw) / 2), ty + 9 * scale + 6, sub, 1)
         for y in range[0, ctx.h - 1]:
