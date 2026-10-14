@@ -6,11 +6,21 @@
 # Размер терминала подгоняется под элемент (vt:resize, событие term_resize). Цвета терминала это места палитры 32..47 (ui.cells),
 # пиксельный вывод рисует их палитрой терминала CC; байты 128..159 (телетекст) рисуются блоками. Курсор рисуется инверсией, мигает,
 # если программа включила мигание.
+#
+# Как в обычном терминале: колесо мыши и Shift+Up/Down/PgUp/PgDn/Home/End листают назад (vt.hist), выделение мышью (двойной щелчок это
+# слово, тройной строка) копирует текст в буфер, правая или средняя кнопка и Shift+Insert вставляют его, Ctrl+Insert копирует. Мышь
+# достаётся программе, только если vt.mouse_app (на экране программа, а не строка ввода) и Shift не нажат. Ctrl+T это terminate.
+# Раскладки (Ctrl+Shift, Alt+Shift): см. input.layout.
 
 import ui.widget as widget
 import term.chars as chars
 import input.layout as layout_mod
 import unicode
+
+# буфер обмена терминала: общий для всех окон
+export const clipboard = {text: ""}
+
+const SCROLL_STEP = 3
 
 export class TermView(widget.Widget):
     # props.layouts: раскладки по кругу (по умолчанию en, ru, uk), Ctrl+Shift или Alt+Shift переключает
@@ -23,7 +33,16 @@ export class TermView(widget.Widget):
         self.raw_input = true
         self.captures_text = true
         self.palette_seen = 0
-        self.ctrl = false
+        self.mods = {ctrl: false, shift: false, alt: false}
+        # прокрутка назад: сколько строк от низа; выделение в общих номерах строк (vt:row_at)
+        self.offset = 0
+        self.sel_a = nil
+        self.sel_b = nil
+        self.selecting = false
+        self.program_drag = false
+        self.pushed_seen = vt.pushed
+        self.hist_seen = len(vt.hist)
+        self.last_click = {time: -10, row: 0, col: 0, count: 0}
         let me = self
         vt.on_change = (v, y) => me:invalidate()
 
@@ -35,28 +54,104 @@ export class TermView(widget.Widget):
             self.vt:resize(self.w, self.h)
             self:emit("event", "term_resize")
 
-    def raw_event(self, name, a, b):
-        # Ctrl+T это прерывание программы (событие terminate), как в CC
-        if name == "key":
-            if self.kbd:key(a):
-                self:_show_layout()
-        elif name == "key_up":
-            self.kbd:key_up(a)
-        if name == "key" and (a == keys.leftCtrl or a == keys.rightCtrl):
-            self.ctrl = true
-        elif name == "key_up" and (a == keys.leftCtrl or a == keys.rightCtrl):
-            self.ctrl = false
-        if name == "key" and a == keys.t and self.ctrl:
-            self:emit("event", "terminate")
-            return true
-        self:emit("event", name, a, b)
+    # ------------------------------------------------------------ прокрутка и выделение
+
+    def _max_offset(self):
+        return len(self.vt.hist)
+
+    def scroll_by(self, n):
+        self.offset = math.max(0, math.min(self:_max_offset(), self.offset + n))
+        self:invalidate()
+
+    def _top_row(self):
+        return len(self.vt.hist) - self.offset + 1
+
+    # клетка экрана (с 1) -> общий номер строки и колонка
+    def _cell_at(self, mx, my):
+        col = math.max(1, math.min(self.vt.w, mx - self.x + 1))
+        row = self:_top_row() + math.max(0, math.min(self.h - 1, my - self.y))
+        return row, col
+
+    def _sel_range(self):
+        if self.sel_a == nil or self.sel_b == nil:
+            return nil, nil
+        a = self.sel_a
+        b = self.sel_b
+        if a.row > b.row or (a.row == b.row and a.col > b.col):
+            return b, a
+        return a, b
+
+    def _selected(self, row, col):
+        a, b = self:_sel_range()
+        if a == nil:
+            return false
+        if row < a.row or row > b.row:
+            return false
+        if row == a.row and col < a.col:
+            return false
+        if row == b.row and col > b.col:
+            return false
         return true
 
-    def char(self, ch):
-        self:emit("event", "char", self.kbd:translate(ch))
-        return true
+    def clear_selection(self):
+        if self.sel_a != nil:
+            self.sel_a = nil
+            self.sel_b = nil
+            self:invalidate()
 
-    # индикатор раскладки в правом верхнем углу на 1.5 секунды после переключения
+    # выделенный текст (строки без пробелов справа, склеены переводами строк)
+    def selection_text(self):
+        a, b = self:_sel_range()
+        if a == nil:
+            return ""
+        lines = []
+        for row in range[a.row, b.row]:
+            t, f, bg = self.vt:row_at(row)
+            if t == nil:
+                break
+            first = 1
+            last = len(t)
+            if row == a.row:
+                first = a.col
+            if row == b.row:
+                last = b.col
+            cells = []
+            for x in range[first, math.min(last, len(t))]:
+                cells[len(cells) + 1] = t[x]
+            k = len(cells)
+            while k > 0 and (cells[k] == 32 or cells[k] == 0):
+                k -= 1
+            for i in range[1, k]:
+                if cells[i] >= chars.LATIN:
+                    cells[i] = cells[i] - chars.LATIN
+            lines[len(lines) + 1] = chars.encode(chars.slice(cells, 1, k))
+        return table.concat(lines, "\n")
+
+    def copy_selection(self):
+        text = self:selection_text()
+        if text != "":
+            clipboard.text = text
+        return text != ""
+
+    def paste(self):
+        if clipboard.text != "":
+            self:emit("event", "paste", clipboard.text)
+
+    # слово под клеткой: границы колонок
+    def _word_bounds(self, row, col):
+        t, f, bg = self.vt:row_at(row)
+        lo = col
+        hi = col
+        if t[col] == nil or t[col] == 32 or t[col] == 0:
+            return col, col
+        while lo > 1 and t[lo - 1] != 32 and t[lo - 1] != 0:
+            lo -= 1
+        while hi < len(t) and t[hi + 1] != 32 and t[hi + 1] != 0:
+            hi += 1
+        return lo, hi
+
+    # ------------------------------------------------------------ события
+
     def _show_layout(self):
         self.flash = true
         self:invalidate()
@@ -68,17 +163,146 @@ export class TermView(widget.Widget):
         self.flash = false
         self:invalidate()
 
+    def _track(self, code, down):
+        if code == keys.leftCtrl or code == keys.rightCtrl:
+            self.mods.ctrl = down
+        elif code == keys.leftShift or code == keys.rightShift:
+            self.mods.shift = down
+        elif code == keys.leftAlt or code == keys.rightAlt:
+            self.mods.alt = down
+
+    def raw_event(self, name, a, b):
+        if name == "key":
+            if self.kbd:key(a):
+                self:_show_layout()
+            self:_track(a, true)
+            if self.mods.shift and not self.mods.ctrl:
+                if a == keys.up:
+                    self:scroll_by(1)
+                    return true
+                if a == keys.down:
+                    self:scroll_by(-1)
+                    return true
+                if a == keys.pageUp:
+                    self:scroll_by(math.max(1, self.h - 1))
+                    return true
+                if a == keys.pageDown:
+                    self:scroll_by(-math.max(1, self.h - 1))
+                    return true
+                if a == keys.home:
+                    self:scroll_by(self:_max_offset())
+                    return true
+                if a == keys["end"]:
+                    self:scroll_by(-self:_max_offset())
+                    return true
+                if a == keys.insert:
+                    self:paste()
+                    return true
+            if self.mods.ctrl and a == keys.insert:
+                self:copy_selection()
+                return true
+            if self.mods.ctrl and a == keys.t:
+                self:emit("event", "terminate")
+                return true
+            is_mod = a == keys.leftCtrl or a == keys.rightCtrl or a == keys.leftShift or a == keys.rightShift or a == keys.leftAlt or a == keys.rightAlt
+            if not is_mod:
+                # любая другая клавиша возвращает вид вниз и снимает выделение
+                if self.offset > 0:
+                    self.offset = 0
+                    self:invalidate()
+                self:clear_selection()
+        elif name == "key_up":
+            self.kbd:key_up(a)
+            self:_track(a, false)
+        self:emit("event", name, a, b)
+        return true
+
+    def char(self, ch):
+        if self.offset > 0:
+            self.offset = 0
+            self:invalidate()
+        self:clear_selection()
+        self:emit("event", "char", self.kbd:translate(ch))
+        return true
+
     def mouse(self, kind, mx, my, button):
         x = mx - self.x + 1
         y = my - self.y + 1
+        to_program = self.vt.mouse_app and not self.mods.shift
+        if kind == "scroll":
+            if to_program:
+                self:emit("event", "mouse_scroll", button, x, y)
+            else:
+                # button: -1 вверх, 1 вниз
+                self:scroll_by(button < 0 and SCROLL_STEP or -SCROLL_STEP)
+            return true
         if kind == "down":
-            self:emit("event", "mouse_click", button, x, y)
-        elif kind == "drag":
-            self:emit("event", "mouse_drag", button, x, y)
-        elif kind == "up":
-            self:emit("event", "mouse_up", button, x, y)
-        elif kind == "scroll":
-            self:emit("event", "mouse_scroll", button, x, y)
+            if to_program:
+                self.program_drag = true
+                self:emit("event", "mouse_click", button, x, y)
+                return true
+            if button == 2 or button == 3:
+                self:paste()
+                return true
+            row, col = self:_cell_at(mx, my)
+            now = os.clock()
+            lc = self.last_click
+            if now - lc.time < 0.45 and lc.row == row and lc.col == col:
+                lc.count += 1
+            else:
+                lc.count = 1
+            lc.time = now
+            lc.row = row
+            lc.col = col
+            if lc.count == 2:
+                lo, hi = self:_word_bounds(row, col)
+                self.sel_a = {row: row, col: lo}
+                self.sel_b = {row: row, col: hi}
+                self.selecting = false
+                self:copy_selection()
+            elif lc.count >= 3:
+                self.sel_a = {row: row, col: 1}
+                self.sel_b = {row: row, col: self.vt.w}
+                self.selecting = false
+                lc.count = 0
+                self:copy_selection()
+            else:
+                self.sel_a = {row: row, col: col}
+                self.sel_b = {row: row, col: col}
+                self.selecting = true
+            self:invalidate()
+            return true
+        if kind == "drag":
+            if self.program_drag:
+                self:emit("event", "mouse_drag", button, x, y)
+                return true
+            if self.selecting:
+                # у края вид сам едет
+                if my < self.y:
+                    self:scroll_by(1)
+                elif my >= self.y + self.h:
+                    self:scroll_by(-1)
+                row, col = self:_cell_at(mx, my)
+                self.sel_b = {row: row, col: col}
+                self:invalidate()
+            return true
+        if kind == "up":
+            if self.program_drag:
+                self.program_drag = false
+                self:emit("event", "mouse_up", button, x, y)
+                return true
+            if self.selecting:
+                self.selecting = false
+                a = self.sel_a
+                b = self.sel_b
+                if a != nil and b != nil and a.row == b.row and a.col == b.col:
+                    # простой щелчок: выделения нет
+                    self.sel_a = nil
+                    self.sel_b = nil
+                else:
+                    self:copy_selection()
+                self:invalidate()
+            return true
         return true
 
     def hints(self):
@@ -91,24 +315,59 @@ export class TermView(widget.Widget):
             out[i] = [p[1], p[2], p[3]]
         return out
 
+    # ------------------------------------------------------------ рисование
+
+    def _sync_history(self):
+        vt = self.vt
+        d = vt.pushed - self.pushed_seen
+        if d > 0:
+            grown = len(vt.hist) - self.hist_seen
+            trimmed = d - grown
+            if self.offset > 0:
+                self.offset = math.min(len(vt.hist), self.offset + d)
+            if trimmed > 0 and self.sel_a != nil:
+                self.sel_a.row -= trimmed
+                self.sel_b.row -= trimmed
+                if self.sel_a.row < 1 or self.sel_b.row < 1:
+                    self.sel_a = nil
+                    self.sel_b = nil
+            self.pushed_seen = vt.pushed
+            self.hist_seen = len(vt.hist)
+        if self.offset > len(vt.hist):
+            self.offset = len(vt.hist)
+
     def _draw(self, c, t):
         vt = self.vt
         if self.palette_seen != vt.palette_rev and self.ui != nil and self.ui.out.set_term_palette != nil:
             self.palette_seen = vt.palette_rev
             self.ui.out:set_term_palette(self:_palette_list())
-        rows = math.min(vt.h, self.h)
+        self:_sync_history()
+        rows = math.min(self.h, vt.h)
         cols = math.min(vt.w, self.w)
+        top = self:_top_row()
+        have_sel = self.sel_a != nil
         for y in range[1, rows]:
-            tt = vt.text[y]
-            ff = vt.fg[y]
-            bb = vt.bg[y]
-            for x in range[1, cols]:
-                c:set(self.x + x - 1, self.y + y - 1, chars.to_cp(tt[x]), 32 + ff[x], 32 + bb[x])
-        if self.flash:
+            row = top + y - 1
+            tt, ff, bb = vt:row_at(row)
+            if tt != nil:
+                for x in range[1, cols]:
+                    v = tt[x] ?? 32
+                    f = ff[x] ?? 0
+                    b = bb[x] ?? 15
+                    if have_sel and self:_selected(row, x):
+                        c:set(self.x + x - 1, self.y + y - 1, chars.to_cp(v), 32, 32 + 11)
+                    else:
+                        c:set(self.x + x - 1, self.y + y - 1, chars.to_cp(v), 32 + f, 32 + b)
+        if self.offset > 0:
+            label = " ↑ " .. self.offset .. " "
+            n = unicode.length(label)
+            for i, cp in unicode.codepoints(label):
+                c:set(self.x + self.w - n + i - 1, self.y, cp, 0, 7)
+        elif self.flash:
             label = " " .. self.kbd:label() .. " "
             for i, cp in unicode.codepoints(label):
                 c:set(self.x + self.w - 4 + i - 1, self.y, cp, 0, 7)
-        if vt.blink and self.focused and (self.ui == nil or self.ui.blink):
+        if self.offset == 0 and vt.blink and self.focused and (self.ui == nil or self.ui.blink):
             if vt.cx >= 1 and vt.cx <= cols and vt.cy >= 1 and vt.cy <= rows:
                 cx = self.x + vt.cx - 1
                 cy = self.y + vt.cy - 1

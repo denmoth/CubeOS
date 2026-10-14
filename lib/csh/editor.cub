@@ -1,0 +1,556 @@
+# csh.editor: строка ввода оболочки: приглашение, подсветка, серая подсказка из истории, выделение Shift+стрелками, Ctrl+R, Tab
+#
+#   ed = editor.new(env, {hist: h, prompt: () => [{text, color}...], highlight: (line) => строка цветов, complete: (line, pos) => ...})
+#   ed:begin()                  рисует приглашение и пустую строку
+#   r, text = ed:feed(name, a, b, c)   одно событие CC; возвращает "line" и текст, когда нажат Enter, "interrupt" при Ctrl+C,
+#                               "eof" при Ctrl+D на пустой строке, иначе nil
+#
+# Цвета это буквы палитры CC ("0".."f"), по букве на символ строки. Редактор рисует только через env.term (текущий терминал), поэтому
+# работает на виртуальном и настоящем терминале. Курсор считается в символах (кириллица это один символ).
+
+import unicode
+import term.chars as chars
+
+const HEX = "0123456789abcdef"
+
+def _color(letter):
+    i = string.find(HEX, letter, 1, true)
+    return 2 ** (i - 1)
+
+export class Editor:
+    # opts: hist (csh.hist), prompt (функция -> список {text, color}), highlight (строка -> строка цветов по байтам), complete
+    # (строка, позиция в символах -> список вариантов {insert, label, color} и длина заменяемого слова)
+    def init(self, env, opts=nil):
+        o = opts ?? {}
+        self.env = env
+        self.hist = o.hist
+        self.prompt_fn = o.prompt
+        self.highlight_fn = o.highlight
+        self.complete_fn = o.complete
+        self.line = []
+        self.pos = 0
+        self.anchor = nil
+        self.sx = 1
+        self.sy = 1
+        self.drawn_rows = 1
+        self.hist_index = nil
+        self.saved = nil
+        self.search = nil
+        self.tab_count = 0
+        self.mods = {shift: false, ctrl: false, alt: false}
+        self.active = false
+
+    def text(self):
+        return table.concat(self.line)
+
+    def set_text(self, s):
+        self.line = unicode.chars(s)
+        self.pos = len(self.line)
+        self.anchor = nil
+
+    def begin(self):
+        term = self.env.term
+        x, y = term.getCursorPos()
+        if x > 1:
+            self:_newline()
+            x, y = term.getCursorPos()
+        self.sx = 1
+        self.sy = y
+        self.line = []
+        self.pos = 0
+        self.anchor = nil
+        self.hist_index = nil
+        self.search = nil
+        self.drawn_rows = 1
+        self.tab_count = 0
+        self.active = true
+        self:redraw()
+
+    def _newline(self):
+        term = self.env.term
+        x, y = term.getCursorPos()
+        w, h = term.getSize()
+        if y + 1 <= h:
+            term.setCursorPos(1, y + 1)
+        else:
+            term.setCursorPos(1, h)
+            term.scroll(1)
+
+    # ------------------------------------------------------------ рисование
+
+    def _prompt_cells(self):
+        segs = []
+        if self.prompt_fn != nil:
+            segs = self.prompt_fn()
+        cells = []
+        colors = []
+        for sg in segs:
+            for ch in unicode.chars(sg.text):
+                cells[len(cells) + 1] = ch
+                colors[len(colors) + 1] = sg.color ?? "0"
+        return cells, colors
+
+    # цвета символов строки (по букве на символ) из функции подсветки по байтам
+    def _line_colors(self, text):
+        n = len(self.line)
+        out = []
+        by = nil
+        if self.highlight_fn != nil:
+            by = self.highlight_fn(text)
+        k = 1
+        for i in range[1, n]:
+            c = "0"
+            if by != nil:
+                c = string.sub(by, k, k)
+                if c == "":
+                    c = "0"
+            out[i] = c
+            k += string.len(self.line[i])
+        return out
+
+    def _ghost(self):
+        if self.hist == nil or self.search != nil or self.pos != len(self.line) or len(self.line) == 0:
+            return nil
+        return self.hist:suggest(self:text())
+
+    def redraw(self):
+        term = self.env.term
+        w, h = term.getSize()
+        pcells, pcolors = self:_prompt_cells()
+        pw = len(pcells)
+        text = self:text()
+        lcolors = self:_line_colors(text)
+        ghost = self:_ghost()
+        gcells = []
+        if ghost != nil:
+            gcells = unicode.chars(ghost)
+        total = pw + len(self.line) + len(gcells)
+        rows = math.floor(total / w) + 1
+        if self.search != nil:
+            rows = 1
+        # на последней строке экрана строка может не поместиться: прокручиваем
+        over = self.sy + rows - 1 - h
+        if over > 0:
+            term.setCursorPos(1, h)
+            term.scroll(over)
+            self.sy -= over
+        clear_rows = math.max(rows, self.drawn_rows)
+        for r in range[0, clear_rows - 1]:
+            if self.sy + r <= h:
+                term.setCursorPos(1, self.sy + r)
+                term.clearLine()
+        self.drawn_rows = rows
+        old_fg = term.getTextColor()
+        old_bg = term.getBackgroundColor()
+        sel_lo = nil
+        sel_hi = nil
+        if self.anchor != nil and self.anchor != self.pos:
+            sel_lo = math.min(self.anchor, self.pos)
+            sel_hi = math.max(self.anchor, self.pos)
+        if self.search != nil:
+            label = "(поиск) `" .. self.search.query .. "': "
+            term.setCursorPos(1, self.sy)
+            term.setTextColor(_color("9"))
+            term.write(label)
+            term.setTextColor(_color("0"))
+            term.write(self.search.found ?? "")
+            term.setCursorPos(math.min(w, chars.length(label) + 1), self.sy)
+            term.setTextColor(old_fg)
+            term.setBackgroundColor(old_bg)
+            return
+        # все клетки подряд: приглашение, строка, подсказка; серии одного цвета в одной строке экрана пишутся одним вызовом
+        i = 1
+        nline = len(self.line)
+        while i <= total:
+            row = self.sy + math.floor((i - 1) / w)
+            col = (i - 1) % w + 1
+            if row > h:
+                break
+            run = []
+            color = nil
+            selected = false
+            j = i
+            while j <= total and math.floor((j - 1) / w) == math.floor((i - 1) / w):
+                ch = nil
+                c = nil
+                sel = false
+                if j <= pw:
+                    ch = pcells[j]
+                    c = pcolors[j]
+                elif j <= pw + nline:
+                    idx = j - pw
+                    ch = self.line[idx]
+                    c = lcolors[idx]
+                    sel = sel_lo != nil and idx > sel_lo and idx <= sel_hi
+                else:
+                    ch = gcells[j - pw - nline]
+                    c = "7"
+                if color == nil:
+                    color = c
+                    selected = sel
+                if c != color or sel != selected:
+                    break
+                run[len(run) + 1] = ch
+                j += 1
+            term.setCursorPos(col, row)
+            if selected:
+                term.setBackgroundColor(_color("b"))
+                term.setTextColor(_color("0"))
+            else:
+                term.setBackgroundColor(old_bg)
+                term.setTextColor(_color(color))
+            term.write(table.concat(run))
+            i = j
+        term.setBackgroundColor(old_bg)
+        term.setTextColor(old_fg)
+        cur = pw + self.pos
+        crow = self.sy + math.floor(cur / w)
+        ccol = cur % w + 1
+        term.setCursorPos(ccol, math.min(crow, h))
+        term.setCursorBlink(true)
+
+    # ------------------------------------------------------------ правка
+
+    def _selection(self):
+        if self.anchor == nil or self.anchor == self.pos:
+            return nil, nil
+        return math.min(self.anchor, self.pos), math.max(self.anchor, self.pos)
+
+    def _delete_range(self, lo, hi):
+        out = []
+        for i in range[1, len(self.line)]:
+            if i < lo or i > hi:
+                out[len(out) + 1] = self.line[i]
+        self.line = out
+
+    def _delete_selection(self):
+        lo, hi = self:_selection()
+        if lo == nil:
+            return false
+        self:_delete_range(lo + 1, hi)
+        self.pos = lo
+        self.anchor = nil
+        return true
+
+    def _insert(self, s):
+        self:_delete_selection()
+        ins = unicode.chars(s)
+        out = []
+        for i in range[1, self.pos]:
+            out[len(out) + 1] = self.line[i]
+        for ch in ins:
+            out[len(out) + 1] = ch
+        for i in range[self.pos + 1, len(self.line)]:
+            out[len(out) + 1] = self.line[i]
+        self.line = out
+        self.pos += len(ins)
+
+    def _move(self, to, select):
+        if select:
+            if self.anchor == nil:
+                self.anchor = self.pos
+        else:
+            self.anchor = nil
+        self.pos = math.max(0, math.min(len(self.line), to))
+
+    def _word_left(self, at):
+        p = at
+        while p > 0 and self.line[p] == " ":
+            p -= 1
+        while p > 0 and self.line[p] != " ":
+            p -= 1
+        return p
+
+    def _word_right(self, at):
+        p = at
+        n = len(self.line)
+        while p < n and self.line[p + 1] == " ":
+            p += 1
+        while p < n and self.line[p + 1] != " ":
+            p += 1
+        return p
+
+    def _history_move(self, dir):
+        if self.hist == nil:
+            return
+        items = self.hist.items
+        if dir < 0:
+            if self.hist_index == nil:
+                self.saved = self:text()
+                self.hist_index = len(items) + 1
+            if self.hist_index > 1:
+                self.hist_index -= 1
+                self:set_text(items[self.hist_index])
+        else:
+            if self.hist_index != nil:
+                self.hist_index += 1
+                if self.hist_index > len(items):
+                    self.hist_index = nil
+                    self:set_text(self.saved ?? "")
+                else:
+                    self:set_text(items[self.hist_index])
+
+    def _replace_word(self, word_len, repl):
+        out = []
+        start = self.pos - word_len
+        for i in range[1, start]:
+            out[len(out) + 1] = self.line[i]
+        for ch in unicode.chars(repl):
+            out[len(out) + 1] = ch
+        n = len(out)
+        for i in range[self.pos + 1, len(self.line)]:
+            out[len(out) + 1] = self.line[i]
+        self.line = out
+        self.pos = n
+        self.anchor = nil
+
+    # Tab: дополнение слова; два раза подряд при нескольких вариантах печатает список
+    def _complete(self):
+        if self.complete_fn == nil:
+            return
+        cands, word_len = self.complete_fn(self:text(), self.pos)
+        if cands == nil or len(cands) == 0:
+            return
+        if len(cands) == 1:
+            self:_replace_word(word_len, cands[1].insert)
+            self.tab_count = 0
+            return
+        base = unicode.chars(cands[1].insert)
+        for c in cands:
+            b = unicode.chars(c.insert)
+            k = 0
+            while k < len(base) and k < len(b) and base[k + 1] == b[k + 1]:
+                k += 1
+            base = chars_prefix(base, k)
+        if len(base) > word_len:
+            self:_replace_word(word_len, table.concat(base))
+            self.tab_count = 0
+        else:
+            self.tab_count += 1
+            if self.tab_count >= 2:
+                self:_show_candidates(cands)
+                self.tab_count = 0
+
+    # печатает варианты колонками под строкой и начинает строку ввода заново
+    def _show_candidates(self, cands):
+        term = self.env.term
+        w, h = term.getSize()
+        self.pos = len(self.line)
+        self:redraw()
+        self:_newline_from_end()
+        widest = 0
+        for c in cands:
+            widest = math.max(widest, chars.length(c.label))
+        colw = widest + 2
+        per = math.max(1, math.floor(w / colw))
+        n = 0
+        for c in cands:
+            term.setTextColor(_color(c.color ?? "0"))
+            term.write(c.label .. string.rep(" ", colw - chars.length(c.label)))
+            n += 1
+            if n % per == 0:
+                self:_newline()
+        if n % per != 0:
+            self:_newline()
+        term.setTextColor(_color("0"))
+        x, y = term.getCursorPos()
+        self.sy = y
+        self.drawn_rows = 1
+        self:redraw()
+
+    def _newline_from_end(self):
+        term = self.env.term
+        w, h = term.getSize()
+        pcells, pc = self:_prompt_cells()
+        cur = len(pcells) + len(self.line)
+        row = self.sy + math.floor(cur / w)
+        if row > h:
+            row = h
+        term.setCursorPos(1, row)
+        self:_newline()
+
+    # ------------------------------------------------------------ события
+
+    def _track(self, code, down):
+        if code == keys.leftShift or code == keys.rightShift:
+            self.mods.shift = down
+        elif code == keys.leftCtrl or code == keys.rightCtrl:
+            self.mods.ctrl = down
+        elif code == keys.leftAlt or code == keys.rightAlt:
+            self.mods.alt = down
+
+    def feed(self, name, a=nil, b=nil, c=nil):
+        if name == "key_up":
+            self:_track(a, false)
+            return nil
+        if name == "term_resize":
+            self:redraw()
+            return nil
+        if name == "paste":
+            first = string.match(a, "^[^\n]*")
+            self:_insert(first)
+            self:redraw()
+            return nil
+        if name == "char":
+            if self.search != nil:
+                self.search.query = self.search.query .. a
+                self.search.from = nil
+                self:_search_update()
+                self:redraw()
+                return nil
+            self:_insert(a)
+            self.hist_index = nil
+            self.tab_count = 0
+            self:redraw()
+            return nil
+        if name != "key":
+            return nil
+        self:_track(a, true)
+        return self:_key(a)
+
+    def _search_update(self):
+        s = self.search
+        idx, found = self.hist:search(s.query, s.from)
+        if idx != nil:
+            s.index = idx
+            s.found = found
+        else:
+            s.found = ""
+
+    def _finish(self):
+        self.active = false
+        self:redraw_final()
+        return "line", self:text()
+
+    def _key(self, code):
+        shift = self.mods.shift
+        ctrl = self.mods.ctrl
+        if self.search != nil:
+            return self:_search_key(code)
+        if code == keys.enter or code == keys.numPadEnter:
+            return self:_finish()
+        if ctrl and code == keys.c:
+            self.active = false
+            self:redraw_final()
+            return "interrupt"
+        if ctrl and code == keys.d:
+            if len(self.line) == 0:
+                self.active = false
+                return "eof"
+            self:_delete_forward()
+            self:redraw()
+            return nil
+        if ctrl and code == keys.l:
+            self.env.term.clear()
+            self.env.term.setCursorPos(1, 1)
+            self.sy = 1
+            self.drawn_rows = 1
+            self:redraw()
+            return nil
+        if ctrl and code == keys.r:
+            if self.hist != nil:
+                self.search = {query: "", found: "", index: nil, from: nil}
+                self:redraw()
+            return nil
+        if code == keys.left:
+            if ctrl:
+                self:_move(self:_word_left(self.pos), shift)
+            else:
+                self:_move(self.pos - 1, shift)
+        elif code == keys.right:
+            if self.pos == len(self.line) and not shift and self:_ghost() != nil:
+                self:_insert(self:_ghost())
+            elif ctrl:
+                self:_move(self:_word_right(self.pos), shift)
+            else:
+                self:_move(self.pos + 1, shift)
+        elif code == keys.home or (ctrl and code == keys.a):
+            self:_move(0, shift)
+        elif code == keys["end"] or (ctrl and code == keys.e):
+            if self.pos == len(self.line) and not shift and self:_ghost() != nil:
+                self:_insert(self:_ghost())
+            else:
+                self:_move(len(self.line), shift)
+        elif code == keys.up:
+            if not shift:
+                self:_history_move(-1)
+        elif code == keys.down:
+            if not shift:
+                self:_history_move(1)
+        elif code == keys.backspace:
+            if not self:_delete_selection() and self.pos > 0:
+                self:_delete_range(self.pos, self.pos)
+                self.pos -= 1
+        elif code == keys.delete:
+            self:_delete_forward()
+        elif ctrl and code == keys.w:
+            to = self:_word_left(self.pos)
+            if to < self.pos:
+                self:_delete_range(to + 1, self.pos)
+                self.pos = to
+        elif ctrl and code == keys.u:
+            self:_delete_range(1, self.pos)
+            self.pos = 0
+        elif ctrl and code == keys.k:
+            self:_delete_range(self.pos + 1, len(self.line))
+        elif code == keys.tab:
+            self:_complete()
+        else:
+            return nil
+        if code != keys.tab:
+            self.tab_count = 0
+        self:redraw()
+        return nil
+
+    def _delete_forward(self):
+        if not self:_delete_selection() and self.pos < len(self.line):
+            self:_delete_range(self.pos + 1, self.pos + 1)
+
+    def _search_key(self, code):
+        s = self.search
+        enter = code == keys.enter or code == keys.numPadEnter
+        if enter or code == keys.tab or code == keys.right:
+            if s.found != nil and s.found != "":
+                self:set_text(s.found)
+            self.search = nil
+            if enter:
+                return self:_finish()
+            self:redraw()
+            return nil
+        if self.mods.ctrl and code == keys.r:
+            if s.index != nil and s.index > 1:
+                s.from = s.index - 1
+                self:_search_update()
+            self:redraw()
+            return nil
+        if code == keys.backspace:
+            if string.len(s.query) > 0:
+                s.query = unicode.sub(s.query, 1, unicode.length(s.query) - 1)
+                s.from = nil
+                self:_search_update()
+        elif code == keys.escape or code == keys.up or code == keys.down or code == keys.left or (self.mods.ctrl and (code == keys.c or code == keys.g)):
+            self.search = nil
+        self:redraw()
+        return nil
+
+    # после Enter: убирает серую подсказку и выделение, курсор в конец строки, перевод строки
+    def redraw_final(self):
+        self.anchor = nil
+        self.hist_index = nil
+        saved = self.hist
+        self.hist = nil
+        self.search = nil
+        self:redraw()
+        self.hist = saved
+        self.pos = len(self.line)
+        self:_newline_from_end()
+        self.env.term.setCursorBlink(false)
+
+def chars_prefix(list, k):
+    out = []
+    for i in range[1, k]:
+        out[i] = list[i]
+    return out
+
+export def new(env, opts=nil):
+    return Editor(env, opts)

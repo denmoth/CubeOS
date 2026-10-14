@@ -1,0 +1,79 @@
+# csh.hist: история команд оболочки: в памяти и в файле между запусками
+#
+#   h = hist.new(env.fs, "/.csh_history", 1000)       читает файл, если он есть
+#   h:add("ls -l")                                    запоминает (пустые и повтор предыдущей не пишутся) и дописывает в файл
+#   h:suggest("ls")                                   последняя команда, которая начинается с этого текста (для серой подсказки)
+#   h:search("grep", upto)                            обратный поиск подстроки: номер записи не позже upto и сама запись
+#   h.items                                           список записей, старые первыми
+
+export class Hist:
+    def init(self, fs, path=nil, limit=1000):
+        self.fs = fs
+        self.path = path
+        self.limit = limit
+        self.items = []
+        if path != nil and fs != nil and fs.exists(path) and not fs.isDir(path):
+            f = fs.open(path, "r")
+            if f != nil:
+                while true:
+                    line = f.readLine()
+                    if line == nil:
+                        break
+                    if line != "":
+                        self.items[len(self.items) + 1] = line
+                f.close()
+        if len(self.items) > limit * 2:
+            # файл вырос: оставляем последние limit записей
+            keep = []
+            for i in range[len(self.items) - limit + 1, len(self.items)]:
+                keep[len(keep) + 1] = self.items[i]
+            self.items = keep
+            self:_rewrite()
+
+    def _rewrite(self):
+        if self.path == nil or self.fs == nil:
+            return
+        f = self.fs.open(self.path, "w")
+        if f != nil:
+            for line in self.items:
+                f.writeLine(line)
+            f.close()
+
+    def add(self, line):
+        if line == "" or string.sub(line, 1, 1) == " ":
+            return
+        n = len(self.items)
+        if n > 0 and self.items[n] == line:
+            return
+        self.items[n + 1] = line
+        if self.path != nil and self.fs != nil:
+            f = self.fs.open(self.path, "a")
+            if f != nil:
+                f.writeLine(line)
+                f.close()
+
+    def clear(self):
+        self.items = []
+        self:_rewrite()
+
+    # последняя запись, которая начинается с prefix и длиннее его (остаток для серой подсказки)
+    def suggest(self, prefix):
+        if prefix == "":
+            return nil
+        n = string.len(prefix)
+        for i in range[len(self.items), 1] step -1:
+            it = self.items[i]
+            if string.len(it) > n and string.sub(it, 1, n) == prefix:
+                return string.sub(it, n + 1)
+        return nil
+
+    # поиск подстроки назад от записи upto (по умолчанию с последней): номер и запись или nil
+    def search(self, text, upto=nil):
+        start = upto ?? len(self.items)
+        for i in range[start, 1] step -1:
+            if string.find(self.items[i], text, 1, true) != nil:
+                return i, self.items[i]
+        return nil, nil
+
+export def new(fs, path=nil, limit=1000):
+    return Hist(fs, path, limit)

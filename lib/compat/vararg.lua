@@ -42,4 +42,15 @@ function M.call_packed(fn, ...)
   return M.pack(pcall(fn, ...))
 end
 
+-- ждать событие у хозяина и вернуть его упакованным (фильтр не нужен, оболочка сама раздаёт события задачам)
+function M.pull_packed(filter)
+  return M.pack(coroutine.yield(filter))
+end
+
+-- возобновить корутину событием ev (упакованным; nil при первом запуске): ok, первое значение (фильтр), остальное отбрасывается
+function M.resume(co, ev)
+  if ev == nil then return coroutine.resume(co) end
+  return coroutine.resume(co, table.unpack(ev, 1, ev.n))
+end
+
 return M

@@ -1,0 +1,167 @@
+# csh.lex: разбор командной строки оболочки CubeOS
+#
+#   toks = lex.tokens("ls -l | grep 'a b' > out.txt &")          список {kind, s, e, raw}: kind это word или op, s и e границы в строке
+#   v, glob = lex.expand(raw, vars)                                слово после кавычек, $ПЕРЕМЕННЫХ и ~: строка и есть ли звёздочки вне кавычек
+#   seq = lex.parse(toks)                                          список «цепочек»: {stages, sep}; sep это ";" "&&" "||" "&" или nil
+#   stage = {words: [raw...], redirs: [{op, target}]}
+#
+# Операторы: | || && & ; > >> <. Кавычки '...' (всё как есть) и "..." (подстановка $), обратная косая чёрта экранирует символ.
+# Внутри строки пишется всё в UTF-8, поэтому границы считаются по байтам.
+
+const OPS = {"|": true, "&": true, ";": true, ">": true, "<": true}
+
+# токены строки; незакрытая кавычка просто идёт до конца строки (для подсветки при наборе)
+export def tokens(line):
+    out = []
+    n = string.len(line)
+    i = 1
+    while i <= n:
+        c = string.sub(line, i, i)
+        if c == " " or c == "\t":
+            i += 1
+        elif c == "#" and (i == 1 or string.sub(line, i - 1, i - 1) == " "):
+            out[len(out) + 1] = {kind: "comment", s: i, e: n, raw: string.sub(line, i)}
+            i = n + 1
+        elif OPS[c] != nil:
+            two = string.sub(line, i, i + 1)
+            if two == "||" or two == "&&" or two == ">>":
+                out[len(out) + 1] = {kind: "op", s: i, e: i + 1, raw: two}
+                i += 2
+            else:
+                out[len(out) + 1] = {kind: "op", s: i, e: i, raw: c}
+                i += 1
+        else:
+            start = i
+            quote = nil
+            while i <= n:
+                c = string.sub(line, i, i)
+                if quote != nil:
+                    if c == "\\" and quote == "\"" and i < n:
+                        i += 1
+                    elif c == quote:
+                        quote = nil
+                elif c == "'" or c == "\"":
+                    quote = c
+                elif c == "\\" and i < n:
+                    i += 1
+                elif c == " " or c == "\t" or OPS[c] != nil:
+                    break
+                i += 1
+            out[len(out) + 1] = {kind: "word", s: start, e: i - 1, raw: string.sub(line, start, i - 1)}
+    return out
+
+# значение переменной окружения оболочки
+def _var(vars, name):
+    v = vars[name]
+    if v == nil:
+        return ""
+    return tostring(v)
+
+# слово без кавычек: подставляет $NAME, ${NAME}, $?, ведущую ~ (домашняя папка из vars.HOME)
+export def expand(raw, vars):
+    out = []
+    n = string.len(raw)
+    i = 1
+    glob = false
+    if string.sub(raw, 1, 1) == "~" and (n == 1 or string.sub(raw, 2, 2) == "/"):
+        out[1] = _var(vars, "HOME")
+        i = 2
+    quote = nil
+    while i <= n:
+        c = string.sub(raw, i, i)
+        if quote == "'":
+            if c == "'":
+                quote = nil
+            else:
+                out[len(out) + 1] = c
+        elif c == "\\" and i < n:
+            i += 1
+            out[len(out) + 1] = string.sub(raw, i, i)
+        elif c == "'" and quote == nil:
+            quote = "'"
+        elif c == "\"":
+            if quote == "\"":
+                quote = nil
+            else:
+                quote = "\""
+        elif c == "$":
+            nxt = string.sub(raw, i + 1, i + 1)
+            if nxt == "{":
+                close = string.find(raw, "}", i + 2, true)
+                if close != nil:
+                    out[len(out) + 1] = _var(vars, string.sub(raw, i + 2, close - 1))
+                    i = close
+                else:
+                    out[len(out) + 1] = c
+            elif nxt == "?":
+                out[len(out) + 1] = _var(vars, "?")
+                i += 1
+            else:
+                name = string.match(raw, "^[%a_][%w_]*", i + 1)
+                if name != nil:
+                    out[len(out) + 1] = _var(vars, name)
+                    i += string.len(name)
+                else:
+                    out[len(out) + 1] = c
+        else:
+            if quote == nil and (c == "*" or c == "?"):
+                glob = true
+            out[len(out) + 1] = c
+        i += 1
+    return table.concat(out), glob
+
+# токены -> список цепочек; ошибка разбора это (nil, сообщение)
+export def parse(toks):
+    chains = []
+    stages = []
+    stage = {words: [], redirs: []}
+    i = 1
+    n = len(toks)
+    piped = false
+    def finish_stage():
+        if len(stage.words) == 0 and len(stage.redirs) == 0:
+            return false
+        stages[len(stages) + 1] = stage
+        return true
+    while i <= n:
+        tk = toks[i]
+        if tk.kind == "comment":
+            i += 1
+        elif tk.kind == "word":
+            stage.words[len(stage.words) + 1] = tk.raw
+            piped = false
+            i += 1
+        else:
+            op = tk.raw
+            if op == ">" or op == ">>" or op == "<":
+                nxt = toks[i + 1]
+                if nxt == nil or nxt.kind != "word":
+                    return nil, "syntax error: expected a file name after '" .. op .. "'"
+                stage.redirs[len(stage.redirs) + 1] = {op: op, target: nxt.raw}
+                i += 2
+            elif op == "|":
+                if not finish_stage():
+                    return nil, "syntax error near '|'"
+                stage = {words: [], redirs: []}
+                piped = true
+                i += 1
+            else:
+                # ; && || &  завершают цепочку
+                if not finish_stage():
+                    if op == ";" and len(stages) == 0:
+                        i += 1
+                    else:
+                        return nil, "syntax error near '" .. op .. "'"
+                    stage = {words: [], redirs: []}
+                else:
+                    chains[len(chains) + 1] = {stages: stages, sep: op}
+                    stages = []
+                    stage = {words: [], redirs: []}
+                    i += 1
+    if piped and len(stage.words) == 0 and len(stage.redirs) == 0:
+        return nil, "syntax error: expected a command after '|'"
+    if len(stage.words) > 0 or len(stage.redirs) > 0:
+        stages[len(stages) + 1] = stage
+    if len(stages) > 0:
+        chains[len(chains) + 1] = {stages: stages, sep: nil}
+    return chains, nil

@@ -1,0 +1,800 @@
+# csh.shell: оболочка CubeOS (csh) для окружения совместимости CraftOS
+#
+#   csh.main(env, args)       главная функция процесса (compat.proc: opts.main); env.csh_opts: history_path, user, host, info, greeting
+#
+# Оболочка сама раздаёт события: внутри корутины процесса она держит задачи (корутины) и редактор строки. Переднего плана ровно
+# одна задача, остальные фоновые (команда с &); ввод идёт только переднему плану, прочие события всем. Строка разбирается csh.lex:
+# пайпы (| захватывает вывод одной команды и отдаёт строками следующей), перенаправления > >> <, цепочки ; && ||, & фон,
+# переменные, псевдонимы, шаблоны * и ?. Программы CraftOS запускаются как os.run (bios.run_program) с настоящим API shell.
+#
+# Задача на момент возобновления получает свой терминал (term.redirect), свой ввод (env.stdin) и признак пайпа (sh.piped); после
+# возврата управления оболочка снова ставит на место экран. Поэтому вывод пайпа не попадает в чужие задачи.
+
+import compat.bios as bios
+import compat.vararg as va
+import term.vterm as vterm
+import term.chars as chars
+import csh.lex as lex
+import csh.hist as hist_mod
+import csh.editor as editor_mod
+import csh.builtins as builtins
+import csh.fetch as fetch
+import version
+import unicode
+
+# события ввода: идут только переднему плану (или редактору, если задач нет)
+const INPUT = {key: true, key_up: true, char: true, paste: true, mouse_click: true, mouse_drag: true, mouse_up: true,
+    mouse_scroll: true, monitor_touch: true, term_resize: true}
+
+# каталоги программ, если они есть в ROM
+const ROM_DIRS = ["rom/programs", "rom/programs/advanced", "rom/programs/rednet", "rom/programs/http", "rom/programs/fun",
+    "rom/programs/fun/advanced", "rom/programs/pocket", "rom/programs/command"]
+
+const DEFAULT_ALIASES = {dir: "ls", ll: "ls -l", la: "ls -a", cls: "clear", clr: "clear", copy: "cp", move: "mv", delete: "rm",
+    rename: "mv", ff: "fetch", neofetch: "fetch", fastfetch: "fetch", man: "/rom/programs/help", rs: "redstone", pr: "print",
+    vi: "edit", nano: "edit"}
+
+def letter_color(letter):
+    return 2 ** (string.find("0123456789abcdef", letter, 1, true) - 1)
+
+# ---------------------------------------------------------------- API shell для программ CraftOS
+
+def api_run(sh, args, n):
+    words = []
+    for i in range[1, n]:
+        words[i] = tostring(args[i])
+    return sh:run_text(table.concat(words, " ")) == 0
+
+def api_execute(sh, args, n):
+    argv = []
+    for i in range[1, n]:
+        argv[i] = tostring(args[i])
+    if len(argv) == 0:
+        return false
+    return sh:run_command(argv) == 0
+
+def make_api(sh, program):
+    api = {}
+    api.run = va.variadic(sh, api_run)
+    api.execute = va.variadic(sh, api_execute)
+    api.exit = () => sh:request_exit()
+    api.dir = () => sh.dir
+    api.setDir = (d) => sh:set_dir(d)
+    api.path = () => sh.path
+    api.setPath = (p) => sh:set_path(p)
+    api.resolve = (p) => sh:resolve(p)
+    api.resolveProgram = (name) => sh:resolve_program(name)
+    api.programs = (hidden) => sh:program_names()
+    api.aliases = () => sh.aliases
+    api.setAlias = (a, c) => sh:set_alias(a, c)
+    api.clearAlias = (a) => sh:set_alias(a, nil)
+    api.getRunningProgram = () => program
+    api.complete = (line) => []
+    api.completeProgram = (line) => []
+    api.setCompletionFunction = (p, f) => nil
+    api.getCompletionInfo = () => {}
+    api.setTitle = (t) => nil
+    api.getTitle = () => "csh"
+    return api
+
+# ---------------------------------------------------------------- оболочка
+
+export class Shell:
+    def init(self, env, opts=nil):
+        o = opts ?? {}
+        self.env = env
+        self.opts = o
+        self.info = o.info
+        self.vars = {HOME: o.home ?? "/", USER: o.user ?? "user", HOST: o.host ?? "cubeos", SHELL: "csh", "?": 0}
+        self.vars.PWD = "/"
+        self.aliases = {}
+        for k, v in DEFAULT_ALIASES:
+            self.aliases[k] = v
+        self.dir = ""
+        self.path = ".:/rom/programs"
+        self.jobs = []
+        self.next_id = 1
+        self.fg = nil
+        self.current = nil
+        self.promote_to = nil
+        self.piped = false
+        self.exit_requested = false
+        self.mods = {ctrl: false, shift: false, alt: false}
+        self.console = env.term.current()
+        self.extra = {}
+        self.extra_help = {}
+        self.extra.fetch = (sh, args) => fetch.run(sh)
+        self.extra_help.fetch = "fetch  логотип и сведения о системе (fastfetch, neofetch)"
+        self.programs_cache = nil
+        self.maker = bios.do_file(env, "rom/modules/main/cc/require.lua")
+        self.hist = hist_mod.new(env.fs, o.history_path ?? "/.csh_history", o.history_limit ?? 1000)
+        let me = self
+        self.editor = editor_mod.new(env, {hist: self.hist, prompt: () => me:prompt_segments(), highlight: (line) => me:highlight(line),
+            complete: (line, pos) => me:complete(line, pos)})
+        self:_default_path()
+
+    def _default_path(self):
+        dirs = ["."]
+        for d in ROM_DIRS:
+            if self.env.fs.isDir(d):
+                dirs[len(dirs) + 1] = "/" .. d
+        self.path = table.concat(dirs, ":")
+
+    # ------------------------------------------------------------ вывод
+
+    def write_color(self, letter, text):
+        term = self.env.term
+        old = term.getTextColor()
+        term.setTextColor(letter_color(letter))
+        bios.write_text(self.env, text)
+        term.setTextColor(old)
+
+    def println(self, text):
+        bios.print_text(self.env, va.pack(text), 1)
+
+    # ошибки идут на настоящий экран, даже если вывод в пайпе
+    def eprint(self, text):
+        term = self.env.term
+        prev = term.redirect(self.console)
+        old = term.getTextColor()
+        term.setTextColor(letter_color("e"))
+        bios.print_text(self.env, va.pack(text), 1)
+        term.setTextColor(old)
+        term.redirect(prev)
+
+    def prompt_segments(self):
+        segs = []
+        status = self.vars["?"]
+        if status != 0 and status != nil:
+            segs[len(segs) + 1] = {text: "[" .. tostring(status) .. "] ", color: "e"}
+        segs[len(segs) + 1] = {text: self.vars.USER .. "@" .. self.vars.HOST, color: "5"}
+        segs[len(segs) + 1] = {text: ":", color: "0"}
+        shown = "/" .. self.dir
+        home = self.vars.HOME
+        if shown == home:
+            shown = "~"
+        elif home != "/" and string.sub(shown, 1, string.len(home) + 1) == home .. "/":
+            shown = "~" .. string.sub(shown, string.len(home) + 1)
+        segs[len(segs) + 1] = {text: shown, color: "3"}
+        segs[len(segs) + 1] = {text: "$ ", color: "0"}
+        return segs
+
+    # ------------------------------------------------------------ файлы и программы
+
+    def resolve(self, p):
+        if string.sub(p, 1, 1) == "/":
+            return self.env.fs.combine(p)
+        return self.env.fs.combine(self.dir, p)
+
+    def set_dir(self, d):
+        self.dir = self.env.fs.combine(d)
+        self.programs_cache = nil
+
+    def set_path(self, p):
+        self.path = p
+        self.programs_cache = nil
+
+    def set_alias(self, a, c):
+        self.aliases[a] = c
+
+    def request_exit(self):
+        self.exit_requested = true
+
+    def _is_file(self, p):
+        return self.env.fs.exists(p) and not self.env.fs.isDir(p)
+
+    def resolve_program(self, name):
+        fsys = self.env.fs
+        if string.find(name, "/", 1, true) != nil:
+            base = self:resolve(name)
+            if self:_is_file(base):
+                return base
+            if self:_is_file(base .. ".lua"):
+                return base .. ".lua"
+            return nil
+        for d in string.gmatch(self.path, "[^:]+"):
+            dir = d == "." and self.dir or fsys.combine(d)
+            p = fsys.combine(dir, name)
+            if self:_is_file(p):
+                return p
+            if self:_is_file(p .. ".lua"):
+                return p .. ".lua"
+        return nil
+
+    # имена всех программ из каталогов пути (без .lua)
+    def program_names(self):
+        if self.programs_cache != nil:
+            return self.programs_cache
+        fsys = self.env.fs
+        seen = {}
+        out = []
+        for d in string.gmatch(self.path, "[^:]+"):
+            dir = d == "." and self.dir or fsys.combine(d)
+            if fsys.isDir(dir):
+                for nm in fsys.list(dir):
+                    base = string.gsub(nm, "%.lua$", "")
+                    if not fsys.isDir(fsys.combine(dir, nm)) and seen[base] == nil and string.sub(base, 1, 1) != ".":
+                        seen[base] = true
+                        out[len(out) + 1] = base
+        table.sort(out)
+        self.programs_cache = out
+        return out
+
+    def _command_known(self, name):
+        if builtins.table_of[name] != nil or self.extra[name] != nil or self.aliases[name] != nil:
+            return true
+        return self:resolve_program(name) != nil
+
+    # шаблон * и ? в относительных и абсолютных путях
+    def glob(self, pattern):
+        fsys = self.env.fs
+        full = self:resolve(pattern)
+        found = fsys.find(full)
+        if found == nil or len(found) == 0:
+            return []
+        table.sort(found)
+        out = []
+        prefix = self.dir == "" and "" or self.dir .. "/"
+        for p in found:
+            if string.sub(pattern, 1, 1) == "/":
+                out[len(out) + 1] = "/" .. p
+            elif prefix != "" and string.sub(p, 1, string.len(prefix)) == prefix:
+                out[len(out) + 1] = string.sub(p, string.len(prefix) + 1)
+            else:
+                out[len(out) + 1] = p
+        return out
+
+    # ------------------------------------------------------------ подсветка и дополнение
+
+    # цвета по байтам строки (буквы палитры CC)
+    def highlight(self, line):
+        toks = lex.tokens(line)
+        n = string.len(line)
+        colors = []
+        for i in range[1, n]:
+            colors[i] = "0"
+        cmd_pos = true
+        redirect = false
+        for tk in toks:
+            c = "0"
+            if tk.kind == "comment":
+                c = "7"
+            elif tk.kind == "op":
+                c = "1"
+                cmd_pos = tk.raw == "|" or tk.raw == "||" or tk.raw == "&&" or tk.raw == ";" or tk.raw == "&"
+                redirect = tk.raw == ">" or tk.raw == ">>" or tk.raw == "<"
+            else:
+                first = string.sub(tk.raw, 1, 1)
+                v = lex.expand(tk.raw, self.vars)
+                if cmd_pos:
+                    c = self:_command_known(v) and "5" or "e"
+                    cmd_pos = false
+                elif redirect:
+                    c = "4"
+                    redirect = false
+                elif first == "'" or first == "\"":
+                    c = "4"
+                elif first == "-" and string.len(tk.raw) > 1:
+                    c = "9"
+                elif first == "$":
+                    c = "2"
+                else:
+                    p = self:resolve(v)
+                    if v != "" and self.env.fs.isDir(p):
+                        c = "3"
+            for i in range[tk.s, tk.e]:
+                colors[i] = c
+        return table.concat(colors)
+
+    def complete(self, line, pos):
+        before = unicode.sub(line, 1, pos)
+        toks = lex.tokens(before)
+        word = ""
+        cmd_pos = true
+        last = toks[len(toks)]
+        ends_space = string.sub(before, -1) == " "
+        if last != nil and not ends_space and last.kind == "word":
+            word = last.raw
+            prev = toks[len(toks) - 1]
+            cmd_pos = prev == nil or (prev.kind == "op" and prev.raw != ">" and prev.raw != ">>" and prev.raw != "<")
+        elif last != nil:
+            cmd_pos = last.kind == "op" and last.raw != ">" and last.raw != ">>" and last.raw != "<"
+        wlen = chars.length(word)
+        out = []
+        if cmd_pos and string.find(word, "/", 1, true) == nil:
+            seen = {}
+            names = []
+            for k, v in builtins.table_of:
+                names[len(names) + 1] = k
+            for k, v in self.extra:
+                names[len(names) + 1] = k
+            for k, v in self.aliases:
+                names[len(names) + 1] = k
+            for nm in self:program_names():
+                names[len(names) + 1] = nm
+            table.sort(names)
+            for nm in names:
+                if seen[nm] == nil and string.sub(nm, 1, string.len(word)) == word:
+                    seen[nm] = true
+                    out[len(out) + 1] = {insert: nm, label: nm, color: "5"}
+            return out, wlen
+        dirpart = string.match(word, "^(.*/)") ?? ""
+        prefix = string.sub(word, string.len(dirpart) + 1)
+        base = self:resolve(dirpart == "" and "" or dirpart)
+        fsys = self.env.fs
+        if not fsys.isDir(base):
+            return out, wlen
+        names = fsys.list(base)
+        table.sort(names)
+        for nm in names:
+            if string.sub(nm, 1, string.len(prefix)) == prefix and (string.sub(nm, 1, 1) != "." or string.sub(prefix, 1, 1) == "."):
+                isdir = fsys.isDir(fsys.combine(base, nm))
+                ext = string.match(nm, "%.([%w]+)$")
+                col = isdir and "3" or (ext == "lua" and "5" or "0")
+                out[len(out) + 1] = {insert: dirpart .. nm .. (isdir and "/" or ""), label: nm .. (isdir and "/" or ""), color: col}
+        return out, wlen
+
+    # ------------------------------------------------------------ выполнение команд
+
+    def run_text(self, text):
+        toks = lex.tokens(text)
+        chains, err = lex.parse(toks)
+        if chains == nil:
+            self:eprint("csh: " .. err)
+            return 2
+        return self:run_chains(chains)
+
+    # цепочки ; && || &: в задаче переднего плана; цепочка с & запускается отдельной фоновой задачей
+    def run_chains(self, chains):
+        status = 0
+        prev = nil
+        for ch in chains:
+            runit = true
+            if prev == "&&" and status != 0:
+                runit = false
+            if prev == "||" and status == 0:
+                runit = false
+            if runit:
+                if ch.sep == "&":
+                    self:spawn_bg(ch)
+                    status = 0
+                else:
+                    status = self:run_pipeline(ch.stages)
+            if ch.sep == "&&" or ch.sep == "||":
+                prev = ch.sep
+            else:
+                prev = nil
+        return status
+
+    def _chain_name(self, stages):
+        parts = []
+        for st in stages:
+            parts[len(parts) + 1] = table.concat(st.words, " ")
+        return table.concat(parts, " | ")
+
+    def spawn_bg(self, chain):
+        let me = self
+        stages = chain.stages
+        name = self:_chain_name(stages)
+        j = self:new_job(name, () => me:run_pipeline(stages))
+        self:write_color("3", "[" .. j.id .. "] ")
+        self:println(name)
+        return j
+
+    def run_pipeline(self, stages):
+        lines_in = nil
+        status = 0
+        n = len(stages)
+        for k in range[1, n]:
+            status, lines_in = self:exec_stage(stages[k], lines_in, k < n)
+        return status
+
+    # слова стадии: подстановки, шаблоны, псевдоним первого слова
+    def _argv(self, stage):
+        argv = []
+        for raw in stage.words:
+            v, glob = lex.expand(raw, self.vars)
+            if glob:
+                found = self:glob(v)
+                if len(found) > 0:
+                    for f in found:
+                        argv[len(argv) + 1] = f
+                else:
+                    argv[len(argv) + 1] = v
+            else:
+                argv[len(argv) + 1] = v
+        guard = 0
+        while len(argv) > 0 and self.aliases[argv[1]] != nil and guard < 8:
+            guard += 1
+            alias_text = self.aliases[argv[1]]
+            toks = lex.tokens(alias_text)
+            extra = []
+            for tk in toks:
+                if tk.kind == "word":
+                    v = lex.expand(tk.raw, self.vars)
+                    extra[len(extra) + 1] = v
+            if len(extra) > 0 and extra[1] == argv[1]:
+                guard = 99
+            rest = []
+            for i in range[2, len(argv)]:
+                rest[len(rest) + 1] = argv[i]
+            argv = extra
+            for r in rest:
+                argv[len(argv) + 1] = r
+        return argv
+
+    # выполняет одну команду пайпа; capture: собрать вывод строками; возвращает код и строки (если собирали)
+    def exec_stage(self, stage, stdin_lines, capture):
+        argv = self:_argv(stage)
+        out_file = nil
+        for r in stage.redirs:
+            target, g = lex.expand(r.target, self.vars)
+            if r.op == "<":
+                lines = self:_read_lines(target)
+                if lines == nil:
+                    self:eprint("csh: " .. target .. ": no such file")
+                    return 1, []
+                stdin_lines = lines
+            else:
+                out_file = {path: self:resolve(target), append: r.op == ">>", name: target}
+        if len(argv) == 0:
+            return 0, []
+        j = self.current
+        prev_target = j.target
+        prev_stdin = j.stdin
+        prev_piped = j.piped
+        cap = nil
+        need_capture = capture or out_file != nil
+        if need_capture:
+            cap = vterm.new(255, 50, {history: 1000000})
+            j.target = cap:api()
+        if stdin_lines != nil:
+            j.stdin = {lines: stdin_lines, pos: 1}
+        j.piped = need_capture
+        self:apply(j)
+        status = self:run_command(argv)
+        j.target = prev_target
+        j.stdin = prev_stdin
+        j.piped = prev_piped
+        self:apply(j)
+        lines = []
+        if cap != nil:
+            lines = cap:all_lines()
+        if out_file != nil:
+            f = self.env.fs.open(out_file.path, out_file.append and "a" or "w")
+            if f == nil:
+                self:eprint("csh: " .. out_file.name .. ": cannot write")
+                return 1, []
+            for l in lines:
+                f.writeLine(l)
+            f.close()
+            lines = []
+        return status, lines
+
+    def _read_lines(self, path):
+        full = self:resolve(path)
+        if not self:_is_file(full):
+            return nil
+        f = self.env.fs.open(full, "r")
+        out = []
+        while true:
+            line = f.readLine()
+            if line == nil:
+                break
+            out[len(out) + 1] = line
+        f.close()
+        return out
+
+    # одна команда: встроенная, программа или «не найдена»; возвращает код возврата
+    def run_command(self, argv):
+        name = argv[1]
+        args = []
+        for i in range[2, len(argv)]:
+            args[len(args) + 1] = argv[i]
+        fn = builtins.table_of[name] ?? self.extra[name]
+        if fn != nil:
+            ok, res = pcall(fn, self, args)
+            if not ok:
+                if res == "Terminated":
+                    error("Terminated", 0)
+                self:eprint("csh: " .. name .. ": " .. tostring(res))
+                return 1
+            return tonumber(res) ?? 0
+        path = self:resolve_program(name)
+        if path == nil:
+            self:eprint("csh: " .. name .. ": command not found")
+            return 127
+        return self:run_program(path, args)
+
+    def run_program(self, path, args):
+        run_env = {shell: make_api(self, path)}
+        run_env.require, run_env.package = self.maker.make(run_env, self.env.fs.getDir(path))
+        ok = bios.run_program(self.env, run_env, path, va.pack(table.unpack(args)))
+        return ok and 0 or 1
+
+    # ------------------------------------------------------------ задачи
+
+    def new_job(self, name, fn):
+        j = {id: self.next_id, name: name, co: coroutine.create(fn), filter: nil, target: self.console, stdin: nil, piped: false,
+            fresh: true, stopped: false, terms: 0}
+        self.next_id += 1
+        self.jobs[len(self.jobs) + 1] = j
+        return j
+
+    def find_job(self, arg):
+        if arg == nil:
+            for i in range[len(self.jobs), 1] step -1:
+                if self.jobs[i] != self.fg and self.jobs[i] != self.current:
+                    return self.jobs[i]
+            return nil
+        id = tonumber(string.match(arg, "%d+"))
+        for j in self.jobs:
+            if j.id == id:
+                return j
+        return nil
+
+    def promote(self, j):
+        self.promote_to = j
+
+    # ставит окружение задачи: экран, ввод, признак пайпа
+    def apply(self, j):
+        self.env.term.redirect(j.target)
+        self.env.stdin = j.stdin
+        self.piped = j.piped
+        self.current = j
+
+    def apply_console(self):
+        self.env.term.redirect(self.console)
+        self.env.stdin = nil
+        self.piped = false
+        self.current = nil
+
+    def _set_mouse(self, v):
+        if self.env.vterm != nil:
+            self.env.vterm.mouse_app = v
+
+    def resume(self, j, ev):
+        bg_wrap = j != self.fg and self.editor.active
+        vt = self.env.vterm
+        rev0 = vt != nil and vt.rev or 0
+        saved_x = 1
+        saved_y = 1
+        if bg_wrap:
+            saved_x, saved_y = self.env.term.getCursorPos()
+            self.env.term.setCursorPos(1, self.editor.sy)
+            for r in range[0, self.editor.drawn_rows - 1]:
+                self.env.term.setCursorPos(1, self.editor.sy + r)
+                self.env.term.clearLine()
+            self.env.term.setCursorPos(1, self.editor.sy)
+        self:apply(j)
+        ok, res = va.resume(j.co, ev)
+        if coroutine.status(j.co) != "dead":
+            j.target = self.env.term.current()
+        self:apply_console()
+        if bg_wrap:
+            if vt != nil and vt.rev != rev0:
+                x, y = self.env.term.getCursorPos()
+                if x > 1:
+                    y = math.min(y + 1, self.env.term.getSize())
+                self.editor.sy = y
+            self.editor.drawn_rows = 1
+            self.editor:redraw()
+        if coroutine.status(j.co) == "dead":
+            self:finish(j, ok, res)
+        else:
+            j.filter = res
+
+    def deliver(self, j, ev):
+        if j.filter == nil or ev[1] == j.filter or ev[1] == "terminate":
+            self:resume(j, ev)
+
+    def _remove(self, j):
+        for i in range[1, len(self.jobs)]:
+            if self.jobs[i] == j:
+                table.remove(self.jobs, i)
+                return
+
+    # печатает сообщение, не ломая строку ввода
+    def notify(self, letter, text):
+        if self.editor.active:
+            term = self.env.term
+            for r in range[0, self.editor.drawn_rows - 1]:
+                term.setCursorPos(1, self.editor.sy + r)
+                term.clearLine()
+            term.setCursorPos(1, self.editor.sy)
+            self:write_color(letter, text)
+            self:println("")
+            x, y = term.getCursorPos()
+            self.editor.sy = y
+            self.editor.drawn_rows = 1
+            self.editor:redraw()
+        else:
+            self:write_color(letter, text)
+            self:println("")
+
+    def finish(self, j, ok, res):
+        self:_remove(j)
+        status = 0
+        if not ok:
+            status = 1
+            if res != "Terminated" and res != nil and res != "":
+                self:eprint("csh: " .. tostring(res))
+        else:
+            status = tonumber(res) ?? 0
+        if j == self.fg:
+            self.fg = nil
+            self:_set_mouse(false)
+            self.vars["?"] = status
+            nxt = self.promote_to
+            self.promote_to = nil
+            if nxt != nil:
+                nxt.stopped = false
+                self.fg = nxt
+                self:_set_mouse(true)
+                self:deliver(nxt, va.pack("term_resize"))
+            elif not self.exit_requested:
+                self.editor:begin()
+        else:
+            self:notify("3", "[" .. j.id .. "]+  " .. (ok and "Done" or "Exit") .. "  " .. j.name)
+
+    def kill_job(self, j):
+        self:deliver(j, va.pack("terminate"))
+        if coroutine.status(j.co) != "dead":
+            # программа не отозвалась на terminate: забываем её корутину
+            self:_remove(j)
+            if j == self.fg:
+                self.fg = nil
+                self:_set_mouse(false)
+                self.editor:begin()
+
+    def stop_fg(self):
+        j = self.fg
+        if j == nil:
+            return
+        j.stopped = true
+        self.fg = nil
+        self:_set_mouse(false)
+        self.env.term.setCursorBlink(false)
+        self:println("")
+        self:notify("4", "[" .. j.id .. "]+  Stopped  " .. j.name)
+        self.editor:begin()
+
+    def interrupt_fg(self):
+        j = self.fg
+        if j == nil:
+            return
+        j.terms += 1
+        if j.terms >= 2:
+            self:kill_job(j)
+        else:
+            self:deliver(j, va.pack("terminate"))
+
+    # ------------------------------------------------------------ строка и события
+
+    def submit(self, line):
+        trimmed = string.gsub(line, "^%s+", "")
+        trimmed = string.gsub(trimmed, "%s+$", "")
+        if trimmed == "":
+            self.editor:begin()
+            return
+        self.hist:add(line)
+        toks = lex.tokens(line)
+        chains, err = lex.parse(toks)
+        if chains == nil:
+            self:eprint("csh: " .. err)
+            self.vars["?"] = 2
+            self.editor:begin()
+            return
+        if len(chains) == 0:
+            self.editor:begin()
+            return
+        let me = self
+        j = self:new_job(trimmed, () => me:run_chains(chains))
+        j.id = 0
+        self.next_id -= 1
+        self.fg = j
+        self:_set_mouse(true)
+
+    # запускает задачи, которые только что создали, до первого ожидания
+    def kick(self):
+        again = true
+        while again:
+            again = false
+            for j in self.jobs:
+                if j.fresh:
+                    j.fresh = false
+                    again = true
+                    self:resume(j, nil)
+                    break
+
+    def _track(self, name, code):
+        if name == "key" or name == "key_up":
+            down = name == "key"
+            if code == keys.leftCtrl or code == keys.rightCtrl:
+                self.mods.ctrl = down
+            elif code == keys.leftShift or code == keys.rightShift:
+                self.mods.shift = down
+            elif code == keys.leftAlt or code == keys.rightAlt:
+                self.mods.alt = down
+
+    def editor_event(self, ev):
+        r, text = self.editor:feed(ev[1], ev[2], ev[3], ev[4])
+        if r == "line":
+            self:submit(text)
+        elif r == "interrupt":
+            self.editor:begin()
+        elif r == "eof":
+            self.exit_requested = true
+
+    def dispatch(self, ev):
+        name = ev[1]
+        self:_track(name, ev[2])
+        if INPUT[name] != nil:
+            if self.fg != nil:
+                if name == "key" and self.mods.ctrl and ev[2] == keys.c:
+                    self:interrupt_fg()
+                elif name == "key" and self.mods.ctrl and ev[2] == keys.z:
+                    self:stop_fg()
+                else:
+                    self:deliver(self.fg, ev)
+                if name == "term_resize":
+                    for j in self.jobs:
+                        if j != self.fg and not j.stopped:
+                            self:deliver(j, ev)
+            else:
+                self:editor_event(ev)
+                if name == "term_resize":
+                    for j in self.jobs:
+                        if not j.stopped:
+                            self:deliver(j, ev)
+        elif name == "terminate":
+            if self.fg != nil:
+                self:interrupt_fg()
+        else:
+            for j in self:_live_jobs():
+                if not j.stopped:
+                    self:deliver(j, ev)
+        self:kick()
+
+    def _live_jobs(self):
+        out = []
+        for j in self.jobs:
+            out[len(out) + 1] = j
+        return out
+
+    def greet(self):
+        o = self.opts
+        if o.greeting == false:
+            return
+        self:write_color("3", version.NAME)
+        self:write_color("0", " ")
+        self:write_color("5", version.VERSION)
+        self:write_color("7", "   csh: help, fetch, Tab, Ctrl+R")
+        self:println("")
+
+    def shutdown(self):
+        for j in self:_live_jobs():
+            self:deliver(j, va.pack("terminate"))
+
+    # главный цикл: события приходят от хозяина процесса
+    def run(self):
+        self:greet()
+        self.editor:begin()
+        while not self.exit_requested:
+            ev = va.pull_packed()
+            self:dispatch(ev)
+        self:shutdown()
+
+# команда -c: выполнить строку и выйти (без редактора)
+def run_command_line(sh, line):
+    sh.current = {target: sh.console, stdin: nil, piped: false}
+    return sh:run_text(line)
+
+export def main(env, args):
+    o = env.csh_opts ?? {}
+    sh = Shell(env, o)
+    env.csh = sh
+    if args[1] == "-c" and args[2] != nil:
+        return run_command_line(sh, args[2])
+    sh:run()
+    return sh.vars["?"]

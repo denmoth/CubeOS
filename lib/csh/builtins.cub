@@ -1,0 +1,599 @@
+# csh.builtins: встроенные команды оболочки csh (cd, ls, grep, cat, jobs...). Каждая это функция (sh, args) -> код возврата (0 это успех);
+# вывод идёт через sh:println и term текущей задачи (в пайпе это буфер), сообщения об ошибках через sh:eprint прямо на экран.
+# Команды-фильтры (grep, head, tail, wc, sort, uniq, cat, tee) читают строки из файлов в аргументах или из пайпа (sh.env.stdin).
+
+import term.chars as chars
+import unicode
+
+export const table_of = {}
+export const help_of = {}
+
+def add(name, text, fn):
+    table_of[name] = fn
+    help_of[name] = text
+
+# ------------------------------------------------------------ вспомогательное
+
+# разбор аргументов: короткие флаги вида -la и именованные с числом (-n 5, -5); возвращает множество флагов, число и остальные
+def flags_of(args, with_number=false):
+    flags = {}
+    rest = []
+    number = nil
+    i = 1
+    while i <= len(args):
+        a = args[i]
+        if string.sub(a, 1, 1) == "-" and string.len(a) > 1 and string.match(a, "^%-%d+$") != nil and with_number:
+            number = tonumber(string.sub(a, 2))
+        elif a == "-n" and with_number and args[i + 1] != nil:
+            number = tonumber(args[i + 1])
+            i += 1
+        elif string.sub(a, 1, 1) == "-" and string.len(a) > 1 and string.sub(a, 2, 2) != "-":
+            for k in range[2, string.len(a)]:
+                flags[string.sub(a, k, k)] = true
+        else:
+            rest[len(rest) + 1] = a
+        i += 1
+    return flags, number, rest
+
+def read_lines(sh, path):
+    fsys = sh.env.fs
+    full = sh:resolve(path)
+    if not fsys.exists(full) or fsys.isDir(full):
+        return nil
+    f = fsys.open(full, "r")
+    if f == nil:
+        return nil
+    out = []
+    while true:
+        line = f.readLine()
+        if line == nil:
+            break
+        out[len(out) + 1] = line
+    f.close()
+    return out
+
+# строки для фильтра: файлы из списка или пайп; nil и сообщение, если нечего читать
+def input_lines(sh, name, files):
+    if len(files) == 0:
+        st = sh.env.stdin
+        if st == nil:
+            sh:eprint(name .. ": no input (give a file or use a pipe)")
+            return nil
+        out = []
+        while st.lines[st.pos] != nil:
+            out[len(out) + 1] = st.lines[st.pos]
+            st.pos += 1
+        return out
+    out = []
+    for f in files:
+        lines = read_lines(sh, f)
+        if lines == nil:
+            sh:eprint(name .. ": " .. f .. ": No such file")
+            return nil
+        for l in lines:
+            out[len(out) + 1] = l
+    return out
+
+# ------------------------------------------------------------ навигация и файлы
+
+def b_cd(sh, args):
+    target = args[1] ?? sh.vars.HOME
+    if target == "-":
+        target = sh.vars.OLDPWD ?? sh.dir
+    full = sh:resolve(target)
+    if not sh.env.fs.isDir(full):
+        sh:eprint("cd: " .. target .. ": no such directory")
+        return 1
+    sh.vars.OLDPWD = sh.dir
+    sh.dir = full
+    sh.vars.PWD = "/" .. full
+    return 0
+add("cd", "cd [папка]  сменить папку", b_cd)
+
+def b_pwd(sh, args):
+    sh:println("/" .. sh.dir)
+    return 0
+add("pwd", "pwd  показать текущую папку", b_pwd)
+
+def color_for(sh, full, name):
+    fsys = sh.env.fs
+    if fsys.isDir(full):
+        return "3"
+    if string.sub(name, 1, 1) == ".":
+        return "7"
+    ext = string.match(name, "%.([%w]+)$")
+    if ext == "lua":
+        return "5"
+    if ext == "cub":
+        return "2"
+    if ext == "json" or ext == "json5" or ext == "txt" or ext == "md":
+        return "4"
+    return "0"
+
+def b_ls(sh, args):
+    flags, n, rest = flags_of(args)
+    fsys = sh.env.fs
+    target = rest[1] ?? ""
+    full = sh:resolve(target)
+    if not fsys.exists(full):
+        sh:eprint("ls: " .. (rest[1] ?? "") .. ": no such file or directory")
+        return 1
+    names = []
+    if fsys.isDir(full):
+        names = fsys.list(full)
+    else:
+        names = [fsys.getName(full)]
+        full = fsys.getDir(full)
+    shown = []
+    for nm in names:
+        if flags.a or string.sub(nm, 1, 1) != ".":
+            shown[len(shown) + 1] = nm
+    def by_kind(a, b):
+        da = fsys.isDir(fsys.combine(full, a))
+        db = fsys.isDir(fsys.combine(full, b))
+        if da != db:
+            return da
+        return string.lower(a) < string.lower(b)
+    table.sort(shown, by_kind)
+    w, h = sh.env.term.getSize()
+    if flags.l:
+        total = 0
+        for nm in shown:
+            p = fsys.combine(full, nm)
+            d = fsys.isDir(p)
+            kind = d and "d" or "-"
+            mode = fsys.isReadOnly(p) and "r-" or "rw"
+            size = d and "-" or tostring(fsys.getSize(p))
+            line = kind .. mode .. " " .. string.rep(" ", 8 - string.len(size)) .. size .. " "
+            sh:write_color("7", line)
+            sh:write_color(color_for(sh, p, nm), nm .. (d and "/" or ""))
+            sh:println("")
+        return 0
+    if sh.piped or flags["1"]:
+        for nm in shown:
+            sh:println(nm)
+        return 0
+    widest = 0
+    for nm in shown:
+        widest = math.max(widest, chars.length(nm) + (fsys.isDir(fsys.combine(full, nm)) and 1 or 0))
+    colw = widest + 2
+    cols = math.max(1, math.floor(w / colw))
+    rows = math.ceil(len(shown) / cols)
+    for r in range[1, rows]:
+        for c in range[0, cols - 1]:
+            idx = c * rows + r
+            nm = shown[idx]
+            if nm != nil:
+                p = fsys.combine(full, nm)
+                label = nm .. (fsys.isDir(p) and "/" or "")
+                sh:write_color(color_for(sh, p, nm), label)
+                if c < cols - 1 and shown[(c + 1) * rows + r] != nil:
+                    sh:write_color("0", string.rep(" ", colw - chars.length(label)))
+        sh:println("")
+    return 0
+add("ls", "ls [-lah1] [путь]  список файлов: цветной, колонками; -l подробно, -a со скрытыми", b_ls)
+
+def b_cat(sh, args):
+    lines = input_lines(sh, "cat", args)
+    if lines == nil:
+        return 1
+    for l in lines:
+        sh:println(l)
+    return 0
+add("cat", "cat файлы...  вывести содержимое (или то, что пришло по пайпу)", b_cat)
+
+def b_head(sh, args):
+    flags, n, rest = flags_of(args, true)
+    lines = input_lines(sh, "head", rest)
+    if lines == nil:
+        return 1
+    for i in range[1, math.min(n ?? 10, len(lines))]:
+        sh:println(lines[i])
+    return 0
+add("head", "head [-n N] [файл]  первые N строк (10)", b_head)
+
+def b_tail(sh, args):
+    flags, n, rest = flags_of(args, true)
+    lines = input_lines(sh, "tail", rest)
+    if lines == nil:
+        return 1
+    count = n ?? 10
+    for i in range[math.max(1, len(lines) - count + 1), len(lines)]:
+        sh:println(lines[i])
+    return 0
+add("tail", "tail [-n N] [файл]  последние N строк (10)", b_tail)
+
+def b_wc(sh, args):
+    flags, n, rest = flags_of(args)
+    lines = input_lines(sh, "wc", rest)
+    if lines == nil:
+        return 1
+    words = 0
+    bytes = 0
+    for l in lines:
+        for w in string.gmatch(l, "%S+"):
+            words += 1
+        bytes += string.len(l) + 1
+    parts = []
+    all = not (flags.l or flags.w or flags.c)
+    if all or flags.l:
+        parts[len(parts) + 1] = tostring(len(lines))
+    if all or flags.w:
+        parts[len(parts) + 1] = tostring(words)
+    if all or flags.c:
+        parts[len(parts) + 1] = tostring(bytes)
+    sh:println(table.concat(parts, " "))
+    return 0
+add("wc", "wc [-lwc] [файл]  число строк, слов и байт", b_wc)
+
+def b_sort(sh, args):
+    flags, n, rest = flags_of(args)
+    lines = input_lines(sh, "sort", rest)
+    if lines == nil:
+        return 1
+    if flags.n:
+        table.sort(lines, (a, b) => (tonumber(string.match(a, "^%s*(-?[%d%.]+)")) ?? 0) < (tonumber(string.match(b, "^%s*(-?[%d%.]+)")) ?? 0))
+    else:
+        table.sort(lines)
+    if flags.r:
+        rev = []
+        for i in range[len(lines), 1] step -1:
+            rev[len(rev) + 1] = lines[i]
+        lines = rev
+    last = nil
+    for l in lines:
+        if not (flags.u and l == last):
+            sh:println(l)
+        last = l
+    return 0
+add("sort", "sort [-rnu] [файл]  отсортировать строки", b_sort)
+
+def b_uniq(sh, args):
+    flags, n, rest = flags_of(args)
+    lines = input_lines(sh, "uniq", rest)
+    if lines == nil:
+        return 1
+    last = nil
+    count = 0
+    def flush():
+        if last != nil:
+            if flags.c:
+                sh:println(string.rep(" ", 4 - string.len(tostring(count))) .. count .. " " .. last)
+            else:
+                sh:println(last)
+    for l in lines:
+        if l == last:
+            count += 1
+        else:
+            flush()
+            last = l
+            count = 1
+    flush()
+    return 0
+add("uniq", "uniq [-c] [файл]  убрать подряд идущие повторы; -c считает", b_uniq)
+
+def b_grep(sh, args):
+    flags, n, rest = flags_of(args)
+    pattern = table.remove(rest, 1)
+    if pattern == nil:
+        sh:eprint("usage: grep [-ivnc] pattern [file...]")
+        return 2
+    lines = input_lines(sh, "grep", rest)
+    if lines == nil:
+        return 1
+    needle = flags.i and string.lower(pattern) or pattern
+    found = 0
+    for i in range[1, len(lines)]:
+        l = lines[i]
+        hay = flags.i and string.lower(l) or l
+        s, e = string.find(hay, needle, 1, true)
+        hit = s != nil
+        if flags.v:
+            hit = not hit
+        if hit:
+            found += 1
+            if not flags.c:
+                if flags.n:
+                    sh:write_color("2", tostring(i))
+                    sh:write_color("7", ":")
+                if s != nil and not flags.v and not sh.piped:
+                    sh:write_color("0", string.sub(l, 1, s - 1))
+                    sh:write_color("e", string.sub(l, s, e))
+                    sh:write_color("0", string.sub(l, e + 1))
+                    sh:println("")
+                else:
+                    sh:println(l)
+    if flags.c:
+        sh:println(tostring(found))
+    return found > 0 and 0 or 1
+add("grep", "grep [-ivnc] текст [файл]  строки, где есть текст; -i без учёта регистра, -v наоборот, -n номера, -c число", b_grep)
+
+def b_tee(sh, args):
+    lines = input_lines(sh, "tee", [])
+    if lines == nil:
+        return 1
+    f = sh.env.fs.open(sh:resolve(args[1] ?? "tee.out"), "w")
+    for l in lines:
+        sh:println(l)
+        if f != nil:
+            f.writeLine(l)
+    if f != nil:
+        f.close()
+    return 0
+add("tee", "tee файл  вывести то, что пришло, и записать в файл", b_tee)
+
+def b_echo(sh, args):
+    flags, n, rest = flags_of(args)
+    text = table.concat(rest, " ")
+    if flags.n:
+        sh:write_color("0", text)
+    else:
+        sh:println(text)
+    return 0
+add("echo", "echo [-n] слова...  напечатать слова", b_echo)
+
+def b_mkdir(sh, args):
+    status = 0
+    for a in args:
+        ok, err = pcall(sh.env.fs.makeDir, sh:resolve(a))
+        if not ok:
+            sh:eprint("mkdir: " .. a .. ": " .. tostring(err))
+            status = 1
+    return status
+add("mkdir", "mkdir папки...  создать папки", b_mkdir)
+
+def b_touch(sh, args):
+    for a in args:
+        p = sh:resolve(a)
+        if not sh.env.fs.exists(p):
+            f = sh.env.fs.open(p, "w")
+            if f != nil:
+                f.close()
+    return 0
+add("touch", "touch файлы...  создать пустые файлы", b_touch)
+
+def b_rm(sh, args):
+    flags, n, rest = flags_of(args)
+    status = 0
+    for a in rest:
+        p = sh:resolve(a)
+        if p == "" or p == "rom":
+            sh:eprint("rm: refusing to remove '/" .. p .. "'")
+            status = 1
+        elif not sh.env.fs.exists(p):
+            sh:eprint("rm: " .. a .. ": no such file or directory")
+            status = 1
+        elif sh.env.fs.isDir(p) and not flags.r:
+            sh:eprint("rm: " .. a .. ": is a directory (use -r)")
+            status = 1
+        else:
+            ok, err = pcall(sh.env.fs.delete, p)
+            if not ok:
+                sh:eprint("rm: " .. a .. ": " .. tostring(err))
+                status = 1
+    return status
+add("rm", "rm [-r] пути...  удалить файлы и папки", b_rm)
+
+def b_cp(sh, args):
+    if len(args) < 2:
+        sh:eprint("usage: cp source dest")
+        return 2
+    dest = sh:resolve(args[len(args)])
+    status = 0
+    for i in range[1, len(args) - 1]:
+        src = sh:resolve(args[i])
+        target = dest
+        if sh.env.fs.isDir(dest):
+            target = sh.env.fs.combine(dest, sh.env.fs.getName(src))
+        ok, err = pcall(sh.env.fs.copy, src, target)
+        if not ok:
+            sh:eprint("cp: " .. args[i] .. ": " .. tostring(err))
+            status = 1
+    return status
+add("cp", "cp откуда куда  копировать", b_cp)
+
+def b_mv(sh, args):
+    if len(args) < 2:
+        sh:eprint("usage: mv source dest")
+        return 2
+    dest = sh:resolve(args[len(args)])
+    status = 0
+    for i in range[1, len(args) - 1]:
+        src = sh:resolve(args[i])
+        target = dest
+        if sh.env.fs.isDir(dest):
+            target = sh.env.fs.combine(dest, sh.env.fs.getName(src))
+        ok, err = pcall(sh.env.fs.move, src, target)
+        if not ok:
+            sh:eprint("mv: " .. args[i] .. ": " .. tostring(err))
+            status = 1
+    return status
+add("mv", "mv откуда куда  переместить или переименовать", b_mv)
+
+# ------------------------------------------------------------ среда
+
+def b_clear(sh, args):
+    sh.env.term.clear()
+    sh.env.term.setCursorPos(1, 1)
+    return 0
+add("clear", "clear  очистить экран", b_clear)
+
+def b_exit(sh, args):
+    sh.exit_requested = true
+    return 0
+add("exit", "exit  выйти из оболочки", b_exit)
+
+add("true", "true  ничего не делает, успех", (sh, args) => 0)
+add("false", "false  ничего не делает, неудача", (sh, args) => 1)
+
+def b_sleep(sh, args):
+    os.sleep(tonumber(args[1]) ?? 1)
+    return 0
+add("sleep", "sleep секунды  подождать", b_sleep)
+
+def b_export(sh, args):
+    for a in args:
+        name, value = string.match(a, "^([%a_][%w_]*)=(.*)$")
+        if name != nil:
+            sh.vars[name] = value
+    return 0
+add("export", "export ИМЯ=значение  задать переменную", b_export)
+
+def b_unset(sh, args):
+    for a in args:
+        sh.vars[a] = nil
+    return 0
+add("unset", "unset ИМЯ  удалить переменную", b_unset)
+
+def b_env(sh, args):
+    names = []
+    for k, v in sh.vars:
+        names[len(names) + 1] = k
+    table.sort(names)
+    for k in names:
+        sh:write_color("3", k)
+        sh:println("=" .. tostring(sh.vars[k]))
+    return 0
+add("env", "env  показать переменные", b_env)
+
+def b_alias(sh, args):
+    if len(args) == 0:
+        names = []
+        for k, v in sh.aliases:
+            names[len(names) + 1] = k
+        table.sort(names)
+        for k in names:
+            sh:println("alias " .. k .. "='" .. sh.aliases[k] .. "'")
+        return 0
+    for a in args:
+        name, value = string.match(a, "^([^=]+)=(.*)$")
+        if name != nil:
+            sh.aliases[name] = value
+        elif sh.aliases[a] != nil:
+            sh:println("alias " .. a .. "='" .. sh.aliases[a] .. "'")
+    return 0
+add("alias", "alias [имя=команда]  задать или показать псевдонимы", b_alias)
+
+def b_unalias(sh, args):
+    for a in args:
+        sh.aliases[a] = nil
+    return 0
+add("unalias", "unalias имя  убрать псевдоним", b_unalias)
+
+def b_history(sh, args):
+    if args[1] == "-c":
+        sh.hist:clear()
+        return 0
+    for i in range[1, len(sh.hist.items)]:
+        sh:write_color("7", string.rep(" ", 5 - string.len(tostring(i))) .. i .. "  ")
+        sh:println(sh.hist.items[i])
+    return 0
+add("history", "history [-c]  история команд; -c очистить", b_history)
+
+def b_type(sh, args):
+    status = 0
+    for a in args:
+        if sh.aliases[a] != nil:
+            sh:println(a .. " is an alias for '" .. sh.aliases[a] .. "'")
+        elif table_of[a] != nil or sh.extra[a] != nil:
+            sh:println(a .. " is a shell builtin")
+        else:
+            p = sh:resolve_program(a)
+            if p != nil:
+                sh:println(a .. " is /" .. p)
+            else:
+                sh:eprint("type: " .. a .. ": not found")
+                status = 1
+    return status
+add("type", "type команда  чем является команда", b_type)
+
+table_of.which = table_of.type
+help_of.which = "which команда  то же, что type"
+
+def b_date(sh, args):
+    sh:println(os.date("%Y-%m-%d %H:%M:%S"))
+    return 0
+add("date", "date  дата и время", b_date)
+
+def b_whoami(sh, args):
+    sh:println(sh.vars.USER)
+    return 0
+add("whoami", "whoami  имя пользователя", b_whoami)
+
+def b_hostname(sh, args):
+    sh:println(sh.vars.HOST)
+    return 0
+add("hostname", "hostname  имя компьютера", b_hostname)
+
+def b_uptime(sh, args):
+    secs = math.floor(os.clock())
+    sh:println("up " .. math.floor(secs / 3600) .. "h " .. math.floor(secs / 60) % 60 .. "m " .. secs % 60 .. "s")
+    return 0
+add("uptime", "uptime  сколько работает компьютер", b_uptime)
+
+# ------------------------------------------------------------ задачи
+
+def b_jobs(sh, args):
+    for j in sh.jobs:
+        if j != sh.fg:
+            state = j.stopped and "Stopped" or "Running"
+            sh:write_color("3", "[" .. j.id .. "]  ")
+            sh:write_color(j.stopped and "4" or "5", state .. string.rep(" ", 9 - string.len(state)))
+            sh:println(j.name)
+    return 0
+add("jobs", "jobs  фоновые задачи", b_jobs)
+
+def b_fg(sh, args):
+    j = sh:find_job(args[1])
+    if j == nil:
+        sh:eprint("fg: no such job")
+        return 1
+    sh:promote(j)
+    return 0
+add("fg", "fg [%N]  вернуть задачу на передний план", b_fg)
+
+def b_bg(sh, args):
+    j = sh:find_job(args[1])
+    if j == nil:
+        sh:eprint("bg: no such job")
+        return 1
+    j.stopped = false
+    sh:println("[" .. j.id .. "] " .. j.name)
+    return 0
+add("bg", "bg [%N]  продолжить остановленную задачу в фоне", b_bg)
+
+def b_kill(sh, args):
+    j = sh:find_job(args[1])
+    if j == nil:
+        sh:eprint("kill: no such job")
+        return 1
+    sh:kill_job(j)
+    return 0
+add("kill", "kill %N  завершить задачу", b_kill)
+
+def b_help(sh, args):
+    names = []
+    for k, v in help_of:
+        names[len(names) + 1] = k
+    for k, v in sh.extra:
+        if help_of[k] == nil:
+            names[len(names) + 1] = k
+    table.sort(names)
+    sh:write_color("4", "CubeOS csh")
+    sh:println("  оболочка с пайпами, фоновыми задачами и подсветкой")
+    sh:println("")
+    sh:write_color("3", "Команды")
+    sh:println(" (остальное это программы CraftOS из /rom/programs и ваши):")
+    for k in names:
+        text = help_of[k] ?? sh.extra_help[k] ?? ""
+        sh:write_color("5", k .. string.rep(" ", 9 - string.len(k)))
+        sh:println(text)
+    sh:println("")
+    sh:write_color("3", "Строка")
+    sh:println(": | пайп, > >> < файлы, & фон, ; && || цепочки, $ПЕРЕМЕННАЯ, ~ дом, 'кавычки'")
+    sh:write_color("3", "Клавиши")
+    sh:println(": Tab дополнить, Ctrl+R поиск в истории, Shift+стрелки выделение,")
+    sh:println("  Shift+PgUp/PgDn и колесо мыши прокрутка, Ctrl+C прервать, Ctrl+Z остановить задачу,")
+    sh:println("  Ctrl+Shift или Alt+Shift раскладка, правая кнопка мыши вставить выделенное")
+    return 0
+add("help", "help  что умеет оболочка", b_help)

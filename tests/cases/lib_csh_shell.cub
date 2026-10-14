@@ -1,0 +1,148 @@
+import t
+import term.vterm as vterm
+import compat.env as compat_env
+import compat.proc as compat_proc
+import csh.shell as csh
+eq = t.eq
+
+HIST = "/repo/build/csh_test_history"
+if fs.exists(HIST):
+    fs.delete(HIST)
+
+def make(w, h):
+    vt = vterm.new(w, h, {history: 200})
+    env = compat_env.new({vterm: vt})
+    env.csh_opts = {history_path: HIST, greeting: false, user: "tester", host: "cube"}
+    proc = compat_proc.new(env, "csh", [], {name: "csh", main: csh.main})
+    proc:start()
+    return vt, proc, env
+
+def typ(proc, text):
+    for i in range[1, string.len(text)]:
+        proc:feed("char", string.sub(text, i, i))
+
+def enter(proc):
+    proc:feed("key", keys.enter, false)
+    proc:feed("key_up", keys.enter)
+
+def screen(vt):
+    lines = []
+    for y in range[1, vt.h]:
+        lines[y] = vt:line_text(y)
+    return table.concat(lines, "\n")
+
+def has(vt, text):
+    return string.find(screen(vt), text, 1, true) != nil
+
+vt, proc, env = make(60, 20)
+eq(has(vt, "tester@cube:~$"), true, "the prompt shows user, host and path")
+
+# встроенная команда и вывод
+typ(proc, "echo hello world")
+enter(proc)
+eq(has(vt, "hello world"), true, "echo prints")
+
+# пайп
+f = fs.open("/repo/build/csh_in.txt", "w")
+f.write("apple\nbanana\ncherry\navocado\n")
+f.close()
+typ(proc, "cd repo/build")
+enter(proc)
+typ(proc, "cat csh_in.txt | grep a | wc -l")
+enter(proc)
+eq(has(vt, "3"), true, "a pipe counts the lines with a (apple, banana, avocado)")
+typ(proc, "cat csh_in.txt | sort -r | head -n 2")
+enter(proc)
+eq(has(vt, "cherry"), true, "sort -r and head: the first line is cherry")
+
+# перенаправление
+typ(proc, "echo new > csh_out.txt")
+enter(proc)
+typ(proc, "echo more >> csh_out.txt")
+enter(proc)
+typ(proc, "cat csh_out.txt")
+enter(proc)
+eq(has(vt, "new\nmore") or (has(vt, "new") and has(vt, "more")), true, "> and >> write a file")
+f = fs.open("/repo/build/csh_out.txt", "r")
+eq(f.readAll(), "new\nmore\n", "the file has both lines")
+f.close()
+
+# переменные, && и ||
+typ(proc, "export NAME=cube; echo hi $NAME")
+enter(proc)
+eq(has(vt, "hi cube"), true, "variables are expanded")
+typ(proc, "false || echo recovered")
+enter(proc)
+eq(has(vt, "recovered"), true, "|| runs after a failure")
+typ(proc, "true && echo chained")
+enter(proc)
+eq(has(vt, "chained"), true, "&& runs after success")
+
+# команда не найдена
+typ(proc, "nosuchcmd")
+enter(proc)
+eq(has(vt, "command not found"), true, "unknown command is reported")
+eq(has(vt, "[127]"), true, "the prompt shows the failing status")
+
+# программа CraftOS из ROM
+typ(proc, "list /rom")
+enter(proc)
+eq(has(vt, "programs"), true, "a ROM program (list) runs and prints the directory")
+typ(proc, "type list")
+enter(proc)
+eq(has(vt, "list is /rom/programs/list.lua"), true, "type finds a program on the path")
+
+# фоновая задача: sleep в фоне и jobs
+typ(proc, "sleep 0.05 &")
+enter(proc)
+eq(has(vt, "[1] sleep 0.05"), true, "a background job gets its number")
+typ(proc, "jobs")
+enter(proc)
+eq(has(vt, "Running"), true, "jobs lists it")
+got = false
+for i in range[1, 40]:
+    ev, id = os.pullEvent("timer")
+    proc:feed("timer", id)
+    if has(vt, "Done"):
+        got = true
+        break
+eq(got, true, "the background job finishes and announces Done")
+
+# переднего плана: sleep, и Ctrl+C прерывает
+typ(proc, "sleep 100")
+enter(proc)
+proc:feed("key", keys.leftCtrl, false)
+proc:feed("key", keys.c, false)
+proc:feed("key_up", keys.c)
+proc:feed("key_up", keys.leftCtrl)
+typ(proc, "echo alive")
+enter(proc)
+eq(has(vt, "alive"), true, "Ctrl+C interrupts the foreground job and the prompt returns")
+
+# история и подсказка из истории
+fh = fs.open(HIST, "r")
+hist_text = fh.readAll()
+fh.close()
+eq(string.find(hist_text, "echo hello world", 1, true) != nil, true, "commands are saved in the history file")
+typ(proc, "echo hel")
+eq(has(vt, "echo hello world"), true, "the gray suggestion from history is shown")
+
+# Ctrl+R поиск
+proc:feed("key", keys.leftCtrl, false)
+proc:feed("key", keys.u, false)
+proc:feed("key_up", keys.u)
+proc:feed("key_up", keys.leftCtrl)
+proc:feed("key", keys.leftCtrl, false)
+proc:feed("key", keys.r, false)
+proc:feed("key_up", keys.r)
+proc:feed("key_up", keys.leftCtrl)
+typ(proc, "csh_in")
+eq(has(vt, "`csh_in'"), true, "Ctrl+R opens the reverse search")
+eq(has(vt, "cat csh_in.txt"), true, "and finds a matching command")
+proc:feed("key", keys.escape, false)
+
+fs.delete("/repo/build/csh_in.txt")
+fs.delete("/repo/build/csh_out.txt")
+fs.delete(HIST)
+
+print("done")

@@ -79,6 +79,15 @@ export def encode(cells):
             parts[i] = string.char(v)
     return table.concat(parts)
 
+# часть списка клеток с i по j
+export def slice(cells, i, j):
+    out = []
+    k = 0
+    for p in range[i, j]:
+        k += 1
+        out[k] = cells[p]
+    return out
+
 # длина строки в клетках и подстрока по клеткам (с 1, включая границы), для строк с кириллицей
 export def length(s):
     if string.find(s, "[^ -~]") == nil:

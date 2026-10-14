@@ -52,7 +52,7 @@ eq(app.vterm.w, 50, "the virtual terminal takes the app width")
 eq(app.vterm.h, 12, "and the height under the top bar and above the footer")
 
 # ввод команды с клавиатуры оболочки
-type_text(sh, "type rom")
+type_text(sh, "echo directory")
 sh:handle("key", keys.enter, false)
 sh:handle("key_up", keys.enter)
 sh:tick(0.05)
@@ -62,7 +62,7 @@ eq(string.find(screen_text(out), "directory", 1, true) != nil, true, "a command 
 # история и стрелки идут программе, а не меняют фокус оболочки
 sh:handle("key", keys.up, false)
 sh:render()
-eq(string.find(screen_text(out), "type rom", 1, true) != nil, true, "Up reaches the program (history), the shell does not move the focus")
+eq(string.find(screen_text(out), "echo directory", 1, true) != nil, true, "Up reaches the program (history), the shell does not move the focus")
 
 
 # цвета терминала в клетках: места 32..47

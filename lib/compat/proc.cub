@@ -7,7 +7,8 @@
 #
 # Программа ждёт события через coroutine.yield (os.pullEvent); хозяин (окно терминала, ядро) решает, какие события ей отдать:
 # ввод только сфокусированной, таймеры по номеру, прочее всем. События, которые программа поставила сама (os.queueEvent), идут в её
-# собственную очередь и доставляются раньше внешних. Таймеры и будильники запоминают номера (owns_timer), чтобы хозяин мог
+# собственную очередь и доставляются раньше внешних. Вместо файла программой может быть функция main(env, args) (opts.main): так
+# работают встроенные программы CubeOS, например оболочка csh. Таймеры и будильники запоминают номера (owns_timer), чтобы хозяин мог
 # отдать «timer» только владельцу.
 
 import compat.bios as bios
@@ -23,13 +24,14 @@ def _event(name, a, b, c, d, e):
     return ev
 
 export class LegacyProc:
-    # args: список аргументов программы; opts: name, on_exit(proc, ok, err), on_shutdown(proc, reboot)
+    # args: список аргументов программы; opts: name, main (функция main(env, args) вместо файла), on_exit(proc, ok, err), on_shutdown(proc, reboot)
     def init(self, env, path, args=nil, opts=nil):
         o = opts ?? {}
         self.env = env
         self.path = path
         self.args = args ?? []
         self.name = o.name ?? path
+        self.main = o.main
         self.on_exit = o.on_exit
         self.on_shutdown = o.on_shutdown
         self.queue = []
@@ -103,7 +105,10 @@ export class LegacyProc:
         path = self.path
         env = self.env
         args = va.pack(table.unpack(self.args))
+        main = self.main
         fn = () => bios.run_program(env, {}, path, args)
+        if main != nil:
+            fn = () => main(env, me.args)
         self.co = coroutine.create(fn)
         self:_resume(nil)
         self:drain()

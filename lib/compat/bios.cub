@@ -99,6 +99,13 @@ export def sleep_for(env, seconds):
 
 # read(replace_char, history, complete, default): строка с курсором, историей (стрелки вверх и вниз), дополнением (Tab), вставкой
 export def read_line(env, replace_char=nil, history=nil, complete=nil, default=nil):
+    # ввод из пайпа или файла (оболочка кладёт env.stdin = {lines, pos}): строки по одной, потом nil
+    st = env.stdin
+    if st != nil:
+        line = st.lines[st.pos]
+        if line != nil:
+            st.pos += 1
+        return line
     term = env.term
     os_api = env.os
     keys_api = env.keys

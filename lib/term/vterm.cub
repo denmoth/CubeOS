@@ -63,12 +63,18 @@ export def hex_index(ch):
     return idx
 
 export class VTerm:
-    # opts: color (true: цветной терминал), palette (список [r, g, b] 0..255)
+    # opts: color (true: цветной терминал), palette (список [r, g, b] 0..255), history (сколько строк хранить в прокрутке назад, 0)
     def init(self, w, h, opts=nil):
         o = opts ?? {}
         self.w = w
         self.h = h
         self.color = o.color ?? true
+        # строки, ушедшие вверх при прокрутке: {t, f, b} со старой шириной; pushed считает все когда-либо ушедшие строки
+        self.hist = []
+        self.hist_max = o.history ?? 0
+        self.pushed = 0
+        # хозяин выставляет true, когда на экране программа, которой нужна мышь
+        self.mouse_app = false
         self.fgc = 0
         self.bgc = 15
         self.cx = 1
@@ -198,6 +204,9 @@ export class VTerm:
         if n >= h or -n >= h:
             self:clear()
             return
+        if n > 0 and self.hist_max > 0:
+            for y in range[1, n]:
+                self:_push_history(self.text[y], self.fg[y], self.bg[y])
         nt = {}
         nf = {}
         nb = {}
@@ -213,6 +222,49 @@ export class VTerm:
         self.fg = nf
         self.bg = nb
         self:_touch_all()
+
+    def _push_history(self, t, f, b):
+        hist = self.hist
+        hist[len(hist) + 1] = {t: t, f: f, b: b}
+        self.pushed += 1
+        if len(hist) > self.hist_max:
+            table.remove(hist, 1)
+
+    # строка по общему номеру: 1..len(hist) это прокрутка назад, дальше экран; возвращает три массива (текст, цвета текста, фона)
+    def row_at(self, i):
+        n = len(self.hist)
+        if i <= n:
+            r = self.hist[i]
+            return r.t, r.f, r.b
+        return self.text[i - n], self.fg[i - n], self.bg[i - n]
+
+    def total_rows(self):
+        return len(self.hist) + self.h
+
+    # весь вывод (прокрутка и экран до последней непустой строки) как список строк UTF-8 без пробелов справа; для пайпов
+    def all_lines(self):
+        out = []
+        total = self:total_rows()
+        last = 0
+        for i in range[1, total]:
+            t, f, b = self:row_at(i)
+            cells = []
+            for x in range[1, len(t)]:
+                cells[x] = t[x]
+            k = len(cells)
+            while k > 0 and (cells[k] == 32 or cells[k] == 0):
+                k -= 1
+            for x in range[1, k]:
+                if cells[x] >= chars.LATIN:
+                    cells[x] = cells[x] - chars.LATIN
+            line = chars.encode(chars.slice(cells, 1, k))
+            out[i] = line
+            if k > 0:
+                last = i
+        res = []
+        for i in range[1, last]:
+            res[i] = out[i]
+        return res
 
     # ------------------------------------------------------------ курсор
 
