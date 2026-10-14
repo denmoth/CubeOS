@@ -9,7 +9,7 @@ WORLD="${1:-Новый мир}"
 ID="${2:-0}"
 DEST="$SAVES/$WORLD/computercraft/computer/$ID"
 mkdir -p "$DEST/repo"
-for d in src lib tests tools game examples; do
+for d in src lib tests tools game examples assets; do
   rm -rf "$DEST/repo/$d"
   cp -r "$REPO/$d" "$DEST/repo/$d"
 done

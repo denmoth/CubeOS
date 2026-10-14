@@ -1,0 +1,167 @@
+# font: растровые шрифты CubeOS (формат .font, см. docs/spec/font-format.md)
+#
+#   f = font.from_file("/repo/assets/fonts/cube-5x8.font")
+#   f.width, f.height, f.ascent               размер клетки и строки над базовой линией
+#   f:has(0x416)                              есть ли глиф для кодовой точки
+#   f:can_render("Привет")                    хватает ли шрифту всех символов строки
+#   f:glyph_text(0x416)                       глиф картинкой: список строк из "#" и "."
+#   f:width_of("Привет")                      ширина текста в пикселях
+#   f:draw(buf, x, y, "Привет", 1)            рисует текст в пиксельный буфер (pixelbuf), цвет 1
+#   buf = f:render("Привет", 1)               новый буфер по размеру текста
+#
+# Шрифт моноширинный. Текст это UTF-8; символ без глифа заменяется глифом U+FFFD (если он есть) или "?".
+
+import unicode
+import pixelbuf
+
+const BAD = 0xFFFD
+
+def _byte(data, i):
+    return string.byte(data, i)
+
+# читает число переменной длины (по 7 бит, старший бит означает продолжение); возвращает значение и следующую позицию
+def _varint(data, pos):
+    value = 0
+    shift = 1
+    while true:
+        b = _byte(data, pos)
+        pos += 1
+        value += (b % 128) * shift
+        if b < 128:
+            return value, pos
+        shift = shift * 128
+
+export class Font:
+    def init(self, data):
+        if string.sub(data, 1, 4) != "CFN1":
+            error("not a CubeOS font (bad magic)", 0)
+        self.width = _byte(data, 5)
+        self.height = _byte(data, 6)
+        self.ascent = _byte(data, 7)
+        self.flags = _byte(data, 8)
+        count = _byte(data, 9) + _byte(data, 10) * 256
+        pos = 11
+        self.ranges = []
+        glyphs = 0
+        for i in range[1, count]:
+            start, pos = _varint(data, pos)
+            n, pos = _varint(data, pos)
+            self.ranges[i] = {start: start, count: n, first: glyphs}
+            glyphs += n
+        self.glyph_count = glyphs
+        self.bytes_per_row = (self.width + 7) // 8
+        self.glyph_size = self.height * self.bytes_per_row
+        self.data = data
+        self.data_start = pos
+        meta_len = _byte(data, pos + glyphs * self.glyph_size) + _byte(data, pos + glyphs * self.glyph_size + 1) * 256
+        self.meta = string.sub(data, pos + glyphs * self.glyph_size + 2, pos + glyphs * self.glyph_size + 1 + meta_len)
+        self.cache = {}
+        self.metrics_bad = nil
+
+    # номер глифа по кодовой точке (двоичный поиск по диапазонам) или nil
+    def _index(self, cp):
+        lo = 1
+        hi = len(self.ranges)
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            r = self.ranges[mid]
+            if cp < r.start:
+                hi = mid - 1
+            elif cp >= r.start + r.count:
+                lo = mid + 1
+            else:
+                return r.first + (cp - r.start)
+        return nil
+
+    def has(self, cp):
+        return self:_index(cp) != nil
+
+    # строки глифа: список из height строк, каждая строка это список width значений 0 или 1
+    def _bits(self, index):
+        cached = self.cache[index]
+        if cached != nil:
+            return cached
+        base = self.data_start + index * self.glyph_size
+        rows = []
+        for y in range[0, self.height - 1]:
+            row = []
+            offset = base + y * self.bytes_per_row
+            for x in range[0, self.width - 1]:
+                byte = _byte(self.data, offset + x // 8)
+                shift = 7 - x % 8
+                row[x + 1] = (byte // 2 ** shift) % 2
+            rows[y + 1] = row
+        self.cache[index] = rows
+        return rows
+
+    # глиф для кодовой точки; нет глифа: U+FFFD или "?"
+    def _glyph(self, cp):
+        index = self:_index(cp)
+        if index == nil:
+            index = self:_index(BAD)
+        if index == nil:
+            index = self:_index(63)
+        if index == nil:
+            return nil
+        return self:_bits(index)
+
+    def glyph_text(self, cp):
+        rows = self:_glyph(cp)
+        out = []
+        for y in range[1, self.height]:
+            parts = []
+            for x in range[1, self.width]:
+                parts[x] = rows[y][x] == 1 and "#" or "."
+            out[y] = table.concat(parts)
+        return out
+
+    def can_render(self, text):
+        for cp in unicode.codepoints(text):
+            if cp != 10 and cp != 9 and not self:has(cp):
+                return false
+        return true
+
+    # ширина текста в пикселях без учёта переводов строки; spacing добавляется между символами
+    def width_of(self, text, spacing=0):
+        n = 0
+        for cp in unicode.codepoints(text):
+            n += 1
+        if n == 0:
+            return 0
+        return n * self.width + (n - 1) * spacing
+
+    # рисует текст в буфер (объект с методом set(x, y, цвет)); возвращает x после последнего символа
+    def draw(self, buf, x, y, text, color=1, spacing=0):
+        for cp in unicode.codepoints(text):
+            rows = self:_glyph(cp)
+            if rows != nil:
+                for gy in range[1, self.height]:
+                    row = rows[gy]
+                    for gx in range[1, self.width]:
+                        if row[gx] == 1:
+                            buf:set(x + gx - 1, y + gy - 1, color)
+            x += self.width + spacing
+        return x
+
+    # новый буфер по размеру текста с нарисованным текстом (фон 0)
+    def render(self, text, color=1, spacing=0):
+        w = self:width_of(text, spacing)
+        buf = pixelbuf.new(w == 0 and 1 or w, self.height)
+        self:draw(buf, 0, 0, text, color, spacing)
+        return buf
+
+export def parse(data):
+    return Font(data)
+
+# читает файл шрифта; reader(path) -> строка (по умолчанию настоящий fs, подмените на вид CFS)
+export def from_file(path, reader=nil):
+    data = nil
+    if reader != nil:
+        data = reader(path)
+    else:
+        h = fs.open(path, "rb")
+        if h == nil:
+            error("cannot open font file: " .. path, 0)
+        data = h.readAll()
+        h.close()
+    return Font(data)

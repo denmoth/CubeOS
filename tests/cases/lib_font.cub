@@ -1,0 +1,90 @@
+import t
+import font
+import pixelbuf
+eq = t.eq
+
+# ---------------------------------------------------------------- буфер пикселей
+b = pixelbuf.new(4, 3)
+b:set(1, 1, 7)
+b:set(10, 10, 9)
+b:set(-1, 0, 9)
+eq(b:get(1, 1), 7, "set and get")
+eq(b:get(10, 10), nil, "get outside")
+eq(b:to_text(), ["....", ".#..", "...."], "to_text")
+b:fill_rect(0, 0, 2, 2, 3)
+eq(b:to_text(), ["##..", "##..", "...."], "fill_rect")
+eq(b:rows()[2], [3, 3, 0, 0], "rows")
+small_buf = pixelbuf.new(2, 2)
+small_buf:set(0, 0, 1)
+b:clear()
+b:blit(small_buf, 2, 1, 0)
+eq(b:to_text(), ["....", "..#.", "...."], "blit with transparency")
+
+# ---------------------------------------------------------------- шрифт 5x8
+f5 = font.from_file("/repo/assets/fonts/cube-5x8.font")
+eq(f5.width, 5, "5x8 width")
+eq(f5.height, 8, "5x8 height")
+eq(f5.ascent, 7, "5x8 ascent")
+eq(f5.glyph_count > 300, true, "5x8 has many glyphs")
+eq(string.find(f5.meta, "Spleen", 1, true) != nil, true, "5x8 credits Spleen")
+eq(f5:glyph_text(65), [".....", ".##..", "#..#.", "#..#.", "####.", "#..#.", "#..#.", "....."], "A")
+eq(f5:glyph_text(0x416), [".....", "#.#.#", "#.#.#", ".###.", "#.#.#", "#.#.#", "#.#.#", "....."], "Zhe")
+eq(f5:glyph_text(0x44F), [".....", ".....", ".###.", "#..#.", ".###.", ".#.#.", "#..#.", "....."], "ya")
+eq(f5:glyph_text(0x410), f5:glyph_text(65), "Cyrillic A shares the Latin shape")
+eq(f5:glyph_text(0x451)[1], f5:glyph_text(0xEB)[1], "yo shares e-diaeresis")
+
+all_ok = true
+for cp in range[0x410, 0x44F]:
+    if not f5:has(cp):
+        all_ok = false
+eq(all_ok, true, "all Russian letters present")
+for cp in [0x401, 0x451, 0x404, 0x454, 0x406, 0x456, 0x407, 0x457, 0x490, 0x491]:
+    eq(f5:has(cp), true, "Ukrainian and yo letter " .. cp)
+eq(f5:has(0x2500), true, "box drawing")
+eq(f5:has(0x2588), true, "block")
+eq(f5:has(0x2192), true, "arrow")
+eq(f5:has(0x65E5), false, "no CJK")
+
+# ---------------------------------------------------------------- шрифт 8x16
+f8 = font.from_file("/repo/assets/fonts/cube-8x16.font")
+eq(f8.width, 8, "8x16 width")
+eq(f8.height, 16, "8x16 height")
+all_ok = true
+for cp in range[0x410, 0x44F]:
+    if not f8:has(cp):
+        all_ok = false
+eq(all_ok, true, "8x16 Russian letters present")
+eq(f8:has(0x404) and f8:has(0x454), true, "8x16 Ukrainian Ye added")
+eq(f8:has(0x3B1), true, "Greek alpha")
+eq(f8:has(0x105), true, "Latin Extended-A")
+ye = f8:glyph_text(0x404)
+eq(len(ye), 16, "Ye rows")
+bar_rows = 0
+for row in ye:
+    if string.find(row, "###", 1, true) != nil:
+        bar_rows += 1
+eq(f8:glyph_text(0x404) != f8:glyph_text(0x421), true, "Ye differs from Es")
+
+# ---------------------------------------------------------------- текст
+eq(f5:can_render("Hello, мир! Привіт, Їжак"), true, "can render mixed text")
+eq(f5:can_render("日本語"), false, "cannot render CJK")
+eq(f5:can_render("line\nbreak"), true, "newline is allowed")
+eq(f5:width_of("Привет"), 30, "width of six letters")
+eq(f5:width_of("Привет", 1), 35, "width with spacing")
+eq(f5:width_of(""), 0, "empty width")
+eq(f8:width_of("Привет"), 48, "8x16 width")
+img = f5:render("Hi", 1)
+eq(img.width, 10, "render width")
+eq(img.height, 8, "render height")
+eq(img:to_text()[1], "..........", "render row 1")
+eq(img:to_text()[2], "#..#...#..", "render row 2")
+eq(img:to_text()[4], "####..##..", "render row 4")
+# неизвестный символ рисуется заменителем, а не пропадает
+tofu = f5:render("日", 1)
+eq(tofu:to_text(), f5:glyph_text(0xFFFD), "fallback glyph")
+eq(f5:draw(pixelbuf.new(40, 8), 2, 0, "ab"), 12, "draw returns next x")
+
+# размер файлов: оба шрифта вместе не больше 20 КБ
+total = fs.getSize("/repo/assets/fonts/cube-5x8.font") + fs.getSize("/repo/assets/fonts/cube-8x16.font")
+eq(total <= 20000, true, "fonts fit into 20 KB")
+print("done")
