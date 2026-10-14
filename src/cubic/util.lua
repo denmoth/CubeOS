@@ -54,4 +54,23 @@ function U.utf8(cp)
   end
 end
 
+-- Длина строки в БАЙТАХ. В хосте с поддержкой UTF-8 (например, с модом cc-tweaked-unicode-support) оператор # и
+-- string.len считают символы, а не байты, и разбор текста с кириллицей обрывается раньше конца файла.
+-- s:byte(i) байтовый всегда, поэтому длина ищется по нему, если # не совпал с реальной.
+function U.blen(s)
+  local n = #s
+  if s:byte(n + 1) == nil then return n end
+  local lo = n + 1
+  local hi = lo * 2
+  while s:byte(hi) do
+    lo = hi
+    hi = hi * 2
+  end
+  while hi - lo > 1 do
+    local mid = math.floor((lo + hi) / 2)
+    if s:byte(mid) then lo = mid else hi = mid end
+  end
+  return lo
+end
+
 return U

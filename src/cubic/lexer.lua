@@ -106,7 +106,7 @@ local function split_fstring(raw, file, line, col)
         local spec
         do
           local d, q = 0, nil
-          for k = 1, #src do
+          for k = 1, U.blen(src) do
             local ch = src:sub(k, k)
             if q then
               if ch == q then q = nil end
@@ -148,7 +148,7 @@ end
 function M.tokenize(src, file, opts)
   opts = opts or {}
   src = src:gsub("^\239\187\191", ""):gsub("\r\n?", "\n")
-  local len = #src
+  local len = U.blen(src)
   local toks = {}
   local comments = {}
   toks.comments = comments

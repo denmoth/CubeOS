@@ -122,9 +122,27 @@ end
 
 ---------------------------------------------------------------- коллекции
 
+-- длина строки в байтах, даже если хост считает # в символах UTF-8 (см. util.lua, U.blen)
+local function blen(s)
+  local n = #s
+  if s:byte(n + 1) == nil then return n end
+  local lo = n + 1
+  local hi = lo * 2
+  while s:byte(hi) do
+    lo = hi
+    hi = hi * 2
+  end
+  while hi - lo > 1 do
+    local mid = math.floor((lo + hi) / 2)
+    if s:byte(mid) then lo = mid else hi = mid end
+  end
+  return lo
+end
+rt.blen = blen
+
 function rt.len(x)
   local t = type(x)
-  if t == "string" then return #x end
+  if t == "string" then return blen(x) end
   if t ~= "table" then error("len() expects a string or a table, got " .. t, 2) end
   local n = #x
   if n > 0 then return n end

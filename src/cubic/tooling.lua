@@ -196,7 +196,7 @@ end
 -- Сырые токены, без разбора контекста. Никогда не бросает ошибку.
 local function scan(src)
   src = src:gsub("\r\n?", "\n")
-  local len = #src
+  local len = U.blen(src)
   local starts = { 1 }
   for p in src:gmatch("()\n") do starts[#starts + 1] = p + 1 end
 
@@ -370,7 +370,7 @@ local function scan(src)
           local le = (starts[nextline + 1] or (len + 2)) - 2
           local text = src:sub(ls, le)
           local lead = #text:match("^ *")
-          if lead < #text then emit("luacode", ls + lead, le) end
+          if lead < U.blen(text) then emit("luacode", ls + lead, le) end
           i = le + 1
           if i == len + 1 then break end
         end
@@ -931,7 +931,7 @@ end
 local function line_span(lines, line)
   local text = lines[line] or ""
   local lead = #text:match("^ *")
-  return lead + 1, #text + 1
+  return lead + 1, U.blen(text) + 1
 end
 
 -- Ошибки и предупреждения: { {severity = "error"|"warning", line, col, end_col, message} }

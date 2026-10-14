@@ -91,7 +91,7 @@ end
 -- Adler-32 of the source text (used in the banner of compiled files)
 local function adler32(s)
   local a, b = 1, 0
-  for i = 1, #s do
+  for i = 1, U.blen(s) do
     a = (a + s:byte(i)) % 65521
     b = (b + a) % 65521
   end
@@ -112,7 +112,7 @@ function C.compile(src, file, opts)
   end
   local gen_opts = setmetatable({
     version = C.VERSION,
-    src_info = "size=" .. #src .. " adler32=" .. adler32(src),
+    src_info = "size=" .. U.blen(src) .. " adler32=" .. adler32(src),
   }, { __index = opts })
   return codegen.generate(ast, file, gen_opts)
 end
@@ -136,7 +136,7 @@ end
 -- true if the compiled text was produced from exactly this source
 function C.is_up_to_date(lua_text, src)
   local b = C.parse_banner(lua_text)
-  return b ~= nil and b.version == C.VERSION and b.size == #src and b.adler32 == adler32(src)
+  return b ~= nil and b.version == C.VERSION and b.size == U.blen(src) and b.adler32 == adler32(src)
 end
 
 -- То же, но не бросает ошибку: возвращает nil, "сообщение"
