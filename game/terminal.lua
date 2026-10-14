@@ -1,9 +1,9 @@
--- Терминал CubeOS: оболочка csh на весь экран (пайпы, фоновые задачи, подсветка, история, fetch; классические программы CC работают как есть),
+-- Терминал CubeOS: оболочка cush на весь экран (пайпы, фоновые задачи, подсветка, история, fetch; классические программы CC работают как есть),
 -- с русским и украинским вводом, прокруткой колесом мыши и выделением.
 -- На компьютере: /repo/game/terminal.lua [pixel|text] [monitor[=имя]] [программа аргументы...]
 --   pixel: свой шрифт, кириллица и любые символы (нужен CC: Graphics); text: обычный терминал (кириллица латиницей).
 -- Ctrl+Shift или Alt+Shift переключает раскладку (EN, RU, UK). Ctrl+C или Ctrl+T прерывает программу. Выход: команда exit.
--- Если указать программу, она запускается вместо csh (например rom/programs/shell.lua).
+-- Если указать программу, она запускается вместо cush (например rom/programs/shell.lua).
 local ROOT = "/repo"
 local cubic = loadfile(ROOT .. "/src/cubic/init.lua")(ROOT .. "/src/cubic")
 local loader = cubic.new_loader({ roots = { ROOT .. "/lib" } })
@@ -21,7 +21,7 @@ preload({
   "cgl.mirror", "cgl.anim", "cgl", "ui.cells", "ui.theme", "ui.border", "ui.keymap", "ui.text", "ui.charmap", "ui.widget",
   "ui.controls", "ui.lists", "ui.dialogs", "ui.runtime", "ui.out_text", "ui.out_pixel", "ui.shell", "ui.toys", "ui",
   "input.layout", "term.chars", "term.palette", "term.vterm", "term.view", "compat.vararg", "compat.bios", "compat.env", "compat.proc",
-  "csh.lex", "csh.hist", "csh.editor", "csh.builtins", "csh.fetch", "csh.shell",
+  "cush.lex", "cush.hist", "cush.editor", "cush.builtins", "cush.fetch", "cush.shell",
 })
 local ui = loader.import("ui")
 local vterm = loader.import("term.vterm")
@@ -29,7 +29,7 @@ local view_mod = loader.import("term.view")
 local env_mod = loader.import("compat.env")
 local proc_mod = loader.import("compat.proc")
 local palette = loader.import("term.palette")
-local csh = loader.import("csh.shell")
+local cush = loader.import("cush.shell")
 
 local opts, target = dofile(ROOT .. "/game/cgl_args.lua")({ ... })
 if not opts then
@@ -51,12 +51,12 @@ local cols, rows = out:size()
 local vt = vterm.new(cols, rows, { palette = palette.get("cubeos"), history = 2000 })
 local view = view_mod.new(vt, { width = "fill", height = "fill" })
 local env = env_mod.new({ vterm = vt })
-env.csh_opts = { history_path = "/.csh_history",
+env.cush_opts = { history_path = "/.cush_history",
   info = { display = out.kind == "pixel" and "pixel mode" or "text mode", font = out.kind == "pixel" and "Monocraft 6x9" or nil } }
 local program = table.remove(rest, 1)
 local popts = { name = "terminal", on_exit = function() u.quit = true end, on_shutdown = function() u.quit = true end }
-if not program then popts.main = csh.main end
-local proc = proc_mod.new(env, program or "csh", rest, popts)
+if not program then popts.main = cush.main end
+local proc = proc_mod.new(env, program or "cush", rest, popts)
 view:on("event", function(_, name, a, b, c) proc:feed(name, a, b, c) end)
 u:set_root(view)
 u:focus_widget(view)

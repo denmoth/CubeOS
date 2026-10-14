@@ -1,4 +1,4 @@
-# csh.builtins: встроенные команды оболочки csh (cd, ls, grep, cat, jobs...). Каждая это функция (sh, args) -> код возврата (0 это успех);
+# cush.builtins: встроенные команды оболочки cush (cd, ls, grep, cat, jobs...). Каждая это функция (sh, args) -> код возврата (0 это успех);
 # вывод идёт через sh:println и term текущей задачи (в пайпе это буфер), сообщения об ошибках через sh:eprint прямо на экран.
 # Команды-фильтры (grep, head, tail, wc, sort, uniq, cat, tee) читают строки из файлов в аргументах или из пайпа (sh.env.stdin).
 
@@ -579,7 +579,7 @@ def b_help(sh, args):
         if help_of[k] == nil:
             names[len(names) + 1] = k
     table.sort(names)
-    sh:write_color("4", "CubeOS csh")
+    sh:write_color("4", "CubeOS cush")
     sh:println("  оболочка с пайпами, фоновыми задачами и подсветкой")
     sh:println("")
     sh:write_color("3", "Команды")

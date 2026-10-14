@@ -2,18 +2,18 @@ import t
 import term.vterm as vterm
 import compat.env as compat_env
 import compat.proc as compat_proc
-import csh.shell as csh
+import cush.shell as cush
 eq = t.eq
 
-HIST = "/repo/build/csh_test_history"
+HIST = "/repo/build/cush_test_history"
 if fs.exists(HIST):
     fs.delete(HIST)
 
 def make(w, h):
     vt = vterm.new(w, h, {history: 200})
     env = compat_env.new({vterm: vt})
-    env.csh_opts = {history_path: HIST, greeting: false, user: "tester", host: "cube"}
-    proc = compat_proc.new(env, "csh", [], {name: "csh", main: csh.main})
+    env.cush_opts = {history_path: HIST, greeting: false, user: "tester", host: "cube"}
+    proc = compat_proc.new(env, "cush", [], {name: "cush", main: cush.main})
     proc:start()
     return vt, proc, env
 
@@ -43,27 +43,27 @@ enter(proc)
 eq(has(vt, "hello world"), true, "echo prints")
 
 # пайп
-f = fs.open("/repo/build/csh_in.txt", "w")
+f = fs.open("/repo/build/cush_in.txt", "w")
 f.write("apple\nbanana\ncherry\navocado\n")
 f.close()
 typ(proc, "cd repo/build")
 enter(proc)
-typ(proc, "cat csh_in.txt | grep a | wc -l")
+typ(proc, "cat cush_in.txt | grep a | wc -l")
 enter(proc)
 eq(has(vt, "3"), true, "a pipe counts the lines with a (apple, banana, avocado)")
-typ(proc, "cat csh_in.txt | sort -r | head -n 2")
+typ(proc, "cat cush_in.txt | sort -r | head -n 2")
 enter(proc)
 eq(has(vt, "cherry"), true, "sort -r and head: the first line is cherry")
 
 # перенаправление
-typ(proc, "echo new > csh_out.txt")
+typ(proc, "echo new > cush_out.txt")
 enter(proc)
-typ(proc, "echo more >> csh_out.txt")
+typ(proc, "echo more >> cush_out.txt")
 enter(proc)
-typ(proc, "cat csh_out.txt")
+typ(proc, "cat cush_out.txt")
 enter(proc)
 eq(has(vt, "new\nmore") or (has(vt, "new") and has(vt, "more")), true, "> and >> write a file")
-f = fs.open("/repo/build/csh_out.txt", "r")
+f = fs.open("/repo/build/cush_out.txt", "r")
 eq(f.readAll(), "new\nmore\n", "the file has both lines")
 f.close()
 
@@ -136,13 +136,13 @@ proc:feed("key", keys.leftCtrl, false)
 proc:feed("key", keys.r, false)
 proc:feed("key_up", keys.r)
 proc:feed("key_up", keys.leftCtrl)
-typ(proc, "csh_in")
-eq(has(vt, "`csh_in'"), true, "Ctrl+R opens the reverse search")
-eq(has(vt, "cat csh_in.txt"), true, "and finds a matching command")
+typ(proc, "cush_in")
+eq(has(vt, "`cush_in'"), true, "Ctrl+R opens the reverse search")
+eq(has(vt, "cat cush_in.txt"), true, "and finds a matching command")
 proc:feed("key", keys.escape, false)
 
-fs.delete("/repo/build/csh_in.txt")
-fs.delete("/repo/build/csh_out.txt")
+fs.delete("/repo/build/cush_in.txt")
+fs.delete("/repo/build/cush_out.txt")
 fs.delete(HIST)
 
 print("done")

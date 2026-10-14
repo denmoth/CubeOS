@@ -1,9 +1,9 @@
-# csh.shell: оболочка CubeOS (csh) для окружения совместимости CraftOS
+# cush.shell: оболочка CubeOS (cush) для окружения совместимости CraftOS
 #
-#   csh.main(env, args)       главная функция процесса (compat.proc: opts.main); env.csh_opts: history_path, user, host, info, greeting
+#   cush.main(env, args)       главная функция процесса (compat.proc: opts.main); env.cush_opts: history_path, user, host, info, greeting
 #
 # Оболочка сама раздаёт события: внутри корутины процесса она держит задачи (корутины) и редактор строки. Переднего плана ровно
-# одна задача, остальные фоновые (команда с &); ввод идёт только переднему плану, прочие события всем. Строка разбирается csh.lex:
+# одна задача, остальные фоновые (команда с &); ввод идёт только переднему плану, прочие события всем. Строка разбирается cush.lex:
 # пайпы (| захватывает вывод одной команды и отдаёт строками следующей), перенаправления > >> <, цепочки ; && ||, & фон,
 # переменные, псевдонимы, шаблоны * и ?. Программы CraftOS запускаются как os.run (bios.run_program) с настоящим API shell.
 #
@@ -14,11 +14,11 @@ import compat.bios as bios
 import compat.vararg as va
 import term.vterm as vterm
 import term.chars as chars
-import csh.lex as lex
-import csh.hist as hist_mod
-import csh.editor as editor_mod
-import csh.builtins as builtins
-import csh.fetch as fetch
+import cush.lex as lex
+import cush.hist as hist_mod
+import cush.editor as editor_mod
+import cush.builtins as builtins
+import cush.fetch as fetch
 import version
 import unicode
 
@@ -74,7 +74,7 @@ def make_api(sh, program):
     api.setCompletionFunction = (p, f) => nil
     api.getCompletionInfo = () => {}
     api.setTitle = (t) => nil
-    api.getTitle = () => "csh"
+    api.getTitle = () => "cush"
     return api
 
 # ---------------------------------------------------------------- оболочка
@@ -90,7 +90,7 @@ export class Shell:
         host = o.host
         if host == nil and label != nil and label != "":
             host = string.gsub(label, "%s+", "-")
-        self.vars = {HOME: o.home ?? "/", USER: o.user ?? "user", HOST: host ?? "cubeos", SHELL: "csh", "?": 0}
+        self.vars = {HOME: o.home ?? "/", USER: o.user ?? "user", HOST: host ?? "cubeos", SHELL: "cush", "?": 0}
         self.vars.PWD = "/"
         self.aliases = {}
         for k, v in DEFAULT_ALIASES:
@@ -112,7 +112,7 @@ export class Shell:
         self.extra_help.fetch = "fetch  логотип и сведения о системе (fastfetch, neofetch)"
         self.programs_cache = nil
         self.maker = bios.do_file(env, "rom/modules/main/cc/require.lua")
-        self.hist = hist_mod.new(env.fs, o.history_path ?? "/.csh_history", o.history_limit ?? 1000)
+        self.hist = hist_mod.new(env.fs, o.history_path ?? "/.cush_history", o.history_limit ?? 1000)
         let me = self
         self.editor = editor_mod.new(env, {hist: self.hist, prompt: () => me:prompt_segments(), highlight: (line) => me:highlight(line),
             complete: (line, pos) => me:complete(line, pos)})
@@ -345,7 +345,7 @@ export class Shell:
         toks = lex.tokens(text)
         chains, err = lex.parse(toks)
         if chains == nil:
-            self:eprint("csh: " .. err)
+            self:eprint("cush: " .. err)
             return 2
         return self:run_chains(chains)
 
@@ -437,7 +437,7 @@ export class Shell:
             if r.op == "<":
                 lines = self:_read_lines(target)
                 if lines == nil:
-                    self:eprint("csh: " .. target .. ": no such file")
+                    self:eprint("cush: " .. target .. ": no such file")
                     return 1, []
                 stdin_lines = lines
             else:
@@ -468,7 +468,7 @@ export class Shell:
         if out_file != nil:
             f = self.env.fs.open(out_file.path, out_file.append and "a" or "w")
             if f == nil:
-                self:eprint("csh: " .. out_file.name .. ": cannot write")
+                self:eprint("cush: " .. out_file.name .. ": cannot write")
                 return 1, []
             for l in lines:
                 f.writeLine(l)
@@ -502,12 +502,12 @@ export class Shell:
             if not ok:
                 if res == "Terminated":
                     error("Terminated", 0)
-                self:eprint("csh: " .. name .. ": " .. tostring(res))
+                self:eprint("cush: " .. name .. ": " .. tostring(res))
                 return 1
             return tonumber(res) ?? 0
         path = self:resolve_program(name)
         if path == nil:
-            self:eprint("csh: " .. name .. ": command not found")
+            self:eprint("cush: " .. name .. ": command not found")
             return 127
         return self:run_program(path, args)
 
@@ -623,7 +623,7 @@ export class Shell:
         if not ok:
             status = 1
             if res != "Terminated" and res != nil and res != "":
-                self:eprint("csh: " .. tostring(res))
+                self:eprint("cush: " .. tostring(res))
         else:
             status = tonumber(res) ?? 0
         if j == self.fg:
@@ -686,7 +686,7 @@ export class Shell:
         toks = lex.tokens(line)
         chains, err = lex.parse(toks)
         if chains == nil:
-            self:eprint("csh: " .. err)
+            self:eprint("cush: " .. err)
             self.vars["?"] = 2
             self.editor:begin()
             return
@@ -774,7 +774,7 @@ export class Shell:
         self:write_color("3", version.NAME)
         self:write_color("0", " ")
         self:write_color("5", version.VERSION)
-        self:write_color("7", "   csh: help, fetch, Tab, Ctrl+R")
+        self:write_color("7", "   cush: help, fetch, Tab, Ctrl+R")
         self:println("")
 
     def shutdown(self):
@@ -796,9 +796,9 @@ def run_command_line(sh, line):
     return sh:run_text(line)
 
 export def main(env, args):
-    o = env.csh_opts ?? {}
+    o = env.cush_opts ?? {}
     sh = Shell(env, o)
-    env.csh = sh
+    env.cush = sh
     if args[1] == "-c" and args[2] != nil:
         return run_command_line(sh, args[2])
     sh:run()

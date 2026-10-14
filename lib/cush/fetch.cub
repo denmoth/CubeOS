@@ -1,4 +1,4 @@
-# csh.fetch: команда fetch (fastfetch): логотип CubeOS блоками телетекста и сведения о системе
+# cush.fetch: команда fetch (fastfetch): логотип CubeOS блоками телетекста и сведения о системе
 #
 #   fetch.run(sh)          печатает логотип и справа строки «ключ: значение», внизу цветные квадраты палитры
 #
@@ -105,7 +105,7 @@ export def facts(sh):
     out[len(out) + 1] = ["Host", string.gsub(host, " %(.*$", "")]
     out[len(out) + 1] = ["Kernel", "Cubic -> " .. (_G._VERSION ?? "Lua")]
     out[len(out) + 1] = ["Uptime", uptime_text()]
-    out[len(out) + 1] = ["Shell", "csh"]
+    out[len(out) + 1] = ["Shell", "cush"]
     info = sh.info ?? {}
     out[len(out) + 1] = ["Terminal", w .. "x" .. h .. " cells" .. (info.display != nil and (", " .. info.display) or "")]
     if info.font != nil:

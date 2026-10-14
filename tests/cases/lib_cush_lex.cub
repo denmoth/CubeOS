@@ -1,5 +1,5 @@
 import t
-import csh.lex as lex
+import cush.lex as lex
 eq = t.eq
 
 toks = lex.tokens("ls -l | grep 'a b' > out.txt &")

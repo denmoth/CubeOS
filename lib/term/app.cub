@@ -13,14 +13,14 @@ import term.view as view_mod
 import compat.env as compat_env
 import compat.proc as compat_proc
 import term.palette as palette
-import csh.shell as csh
+import cush.shell as cush
 
 # события, которые идут только в экран на переднем плане (клавиатура и мышь обрабатывает оболочка сама)
 const INPUT_EVENTS = {key: true, key_up: true, char: true, paste: true, mouse_click: true, mouse_drag: true, mouse_up: true,
     mouse_scroll: true, monitor_touch: true, term_resize: true}
 
-# spec: id (terminal), name (Терминал), icon, program (по умолчанию оболочка csh; можно файл программы, например rom/programs/shell.lua),
-# args, palette ("cubeos"), history (строк прокрутки, 2000), history_path (файл истории команд csh), user, host, exit_closes (true)
+# spec: id (terminal), name (Терминал), icon, program (по умолчанию оболочка cush; можно файл программы, например rom/programs/shell.lua),
+# args, palette ("cubeos"), history (строк прокрутки, 2000), history_path (файл истории команд cush), user, host, exit_closes (true)
 export def spec(opts=nil):
     o = opts ?? {}
     def launch(app):
@@ -32,13 +32,13 @@ export def spec(opts=nil):
         out = app.ui.out
         if app.shell != nil:
             out = app.shell.out
-        env.csh_opts = {history_path: o.history_path ?? "/.csh_history", user: o.user, host: o.host, greeting: o.greeting,
+        env.cush_opts = {history_path: o.history_path ?? "/.cush_history", user: o.user, host: o.host, greeting: o.greeting,
             info: {display: out.kind == "pixel" and "pixel mode" or "text mode", font: out.kind == "pixel" and "Monocraft 6x9" or nil}}
         popts = {name: o.name ?? "terminal", on_exit: (p, ok, err) => on_exit(app, p, ok, err, o),
             on_shutdown: (p, reboot) => app:close()}
-        path = o.program ?? "csh"
+        path = o.program ?? "cush"
         if o.program == nil:
-            popts.main = csh.main
+            popts.main = cush.main
         proc = compat_proc.new(env, path, o.args ?? [], popts)
         view:on("event", (w, name, a, b, c) => proc:feed(name, a, b, c))
         app:set_root(view)

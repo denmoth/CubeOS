@@ -1,4 +1,4 @@
-# csh.editor: строка ввода оболочки: приглашение, подсветка, серая подсказка из истории, выделение Shift+стрелками, Ctrl+R, Tab
+# cush.editor: строка ввода оболочки: приглашение, подсветка, серая подсказка из истории, выделение Shift+стрелками, Ctrl+R, Tab
 #
 #   ed = editor.new(env, {hist: h, prompt: () => [{text, color}...], highlight: (line) => строка цветов, complete: (line, pos) => ...})
 #   ed:begin()                  рисует приглашение и пустую строку
@@ -18,7 +18,7 @@ def _color(letter):
     return 2 ** (i - 1)
 
 export class Editor:
-    # opts: hist (csh.hist), prompt (функция -> список {text, color}), highlight (строка -> строка цветов по байтам), complete
+    # opts: hist (cush.hist), prompt (функция -> список {text, color}), highlight (строка -> строка цветов по байтам), complete
     # (строка, позиция в символах -> список вариантов {insert, label, color} и длина заменяемого слова)
     def init(self, env, opts=nil):
         o = opts ?? {}
