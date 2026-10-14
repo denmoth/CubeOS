@@ -1,0 +1,66 @@
+# term.chars: набор символов CC (байты 0..255) и их вид в наших буферах клеток
+#
+# Классические программы пишут в терминал байты. Набор CC: 32..126 ASCII, 160..255 Latin-1, 128..159 «телетекст» (блоки 2x3),
+# 0..31 и 127 это значки и стрелки (в CC они рисуются шрифтом терминала). Для показа в буфере клеток (ui.cells) байт превращается
+# в код символа Unicode: обычные символы как есть, значки в похожие символы Unicode, телетекст и прочее в «сырые» коды
+# 0xE000 + байт. Вывод на настоящий CC (ui.out_text) возвращает сырые коды в байты, пиксельный вывод (ui.out_pixel) сам рисует
+# телетекст блоками.
+#
+#   chars.to_cp(0x41) -> 65           chars.to_cp(150) -> 0xE096 (телетекст)       chars.to_byte(0xE096) -> 150
+#   chars.teletext_bits(150)          -> маска шести подпикселей (1 левый верх, 2 правый верх, 4, 8, 16, 32 правый низ)
+
+import unicode
+
+export const RAW_BASE = 0xE000
+
+# значки нижних кодов CC в похожие символы Unicode (что есть в шрифте Monocraft: стрелки, точки, треугольники)
+const LOW = {
+    1: 0x263A, 2: 0x263B, 3: 0x2665, 4: 0x25C6, 5: 0x2663, 6: 0x2660, 7: 0x2022, 8: 0x25D8, 9: 0x25CB, 10: 0x25D9, 11: 0x2642,
+    12: 0x2640, 13: 0x266A, 14: 0x266B, 15: 0x263C, 16: 0x25BA, 17: 0x25C4, 18: 0x2195, 19: 0x203C, 20: 0xB6, 21: 0xA7, 22: 0x25AC,
+    23: 0x21A8, 24: 0x2191, 25: 0x2193, 26: 0x2192, 27: 0x2190, 28: 0x221F, 29: 0x2194, 30: 0x25B2, 31: 0x25BC
+}
+
+# байт CC -> код символа
+export def to_cp(b):
+    if b >= 32 and b < 127:
+        return b
+    if b >= 160:
+        return b == 160 and 32 or b
+    if b >= 128 and b < 160:
+        return RAW_BASE + b
+    if b == 127:
+        return 0x2588
+    if b == 0:
+        return 32
+    # 1..31: значок Unicode, но байт тоже запоминаем: ui.out_text вернёт именно его
+    return RAW_BASE + b
+
+# код символа из буфера клеток -> байт терминала CC (для вывода на настоящий CC)
+export def to_byte(cp):
+    if cp >= RAW_BASE and cp < RAW_BASE + 256:
+        return cp - RAW_BASE
+    if cp < 256:
+        return cp
+    return 63
+
+# значок Unicode для сырого кода нижней части (для пиксельного вывода) или nil
+export def low_glyph(cp):
+    if cp > RAW_BASE and cp < RAW_BASE + 32:
+        return LOW[cp - RAW_BASE]
+    return nil
+
+# телетекст: байты 128..159 это шесть подпикселей 2x3: бит 1 левый верх, 2 правый верх, 4 левый средний, 8 правый средний,
+# 16 левый нижний; правый нижний подпиксель байта 128..159 всегда фоновый (как в cgl.teletext). Возвращает маску из шести бит,
+# где бит 32 это правый нижний (в символах CC он не используется).
+export def teletext_bits(b):
+    return b - 128
+
+export def is_teletext(cp):
+    return cp >= RAW_BASE + 128 and cp < RAW_BASE + 160
+
+# строка CC (байты) -> строка UTF-8 для показа в обычных программах CubeOS
+export def to_utf8(s):
+    out = []
+    for i in range[1, string.len(s)]:
+        out[i] = unicode.char(low_glyph(to_cp(string.byte(s, i))) ?? (to_cp(string.byte(s, i)) >= RAW_BASE and 63 or to_cp(string.byte(s, i))))
+    return table.concat(out)

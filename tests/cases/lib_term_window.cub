@@ -1,0 +1,94 @@
+import t
+import term.vterm as vterm
+import term.window as window
+eq = t.eq
+
+def rows(vt):
+    out = []
+    for y in range[1, vt.h]:
+        out[y] = vt:line_text(y)
+    return out
+
+parent = vterm.new(12, 5)
+pa = parent:api()
+win = window.create(pa, 3, 2, 6, 2, true)
+w = win:api()
+w.setCursorPos(1, 1)
+w.write("hello!")
+eq(rows(parent)[2], "  hello!    ", "a visible window mirrors to its parent at its position")
+w.setCursorPos(1, 2)
+w.write("ab")
+eq(rows(parent)[3], "  ab        ", "second line")
+cx, cy = parent:getCursorPos()
+eq([cx, cy], [5, 3], "the parent cursor follows the window cursor")
+w.setCursorBlink(true)
+eq(parent:getCursorBlink(), true, "blink is mirrored")
+w.setCursorPos(10, 1)
+eq(parent:getCursorBlink(), false, "no blink when the cursor is outside the window")
+w.setCursorPos(1, 1)
+w.setTextColor(colors.red)
+w.write("R")
+eq(parent.fg[2][3], 14, "colors reach the parent")
+eq(parent:getTextColor(), colors.red, "and the parent text color follows")
+
+# невидимое окно копит изменения
+w.setVisible(false)
+eq(w.isVisible(), false, "hidden")
+w.setCursorPos(1, 1)
+w.write("secret")
+eq(rows(parent)[2], "  Rello!    ", "nothing changes in the parent while hidden")
+w.setVisible(true)
+eq(rows(parent)[2], "  secret    ", "showing redraws")
+eq(win:line_text(1), "secret", "the window keeps its own buffer")
+
+# redraw и позиция
+parent:clear()
+w.redraw()
+eq(rows(parent)[2], "  secret    ", "redraw")
+x, y = w.getPosition()
+eq([x, y], [3, 2], "position")
+w.reposition(1, 4)
+eq(rows(parent)[4], "secret      ", "reposition draws at the new place")
+x, y = w.getPosition()
+eq([x, y], [1, 4], "new position")
+w.reposition(1, 1, 8, 3)
+sw, sh = w.getSize()
+eq([sw, sh], [8, 3], "reposition can resize")
+eq(win:line_text(1), "secret  ", "and keeps the content")
+
+# прокрутка и очистка в окне
+win2 = window.create(pa, 1, 1, 4, 2, true)
+w2 = win2:api()
+parent:clear()
+w2.setCursorPos(1, 1)
+w2.write("aaaa")
+w2.setCursorPos(1, 2)
+w2.write("bbbb")
+w2.scroll(1)
+eq(rows(parent)[1], "bbbb        ", "scroll inside the window")
+eq(rows(parent)[2], "            ", "blank line")
+w2.clear()
+eq(rows(parent)[1], "            ", "clear")
+
+# окно в окне
+inner = window.create(w2, 2, 1, 2, 1, true)
+ii = inner:api()
+ii.write("zz")
+eq(rows(parent)[1], " zz         ", "a window inside a window reaches the real parent")
+
+# палитра
+parent:setPaletteColor(colors.white, 0x102030)
+win3 = window.create(pa, 1, 1, 3, 1, true)
+r, g, b = win3:getPaletteColor(colors.white)
+eq([math.floor(r * 255 + 0.5), math.floor(g * 255 + 0.5), math.floor(b * 255 + 0.5)], [0x10, 0x20, 0x30], "palette is copied from the parent")
+win3:setPaletteColor(colors.red, 1, 0, 0)
+r2, g2, b2 = parent:getPaletteColor(colors.red)
+eq(r2, 1, "a visible window passes palette changes to the parent")
+
+# клипинг: окно не вылезает, лишнее обрезается родителем
+small = vterm.new(5, 2)
+big = window.create(small:api(), 4, 1, 6, 2, true)
+big:api().write("abcdef")
+eq(small:line_text(1), "   ab", "the parent cuts what does not fit")
+
+print("done")

@@ -1,0 +1,128 @@
+# term.window: окна поверх терминала, как `window.create` в CC
+#
+#   win = window.create(parent, 5, 3, 20, 8, true)       parent: таблица функций term (настоящий term, vterm:api(), другое окно)
+#   w = win:api()                                        таблица функций окна (со всеми методами term и методами окна)
+#   w.write("текст"); w.setVisible(false); w.reposition(1, 1, 30, 10)
+#
+# У окна свой буфер: пока окно видимо, каждое изменение строки отправляется родителю (setCursorPos + blit); невидимое окно только
+# копит изменения, redraw() или setVisible(true) показывает их. Курсор окна отражается в родителе. Палитра окна стартует копией
+# палитры родителя, изменение цвета у видимого окна передаётся родителю.
+
+import term.vterm as vterm
+
+const HEX = "0123456789abcdef"
+
+export class Window(vterm.VTerm):
+    def init(self, parent, x, y, w, h, visible=true):
+        super.init(self, w, h, {})
+        self.parent = parent
+        self.px = x
+        self.py = y
+        self.visible = visible
+        # палитра родителя
+        if parent.getPaletteColor != nil:
+            for i in range[0, 15]:
+                r, g, b = parent.getPaletteColor(2 ** i)
+                self.palette[i + 1] = [math.floor(r * 255 + 0.5), math.floor(g * 255 + 0.5), math.floor(b * 255 + 0.5)]
+        self.color = parent.isColor == nil or parent.isColor()
+        if visible:
+            self:redraw()
+
+    def _touch(self, y):
+        super._touch(self, y)
+        if self.visible:
+            self:flush_line(y)
+            self:restoreCursor()
+
+    def _touch_all(self):
+        super._touch_all(self)
+        if self.visible:
+            self:redraw()
+
+    # отправляет строку y родителю
+    def flush_line(self, y):
+        if y < 1 or y > self.h:
+            return
+        py = self.py + y - 1
+        self.parent.setCursorPos(self.px, py)
+        self.parent.blit(self:line_text(y), self:line_blit(y, "fg"), self:line_blit(y, "bg"))
+
+    def redraw(self):
+        if not self.visible:
+            return
+        for y in range[1, self.h]:
+            self:flush_line(y)
+        self:restoreCursor()
+
+    # курсор родителя ставится туда, где курсор окна, мигает, только если он внутри окна
+    def restoreCursor(self):
+        if not self.visible:
+            return
+        inside = self.cx >= 1 and self.cx <= self.w and self.cy >= 1 and self.cy <= self.h
+        self.parent.setCursorPos(self.px + self.cx - 1, self.py + self.cy - 1)
+        self.parent.setCursorBlink(self.blink and inside)
+        self.parent.setTextColor(2 ** self.fgc)
+
+    def write(self, s):
+        super.write(self, s)
+        if self.visible:
+            self:restoreCursor()
+
+    def blit(self, s, fg, bg):
+        super.blit(self, s, fg, bg)
+        if self.visible:
+            self:restoreCursor()
+
+    def setCursorPos(self, x, y):
+        super.setCursorPos(self, x, y)
+        if self.visible:
+            self:restoreCursor()
+
+    def setCursorBlink(self, b):
+        super.setCursorBlink(self, b)
+        if self.visible:
+            self:restoreCursor()
+
+    def setPaletteColor(self, c, r, g=nil, b=nil):
+        super.setPaletteColor(self, c, r, g, b)
+        if self.visible and self.parent.setPaletteColor != nil:
+            idx = vterm.color_index(c, 1)
+            p = self.palette[idx + 1]
+            self.parent.setPaletteColor(c, p[1] / 255, p[2] / 255, p[3] / 255)
+
+    def setVisible(self, v):
+        if v != self.visible:
+            self.visible = v
+            if v:
+                self:redraw()
+
+    def isVisible(self):
+        return self.visible
+
+    def getPosition(self):
+        return self.px, self.py
+
+    # reposition(x, y [, w, h [, parent]]): перемещает и меняет размер окна; родитель может смениться
+    def reposition(self, x, y, w=nil, h=nil, parent=nil):
+        self.px = x
+        self.py = y
+        if parent != nil:
+            self.parent = parent
+        if w != nil and h != nil and (w != self.w or h != self.h):
+            self:resize(w, h)
+        if self.visible:
+            self:redraw()
+
+    def api(self):
+        t = super.api(self)
+        let me = self
+        t.setVisible = (v) => me:setVisible(v)
+        t.isVisible = () => me:isVisible()
+        t.redraw = () => me:redraw()
+        t.restoreCursor = () => me:restoreCursor()
+        t.getPosition = () => me:getPosition()
+        t.reposition = (x, y, w, h, p) => me:reposition(x, y, w, h, p)
+        return t
+
+export def create(parent, x, y, w, h, visible=true):
+    return Window(parent, x, y, w, h, visible)

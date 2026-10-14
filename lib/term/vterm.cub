@@ -1,0 +1,358 @@
+# term.vterm: виртуальный терминал с интерфейсом `term` из CC
+#
+#   vt = vterm.new(51, 19)                 сетка 51x19, цвета как в CC, палитра CC
+#   t = vt:api()                           таблица обычных функций, как настоящий `term` (term.write(...) без self)
+#   t.write("Привет"); t.setCursorPos(1, 2); t.blit("ab", "01", "ff")
+#
+# Все методы CC: write, blit, clear, clearLine, scroll, getCursorPos, setCursorPos, getCursorBlink, setCursorBlink, getSize,
+# setTextColor/Colour, getTextColor/Colour, setBackgroundColor/Colour, getBackgroundColor/Colour, isColor/isColour,
+# getPaletteColor/Colour, setPaletteColor/Colour, getLine. Ошибки сформулированы как в CC. Хранятся байты и цвета (номера 0..15 это
+# номер бита цвета CC), поэтому всё можно показать в буфере клеток (term.view) или переслать настоящему терминалу.
+#
+# Изменения копятся в dirty (по строкам) и rev: хозяин терминала (окно, вид) перерисовывает только их.
+
+import unicode
+
+# значения цветов CC (степени двойки) -> номера 0..15
+const COLOR_INDEX = {1: 0, 2: 1, 4: 2, 8: 3, 16: 4, 32: 5, 64: 6, 128: 7, 256: 8, 512: 9, 1024: 10, 2048: 11, 4096: 12,
+    8192: 13, 16384: 14, 32768: 15}
+
+const DEFAULT_PALETTE = [[240, 240, 240], [242, 178, 51], [229, 127, 216], [153, 178, 242], [222, 222, 108], [127, 204, 25],
+    [242, 178, 204], [76, 76, 76], [153, 153, 153], [76, 153, 178], [178, 102, 229], [51, 102, 204], [127, 102, 76],
+    [87, 166, 78], [204, 76, 76], [17, 17, 17]]
+
+const HEX = "0123456789abcdef"
+
+def _type_name(v):
+    if v == nil:
+        return "nil"
+    return type(v)
+
+def _check_string(v, n):
+    if type(v) == "number":
+        return tostring(v)
+    if type(v) != "string":
+        error("bad argument #" .. n .. " (string expected, got " .. _type_name(v) .. ")", 0)
+    return v
+
+def _check_number(v, n):
+    if type(v) != "number":
+        error("bad argument #" .. n .. " (number expected, got " .. _type_name(v) .. ")", 0)
+    return v
+
+# значение цвета CC -> номер 0..15 (ошибка для не степени двойки)
+export def color_index(value, n=1):
+    _check_number(value, n)
+    idx = COLOR_INDEX[value]
+    if idx == nil:
+        error("Invalid color (got " .. tostring(value) .. ")", 0)
+    return idx
+
+export def hex_index(ch):
+    idx = nil
+    b = string.byte(ch)
+    if b >= 48 and b <= 57:
+        idx = b - 48
+    elif b >= 97 and b <= 102:
+        idx = b - 87
+    elif b >= 65 and b <= 70:
+        idx = b - 55
+    if idx == nil:
+        error("Invalid color (got '" .. ch .. "')", 0)
+    return idx
+
+export class VTerm:
+    # opts: color (true: цветной терминал), palette (список [r, g, b] 0..255)
+    def init(self, w, h, opts=nil):
+        o = opts ?? {}
+        self.w = w
+        self.h = h
+        self.color = o.color ?? true
+        self.fgc = 0
+        self.bgc = 15
+        self.cx = 1
+        self.cy = 1
+        self.blink = false
+        self.palette = []
+        src = o.palette ?? DEFAULT_PALETTE
+        for i in range[1, 16]:
+            self.palette[i] = [src[i][1], src[i][2], src[i][3]]
+        self.text = {}
+        self.fg = {}
+        self.bg = {}
+        for y in range[1, h]:
+            self:_blank_line(y)
+        self.dirty = {}
+        self.dirty_all = true
+        self.rev = 1
+        self.cursor_rev = 1
+        self.palette_rev = 1
+        self.on_change = nil
+        self.on_resize = nil
+
+    def _make_line(self):
+        t = {}
+        f = {}
+        b = {}
+        for x in range[1, self.w]:
+            t[x] = 32
+            f[x] = self.fgc
+            b[x] = self.bgc
+        return t, f, b
+
+    def _blank_line(self, y):
+        t, f, b = self:_make_line()
+        self.text[y] = t
+        self.fg[y] = f
+        self.bg[y] = b
+
+    def _touch(self, y):
+        self.dirty[y] = true
+        self.rev += 1
+        if self.on_change != nil:
+            self.on_change(self, y)
+
+    def _touch_all(self):
+        self.dirty_all = true
+        self.rev += 1
+        if self.on_change != nil:
+            self.on_change(self, nil)
+
+    # хозяин забрал изменения: возвращает список изменённых строк (все строки, если менялось всё)
+    def take_dirty(self):
+        out = []
+        if self.dirty_all:
+            for y in range[1, self.h]:
+                out[y] = y
+        else:
+            for y, v in self.dirty:
+                out[len(out) + 1] = y
+            table.sort(out)
+        self.dirty = {}
+        self.dirty_all = false
+        return out
+
+    # ------------------------------------------------------------ вывод
+
+    def write(self, s):
+        s = _check_string(s, 1)
+        n = string.len(s)
+        y = self.cy
+        if y >= 1 and y <= self.h and n > 0:
+            tt = self.text[y]
+            ff = self.fg[y]
+            bb = self.bg[y]
+            for i in range[1, n]:
+                x = self.cx + i - 1
+                if x >= 1 and x <= self.w:
+                    tt[x] = string.byte(s, i)
+                    ff[x] = self.fgc
+                    bb[x] = self.bgc
+            self:_touch(y)
+        self.cx += n
+
+    def blit(self, s, fg, bg):
+        if type(s) != "string":
+            error("bad argument #1 (string expected, got " .. _type_name(s) .. ")", 0)
+        if type(fg) != "string":
+            error("bad argument #2 (string expected, got " .. _type_name(fg) .. ")", 0)
+        if type(bg) != "string":
+            error("bad argument #3 (string expected, got " .. _type_name(bg) .. ")", 0)
+        n = string.len(s)
+        if string.len(fg) != n or string.len(bg) != n:
+            error("Arguments must be the same length", 0)
+        y = self.cy
+        if y >= 1 and y <= self.h and n > 0:
+            tt = self.text[y]
+            ff = self.fg[y]
+            bb = self.bg[y]
+            for i in range[1, n]:
+                x = self.cx + i - 1
+                if x >= 1 and x <= self.w:
+                    tt[x] = string.byte(s, i)
+                    ff[x] = hex_index(string.sub(fg, i, i))
+                    bb[x] = hex_index(string.sub(bg, i, i))
+            self:_touch(y)
+        self.cx += n
+
+    def clear(self):
+        for y in range[1, self.h]:
+            self:_blank_line(y)
+        self:_touch_all()
+
+    def clearLine(self):
+        y = self.cy
+        if y >= 1 and y <= self.h:
+            self:_blank_line(y)
+            self:_touch(y)
+
+    # n > 0: содержимое едет вверх, снизу пустые строки текущими цветами; n < 0: вниз
+    def scroll(self, n):
+        n = _check_number(n, 1)
+        n = math.floor(n)
+        if n == 0:
+            return
+        h = self.h
+        if n >= h or -n >= h:
+            self:clear()
+            return
+        nt = {}
+        nf = {}
+        nb = {}
+        for y in range[1, h]:
+            src = y + n
+            if src >= 1 and src <= h:
+                nt[y] = self.text[src]
+                nf[y] = self.fg[src]
+                nb[y] = self.bg[src]
+            else:
+                nt[y], nf[y], nb[y] = self:_make_line()
+        self.text = nt
+        self.fg = nf
+        self.bg = nb
+        self:_touch_all()
+
+    # ------------------------------------------------------------ курсор
+
+    def getCursorPos(self):
+        return self.cx, self.cy
+
+    def setCursorPos(self, x, y):
+        _check_number(x, 1)
+        _check_number(y, 2)
+        self.cx = math.floor(x)
+        self.cy = math.floor(y)
+        self.cursor_rev += 1
+
+    def getCursorBlink(self):
+        return self.blink
+
+    def setCursorBlink(self, b):
+        if type(b) != "boolean":
+            error("bad argument #1 (boolean expected, got " .. _type_name(b) .. ")", 0)
+        self.blink = b
+        self.cursor_rev += 1
+
+    def getSize(self):
+        return self.w, self.h
+
+    # ------------------------------------------------------------ цвета
+
+    def setTextColor(self, c):
+        self.fgc = color_index(c, 1)
+
+    def getTextColor(self):
+        return 2 ** self.fgc
+
+    def setBackgroundColor(self, c):
+        self.bgc = color_index(c, 1)
+
+    def getBackgroundColor(self):
+        return 2 ** self.bgc
+
+    def isColor(self):
+        return self.color
+
+    def getPaletteColor(self, c):
+        idx = color_index(c, 1)
+        p = self.palette[idx + 1]
+        return p[1] / 255, p[2] / 255, p[3] / 255
+
+    # setPaletteColor(цвет, r, g, b) с долями 0..1 или setPaletteColor(цвет, 0xRRGGBB)
+    def setPaletteColor(self, c, r, g=nil, b=nil):
+        idx = color_index(c, 1)
+        _check_number(r, 2)
+        red = 0
+        green = 0
+        blue = 0
+        if g == nil:
+            red = math.floor(r / 65536) % 256
+            green = math.floor(r / 256) % 256
+            blue = r % 256
+        else:
+            _check_number(g, 3)
+            _check_number(b, 4)
+            red = math.floor(r * 255 + 0.5)
+            green = math.floor(g * 255 + 0.5)
+            blue = math.floor(b * 255 + 0.5)
+        self.palette[idx + 1] = [math.max(0, math.min(255, red)), math.max(0, math.min(255, green)), math.max(0, math.min(255, blue))]
+        self.palette_rev += 1
+        self:_touch_all()
+
+    # строка y: текст, цвета текста и фона в виде строк «blit» (как term.getLine в CC)
+    def getLine(self, y):
+        _check_number(y, 1)
+        y = math.floor(y)
+        if y < 1 or y > self.h:
+            error("Line is out of range.", 0)
+        return self:line_text(y), self:line_blit(y, "fg"), self:line_blit(y, "bg")
+
+    def line_text(self, y):
+        parts = {}
+        tt = self.text[y]
+        for x in range[1, self.w]:
+            parts[x] = string.char(tt[x])
+        return table.concat(parts)
+
+    def line_blit(self, y, which):
+        parts = {}
+        src = which == "bg" and self.bg[y] or self.fg[y]
+        for x in range[1, self.w]:
+            parts[x] = string.sub(HEX, src[x] + 1, src[x] + 1)
+        return table.concat(parts)
+
+    # ------------------------------------------------------------ размер
+
+    def resize(self, w, h):
+        nt = {}
+        nf = {}
+        nb = {}
+        for y in range[1, h]:
+            t = {}
+            f = {}
+            b = {}
+            for x in range[1, w]:
+                if y <= self.h and x <= self.w:
+                    t[x] = self.text[y][x]
+                    f[x] = self.fg[y][x]
+                    b[x] = self.bg[y][x]
+                else:
+                    t[x] = 32
+                    f[x] = self.fgc
+                    b[x] = self.bgc
+            nt[y] = t
+            nf[y] = f
+            nb[y] = b
+        self.w = w
+        self.h = h
+        self.text = nt
+        self.fg = nf
+        self.bg = nb
+        self:_touch_all()
+        if self.on_resize != nil:
+            self.on_resize(self)
+
+    # ------------------------------------------------------------ таблица функций, как настоящий term
+
+    def api(self):
+        t = {}
+        names = ["write", "blit", "clear", "clearLine", "scroll", "getCursorPos", "setCursorPos", "getCursorBlink",
+            "setCursorBlink", "getSize", "setTextColor", "getTextColor", "setBackgroundColor", "getBackgroundColor", "isColor",
+            "getPaletteColor", "setPaletteColor", "getLine"]
+        for n in names:
+            t[n] = _bind(self, n)
+        t.setTextColour = t.setTextColor
+        t.getTextColour = t.getTextColor
+        t.setBackgroundColour = t.setBackgroundColor
+        t.getBackgroundColour = t.getBackgroundColor
+        t.isColour = t.isColor
+        t.getPaletteColour = t.getPaletteColor
+        t.setPaletteColour = t.setPaletteColor
+        t.vterm = self
+        return t
+
+def _bind(obj, name):
+    return (a, b, c, d) => obj[name](obj, a, b, c, d)
+
+export def new(w, h, opts=nil):
+    return VTerm(w, h, opts)
