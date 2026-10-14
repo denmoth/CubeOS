@@ -85,7 +85,12 @@ export class Shell:
         self.env = env
         self.opts = o
         self.info = o.info
-        self.vars = {HOME: o.home ?? "/", USER: o.user ?? "user", HOST: o.host ?? "cubeos", SHELL: "csh", "?": 0}
+        # имя компьютера в приглашении это его метка (имена с пробелами через дефис), без метки cubeos
+        label = env.os.getComputerLabel()
+        host = o.host
+        if host == nil and label != nil and label != "":
+            host = string.gsub(label, "%s+", "-")
+        self.vars = {HOME: o.home ?? "/", USER: o.user ?? "user", HOST: host ?? "cubeos", SHELL: "csh", "?": 0}
         self.vars.PWD = "/"
         self.aliases = {}
         for k, v in DEFAULT_ALIASES:
