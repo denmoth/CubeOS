@@ -41,6 +41,16 @@ export class MirrorDisplay:
         for d in self.displays:
             d:set_colors(list)
 
+    def adapt(self, s):
+        for d in self.displays:
+            if d.adapt != nil:
+                d:adapt(s)
+
+    def reset_terminal_palette(self):
+        for d in self.displays:
+            if d.reset_terminal_palette != nil:
+                d:reset_terminal_palette()
+
     # показывает кадр на всех выводах, возвращает сумму отправленного
     def present(self, s):
         x0 = s.dx0

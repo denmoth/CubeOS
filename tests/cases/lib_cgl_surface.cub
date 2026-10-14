@@ -121,6 +121,30 @@ p:clear(0)
 p:fill_pattern(0, 0, 4, 1, [0x01], 1)
 eq(show(p)[1], "1.......", "pattern with transparent background")
 
+# градиенты по диагонали, радиальный, с дизерингом
+gd = sf.new(4, 4)
+gd:fill_gradient(0, 0, 4, 4, [1, 2, 3], "d")
+eq(gd:get(0, 0), 1, "diagonal starts at the first color")
+eq(gd:get(3, 3), 3, "diagonal ends at the last color")
+eq(gd:get(3, 0) == gd:get(0, 3), true, "diagonal is symmetric")
+gr = sf.new(9, 9)
+gr:fill_gradient(0, 0, 9, 9, [1, 2, 3], "r")
+eq(gr:get(4, 4), 1, "radial center")
+eq(gr:get(0, 0), 3, "radial corner")
+gc = sf.new(11, 11, 0)
+gc:fill_radial(5, 5, 5, [1, 2, 3])
+eq(gc:get(5, 5), 1, "fill_radial center")
+eq(gc:get(0, 0), 0, "fill_radial leaves the corners alone")
+eq(gc:get(5, 0) == 3 or gc:get(5, 0) == 2, true, "fill_radial edge")
+gdz = sf.new(16, 1, 0)
+gdz:fill_gradient(0, 0, 16, 1, [1, 2], "h", {dither: true})
+seen = {}
+for i in range[0, 15]:
+    seen[gdz:get(i, 0)] = true
+eq(seen[1] == true and seen[2] == true, true, "dithered gradient mixes both colors")
+eq(gdz:get(0, 0), 1, "dithered gradient starts clean")
+eq(gdz:get(15, 0), 2, "dithered gradient ends clean")
+
 # ---------------------------------------------------------------- девять частей
 np = sf.new(3, 3)
 np:set(0, 0, 1)

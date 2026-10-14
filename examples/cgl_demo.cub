@@ -1,5 +1,6 @@
 # Демонстрация Cube Graphics Library: заставка, плазма, трёхмерная сцена, галерея фигур и окно, логотип.
-# Запуск в игре: game/cgl_demo.lua (стрелки: сцена, D: дизеринг телетекста, M: смена вывода, Q: выход, мышь: частицы)
+# Запуск в игре: game/cgl_demo.lua (стрелки: сцена, D: дизеринг телетекста, A: адаптивные цвета телетекста, M: смена вывода,
+# Q: выход, мышь: частицы). Терминал обновляется раз в игровой тик, поэтому кадров больше 20 в секунду на экране не бывает.
 #
 # main(opts): fps (по умолчанию 20, 0 без ограничения), backend, term (например, монитор), monitor (его имя для касаний), log_path (файл со средним fps по сценам), auto (переключать сцены каждые N кадров и выйти, для проверок), wait, clock.
 # Работает с CC: Graphics (пиксели 6x9 на клетку) и на обычном цветном терминале (телетекст, 2x3 пикселя на клетку).
@@ -350,7 +351,54 @@ class Gallery:
                 y1 = math.max(y1, math.floor(p.y + 0.5))
             self.pbox = [x0, y0, x1, y1]
 
-# ---------------------------------------------------------------- сцена 5: логотип
+# ---------------------------------------------------------------- сцена 5: следы
+
+# Три шара летают по фигурам Лиссажу. Следы делает fx.Trail: каждый кадр все яркие пиксели темнеют на ступень (одна проверка в
+# таблице на пиксель), потом шары рисуются самой яркой ступенью. Для плавности нужны ступени яркости, поэтому на время сцены
+# последние 48 номеров палитры перекрашиваются в три оттенка по 16 ступеней (после сцены палитра возвращается).
+class Trails:
+    def init(self, ctx):
+        v = ctx.view
+        self.v = v
+        if v.w < ctx.w:
+            ctx.s:rect(v.x - 2, v.y - 2, v.w + 4, v.h + 4, ctx.gray)
+        ctx.s:fill_rect(v.x, v.y, v.w, v.h, ctx.deep)
+        self.base = 208
+        hues = [[255, 80, 70], [70, 200, 255], [255, 220, 70]]
+        self.saved = []
+        entries = []
+        self.ramps = []
+        for h in range[0, 2]:
+            steps = color.shade_steps(hues[h + 1][1], hues[h + 1][2], hues[h + 1][3], 16, 6, 8, 24)
+            ramp = []
+            for k in range[1, 16]:
+                slot = self.base + h * 16 + k - 1
+                r, g, b = ctx.pal:get(slot)
+                self.saved[len(self.saved) + 1] = [slot, r, g, b]
+                entries[len(entries) + 1] = [slot, steps[k][1], steps[k][2], steps[k][3]]
+                ramp[k] = slot
+            self.ramps[h + 1] = ramp
+        ctx.screen:set_colors(entries)
+        self.trail = fx.Trail(self.ramps, ctx.deep)
+
+    def leave(self, ctx):
+        ctx.screen:set_colors(self.saved)
+
+    def draw(self, ctx, dt, t):
+        v = self.v
+        s = ctx.s
+        self.trail:fade(s, v.x, v.y, v.w, v.h)
+        cx = v.x + v.w / 2
+        cy = v.y + v.h / 2
+        for i in range[0, 2]:
+            a = t * (1.1 + i * 0.37) + i * 2.1
+            b = t * (0.8 + i * 0.53) + i
+            x = cx + math.sin(a) * v.w * 0.42
+            y = cy + math.sin(b) * v.h * 0.4
+            s:circle(math.floor(x), math.floor(y), math.max(2, math.floor(v.h / 28)), self.ramps[i + 1][16], true)
+        s:text(ctx.font, v.x + 2, v.y + 2, "fx.Trail", ctx.white)
+
+# ---------------------------------------------------------------- сцена 6: логотип
 
 class LogoScene:
     def init(self, ctx):
@@ -413,9 +461,9 @@ export def main(opts=nil):
     ctx.waves = [near(250, 150, 90), near(220, 90, 130), near(150, 60, 150), near(80, 40, 120)]
     # окно для тяжёлых сцен (плазма, 3D): не больше ~90 тысяч пикселей, на большом мониторе оно по центру
     ctx.view = make_view(ctx.w, ctx.h)
-    classes = [Intro, Title, PlasmaScene, Scene3D, Gallery, LogoScene]
-    names = ["Интро", "Заставка", "Плазма", "3D", "Фигуры", "Логотип"]
-    state = {index: 1, scene: nil, quit: false, flip: false}
+    classes = [Intro, Title, PlasmaScene, Scene3D, Gallery, Trails, LogoScene]
+    names = ["Интро", "Заставка", "Плазма", "3D", "Фигуры", "Следы", "Логотип"]
+    state = {index: 1, scene: nil, quit: false, flip: false, adapted: false}
     perf = []
     for i in range[1, len(classes)]:
         perf[i] = {frames: 0, time: 0}
@@ -440,6 +488,14 @@ export def main(opts=nil):
             q.dither = not q.dither
             q:rebuild()
             ctx.screen.display:invalidate()
+        elif code == keys.a and ctx.screen.display.adapt != nil and ctx.screen.kind == "teletext":
+            # адаптивные цвета: 16 цветов терминала подбираются под текущую картинку, ещё раз A возвращает стандартные
+            if state.adapted:
+                ctx.screen.display:reset_terminal_palette()
+                state.adapted = false
+            else:
+                ctx.screen:adapt()
+                state.adapted = true
         elif code == keys.m:
             state.flip = true
             ctx.screen:stop()

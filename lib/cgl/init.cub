@@ -51,6 +51,10 @@ export class Screen:
     def invalidate(self):
         self.display:invalidate()
 
+    # подбирает 16 цветов терминала под текущую картинку (для телетекста и режима 1): заметно лучше стандартных 16 цветов CC
+    def adapt(self):
+        self.display:adapt(self.surface)
+
     def clear(self, c=0):
         self.surface:clear(c)
 

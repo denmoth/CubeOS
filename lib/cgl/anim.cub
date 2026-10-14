@@ -8,6 +8,8 @@
 # Время везде в секундах (дробное). Всё считается от переданного dt, часов внутри нет: поведение детерминировано и легко
 # тестируется. Имена кривых: linear, in_/out_/in_out_ + quad, cubic, quart, sine, expo, circ, back, elastic, bounce.
 
+import unicode
+
 const PI = math.pi
 
 def _clamp01(t):
@@ -72,11 +74,21 @@ export def names():
         out[len(out) + 1] = "in_out_" .. k
     return out
 
-# значение кривой name в точке t (t вне 0..1 обрезается)
+# значение кривой name в точке t (t вне 0..1 обрезается). name: название, функция от t или steps_N; ещё smoothstep, smootherstep, anim.bezier
 export def ease(name, t):
     t = _clamp01(t)
+    if type(name) == "function":
+        return name(t)
     if name == "linear" or name == nil:
         return t
+    if name == "smoothstep":
+        return t * t * (3 - 2 * t)
+    if name == "smootherstep":
+        return t * t * t * (t * (t * 6 - 15) + 10)
+    steps = string.match(name, "^steps_(%d+)$")
+    if steps != nil:
+        n = tonumber(steps)
+        return math.min(1, math.floor(t * n) / n)
     if name == "out_bounce":
         return _bounce_out(t)
     if name == "in_bounce":
@@ -282,3 +294,159 @@ export class Animator:
 
 export def animator():
     return Animator()
+
+# ------------------------------------------------------------ кривая Безье как в CSS (cubic-bezier(x1, y1, x2, y2))
+
+# возвращает функцию плавности: anim.tween({ease: anim.bezier(0.25, 0.1, 0.25, 1)})
+export def bezier(x1, y1, x2, y2):
+    def sample_x(u):
+        return 3 * (1 - u) * (1 - u) * u * x1 + 3 * (1 - u) * u * u * x2 + u * u * u
+    def sample_y(u):
+        return 3 * (1 - u) * (1 - u) * u * y1 + 3 * (1 - u) * u * u * y2 + u * u * u
+    def curve(t):
+        if t <= 0:
+            return 0
+        if t >= 1:
+            return 1
+        lo = 0
+        hi = 1
+        u = t
+        for i in range[1, 24]:
+            u = (lo + hi) / 2
+            if sample_x(u) < t:
+                lo = u
+            else:
+                hi = u
+        return sample_y(u)
+    return curve
+
+# ------------------------------------------------------------ ключевые кадры
+
+# Несколько значений по ходу времени: frames это список [момент 0..1, значение, кривая к этому кадру (необязательно)].
+#   anim.keyframes([[0, 0], [0.3, 100, "out_quad"], [1, 50]], {time: 1, on_update: (v) => ...})
+export class Keyframes:
+    def init(self, frames, opts=nil):
+        o = opts ?? {}
+        self.frames = frames
+        self.time = o.time ?? 1
+        self.delay = o.delay ?? 0
+        self.repeat_count = o.repeat ?? 0
+        self.yoyo = o.yoyo ?? false
+        self.on_update = o.on_update
+        self.on_done = o.on_done
+        self.elapsed = 0
+        self.wait_left = self.delay
+        self.cycle = 0
+        self.done = false
+        self.paused = false
+        self.overflow = 0
+        self.value = frames[1][2]
+
+    def _value_at(self, k):
+        frames = self.frames
+        if k <= frames[1][1]:
+            return frames[1][2]
+        for i in range[2, len(frames)]:
+            f = frames[i]
+            if k <= f[1]:
+                p = frames[i - 1]
+                span = f[1] - p[1]
+                local = span <= 0 and 1 or (k - p[1]) / span
+                e = ease(f[3] ?? "linear", local)
+                a = p[2]
+                b = f[2]
+                if type(a) == "table":
+                    out = []
+                    for j, av in a:
+                        out[j] = av + (b[j] - av) * e
+                    return out
+                return a + (b - a) * e
+        return frames[len(frames)][2]
+
+    def pause(self):
+        self.paused = true
+
+    def resume(self):
+        self.paused = false
+
+    def stop(self):
+        self.done = true
+
+    def update(self, dt):
+        if self.done:
+            return false
+        if self.paused:
+            return true
+        if self.wait_left > 0:
+            self.wait_left -= dt
+            if self.wait_left > 0:
+                return true
+            dt = -self.wait_left
+            self.wait_left = 0
+        self.elapsed += dt
+        finished = false
+        while self.elapsed >= self.time and self.time > 0:
+            if self.repeat_count == -1 or self.cycle < self.repeat_count:
+                self.cycle += 1
+                self.elapsed -= self.time
+            else:
+                self.overflow = self.elapsed - self.time
+                self.elapsed = self.time
+                finished = true
+                break
+        k = self.time <= 0 and 1 or math.min(1, self.elapsed / self.time)
+        if self.yoyo and self.cycle % 2 == 1:
+            k = 1 - k
+        self.value = self:_value_at(k)
+        if self.on_update != nil:
+            self.on_update(self.value)
+        if finished or self.time <= 0:
+            self.done = true
+            if self.on_done != nil:
+                self.on_done()
+            return false
+        return true
+
+export def keyframes(frames, opts=nil):
+    return Keyframes(frames, opts)
+
+# ------------------------------------------------------------ готовые приёмы для интерфейса
+
+# запускает анимации по очереди со сдвигом: каждая следующая стартует на step секунд позже (появление списка, меню, плиток)
+export def stagger(items, step):
+    for i, item in items:
+        if item.wait_left != nil:
+            item.wait_left += (i - 1) * step
+    return Parallel(items)
+
+# дрожание: on_update(dx, dy) получает смещение, которое затухает к концу. opts: amplitude (пиксели, по умолчанию 3), time (0.4),
+# frequency (колебаний в секунду, 30), on_done
+export def shake(opts=nil):
+    o = opts ?? {}
+    amplitude = o.amplitude ?? 3
+    frequency = o.frequency ?? 30
+    total = o.time ?? 0.4
+    update = o.on_update
+    def step(k):
+        if update != nil:
+            decay = 1 - k
+            phase = k * total * frequency * math.pi * 2
+            update(math.sin(phase) * amplitude * decay, math.cos(phase * 1.3) * amplitude * decay * 0.5)
+    return Tween({from: 0, to: 1, time: total, on_update: step, on_done: o.on_done})
+
+# пульс: значение плавно ходит между min и max с периодом period секунд, пока не остановишь
+export def pulse(min_value, max_value, period, on_update):
+    return Tween({from: min_value, to: max_value, time: period / 2, ease: "in_out_sine", repeat: -1, yoyo: true, on_update: on_update})
+
+# бегущее число: on_update получает строку (целое число) от from до to за time секунд
+export def counter(from_value, to_value, time, on_update, ease_name="out_cubic"):
+    def step(v):
+        on_update(string.format("%d", math.floor(v + 0.5)))
+    return Tween({from: from_value, to: to_value, time: time, ease: ease_name, on_update: step})
+
+# печатающийся текст: on_update получает начало строки, cps символов в секунду
+export def typewriter(text, cps, on_update):
+    n = unicode.length(text)
+    def step(v):
+        on_update(unicode.sub(text, 1, math.floor(v)))
+    return Tween({from: 0, to: n, time: n / cps, on_update: step})

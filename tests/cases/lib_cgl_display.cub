@@ -302,4 +302,38 @@ eq(d:to_pixel(2, 2), 2, "to_pixel x")
 px, py = d:to_pixel(2, 2)
 eq([px, py], [2, 3], "to_pixel")
 
+# адаптивные цвета: 16 цветов терминала подбираются под картинку
+tm, o = make_term(4, 2, false)
+d = teletext.new(tm, {})
+d:open()
+s = sf.new(8, 6, 0)
+s:fill_rect(0, 0, 4, 6, 100)
+s:fill_rect(4, 0, 4, 6, 140)
+d:present(s)
+r100, g100, b100 = d.palette:get(100)
+d:adapt(s)
+eq(o.palette[1][1] != nil, true, "terminal palette was loaded")
+got = {}
+for i, e in o.palette:
+    got[(math.floor(e[1] * 255 + 0.5)) .. "," .. math.floor(e[2] * 255 + 0.5) .. "," .. math.floor(e[3] * 255 + 0.5)] = true
+r140, g140, b140 = d.palette:get(140)
+eq(got[r100 .. "," .. g100 .. "," .. b100], true, "the first picture color is in the terminal palette")
+eq(got[r140 .. "," .. g140 .. "," .. b140], true, "the second picture color is in the terminal palette")
+# после адаптации кадр уходит заново и точно этими цветами
+o.cells = {}
+d:present(s)
+eq(len(o.cells) > 0, true, "frame is resent after adapt")
+d:close()
+std = color.cc_palette()
+sr, sg, sb = std:get(0)
+eq(math.floor(o.palette[1][1] * 255 + 0.5), sr, "close restores the standard palette")
+
+al = quant.adaptive(s, d.palette, 16)
+eq(len(al), 2, "two colors give two palette entries")
+s3 = sf.new(4, 4, 0)
+for i in range[0, 15]:
+    s3:set(i % 4, i // 4, 16 + i * 10)
+al3 = quant.adaptive(s3, color.default_palette(), 4)
+eq(len(al3), 4, "sixteen colors reduce to four")
+
 print("done")

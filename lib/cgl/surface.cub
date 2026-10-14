@@ -425,18 +425,63 @@ export class Surface:
     # ------------------------------------------------------------ градиенты и узоры
 
     # градиент из списка цветов (номеров) по вертикали ("v") или горизонтали ("h")
-    def fill_gradient(self, x, y, w, h, colors, direction="v"):
+    # direction: "v" сверху вниз, "h" слева направо, "d" по диагонали (из левого верхнего угла в правый нижний), "r" от центра
+    # к углам (радиальный). opts.dither: true смешивает соседние цвета ступеней узором Байера, и ступеней не видно
+    def fill_gradient(self, x, y, w, h, colors, direction="v", opts=nil):
         n = len(colors)
         if n == 0 or w <= 0 or h <= 0:
             return
-        if direction == "h":
+        dither = opts != nil and opts.dither == true
+        if not dither and (direction == "h" or direction == "v"):
+            if direction == "h":
+                for i in range[0, w - 1]:
+                    idx = n == 1 and 1 or _floor(i * (n - 1) / math.max(1, w - 1) + 0.5) + 1
+                    self:fill_rect(x + i, y, 1, h, colors[idx])
+            else:
+                for j in range[0, h - 1]:
+                    idx = n == 1 and 1 or _floor(j * (n - 1) / math.max(1, h - 1) + 0.5) + 1
+                    self:fill_rect(x, y + j, w, 1, colors[idx])
+            return
+        # общий путь: положение t 0..1 для каждого пикселя
+        cx = (w - 1) / 2
+        cy = (h - 1) / 2
+        rmax = math.sqrt(cx * cx + cy * cy)
+        for j in range[0, h - 1]:
             for i in range[0, w - 1]:
-                idx = n == 1 and 1 or _floor(i * (n - 1) / math.max(1, w - 1) + 0.5) + 1
-                self:fill_rect(x + i, y, 1, h, colors[idx])
-        else:
-            for j in range[0, h - 1]:
-                idx = n == 1 and 1 or _floor(j * (n - 1) / math.max(1, h - 1) + 0.5) + 1
-                self:fill_rect(x, y + j, w, 1, colors[idx])
+                t = 0
+                if direction == "h":
+                    t = i / math.max(1, w - 1)
+                elif direction == "v":
+                    t = j / math.max(1, h - 1)
+                elif direction == "d":
+                    t = (i / math.max(1, w - 1) + j / math.max(1, h - 1)) / 2
+                else:
+                    t = rmax == 0 and 0 or math.sqrt((i - cx) * (i - cx) + (j - cy) * (j - cy)) / rmax
+                p = t * (n - 1)
+                k = _floor(p)
+                idx = k + 1
+                if dither and k < n - 1 and color.dither(p - k, x + i, y + j):
+                    idx = k + 2
+                elif not dither:
+                    idx = _floor(p + 0.5) + 1
+                self:set(x + i, y + j, colors[math.min(n, idx)])
+
+    # радиальный градиент в круге: от центра (colors[1]) к краю (colors[n]); за кругом ничего не рисуется
+    def fill_radial(self, cx, cy, radius, colors, opts=nil):
+        n = len(colors)
+        if n == 0 or radius < 0:
+            return
+        dither = opts != nil and opts.dither == true
+        for j in range[-radius, radius]:
+            for i in range[-radius, radius]:
+                d = math.sqrt(i * i + j * j)
+                if d <= radius + 0.25:
+                    p = radius == 0 and 0 or math.min(1, d / radius) * (n - 1)
+                    k = _floor(p)
+                    idx = _floor(p + 0.5) + 1
+                    if dither and k < n - 1:
+                        idx = color.dither(p - k, cx + i, cy + j) and k + 2 or k + 1
+                    self:set(cx + i, cy + j, colors[math.min(n, idx)])
 
     # узор 8x8 (список из 8 чисел, младший бит слева) двумя цветами; c2 = CLEAR оставляет фон как есть
     def fill_pattern(self, x, y, w, h, pattern, c1, c2=-1):

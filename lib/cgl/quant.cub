@@ -17,6 +17,7 @@ export class Quantizer:
         self.src = src
         self.dst = dst
         self.dither = o.dither ?? false
+        self.clear_opt = o.clear
         self.clear = o.clear ?? dst:nearest(0, 0, 0)
         self.main = []
         self.alt = []
@@ -25,6 +26,7 @@ export class Quantizer:
 
     # пересчитать таблицы (после изменения палитр)
     def rebuild(self):
+        self.clear = self.clear_opt ?? self.dst:nearest(0, 0, 0)
         self.main = []
         self.alt = []
         self.share = []
@@ -100,3 +102,100 @@ export class Quantizer:
 
 export def new(src, dst, opts=nil):
     return Quantizer(src, dst, opts)
+
+# Адаптивная палитра: подбирает n цветов терминала под картинку (медианное сечение по числу пикселей каждого цвета).
+#   list = quant.adaptive(surface, palette, 16)     список из n троек [r, g, b]
+# Берутся реально использованные цвета поверхности с весом по числу пикселей; прозрачные (CLEAR) не учитываются.
+export def adaptive(s, palette, n=16):
+    counts = {}
+    for i in range[1, s.w * s.h]:
+        v = s.px[i]
+        if v >= 0:
+            counts[v] = (counts[v] ?? 0) + 1
+    items = []
+    for v, c in counts:
+        r, g, b = palette:get(v)
+        items[len(items) + 1] = {r: r, g: g, b: b, n: c}
+    if len(items) == 0:
+        return [[0, 0, 0]]
+    boxes = [items]
+    while len(boxes) < n:
+        # делим ящик с самым большим «разбросом * вес»
+        best = nil
+        best_score = -1
+        for bi, box in boxes:
+            if len(box) > 1:
+                lo_r = 255
+                hi_r = 0
+                lo_g = 255
+                hi_g = 0
+                lo_b = 255
+                hi_b = 0
+                total = 0
+                for it in box:
+                    lo_r = math.min(lo_r, it.r)
+                    hi_r = math.max(hi_r, it.r)
+                    lo_g = math.min(lo_g, it.g)
+                    hi_g = math.max(hi_g, it.g)
+                    lo_b = math.min(lo_b, it.b)
+                    hi_b = math.max(hi_b, it.b)
+                    total += it.n
+                score = math.max(hi_r - lo_r, hi_g - lo_g, hi_b - lo_b) * math.sqrt(total)
+                if score > best_score:
+                    best_score = score
+                    best = bi
+        if best == nil:
+            break
+        box = boxes[best]
+        lo_r = 255
+        hi_r = 0
+        lo_g = 255
+        hi_g = 0
+        lo_b = 255
+        hi_b = 0
+        for it in box:
+            lo_r = math.min(lo_r, it.r)
+            hi_r = math.max(hi_r, it.r)
+            lo_g = math.min(lo_g, it.g)
+            hi_g = math.max(hi_g, it.g)
+            lo_b = math.min(lo_b, it.b)
+            hi_b = math.max(hi_b, it.b)
+        axis = "g"
+        if hi_r - lo_r >= hi_g - lo_g and hi_r - lo_r >= hi_b - lo_b:
+            axis = "r"
+        elif hi_b - lo_b > hi_g - lo_g:
+            axis = "b"
+        table.sort(box, (p, q) => p[axis] < q[axis])
+        # медиана по числу пикселей
+        total = 0
+        for it in box:
+            total += it.n
+        acc = 0
+        cut = 1
+        for i, it in box:
+            acc += it.n
+            if acc >= total / 2:
+                cut = math.min(i, len(box) - 1)
+                break
+        left = []
+        right = []
+        for i, it in box:
+            if i <= cut:
+                left[len(left) + 1] = it
+            else:
+                right[len(right) + 1] = it
+        boxes[best] = left
+        boxes[len(boxes) + 1] = right
+    out = []
+    for box in boxes:
+        sr = 0
+        sg = 0
+        sb = 0
+        total = 0
+        for it in box:
+            sr += it.r * it.n
+            sg += it.g * it.n
+            sb += it.b * it.n
+            total += it.n
+        out[len(out) + 1] = [math.floor(sr / total + 0.5), math.floor(sg / total + 0.5), math.floor(sb / total + 0.5)]
+    return out
