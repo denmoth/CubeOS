@@ -1,0 +1,137 @@
+# cfs.handle: файловый дескриптор CFS
+#
+#   with v:open("$home/a.txt", "w") as f:
+#       f:write_line("привет")
+#   with v:open("$home/a.txt") as f:
+#       for line in f:lines(): print(line)
+#
+# Режимы: "r" чтение, "w" запись с очисткой, "a" дописывание ("b" можно добавлять, ничего не меняет).
+# Данные записи копятся в памяти и попадают в файл при flush() и close() (замена файла целиком, атомарно).
+
+import cfs.errors as errors
+
+export class Handle:
+    def init(self, fsys, subject, real_path, mode, content):
+        self.fsys = fsys
+        self.subject = subject
+        self.real_path = real_path
+        self.mode = mode
+        self.closed = false
+        self.pos = 1
+        self.dirty = false
+        if mode == "r":
+            self.data = content
+        else:
+            self.chunks = content != "" and [content] or []
+            self.data = nil
+
+    def _check_open(self):
+        if self.closed:
+            errors.fail("EINVAL", "the file is closed", self.real_path)
+
+    def _check_readable(self):
+        self:_check_open()
+        if self.mode != "r":
+            errors.fail("EINVAL", "the file is not open for reading", self.real_path)
+
+    def _check_writable(self):
+        self:_check_open()
+        if self.mode == "r":
+            errors.fail("EINVAL", "the file is not open for writing", self.real_path)
+
+    # ------------------------------------------------------------ чтение
+
+    # читает до n байт (или всё до конца без аргумента); в конце файла возвращает nil
+    def read(self, n=nil):
+        self:_check_readable()
+        total = len(self.data)
+        if self.pos > total:
+            return nil
+        if n == nil:
+            piece = string.sub(self.data, self.pos)
+            self.pos = total + 1
+            return piece
+        piece = string.sub(self.data, self.pos, self.pos + n - 1)
+        self.pos += len(piece)
+        return piece
+
+    def read_all(self):
+        self:_check_readable()
+        piece = string.sub(self.data, self.pos)
+        self.pos = len(self.data) + 1
+        return piece
+
+    # следующая строка без перевода строки (keep=true оставляет его); в конце файла nil
+    def read_line(self, keep=false):
+        self:_check_readable()
+        total = len(self.data)
+        if self.pos > total:
+            return nil
+        stop = string.find(self.data, "\n", self.pos, true)
+        if stop == nil:
+            line = string.sub(self.data, self.pos)
+            self.pos = total + 1
+            return line
+        line = string.sub(self.data, self.pos, keep and stop or stop - 1)
+        self.pos = stop + 1
+        return line
+
+    # итератор по строкам: for line in f:lines()
+    def lines(self):
+        return () => self:read_line()
+
+    def eof(self):
+        self:_check_readable()
+        return self.pos > len(self.data)
+
+    # whence: "set" от начала, "cur" от текущей позиции, "end" от конца; возвращает позицию с нуля
+    def seek(self, whence="cur", offset=0):
+        self:_check_readable()
+        total = len(self.data)
+        base = 0
+        if whence == "cur":
+            base = self.pos - 1
+        elif whence == "end":
+            base = total
+        elif whence != "set":
+            errors.fail("EINVAL", "bad seek origin: " .. tostring(whence), self.real_path)
+        target = base + offset
+        if target < 0:
+            target = 0
+        if target > total:
+            target = total
+        self.pos = target + 1
+        return target
+
+    # ------------------------------------------------------------ запись
+
+    def write(self, data):
+        self:_check_writable()
+        piece = tostring(data)
+        self.chunks[len(self.chunks) + 1] = piece
+        self.dirty = true
+        return self
+
+    def write_line(self, data=""):
+        return self:write(tostring(data) .. "\n")
+
+    def flush(self):
+        self:_check_writable()
+        if self.dirty:
+            joined = table.concat(self.chunks)
+            self.chunks = joined != "" and [joined] or []
+            self.fsys:write_file(self.subject, self.real_path, joined)
+            self.dirty = false
+
+    def close(self):
+        if self.closed:
+            return
+        if self.mode != "r":
+            self:flush()
+        self.closed = true
+        self.data = nil
+        self.chunks = nil
+
+    # для оператора with
+    def __exit(self):
+        self:close()

@@ -1,0 +1,701 @@
+# cfs.core: ядро CFS (Cube File System): точки монтирования, ссылки .sym, права, важные файлы (!),
+# корзина, блокировки, события, очистка tmp.
+#
+# Методы принимают субъекта первым аргументом (nil означает систему, ей разрешено всё) и реальный путь
+# (без $алиасов и виртуального корня: ими занимается cfs.view). Интерфейс провайдеров описан в cfs.memory.
+
+import cfs.path as paths
+import cfs.errors as errors
+import cfs.rules as rules_mod
+import cfs.handle as handle_mod
+import cfs.trash as trash_mod
+import unicode
+
+const MAX_LINK_DEPTH = 16
+const TMP_SUFFIX = ".~tmp"
+const OLD_SUFFIX = ".~old"
+
+def _default_clock():
+    return os.epoch("utc")
+
+def _is_internal_name(name):
+    return string.sub(name, -5) == TMP_SUFFIX or string.sub(name, -5) == OLD_SUFFIX
+
+export class CFS:
+    # opts: aliases, clock, confirm (функция(операция, путь, субъект) -> bool), emit_events, trash {path, max_bytes},
+    #       no_trash (список префиксов, где удаление окончательное)
+    def init(self, opts=nil):
+        o = opts ?? {}
+        self.mounts = []
+        self.rules = rules_mod.new()
+        self.aliases = o.aliases ?? {}
+        self.clock = o.clock ?? _default_clock
+        self.confirm = o.confirm
+        self.emit_events = o.emit_events ?? false
+        self.trash_cfg = o.trash ?? {path: "/cubeos/users/$user/trash", max_bytes: 131072}
+        self.trash_overrides = {}
+        self.no_trash = o.no_trash ?? []
+        self.watchers = {}
+        self.watch_seq = 0
+        self.locks = {}
+        self.clean_jobs = []
+
+    def now(self):
+        return self.clock()
+
+    # ------------------------------------------------------------ монтирование
+
+    # opts: readonly, reserve (байт, который не трогают обычные субъекты, по умолчанию 0), name
+    def mount(self, path, provider, opts=nil):
+        o = opts ?? {}
+        norm = paths.normalize(path)
+        for m in self.mounts:
+            if m.path == norm:
+                errors.fail("EBUSY", "something is already mounted here", norm)
+        self.mounts[len(self.mounts) + 1] = {path: norm, provider: provider, readonly: o.readonly ?? false,
+            reserve: o.reserve ?? 0, name: o.name ?? norm}
+        table.sort(self.mounts, (a, b) => len(a.path) > len(b.path))
+
+    def umount(self, path):
+        norm = paths.normalize(path)
+        for i, m in self.mounts:
+            if m.path == norm:
+                table.remove(self.mounts, i)
+                return true
+        return false
+
+    # {path, name, readonly, free, capacity} для каждой точки монтирования
+    def mounts_info(self):
+        out = []
+        for m in self.mounts:
+            out[len(out) + 1] = {path: m.path, name: m.name, readonly: m.readonly or m.provider:is_readonly(),
+                free: m.provider:free_space(), capacity: m.provider:capacity()}
+        table.sort(out, (a, b) => a.path < b.path)
+        return out
+
+    # возвращает (точка монтирования, путь внутри провайдера)
+    def _locate(self, path):
+        for m in self.mounts:
+            if paths.is_inside(path, m.path):
+                rel = string.sub(path, len(m.path) + 1)
+                if m.path == "/":
+                    rel = path
+                if rel == "":
+                    rel = "/"
+                return m, rel
+        errors.fail("ENOENT", "nothing is mounted at this path", path)
+
+    # имена точек монтирования, лежащих непосредственно внутри каталога path
+    def _mount_children(self, path):
+        names = {}
+        for m in self.mounts:
+            if m.path != path and paths.is_inside(m.path, path):
+                rest = m.path
+                if path != "/":
+                    rest = string.sub(m.path, len(path) + 1)
+                first = string.match(rest, "^/?([^/]+)")
+                if first != nil:
+                    names[first] = true
+        return names
+
+    # ------------------------------------------------------------ сырые операции без проверок
+
+    def _raw_stat(self, path):
+        m, rel = self:_locate(path)
+        st = m.provider:stat(rel)
+        if st != nil:
+            return st
+        # каталог, через который проходит точка монтирования, существует виртуально
+        for name, flag in self:_mount_children(path):
+            return {type: "dir", size: 0, modified: 0, virtual: true}
+        return nil
+
+    def _link_target(self, path):
+        m, rel = self:_locate(path)
+        if m.provider:stat(rel) != nil:
+            return nil
+        st = m.provider:stat(rel .. ".sym")
+        if st == nil or st.type != "file":
+            return nil
+        text = m.provider:read(rel .. ".sym")
+        first = string.match(text, "^([^\n]*)")
+        return (string.gsub(first, "^%s+", ""))
+
+    # раскрывает ссылки .sym в пути; follow_last=false оставляет последний элемент как есть
+    def resolve(self, path, follow_last=true):
+        comps = paths.split(path)
+        resolved = []
+        i = 1
+        depth = 0
+        while i <= len(comps):
+            seg = comps[i]
+            current = paths.join_parts(resolved)
+            candidate = ""
+            if current == "/":
+                candidate = "/" .. seg
+            else:
+                candidate = current .. "/" .. seg
+            is_last = i == len(comps)
+            target = nil
+            if follow_last or not is_last:
+                target = self:_link_target(candidate)
+            if target != nil:
+                depth += 1
+                if depth > MAX_LINK_DEPTH:
+                    errors.fail("ELOOP", "too many levels of symbolic links", path)
+                base = target
+                if string.sub(target, 1, 1) != "/":
+                    base = current .. "/" .. target
+                rest = []
+                for k in range[i + 1, len(comps)]:
+                    rest[len(rest) + 1] = comps[k]
+                comps = paths.split(base)
+                for r in rest:
+                    comps[len(comps) + 1] = r
+                resolved = []
+                i = 1
+            else:
+                resolved[len(resolved) + 1] = seg
+                i += 1
+        return paths.join_parts(resolved)
+
+    # ------------------------------------------------------------ проверки
+
+    def _need(self, sub, path, need):
+        if not self.rules:allows(sub, path, need):
+            errors.fail("EACCES", "permission denied", path)
+
+    def _can_see(self, sub, path):
+        r = self.rules:rights(sub, path)
+        return r != ""
+
+    def _check_important(self, sub, original, real, op):
+        if not (paths.is_important(original) or paths.is_important(real)):
+            return
+        if rules_mod.is_system(sub):
+            return
+        if not rules_mod.is_admin(sub):
+            errors.fail("EACCES", "an important item (!) can only be changed by an administrator", real)
+        if self.confirm == nil or not self.confirm(op, real, sub):
+            errors.fail("ECONFIRM", "changing an important item (!) needs confirmation", real)
+
+    def _check_writable_mount(self, m, real):
+        if m.readonly or m.provider:is_readonly():
+            errors.fail("EROFS", "read-only file system", real)
+
+    # проверка нового имени: допустимость и совпадение с существующим именем без учёта регистра
+    def _check_new_name(self, m, real, allow_internal=false):
+        name = paths.basename(real)
+        paths.check_name(name, real)
+        if not allow_internal and (string.sub(name, -4) == ".sym" or _is_internal_name(name)):
+            errors.fail("ENAME", "this name is reserved by the file system", real)
+        parent_real = paths.parent(real)
+        pm, prel = self:_locate(parent_real)
+        pst = pm.provider:stat(prel)
+        if pst != nil and pst.type == "dir":
+            lowered = unicode.lower(name)
+            for sibling in pm.provider:list(prel):
+                shown = sibling
+                if string.sub(sibling, -4) == ".sym":
+                    shown = string.sub(sibling, 1, -5)
+                if shown != name and unicode.lower(shown) == lowered:
+                    errors.fail("ENAME", "a name that differs only by case already exists: " .. shown, real)
+
+    def _notify(self, kind, path, to=nil):
+        for id, w in self.watchers:
+            if paths.is_inside(path, w.prefix) or (to != nil and paths.is_inside(to, w.prefix)):
+                pcall(w.fn, {kind: kind, path: path, to: to})
+        if self.emit_events and os.queueEvent != nil:
+            os.queueEvent("cfs_change", kind, path, to)
+
+    def _space_check(self, m, need, sub, real):
+        if need <= 0 or rules_mod.is_system(sub):
+            return
+        free = m.provider:free_space()
+        if free != nil and free - need < m.reserve:
+            errors.fail("ENOSPC", "not enough free space (a reserve is kept for the system)", real)
+
+    # ------------------------------------------------------------ чтение
+
+    def exists(self, sub, path):
+        real = self:resolve(path)
+        if sub != nil and not self:_can_see(sub, real):
+            return false
+        return self:_raw_stat(real) != nil
+
+    def _entry(self, m, real, st, name, link_target=nil):
+        e = {name: name, type: st.type, size: st.size, modified: st.modified, hidden: paths.is_hidden(name),
+            important: paths.is_important_name(name), readonly: m.readonly or m.provider:is_readonly()}
+        if link_target != nil:
+            e.type = "link"
+            e.target = link_target
+        return e
+
+    # сведения о пути (ссылки раскрываются); nil, если пути нет
+    def stat(self, sub, path):
+        real = self:resolve(path)
+        if sub != nil and not self:_can_see(sub, real):
+            errors.fail("EACCES", "permission denied", real)
+        st = self:_raw_stat(real)
+        if st == nil:
+            return nil
+        m, rel = self:_locate(real)
+        e = self:_entry(m, real, st, paths.basename(real))
+        e.path = real
+        e.important = paths.is_important(real)
+        return e
+
+    # то же, но ссылка не раскрывается: тип "link" и target
+    def lstat(self, sub, path):
+        real = self:resolve(path, false)
+        if sub != nil and not self:_can_see(sub, real):
+            errors.fail("EACCES", "permission denied", real)
+        target = self:_link_target(real)
+        m, rel = self:_locate(real)
+        if target != nil:
+            st = m.provider:stat(rel .. ".sym")
+            e = self:_entry(m, real, st, paths.basename(real), target)
+            e.path = real
+            return e
+        st = self:_raw_stat(real)
+        if st == nil:
+            return nil
+        e = self:_entry(m, real, st, paths.basename(real))
+        e.path = real
+        e.important = paths.is_important(real)
+        return e
+
+    def readlink(self, sub, path):
+        real = self:resolve(path, false)
+        self:_need(sub, real, "r")
+        target = self:_link_target(real)
+        if target == nil:
+            errors.fail("EINVAL", "not a symbolic link", real)
+        return target
+
+    # список каталога: {name, type, size, modified, hidden, important, [target]}; opts.hidden включает скрытые
+    def list(self, sub, path, opts=nil):
+        o = opts ?? {}
+        real = self:resolve(path)
+        self:_need(sub, real, "l")
+        st = self:_raw_stat(real)
+        if st == nil:
+            errors.fail("ENOENT", "no such directory", real)
+        if st.type != "dir":
+            errors.fail("ENOTDIR", "not a directory", real)
+        m, rel = self:_locate(real)
+        seen = {}
+        out = []
+        if m.provider:stat(rel) != nil:
+            for raw in m.provider:list(rel):
+                if _is_internal_name(raw):
+                    continue
+                child_rel = rel == "/" and "/" .. raw or rel .. "/" .. raw
+                cst = m.provider:stat(child_rel)
+                if cst != nil:
+                    name = raw
+                    target = nil
+                    if cst.type == "file" and string.sub(raw, -4) == ".sym" and len(raw) > 4:
+                        name = string.sub(raw, 1, -5)
+                        target = self:_link_target(paths.join(real, name))
+                    if not seen[name] and (o.hidden or not paths.is_hidden(name)):
+                        seen[name] = true
+                        out[len(out) + 1] = self:_entry(m, real, cst, name, target)
+        for name, flag in self:_mount_children(real):
+            if not seen[name] and (o.hidden or not paths.is_hidden(name)):
+                seen[name] = true
+                out[len(out) + 1] = {name: name, type: "dir", size: 0, modified: 0, hidden: paths.is_hidden(name),
+                    important: paths.is_important_name(name), readonly: false, mount: true}
+        table.sort(out, (a, b) => a.name < b.name)
+        return out
+
+    def read_file(self, sub, path):
+        real = self:resolve(path)
+        self:_need(sub, real, "r")
+        st = self:_raw_stat(real)
+        if st == nil:
+            errors.fail("ENOENT", "no such file", real)
+        if st.type == "dir":
+            errors.fail("EISDIR", "is a directory", real)
+        m, rel = self:_locate(real)
+        return m.provider:read(rel)
+
+    # ------------------------------------------------------------ запись
+
+    # opts.append дописывает в конец
+    def write_file(self, sub, path, data, opts=nil):
+        o = opts ?? {}
+        real = self:resolve(path)
+        self:_need(sub, real, "w")
+        self:_check_important(sub, path, real, "write")
+        m, rel = self:_locate(real)
+        self:_check_writable_mount(m, real)
+        parent_real = paths.parent(real)
+        pst = self:_raw_stat(parent_real)
+        if pst == nil:
+            errors.fail("ENOENT", "no such directory", parent_real)
+        if pst.type != "dir":
+            errors.fail("ENOTDIR", "not a directory", parent_real)
+        existing = m.provider:stat(rel)
+        if existing != nil and existing.type == "dir":
+            errors.fail("EISDIR", "is a directory", real)
+        if existing == nil:
+            self:_check_new_name(m, real, o.internal ?? false)
+        text = tostring(data)
+        if o.append and existing != nil:
+            text = m.provider:read(rel) .. text
+        old_size = existing != nil and existing.size or 0
+        self:_space_check(m, len(text) - old_size, sub, real)
+        if existing != nil and not (o.direct ?? false):
+            # атомарная замена: пишем во временный файл рядом и подменяем
+            tmp = rel .. TMP_SUFFIX
+            old = rel .. OLD_SUFFIX
+            try:
+                m.provider:write(tmp, text)
+                m.provider:move(rel, old)
+                m.provider:move(tmp, rel)
+                m.provider:remove(old)
+            except Error as e:
+                # откат: возвращаем старый файл, пробуем записать напрямую
+                if m.provider:stat(old) != nil and m.provider:stat(rel) == nil:
+                    m.provider:move(old, rel)
+                if m.provider:stat(tmp) != nil:
+                    m.provider:remove(tmp)
+                if e.code == "ENOSPC":
+                    m.provider:write(rel, text)
+                else:
+                    raise e
+        else:
+            m.provider:write(rel, text)
+        self:_notify(existing != nil and "modify" or "create", real)
+
+    # открывает файл: "r", "w", "a" (буква b допустима)
+    def open(self, sub, path, mode="r"):
+        letter = string.sub(mode, 1, 1)
+        real = self:resolve(path)
+        if letter == "r":
+            return handle_mod.Handle(self, sub, real, "r", self:read_file(sub, real))
+        if letter == "w":
+            self:write_file(sub, real, "")
+            return handle_mod.Handle(self, sub, real, "w", "")
+        if letter == "a":
+            existing = ""
+            if self:exists(nil, real):
+                existing = self:read_file(sub, real)
+            else:
+                self:write_file(sub, real, "")
+            return handle_mod.Handle(self, sub, real, "a", existing)
+        errors.fail("EINVAL", "unknown open mode: " .. tostring(mode), real)
+
+    def mkdir(self, sub, path, opts=nil):
+        o = opts ?? {}
+        real = self:resolve(path)
+        existing = self:_raw_stat(real)
+        if existing != nil and not existing.virtual:
+            if existing.type == "dir" and (o.parents or o.exist_ok):
+                return
+            if existing.type == "dir":
+                errors.fail("EEXIST", "already exists", real)
+            errors.fail("EEXIST", "a file with this name exists", real)
+        self:_need(sub, real, "w")
+        self:_check_important(sub, path, real, "mkdir")
+        parent_real = paths.parent(real)
+        pst = self:_raw_stat(parent_real)
+        if pst == nil or pst.virtual:
+            if o.parents:
+                self:mkdir(sub, parent_real, {parents: true})
+            else:
+                errors.fail("ENOENT", "no such directory", parent_real)
+        elif pst.type != "dir":
+            errors.fail("ENOTDIR", "not a directory", parent_real)
+        m, rel = self:_locate(real)
+        self:_check_writable_mount(m, real)
+        self:_check_new_name(m, real)
+        m.provider:mkdir(rel)
+        self:_notify("create", real)
+
+    def _is_no_trash(self, sub, real):
+        for prefix in self.no_trash:
+            if paths.is_inside(real, prefix):
+                return true
+        if sub != nil:
+            cfg = trash_mod.config(self, sub)
+            if not cfg.enabled or paths.is_inside(real, cfg.path):
+                return true
+        return false
+
+    def _tree_size(self, real):
+        st = self:_raw_stat(real)
+        if st == nil:
+            return 0
+        if st.type != "dir":
+            return st.size
+        total = 0
+        for entry in self:list(nil, real, {hidden: true}):
+            total += self:_tree_size(paths.join(real, entry.name))
+        return total
+
+    # opts.recursive (непустые каталоги), opts.permanent (мимо корзины)
+    def remove(self, sub, path, opts=nil):
+        o = opts ?? {}
+        real = self:resolve(path, false)
+        self:_need(sub, real, "w")
+        self:_check_important(sub, path, real, "delete")
+        m, rel = self:_locate(real)
+        self:_check_writable_mount(m, real)
+        if real == "/" or m.path == real:
+            errors.fail("EBUSY", "cannot remove a mount point or the root", real)
+        target = self:_link_target(real)
+        if target != nil:
+            m.provider:remove(rel .. ".sym")
+            self:_notify("delete", real)
+            return
+        st = self:_raw_stat(real)
+        if st == nil:
+            errors.fail("ENOENT", "no such file or directory", real)
+        if st.type == "dir" and not o.recursive and len(self:list(nil, real, {hidden: true})) > 0:
+            errors.fail("ENOTEMPTY", "the directory is not empty", real)
+        if sub != nil and not o.permanent and not self:_is_no_trash(sub, real):
+            size = self:_tree_size(real)
+            trash_mod.put(self, sub, real, size, st.type)
+            self:_notify("delete", real)
+            return
+        if st.type == "dir":
+            for entry in self:list(nil, real, {hidden: true}):
+                self:remove(nil, paths.join(real, entry.name), {recursive: true, permanent: true})
+            if self:_raw_stat(real) != nil and m.provider:stat(rel) != nil:
+                m.provider:remove(rel)
+        else:
+            m.provider:remove(rel)
+        self:_notify("delete", real)
+
+    def _copy_tree(self, sub, from_real, to_real):
+        target = self:_link_target(from_real)
+        if target != nil:
+            self:link(sub, target, to_real)
+            return
+        st = self:_raw_stat(from_real)
+        if st.type == "dir":
+            self:mkdir(sub, to_real)
+            for entry in self:list(sub, from_real, {hidden: true}):
+                self:_copy_tree(sub, paths.join(from_real, entry.name), paths.join(to_real, entry.name))
+        else:
+            self:write_file(sub, to_real, self:read_file(sub, from_real))
+
+    # копирует файл, ссылку или каталог; в существующий каталог кладёт внутрь; opts.overwrite заменяет
+    def copy(self, sub, src, dst, opts=nil):
+        o = opts ?? {}
+        from_real = self:resolve(src, false)
+        self:_need(sub, from_real, "r")
+        st = self:_raw_stat(from_real)
+        if st == nil and self:_link_target(from_real) == nil:
+            errors.fail("ENOENT", "no such file or directory", from_real)
+        to_real = self:resolve(dst)
+        dst_st = self:_raw_stat(to_real)
+        if dst_st != nil and dst_st.type == "dir":
+            to_real = paths.join(to_real, paths.basename(from_real))
+            dst_st = self:_raw_stat(to_real)
+        if paths.is_inside(to_real, from_real):
+            errors.fail("EINVAL", "cannot copy a directory into itself", from_real)
+        if dst_st != nil:
+            if not o.overwrite:
+                errors.fail("EEXIST", "destination exists", to_real)
+            self:remove(sub, to_real, {recursive: true, permanent: true})
+        self:_copy_tree(sub, from_real, to_real)
+        return to_real
+
+    # переносит; между разными дисками копирует и удаляет оригинал
+    def move(self, sub, src, dst, opts=nil):
+        o = opts ?? {}
+        from_real = self:resolve(src, false)
+        self:_need(sub, from_real, "w")
+        self:_check_important(sub, src, from_real, "move")
+        link = self:_link_target(from_real)
+        st = self:_raw_stat(from_real)
+        if st == nil and link == nil:
+            errors.fail("ENOENT", "no such file or directory", from_real)
+        to_real = self:resolve(dst)
+        dst_st = self:_raw_stat(to_real)
+        if dst_st != nil and dst_st.type == "dir":
+            to_real = paths.join(to_real, paths.basename(from_real))
+            dst_st = self:_raw_stat(to_real)
+        if from_real == to_real:
+            return to_real
+        if paths.is_inside(to_real, from_real):
+            errors.fail("EINVAL", "cannot move a directory into itself", from_real)
+        self:_need(sub, to_real, "w")
+        self:_check_important(sub, dst, to_real, "move")
+        if dst_st != nil:
+            if not o.overwrite:
+                errors.fail("EEXIST", "destination exists", to_real)
+            self:remove(sub, to_real, {recursive: true, permanent: true})
+        fm, frel = self:_locate(from_real)
+        tm, trel = self:_locate(to_real)
+        self:_check_writable_mount(fm, from_real)
+        self:_check_writable_mount(tm, to_real)
+        pst = self:_raw_stat(paths.parent(to_real))
+        if pst == nil or pst.type != "dir":
+            errors.fail("ENOENT", "no such directory", paths.parent(to_real))
+        self:_check_new_name(tm, to_real)
+        if fm == tm:
+            if link != nil:
+                fm.provider:move(frel .. ".sym", trel .. ".sym")
+            else:
+                fm.provider:move(frel, trel)
+        else:
+            self:_copy_tree(sub, from_real, to_real)
+            self:remove(sub, from_real, {recursive: true, permanent: true})
+        self:_notify("move", from_real, to_real)
+        return to_real
+
+    # создаёт символическую ссылку linkpath -> target (файл linkpath.sym)
+    def link(self, sub, target, linkpath):
+        real = self:resolve(linkpath, false)
+        self:_need(sub, real, "w")
+        self:_check_important(sub, linkpath, real, "link")
+        if self:_raw_stat(real) != nil or self:_link_target(real) != nil:
+            errors.fail("EEXIST", "already exists", real)
+        m, rel = self:_locate(real)
+        self:_check_writable_mount(m, real)
+        self:_check_new_name(m, real)
+        parent_real = paths.parent(real)
+        pst = self:_raw_stat(parent_real)
+        if pst == nil or pst.type != "dir":
+            errors.fail("ENOENT", "no such directory", parent_real)
+        m.provider:write(rel .. ".sym", target .. "\n")
+        self:_notify("create", real)
+
+    # ------------------------------------------------------------ блокировки (рекомендательные)
+
+    # пробует взять блокировку, не ждёт: true или false; mode "shared" или "exclusive"
+    def lock(self, owner, path, mode="exclusive"):
+        real = self:resolve(path)
+        entry = self.locks[real]
+        if entry == nil:
+            owners = {}
+            owners[owner] = true
+            self.locks[real] = {mode: mode, owners: owners}
+            return true
+        if entry.owners[owner]:
+            if entry.mode == mode:
+                return true
+            only_me = true
+            for who, flag in entry.owners:
+                if who != owner:
+                    only_me = false
+            if only_me:
+                entry.mode = mode
+                return true
+            return false
+        if entry.mode == "shared" and mode == "shared":
+            entry.owners[owner] = true
+            return true
+        return false
+
+    def unlock(self, owner, path):
+        real = self:resolve(path)
+        entry = self.locks[real]
+        if entry == nil or not entry.owners[owner]:
+            return false
+        entry.owners[owner] = nil
+        if next(entry.owners) == nil:
+            self.locks[real] = nil
+        return true
+
+    # кто держит блокировку: nil или {mode, owners}
+    def lock_info(self, path):
+        real = self:resolve(path)
+        entry = self.locks[real]
+        if entry == nil:
+            return nil
+        who = []
+        for name, flag in entry.owners:
+            who[len(who) + 1] = name
+        table.sort(who)
+        return {mode: entry.mode, owners: who}
+
+    # снимает все блокировки владельца (например, при завершении процесса)
+    def release_owner(self, owner):
+        for real, entry in self.locks:
+            entry.owners[owner] = nil
+            if next(entry.owners) == nil:
+                self.locks[real] = nil
+
+    # ------------------------------------------------------------ события
+
+    # вызывает fn({kind, path, to}) при изменении путей внутри prefix; возвращает номер для unwatch
+    def watch(self, prefix, fn):
+        self.watch_seq += 1
+        self.watchers[self.watch_seq] = {prefix: paths.normalize(prefix), fn: fn}
+        return self.watch_seq
+
+    def unwatch(self, id):
+        self.watchers[id] = nil
+
+    # ------------------------------------------------------------ место и очистка
+
+    def space(self, path):
+        real = self:resolve(path)
+        m, rel = self:_locate(real)
+        free = m.provider:free_space()
+        capacity = m.provider:capacity()
+        used = nil
+        if m.provider.used != nil:
+            used = m.provider:used()
+        elif capacity != nil and free != nil:
+            used = capacity - free
+        warn = capacity != nil and used != nil and capacity > 0 and used >= capacity * 0.9
+        return {free: free, capacity: capacity, used: used, warn: warn ?? false}
+
+    # удаляет содержимое каталога; opts.older_than (мс) только старые, opts.all всё. Возвращает число элементов.
+    def clean(self, sub, path, opts=nil):
+        o = opts ?? {}
+        real = self:resolve(path)
+        cutoff = nil
+        if o.older_than != nil:
+            cutoff = self:now() - o.older_than
+        elif not o.all:
+            errors.fail("EINVAL", "clean needs older_than or all", real)
+        count = 0
+        for entry in self:list(nil, real, {hidden: true}):
+            if entry.mount:
+                continue
+            if cutoff == nil or entry.modified < cutoff:
+                self:remove(sub, paths.join(real, entry.name), {recursive: true, permanent: true})
+                count += 1
+        return count
+
+    # настраивает очистку по расписанию: каждые interval мс удалять элементы старше max_age мс
+    def schedule_clean(self, path, interval, max_age):
+        self.clean_jobs[len(self.clean_jobs) + 1] = {path: paths.normalize(path), interval: interval, max_age: max_age,
+            last: self:now()}
+
+    # вызывается ядром периодически; возвращает число удалённых элементов
+    def tick(self):
+        total = 0
+        t = self:now()
+        for job in self.clean_jobs:
+            if t - job.last >= job.interval:
+                job.last = t
+                total += self:clean(nil, job.path, {older_than: job.max_age})
+        return total
+
+    # ------------------------------------------------------------ корзина
+
+    def set_trash(self, user, path, max_bytes=nil, enabled=true):
+        self.trash_overrides[user] = {path: path, max_bytes: max_bytes ?? self.trash_cfg.max_bytes, enabled: enabled}
+
+    def trash_items(self, sub):
+        return trash_mod.items(self, sub)
+
+    def trash_restore(self, sub, id, to=nil):
+        return trash_mod.restore(self, sub, id, to)
+
+    def trash_purge(self, sub, id):
+        trash_mod.purge(self, sub, id)
+
+    def trash_empty(self, sub):
+        return trash_mod.empty(self, sub)
+
+export def new(opts=nil):
+    return CFS(opts)

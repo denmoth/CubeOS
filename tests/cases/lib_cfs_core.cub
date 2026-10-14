@@ -1,0 +1,360 @@
+import t
+import cfs.core as core
+import cfs.memory as memory
+import cfs.rules as rules
+import cfs.errors as errors
+eq = t.eq
+
+clock = {now: 1000}
+def now():
+    return clock.now
+
+def code_of(f):
+    try:
+        f()
+    except Error as e:
+        return e.code
+    return nil
+
+ivan = rules.subject("ivan", ["user"])
+anna = rules.subject("anna", ["user"])
+boss = rules.subject("boss", ["admin"])
+
+confirms = {answer: true, asked: []}
+def confirm(op, path, sub):
+    confirms.asked[len(confirms.asked) + 1] = op .. ":" .. path
+    return confirms.answer
+
+def mk(extra_opts=nil):
+    opts = {clock: now, confirm: confirm, no_trash: ["/cubeos/tmp"]}
+    fsys = core.new(opts)
+    root = memory.new({now: now})
+    fsys:mount("/", root)
+    tmp = memory.new({limit: 1000, now: now})
+    fsys:mount("/cubeos/tmp", tmp)
+    fsys.rules:add("/cubeos/users/$user/**", {"*": "rwxl"})
+    fsys.rules:add("/cubeos/shared/**", {"*": "rl", admin: "rwxl"})
+    fsys.rules:add("/cubeos/tmp/**", {"*": "rwxl"})
+    fsys.rules:add("/cubeos/sys/**", {"*": "rxl"})
+    fsys:mkdir(nil, "/cubeos/users/ivan/home", {parents: true})
+    fsys:mkdir(nil, "/cubeos/users/anna/home", {parents: true})
+    fsys:mkdir(nil, "/cubeos/shared", {parents: true})
+    fsys:mkdir(nil, "/cubeos/sys", {parents: true})
+    return fsys
+
+def names(entries):
+    out = []
+    for e in entries:
+        out[len(out) + 1] = e.name
+    return out
+
+# ---------------------------------------------------------------- основы
+f = mk()
+f:write_file(ivan, "/cubeos/users/ivan/home/a.txt", "hello")
+eq(f:read_file(ivan, "/cubeos/users/ivan/home/a.txt"), "hello", "write and read")
+eq(f:exists(ivan, "/cubeos/users/ivan/home/a.txt"), true, "exists")
+eq(f:exists(ivan, "/cubeos/users/ivan/home/none"), false, "not exists")
+st = f:stat(ivan, "/cubeos/users/ivan/home/a.txt")
+eq(st.type, "file", "stat type")
+eq(st.size, 5, "stat size")
+eq(st.name, "a.txt", "stat name")
+eq(f:stat(ivan, "/cubeos/users/ivan/home/none"), nil, "stat missing")
+f:write_file(ivan, "/cubeos/users/ivan/home/a.txt", " world", {append: true})
+eq(f:read_file(ivan, "/cubeos/users/ivan/home/a.txt"), "hello world", "append")
+f:mkdir(ivan, "/cubeos/users/ivan/home/docs/deep", {parents: true})
+f:write_file(ivan, "/cubeos/users/ivan/home/.hidden", "x")
+eq(names(f:list(ivan, "/cubeos/users/ivan/home")), ["a.txt", "docs"], "list hides dotfiles")
+eq(names(f:list(ivan, "/cubeos/users/ivan/home", {hidden: true})), [".hidden", "a.txt", "docs"], "list with hidden")
+eq(code_of(() => f:mkdir(ivan, "/cubeos/users/ivan/home/docs")), "EEXIST", "mkdir exists")
+eq(code_of(() => f:write_file(ivan, "/cubeos/users/ivan/home/nodir/x", "1")), "ENOENT", "write needs parent")
+eq(code_of(() => f:write_file(ivan, "/cubeos/users/ivan/home/docs", "1")), "EISDIR", "write onto dir")
+eq(code_of(() => f:read_file(ivan, "/cubeos/users/ivan/home/docs")), "EISDIR", "read dir")
+eq(code_of(() => f:list(ivan, "/cubeos/users/ivan/home/a.txt")), "ENOTDIR", "list file")
+# временные файлы атомарной замены не остаются
+f:write_file(ivan, "/cubeos/users/ivan/home/a.txt", "v2")
+root_p = f.mounts[2].provider
+tmp_p = f.mounts[1].provider
+eq(tmp_p:list("/"), [], "tmp mount untouched")
+eq(root_p:list("/cubeos/users/ivan/home"), [".hidden", "a.txt", "docs"], "no temp leftovers")
+
+# ---------------------------------------------------------------- точки монтирования
+eq(names(f:list(nil, "/cubeos")), ["shared", "sys", "tmp", "users"], "mount point listed")
+tmp_entry = nil
+for e in f:list(nil, "/cubeos"):
+    if e.name == "tmp":
+        tmp_entry = e
+eq(tmp_entry.mount, true, "mount flag")
+eq(f:stat(nil, "/cubeos/tmp").type, "dir", "mount root stat")
+f:write_file(ivan, "/cubeos/tmp/scratch.txt", "t")
+eq(f:read_file(ivan, "/cubeos/tmp/scratch.txt"), "t", "write into tmp mount")
+eq(root_p:stat("/cubeos/tmp/scratch.txt"), nil, "tmp data is not on the root provider")
+g = core.new({clock: now})
+g:mount("/", memory.new({now: now}))
+g:mount("/a/b/c", memory.new({now: now}))
+eq(g:stat(nil, "/a/b").type, "dir", "virtual ancestor dir")
+eq(names(g:list(nil, "/a")), ["b"], "virtual listing")
+eq(code_of(() => g:remove(nil, "/a/b/c")), "EBUSY", "cannot remove mount point")
+infos = f:mounts_info()
+eq(len(infos), 2, "mounts_info")
+no_root = core.new({})
+eq(code_of(() => no_root:stat(nil, "/x")), "ENOENT", "no mount")
+
+# ---------------------------------------------------------------- ссылки
+f:mkdir(nil, "/cubeos/shared/real")
+f:write_file(boss, "/cubeos/shared/real/data.txt", "payload")
+f:link(boss, "/cubeos/shared/real/data.txt", "/cubeos/shared/data-link")
+eq(f:read_file(ivan, "/cubeos/shared/data-link"), "payload", "read through file link")
+eq(f:lstat(ivan, "/cubeos/shared/data-link").type, "link", "lstat link")
+eq(f:lstat(ivan, "/cubeos/shared/data-link").target, "/cubeos/shared/real/data.txt", "link target")
+eq(f:stat(ivan, "/cubeos/shared/data-link").type, "file", "stat follows link")
+eq(f:readlink(ivan, "/cubeos/shared/data-link"), "/cubeos/shared/real/data.txt", "readlink")
+shared_names = names(f:list(ivan, "/cubeos/shared"))
+eq(shared_names, ["data-link", "real"], "link listed without .sym")
+link_entry = nil
+for e in f:list(ivan, "/cubeos/shared"):
+    if e.name == "data-link":
+        link_entry = e
+eq(link_entry.type, "link", "link entry type")
+f:link(boss, "/cubeos/shared/real", "/cubeos/shared/dir-link")
+eq(f:read_file(ivan, "/cubeos/shared/dir-link/data.txt"), "payload", "read through directory link")
+eq(names(f:list(ivan, "/cubeos/shared/dir-link")), ["data.txt"], "list through directory link")
+f:link(boss, "real/data.txt", "/cubeos/shared/rel-link")
+eq(f:read_file(ivan, "/cubeos/shared/rel-link"), "payload", "relative link")
+f:link(boss, "/cubeos/shared/loop-b", "/cubeos/shared/loop-a")
+f:link(boss, "/cubeos/shared/loop-a", "/cubeos/shared/loop-b")
+eq(code_of(() => f:read_file(ivan, "/cubeos/shared/loop-a")), "ELOOP", "link loop")
+f:remove(boss, "/cubeos/shared/data-link")
+eq(f:exists(nil, "/cubeos/shared/real/data.txt"), true, "removing link keeps target")
+eq(f:lstat(nil, "/cubeos/shared/data-link"), nil, "link removed")
+eq(code_of(() => f:link(boss, "x", "/cubeos/shared/rel-link")), "EEXIST", "link exists")
+
+# ---------------------------------------------------------------- права
+eq(code_of(() => f:write_file(ivan, "/cubeos/users/anna/home/x", "1")), "EACCES", "write other home")
+eq(code_of(() => f:read_file(ivan, "/cubeos/users/anna/home/x")), "EACCES", "read other home")
+eq(code_of(() => f:write_file(ivan, "/cubeos/shared/x", "1")), "EACCES", "user cannot write shared")
+eq(f:exists(ivan, "/cubeos/users/anna/home"), false, "invisible paths do not exist")
+f:write_file(boss, "/cubeos/shared/x", "1")
+eq(f:read_file(ivan, "/cubeos/shared/x"), "1", "user reads shared")
+eq(code_of(() => f:list(ivan, "/nowhere")), "EACCES", "no rule no access")
+
+# ---------------------------------------------------------------- важные файлы
+confirms.asked = []
+eq(code_of(() => f:write_file(ivan, "/cubeos/users/ivan/home/!keep", "1")), "EACCES", "user cannot create important")
+confirms.answer = true
+f:write_file(boss, "/cubeos/shared/!config", "1")
+eq(confirms.asked[1], "write:/cubeos/shared/!config", "confirmation asked for create")
+confirms.answer = false
+eq(code_of(() => f:write_file(boss, "/cubeos/shared/!config", "2")), "ECONFIRM", "declined confirmation")
+eq(f:read_file(boss, "/cubeos/shared/!config"), "1", "declined write keeps data")
+eq(f:read_file(ivan, "/cubeos/shared/!config"), "1", "anyone reads important")
+confirms.answer = true
+eq(code_of(() => f:remove(ivan, "/cubeos/shared/!config")), "EACCES", "user cannot delete important")
+f:mkdir(boss, "/cubeos/shared/!vault")
+f:write_file(boss, "/cubeos/shared/!vault/inner", "s")
+eq(code_of(() => f:write_file(ivan, "/cubeos/shared/!vault/inner", "z")), "EACCES", "inside important dir")
+confirms.asked = []
+f:write_file(nil, "/cubeos/shared/!config", "sys")
+eq(len(confirms.asked), 0, "system needs no confirmation")
+f:remove(boss, "/cubeos/shared/!config", {permanent: true})
+eq(f:exists(nil, "/cubeos/shared/!config"), false, "admin deletes after confirmation")
+eq(confirms.asked[1], "delete:/cubeos/shared/!config", "confirmation asked for delete")
+f:write_file(boss, "/cubeos/shared/plain", "1")
+confirms.asked = []
+f:move(boss, "/cubeos/shared/plain", "/cubeos/shared/!renamed")
+eq(confirms.asked[1], "move:/cubeos/shared/!renamed", "moving into important name asks")
+confirms.answer = true
+
+# ---------------------------------------------------------------- имена
+eq(code_of(() => f:write_file(ivan, "/cubeos/users/ivan/home/bad:name", "1")), "ENAME", "forbidden char")
+eq(code_of(() => f:mkdir(ivan, "/cubeos/users/ivan/home/what?")), "ENAME", "forbidden char in dir")
+f:write_file(ivan, "/cubeos/users/ivan/home/Файл.txt", "ru")
+eq(f:read_file(ivan, "/cubeos/users/ivan/home/Файл.txt"), "ru", "cyrillic name")
+eq(code_of(() => f:write_file(ivan, "/cubeos/users/ivan/home/файл.txt", "x")), "ENAME", "case collision with cyrillic")
+f:write_file(ivan, "/cubeos/users/ivan/home/Case.txt", "1")
+eq(code_of(() => f:write_file(ivan, "/cubeos/users/ivan/home/case.txt", "2")), "ENAME", "case collision")
+f:write_file(ivan, "/cubeos/users/ivan/home/Case.txt", "3")
+eq(f:read_file(ivan, "/cubeos/users/ivan/home/Case.txt"), "3", "overwrite same name ok")
+eq(code_of(() => f:write_file(ivan, "/cubeos/users/ivan/home/x.sym", "1")), "ENAME", "reserved .sym")
+eq(code_of(() => f:write_file(ivan, "/cubeos/users/ivan/home/" .. string.rep("a", 65), "1")), "ENAME", "too long")
+
+# ---------------------------------------------------------------- корзина
+home = "/cubeos/users/ivan/home"
+f:write_file(ivan, home .. "/trashme.txt", "bye")
+f:remove(ivan, home .. "/trashme.txt")
+eq(f:exists(ivan, home .. "/trashme.txt"), false, "removed from place")
+items = f:trash_items(ivan)
+eq(len(items), 1, "trash has item")
+eq(items[1].name, "trashme.txt", "trash item name")
+eq(items[1].original, home .. "/trashme.txt", "trash original path")
+eq(items[1].size, 3, "trash item size")
+back = f:trash_restore(ivan, items[1].id)
+eq(back, home .. "/trashme.txt", "restore path")
+eq(f:read_file(ivan, home .. "/trashme.txt"), "bye", "restored content")
+eq(len(f:trash_items(ivan)), 0, "trash empty after restore")
+f:remove(ivan, home .. "/trashme.txt", {permanent: true})
+eq(len(f:trash_items(ivan)), 0, "permanent bypasses trash")
+f:mkdir(ivan, home .. "/folder")
+f:write_file(ivan, home .. "/folder/in.txt", "in")
+eq(code_of(() => f:remove(ivan, home .. "/folder")), "ENOTEMPTY", "non-empty needs recursive")
+f:remove(ivan, home .. "/folder", {recursive: true})
+eq(f:trash_items(ivan)[1].kind, "dir", "dir in trash")
+f:trash_restore(ivan, f:trash_items(ivan)[1].id)
+eq(f:read_file(ivan, home .. "/folder/in.txt"), "in", "dir restored with content")
+f:write_file(ivan, "/cubeos/tmp/gone", "1")
+f:remove(ivan, "/cubeos/tmp/gone")
+eq(len(f:trash_items(ivan)), 0, "tmp removal is permanent")
+f:write_file(ivan, home .. "/occupied", "1")
+f:remove(ivan, home .. "/occupied")
+f:write_file(ivan, home .. "/occupied", "2")
+eq(code_of(() => f:trash_restore(ivan, f:trash_items(ivan)[1].id)), "EEXIST", "restore onto existing")
+f:trash_empty(ivan)
+# лимит и вытеснение
+f:set_trash("ivan", "/cubeos/users/ivan/bin", 10)
+f:write_file(ivan, home .. "/t1", "123456")
+f:write_file(ivan, home .. "/t2", "123456")
+f:write_file(ivan, home .. "/t3", "12345678901")
+f:remove(ivan, home .. "/t1")
+clock.now = 2000
+f:remove(ivan, home .. "/t2")
+eq(len(f:trash_items(ivan)), 1, "oldest evicted by size limit")
+eq(f:trash_items(ivan)[1].name, "t2", "newest kept")
+eq(code_of(() => f:remove(ivan, home .. "/t3")), "ENOSPC", "too large for trash")
+f:remove(ivan, home .. "/t3", {permanent: true})
+f:set_trash("anna", "/cubeos/users/anna/bin", 100, false)
+f:write_file(anna, "/cubeos/users/anna/home/d", "1")
+f:remove(anna, "/cubeos/users/anna/home/d")
+eq(len(f:trash_items(anna)), 0, "trash disabled means permanent")
+
+# ---------------------------------------------------------------- copy и move
+f:write_file(ivan, home .. "/src.txt", "data")
+f:copy(ivan, home .. "/src.txt", home .. "/copy.txt")
+eq(f:read_file(ivan, home .. "/copy.txt"), "data", "copy")
+eq(code_of(() => f:copy(ivan, home .. "/src.txt", home .. "/copy.txt")), "EEXIST", "copy onto existing")
+f:write_file(ivan, home .. "/other.txt", "other")
+f:copy(ivan, home .. "/src.txt", home .. "/other.txt", {overwrite: true})
+eq(f:read_file(ivan, home .. "/other.txt"), "data", "copy overwrite")
+f:mkdir(ivan, home .. "/box")
+eq(f:copy(ivan, home .. "/src.txt", home .. "/box"), home .. "/box/src.txt", "copy into directory")
+f:mkdir(ivan, home .. "/tree/sub", {parents: true})
+f:write_file(ivan, home .. "/tree/sub/leaf", "L")
+f:link(ivan, "sub/leaf", home .. "/tree/lnk")
+f:copy(ivan, home .. "/tree", home .. "/tree2")
+eq(f:read_file(ivan, home .. "/tree2/sub/leaf"), "L", "copy tree")
+eq(f:lstat(ivan, home .. "/tree2/lnk").type, "link", "copy keeps links")
+eq(code_of(() => f:copy(ivan, home .. "/tree", home .. "/tree/inner")), "EINVAL", "copy into itself")
+f:move(ivan, home .. "/copy.txt", home .. "/moved.txt")
+eq(f:exists(ivan, home .. "/copy.txt"), false, "moved from")
+eq(f:read_file(ivan, home .. "/moved.txt"), "data", "moved to")
+eq(f:move(ivan, home .. "/moved.txt", home .. "/box"), home .. "/box/moved.txt", "move into directory")
+eq(code_of(() => f:move(ivan, home .. "/src.txt", home .. "/box/moved.txt")), "EEXIST", "move onto existing")
+f:move(ivan, home .. "/src.txt", home .. "/box/moved.txt", {overwrite: true})
+eq(f:read_file(ivan, home .. "/box/moved.txt"), "data", "move overwrite")
+f:move(ivan, home .. "/tree", "/cubeos/tmp/tree")
+eq(f:read_file(ivan, "/cubeos/tmp/tree/sub/leaf"), "L", "move across mounts")
+eq(f:exists(ivan, home .. "/tree"), false, "source gone after cross-mount move")
+eq(code_of(() => f:move(ivan, "/cubeos/tmp/tree", "/cubeos/tmp/tree/x")), "EINVAL", "move into itself")
+eq(code_of(() => f:move(ivan, home .. "/nothing", home .. "/x")), "ENOENT", "move missing")
+f:move(ivan, home .. "/tree2/lnk", home .. "/tree2/lnk2")
+eq(f:lstat(ivan, home .. "/tree2/lnk2").type, "link", "move a link")
+
+# ---------------------------------------------------------------- блокировки
+eq(f:lock("p1", home .. "/a.txt", "exclusive"), true, "lock")
+eq(f:lock("p2", home .. "/a.txt", "shared"), false, "blocked by exclusive")
+eq(f:lock("p1", home .. "/a.txt", "exclusive"), true, "relock same owner")
+eq(f:lock_info(home .. "/a.txt"), {mode: "exclusive", owners: ["p1"]}, "lock info")
+eq(f:unlock("p1", home .. "/a.txt"), true, "unlock")
+eq(f:lock("p1", home .. "/a.txt", "shared"), true, "shared lock")
+eq(f:lock("p2", home .. "/a.txt", "shared"), true, "second shared lock")
+eq(f:lock("p3", home .. "/a.txt", "exclusive"), false, "exclusive blocked by shared")
+f:release_owner("p1")
+f:release_owner("p2")
+eq(f:lock_info(home .. "/a.txt"), nil, "released")
+
+# ---------------------------------------------------------------- события
+events = []
+def on_event(ev):
+    events[len(events) + 1] = ev.kind .. ":" .. ev.path .. (ev.to != nil and ("->" .. ev.to) or "")
+wid = f:watch(home, on_event)
+f:write_file(ivan, home .. "/ev.txt", "1")
+f:write_file(ivan, home .. "/ev.txt", "2")
+f:move(ivan, home .. "/ev.txt", home .. "/ev2.txt")
+f:remove(ivan, home .. "/ev2.txt", {permanent: true})
+f:write_file(ivan, "/cubeos/tmp/outside", "1")
+eq(events, ["create:" .. home .. "/ev.txt", "modify:" .. home .. "/ev.txt", "move:" .. home .. "/ev.txt->" .. home .. "/ev2.txt", "delete:" .. home .. "/ev2.txt"], "watch events")
+f:unwatch(wid)
+f:write_file(ivan, home .. "/ev3.txt", "1")
+eq(len(events), 4, "unwatch stops events")
+
+# ---------------------------------------------------------------- место
+sp = f:space("/cubeos/tmp")
+eq(sp.capacity, 1000, "space capacity")
+eq(sp.warn, false, "no warning yet")
+f:write_file(ivan, "/cubeos/tmp/big", string.rep("x", 900))
+eq(f:space("/cubeos/tmp").warn, true, "warning at 90 percent")
+eq(code_of(() => f:write_file(ivan, "/cubeos/tmp/more", string.rep("y", 200))), "ENOSPC", "no space")
+r = core.new({})
+rm = memory.new({limit: 100})
+r:mount("/", rm, {reserve: 30})
+r.rules:add("/**", {"*": "rwxl"})
+r:write_file(nil, "/sys", string.rep("z", 90))
+r:remove(nil, "/sys")
+r:write_file(ivan, "/ok", string.rep("a", 60))
+eq(code_of(() => r:write_file(ivan, "/over", string.rep("b", 20))), "ENOSPC", "reserve protects the system")
+r:write_file(nil, "/sysfile", string.rep("c", 20))
+eq(r:read_file(nil, "/sysfile"), string.rep("c", 20), "system may use the reserve")
+
+# ---------------------------------------------------------------- очистка tmp
+clock.now = 10000
+f:remove(ivan, "/cubeos/tmp/big", {permanent: true})
+f:write_file(ivan, "/cubeos/tmp/old", "1")
+tmp_p:set_modified("/scratch.txt", 1)
+clock.now = 20000
+f:write_file(ivan, "/cubeos/tmp/fresh", "1")
+eq(f:clean(nil, "/cubeos/tmp", {older_than: 5000}), 4, "clean old entries")
+eq(names(f:list(nil, "/cubeos/tmp")), ["fresh"], "fresh remains")
+f:schedule_clean("/cubeos/tmp", 1000, 500)
+clock.now = 20400
+eq(f:tick(), 0, "tick before interval")
+clock.now = 21500
+eq(f:tick(), 1, "tick cleans")
+eq(code_of(() => f:clean(nil, "/cubeos/tmp")), "EINVAL", "clean needs a rule")
+f:write_file(ivan, "/cubeos/tmp/z", "1")
+eq(f:clean(nil, "/cubeos/tmp", {all: true}), 1, "clean all")
+
+# ---------------------------------------------------------------- дескрипторы
+h = f:open(ivan, home .. "/stream.txt", "w")
+h:write("one")
+h:write_line("-two")
+h:write_line("three")
+h:close()
+eq(f:read_file(ivan, home .. "/stream.txt"), "one-two\nthree\n", "handle write")
+h = f:open(ivan, home .. "/stream.txt", "a")
+h:write("four")
+h:close()
+eq(f:read_file(ivan, home .. "/stream.txt"), "one-two\nthree\nfour", "handle append")
+h = f:open(ivan, home .. "/stream.txt")
+eq(h:read(3), "one", "handle read n")
+eq(h:read_line(), "-two", "handle read line")
+eq(h:eof(), false, "not eof")
+eq(h:read_all(), "three\nfour", "handle read all")
+eq(h:read(1), nil, "eof returns nil")
+eq(h:seek("set", 4), 4, "seek set")
+eq(h:read_line(true), "two\n", "read line keep")
+eq(h:seek("end", 0), 18, "seek end")
+h:close()
+eq(code_of(() => h:read(1)), "EINVAL", "read after close")
+lines_seen = []
+h = f:open(ivan, home .. "/stream.txt")
+for line in h:lines():
+    lines_seen[len(lines_seen) + 1] = line
+h:close()
+eq(lines_seen, ["one-two", "three", "four"], "lines iterator")
+with f:open(ivan, home .. "/with.txt", "w") as fh:
+    fh:write("inside with")
+eq(f:read_file(ivan, home .. "/with.txt"), "inside with", "with closes and flushes")
+h = f:open(ivan, home .. "/stream.txt")
+eq(code_of(() => h:write("x")), "EINVAL", "write on read handle")
+h:close()
+eq(code_of(() => f:open(ivan, home .. "/missing.txt", "r")), "ENOENT", "open missing")
+eq(code_of(() => f:open(ivan, home .. "/x", "q")), "EINVAL", "bad mode")
+print("done")

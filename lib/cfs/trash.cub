@@ -1,0 +1,112 @@
+# cfs.trash: корзина пользователя
+#
+# Корзина это каталог (по умолчанию /cubeos/users/<имя>/trash, его и диск можно настроить), в нём:
+#   000001/<имя элемента>     удалённый файл или каталог
+#   000001.info               строки ключ=значение: orig (исходный путь), time (мс), size (байт), kind (file|dir|link)
+# Переполнение (max_bytes) вытесняет самые старые элементы; элемент больше лимита в корзину не помещается.
+
+import cfs.path as paths
+import cfs.errors as errors
+
+# настройки корзины для пользователя: {path, max_bytes, enabled}
+export def config(fsys, sub):
+    cfg = fsys.trash_overrides[sub.name] ?? fsys.trash_cfg
+    place = string.gsub(cfg.path, "%$user", () => sub.name)
+    return {path: paths.normalize(place), max_bytes: cfg.max_bytes ?? 131072, enabled: cfg.enabled != false}
+
+def _id_text(n):
+    return string.format("%06d", n)
+
+def _parse_info(text):
+    info = {}
+    for line in string.gmatch(text, "[^\n]+"):
+        k, v = string.match(line, "^([%w_]+)=(.*)$")
+        if k != nil:
+            info[k] = v
+    return info
+
+# список элементов корзины, старые первыми: {id, name, original, time, size, kind}
+export def items(fsys, sub):
+    cfg = config(fsys, sub)
+    out = []
+    if not fsys:exists(nil, cfg.path):
+        return out
+    for entry in fsys:list(nil, cfg.path, {hidden: true}):
+        id = string.match(entry.name, "^(%d+)%.info$")
+        if id != nil:
+            info = _parse_info(fsys:read_file(nil, cfg.path .. "/" .. entry.name))
+            item_dir = cfg.path .. "/" .. id
+            name = ""
+            if fsys:exists(nil, item_dir):
+                inside = fsys:list(nil, item_dir, {hidden: true})
+                if len(inside) > 0:
+                    name = inside[1].name
+            out[len(out) + 1] = {id: id, name: name, original: info.orig, time: tonumber(info.time) ?? 0,
+                size: tonumber(info.size) ?? 0, kind: info.kind ?? "file"}
+    table.sort(out, (a, b) => a.id < b.id)
+    return out
+
+def _total(list_of_items):
+    total = 0
+    for it in list_of_items:
+        total += it.size
+    return total
+
+export def purge(fsys, sub, id):
+    cfg = config(fsys, sub)
+    item_dir = cfg.path .. "/" .. id
+    if fsys:exists(nil, item_dir):
+        fsys:remove(nil, item_dir, {recursive: true, permanent: true})
+    if fsys:exists(nil, item_dir .. ".info"):
+        fsys:remove(nil, item_dir .. ".info", {permanent: true})
+
+export def empty(fsys, sub):
+    count = 0
+    for it in items(fsys, sub):
+        purge(fsys, sub, it.id)
+        count += 1
+    return count
+
+# кладёт real (уже проверенный путь) в корзину; size и kind посчитаны вызывающим
+export def put(fsys, sub, real, size, kind):
+    cfg = config(fsys, sub)
+    if size > cfg.max_bytes:
+        errors.fail("ENOSPC", "the item is larger than the trash limit; delete it permanently instead", real)
+    fsys:mkdir(nil, cfg.path, {parents: true})
+    existing = items(fsys, sub)
+    # освобождаем место, вытесняя старые элементы
+    total = _total(existing)
+    i = 1
+    while total + size > cfg.max_bytes and i <= len(existing):
+        total -= existing[i].size
+        purge(fsys, sub, existing[i].id)
+        i += 1
+    next_id = 1
+    for it in existing:
+        n = tonumber(it.id) ?? 0
+        if n >= next_id:
+            next_id = n + 1
+    id = _id_text(next_id)
+    item_dir = cfg.path .. "/" .. id
+    fsys:mkdir(nil, item_dir)
+    fsys:move(nil, real, item_dir .. "/" .. paths.basename(real))
+    info = "orig=" .. real .. "\ntime=" .. fsys:now() .. "\nsize=" .. size .. "\nkind=" .. kind .. "\n"
+    fsys:write_file(nil, item_dir .. ".info", info)
+    return id
+
+# возвращает элемент на место (или в to); существующий путь не затирает
+export def restore(fsys, sub, id, to=nil):
+    cfg = config(fsys, sub)
+    found = nil
+    for it in items(fsys, sub):
+        if it.id == id:
+            found = it
+    if found == nil:
+        errors.fail("ENOENT", "no such item in the trash", id)
+    target = to ?? found.original
+    if fsys:exists(nil, target):
+        errors.fail("EEXIST", "the original location is occupied", target)
+    fsys:mkdir(nil, paths.parent(target), {parents: true})
+    fsys:move(nil, cfg.path .. "/" .. id .. "/" .. found.name, target)
+    purge(fsys, sub, id)
+    return target
