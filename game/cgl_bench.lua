@@ -7,9 +7,23 @@ local cgl = loader.import("cgl")
 local fx = loader.import("cgl.fx")
 local g3d = loader.import("cgl.g3d")
 local fontlib = loader.import("font")
-local backend = ({ ... })[1] or "auto"
 
-local screen = cgl.open({ backend = backend })
+-- аргументы: [graphics|teletext] [monitor[=имя]] [scale=число]; те же, что у cgl_demo.lua
+local opts = { backend = "auto" }
+local target, scale = nil, 0.5
+for _, a in ipairs({ ... }) do
+  if a == "graphics" or a == "teletext" then opts.backend = a
+  elseif a == "monitor" then target = peripheral.find("monitor")
+  elseif a:sub(1, 8) == "monitor=" then target = peripheral.wrap(a:sub(9))
+  elseif a:sub(1, 6) == "scale=" then scale = tonumber(a:sub(7)) or scale end
+end
+if target then
+  if target.setTextScale then target.setTextScale(scale) end
+  opts.term = target
+end
+local out = target or term
+
+local screen = cgl.open(opts)
 local s = screen.surface
 local w, h = screen.w, screen.h
 local pal = screen.palette
@@ -65,7 +79,8 @@ end)
 
 screen:close()
 term.clear(); term.setCursorPos(1, 1)
-print("CGL bench: " .. screen.kind .. " " .. w .. "x" .. h)
+if target then out.clear() end
+print("CGL bench: " .. screen.kind .. " " .. w .. "x" .. h .. (target and " (monitor)" or ""))
 for _, line in ipairs(results) do print(line) end
 local f = fs.open(ROOT .. "/build/cgl-bench.txt", "w")
 if f then

@@ -135,7 +135,7 @@ export def open(opts=nil):
     if backend == "graphics":
         display = graphics_mod.new(t, {mode: o.mode ?? 2, palette: palette, dither: o.dither, clear: o.clear})
     else:
-        display = teletext_mod.new(t, {palette: palette, dither: o.dither ?? true, clear: o.clear,
+        display = teletext_mod.new(t, {palette: palette, dither: o.dither ?? false, clear: o.clear,
             terminal_palette: o.terminal_palette})
     display:open()
     return Screen(display, palette)

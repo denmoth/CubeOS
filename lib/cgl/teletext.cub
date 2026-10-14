@@ -27,6 +27,9 @@ export class TeletextDisplay:
         self.w = self.cols * 2
         self.h = self.rows * 3
         self.prev = nil
+        self.enc = {}
+        self.enc_count = 0
+        self.spare = nil
         self.stats = {frames: 0, pixels: 0, calls: 0}
         self.kind = "teletext"
         self.opened = false
@@ -47,6 +50,8 @@ export class TeletextDisplay:
                 r, g, b = self.term_palette:get(i)
                 self.term.setPaletteColor(2 ** i, r / 255, g / 255, b / 255)
         self.quant:rebuild()
+        self.enc = {}
+        self.enc_count = 0
         self.prev = nil
 
     # меняет цвета палитры поверхности: список [номер, r, g, b]; квантование пересчитывается, кадр уходит заново
@@ -54,6 +59,8 @@ export class TeletextDisplay:
         for e in list:
             self.palette:set(e[1], e[2], e[3], e[4])
         self.quant:rebuild()
+        self.enc = {}
+        self.enc_count = 0
         self.prev = nil
 
     def close(self):
@@ -118,45 +125,69 @@ export class TeletextDisplay:
             bits = 31 - bits
         return 128 + bits, fg, bg
 
+    # символ и цвета для сигнатуры клетки (шесть номеров по 4 бита); результат кэшируется: плоские области и повторяющиеся
+    # узоры дают всего несколько разных клеток, и кодировать их заново каждый кадр незачем
+    def _encode_sig(self, sig):
+        e = self.enc[sig]
+        if e != nil:
+            return e
+        p = [sig % 16, (sig // 16) % 16, (sig // 256) % 16, (sig // 4096) % 16, (sig // 65536) % 16, (sig // 1048576) % 16]
+        ch, fg, bg = self:encode(p)
+        e = [string.char(ch), string.sub(HEX, fg + 1, fg + 1), string.sub(HEX, bg + 1, bg + 1)]
+        if self.enc_count > 30000:
+            self.enc = {}
+            self.enc_count = 0
+        self.enc[sig] = e
+        self.enc_count += 1
+        return e
+
     # рисует кадр; возвращает число изменившихся клеток
     def present(self, s):
         cols = math.min(self.cols, s.w // 2)
         rows = math.min(self.rows, s.h // 3)
         q = self.quant
+        main = q.main
+        clear = q.clear
+        dither = q.dither
         full = self.prev == nil
         prev = self.prev ?? {}
-        cur = {}
+        cur = self.spare ?? {}
         spx = s.px
         sw = s.w
         changed = 0
-        p = [0, 0, 0, 0, 0, 0]
+        term = self.term
         for cy in range[0, rows - 1]:
             first_x = nil
             last_x = nil
-            chars = []
-            fgs = []
-            bgs = []
+            y = cy * 3
+            kbase = cy * cols + 1
             for cx in range[0, cols - 1]:
                 x = cx * 2
-                y = cy * 3
                 i1 = y * sw + x + 1
-                dither = q.dither
+                i2 = i1 + sw
+                i3 = i2 + sw
+                p1 = 0
+                p2 = 0
+                p3 = 0
+                p4 = 0
+                p5 = 0
+                p6 = 0
                 if dither:
-                    p[1] = q:pick(spx[i1], x, y)
-                    p[2] = q:pick(spx[i1 + 1], x + 1, y)
-                    p[3] = q:pick(spx[i1 + sw], x, y + 1)
-                    p[4] = q:pick(spx[i1 + sw + 1], x + 1, y + 1)
-                    p[5] = q:pick(spx[i1 + 2 * sw], x, y + 2)
-                    p[6] = q:pick(spx[i1 + 2 * sw + 1], x + 1, y + 2)
+                    p1 = q:pick(spx[i1], x, y)
+                    p2 = q:pick(spx[i1 + 1], x + 1, y)
+                    p3 = q:pick(spx[i2], x, y + 1)
+                    p4 = q:pick(spx[i2 + 1], x + 1, y + 1)
+                    p5 = q:pick(spx[i3], x, y + 2)
+                    p6 = q:pick(spx[i3 + 1], x + 1, y + 2)
                 else:
-                    p[1] = q:index(spx[i1])
-                    p[2] = q:index(spx[i1 + 1])
-                    p[3] = q:index(spx[i1 + sw])
-                    p[4] = q:index(spx[i1 + sw + 1])
-                    p[5] = q:index(spx[i1 + 2 * sw])
-                    p[6] = q:index(spx[i1 + 2 * sw + 1])
-                sig = p[1] + p[2] * 16 + p[3] * 256 + p[4] * 4096 + p[5] * 65536 + p[6] * 1048576
-                k = cy * cols + cx + 1
+                    p1 = main[spx[i1] + 2] ?? clear
+                    p2 = main[spx[i1 + 1] + 2] ?? clear
+                    p3 = main[spx[i2] + 2] ?? clear
+                    p4 = main[spx[i2 + 1] + 2] ?? clear
+                    p5 = main[spx[i3] + 2] ?? clear
+                    p6 = main[spx[i3 + 1] + 2] ?? clear
+                sig = p1 + p2 * 16 + p3 * 256 + p4 * 4096 + p5 * 65536 + p6 * 1048576
+                k = kbase + cx
                 cur[k] = sig
                 if full or prev[k] != sig:
                     if first_x == nil:
@@ -164,23 +195,20 @@ export class TeletextDisplay:
                     last_x = cx
                     changed += 1
             if first_x != nil:
-                # заново кодируем промежуток целиком (клетки между изменившимися дешевле отправить, чем разбивать вызов)
+                chars = []
+                fgs = []
+                bgs = []
+                n = 0
                 for cx in range[first_x, last_x]:
-                    sig = cur[cy * cols + cx + 1]
-                    p[1] = sig % 16
-                    p[2] = (sig // 16) % 16
-                    p[3] = (sig // 256) % 16
-                    p[4] = (sig // 4096) % 16
-                    p[5] = (sig // 65536) % 16
-                    p[6] = (sig // 1048576) % 16
-                    ch, fg, bg = self:encode(p)
-                    n = cx - first_x + 1
-                    chars[n] = string.char(ch)
-                    fgs[n] = string.sub(HEX, fg + 1, fg + 1)
-                    bgs[n] = string.sub(HEX, bg + 1, bg + 1)
-                self.term.setCursorPos(first_x + 1, cy + 1)
-                self.term.blit(table.concat(chars), table.concat(fgs), table.concat(bgs))
+                    e = self:_encode_sig(cur[kbase + cx])
+                    n += 1
+                    chars[n] = e[1]
+                    fgs[n] = e[2]
+                    bgs[n] = e[3]
+                term.setCursorPos(first_x + 1, cy + 1)
+                term.blit(table.concat(chars), table.concat(fgs), table.concat(bgs))
                 self.stats.calls += 1
+        self.spare = prev != nil and prev or nil
         self.prev = cur
         self.stats.frames += 1
         self.stats.pixels += changed * 6

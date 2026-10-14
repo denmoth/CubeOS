@@ -173,7 +173,8 @@ class Title:
 
 class PlasmaScene:
     def init(self, ctx):
-        self.k = _scale(ctx, 3, 1)
+        # считаем плазму не крупнее ~110 пикселей в ширину и растягиваем: на большом мониторе иначе нет и 4 кадров в секунду
+        self.k = math.max(1, math.ceil(ctx.w / 110))
         self.small = sf.new(math.ceil(ctx.w / self.k), math.ceil(ctx.h / self.k), 0)
         ramp = ctx.pal:ramp(color.rainbow_stops(12, 0.9, 1), 48)
         self.plasma = fx.Plasma(self.small.w, self.small.h, ramp)
@@ -188,6 +189,7 @@ class PlasmaScene:
 class Scene3D:
     def init(self, ctx):
         self.stars = fx.Starfield(ctx.w, ctx.h, 60, {speed: 0.35})
+        self.small = nil
         self.torus = g3d.torus(1, 0.42, 18, 10)
         self.cube = g3d.cube(1)
         self.ramp = ctx.pal:ramp([[8, 20, 60], [30, 90, 200], [90, 200, 255], [255, 255, 255]], 10)
@@ -198,12 +200,20 @@ class Scene3D:
         s:clear(ctx.deep)
         self.stars:update(dt)
         self.stars:draw(s, [ctx.dark_gray, ctx.gray, ctx.light_gray, ctx.white])
-        g3d.render(s, self.torus, {mode: "flat", ramp: self.ramp, rx: t * 0.7, ry: t * 0.45, z: 3.6, fov: ctx.h * 1.3})
-        size = math.floor(ctx.h * 0.3)
-        g3d.render(s, self.cube, {mode: "flat", ramp: self.ramp2, rx: t * 0.9, ry: t * 1.3, rz: t * 0.3, z: 5, fov: ctx.h * 1.2,
-            cx: ctx.w - size, cy: size})
-        g3d.render(s, self.cube, {mode: "wire", color: ctx.green, rx: -t * 0.6, ry: t * 0.8, z: 5, fov: ctx.h * 1.2,
-            cx: size, cy: ctx.h - size})
+        # трёхмерная часть считается в уменьшенном размере и растягивается: заливка граней дорогая на больших экранах
+        k = math.max(1, math.ceil(ctx.w / 150))
+        sm = self.small
+        if sm == nil or sm.w != math.ceil(ctx.w / k):
+            sm = sf.new(math.ceil(ctx.w / k), math.ceil(ctx.h / k), sf.CLEAR)
+            self.small = sm
+        sm:clear(sf.CLEAR)
+        g3d.render(sm, self.torus, {mode: "flat", ramp: self.ramp, rx: t * 0.7, ry: t * 0.45, z: 3.6, fov: sm.h * 1.3})
+        size = math.floor(sm.h * 0.3)
+        g3d.render(sm, self.cube, {mode: "flat", ramp: self.ramp2, rx: t * 0.9, ry: t * 1.3, rz: t * 0.3, z: 5, fov: sm.h * 1.2,
+            cx: sm.w - size, cy: size})
+        g3d.render(sm, self.cube, {mode: "wire", color: ctx.green, rx: -t * 0.6, ry: t * 0.8, z: 5, fov: sm.h * 1.2,
+            cx: size, cy: sm.h - size})
+        s:blit(sm, 0, 0, {scale: k})
         label(ctx, 2, 2, "g3d: flat + wire", ctx.white)
 
 # ---------------------------------------------------------------- сцена 5: фигуры и окно
