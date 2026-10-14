@@ -335,9 +335,49 @@ function C.new_loader(cfg)
     end
   end
 
+  -- Список точечных имён модулей, доступных в корнях (для автодополнения import)
+  function L.list()
+    local lister = (cfg.fs and cfg.fs.list) or (fs and fs.list and fs.isDir and function(dir)
+      if not fs.isDir(dir) then return nil end
+      local names = fs.list(dir)
+      local out = {}
+      for _, n in ipairs(names) do out[#out + 1] = { name = n, dir = fs.isDir(fs.combine(dir, n)) } end
+      return out
+    end)
+    local out, seen = {}, {}
+    if not lister then return out end
+    local function walk(dir, prefix, depth)
+      local entries = lister(dir)
+      if not entries then return end
+      for _, e in ipairs(entries) do
+        if e.dir then
+          if depth < 5 then walk(join(dir, e.name), prefix .. e.name .. ".", depth + 1) end
+        else
+          local base = e.name:match("^(.+)%.cub$") or e.name:match("^(.+)%.lua$")
+          if base then
+            local mod = (base == "init") and prefix:gsub("%.$", "") or (prefix .. base)
+            if mod ~= "" and not seen[mod] then
+              seen[mod] = true
+              out[#out + 1] = mod
+            end
+          end
+        end
+      end
+    end
+    for _, root in ipairs(roots) do walk(root, "", 0) end
+    table.sort(out)
+    return out
+  end
+
   L.import = L.import_for(cfg.base or "")
   L.cache = cache
   return L
 end
+
+-- Данные для редакторов: подсветка, символы, диагностика, автодополнение (см. tooling.lua)
+C.tooling = load_module("tooling", {
+  U = U, lexer = lexer, parser = parser, checker = checker, codegen = codegen, B = B,
+  modtypes = modtypes, type_env = type_env, version = C.VERSION,
+})
 
 return C

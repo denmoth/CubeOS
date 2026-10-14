@@ -2,6 +2,8 @@
 --   cubic compile <файл.cub> [вывод.lua] [--minify] [--keep-comments] [--map] [--strict] [--mods=a,b]
 --   cubic check   <файл.cub>
 --   cubic run     <файл.cub>
+--   Для редакторов (вывод JSON): language | grammar | tokens | symbols | diagnostics | complete | signature | hover
+--     cubic complete <файл> --line=N --col=M      (столбцы и строки с единицы, столбец в байтах)
 -- В CraftOS-PC вывод `print` не попадает в stdout, поэтому весь вывод дополнительно пишется в файл
 -- /repo/build/cli-output.txt (если каталог существует).
 
@@ -54,9 +56,18 @@ for _, a in ipairs(raw) do
   end
 end
 local cmd, input, output = args[1], args[2], args[3]
-if not cmd or not input then
+local EDITOR_CMDS = { tokens = true, symbols = true, diagnostics = true, complete = true, signature = true, hover = true }
+local NO_INPUT = { language = true, grammar = true }
+if not cmd or (not input and not NO_INPUT[cmd]) then
   say("usage: cubic compile|check|run <file.cub> [out.lua] [--minify] [--keep-comments] [--map] [--strict] [--mods=a,b]")
+  say("       cubic language|grammar    |    cubic tokens|symbols|diagnostics|complete|signature|hover <file> [--line=N --col=M]")
   return finish(2)
+end
+
+if NO_INPUT[cmd] then
+  local data = cmd == "language" and cubic.tooling.language() or cubic.tooling.textmate()
+  say(textutils.serializeJSON(data))
+  return finish(0)
 end
 
 local src = read(input)
@@ -125,6 +136,29 @@ local loader = cubic.new_loader({ roots = roots, base = input_dir })
 opts.loader = loader
 opts.base_dir = input_dir
 opts.header_cache = (project_cfg and project_cfg.cache) or (ROOT .. "/build/cuh-cache")
+
+if EDITOR_CMDS[cmd] then
+  local tl = cubic.tooling
+  local line, col = tonumber(flags["line"]), tonumber(flags["col"])
+  opts.file = name
+  local data
+  if cmd == "tokens" then
+    local toks, embedded = tl.highlight(src)
+    data = { tokens = toks, embedded = embedded }
+  elseif cmd == "symbols" then
+    data = tl.symbols(src)
+  elseif cmd == "diagnostics" then
+    data = tl.diagnostics(src, name, opts)
+  elseif line and col then
+    data = tl[cmd](src, line, col, opts)
+  else
+    say("error: " .. cmd .. " needs --line=N --col=M")
+    return finish(2)
+  end
+  if data == nil then data = {} end
+  say(textutils.serializeJSON(data))
+  return finish(0)
+end
 
 local lua, linemap, warnings = cubic.try_compile(src, name, opts)
 if not lua then

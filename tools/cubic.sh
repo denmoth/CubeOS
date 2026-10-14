@@ -15,7 +15,7 @@ ARGS=""
 for a in "$@"; do
   case "$a" in
     --*) ARGS="$ARGS'$a', " ;;
-    compile|check|run) ARGS="$ARGS'$a', " ;;
+    compile|check|run|language|grammar|tokens|symbols|diagnostics|complete|signature|hover) ARGS="$ARGS'$a', " ;;
     *) ARGS="$ARGS'/work/$a', " ;;
   esac
 done

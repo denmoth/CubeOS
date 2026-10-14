@@ -282,6 +282,70 @@ function M.new_env()
   return env
 end
 
+---------------------------------------------------------------- для редакторов
+
+M.tostr_type = function(t) return tostr(t) end
+
+-- Список членов типа: { {name, kind = "field"|"method"|"static"|"function"|"variable"|"class", type = "текст", fn = тип-функции} }
+-- accessor: "." | ":"; для ":" возвращаются только методы
+function M.members_of(t, genv, accessor)
+  local out, seen = {}, {}
+  local function add(name, kind, ty)
+    if seen[name] or name:sub(1, 2) == "__" then return end
+    seen[name] = true
+    out[#out + 1] = { name = name, kind = kind, type = tostr(ty), fn = ty.k == "fn" and ty or nil }
+  end
+  local function from_class(cls, instance)
+    local c = cls
+    while c do
+      for n, ty in pairs(c.methods) do add(n, "method", ty) end
+      if accessor ~= ":" or not instance then
+        for n, ty in pairs(c.statics) do add(n, "static", ty) end
+      end
+      if instance then
+        for n, ty in pairs(c.fields) do
+          add(n, ty.k == "fn" and "method" or "field", ty)
+        end
+      end
+      c = c.base
+    end
+  end
+  local function walk(ty)
+    local k = ty.k
+    if k == "inst" then
+      from_class(ty.cls, true)
+    elseif k == "classobj" then
+      from_class(ty.cls, false)
+    elseif k == "rec" then
+      for n, ft in pairs(ty.fields) do add(n, ft.k == "fn" and "method" or "field", ft) end
+    elseif k == "ns" then
+      for n, ft in pairs(ty.members) do
+        local kind = ft.k == "fn" and "function" or (ft.k == "classobj" and "class" or "variable")
+        add(n, kind, ft)
+      end
+    elseif k == "str" then
+      local sns = genv.vars.string
+      if sns and sns.members then
+        for n, ft in pairs(sns.members) do add(n, "method", ft) end
+      end
+    elseif k == "union" then
+      for _, item in ipairs(ty.items) do
+        if item.k ~= "nil" then walk(item) end
+      end
+    end
+  end
+  walk(t)
+  if accessor == ":" then
+    local keep = {}
+    for _, m in ipairs(out) do
+      if m.kind == "method" or m.kind == "function" then keep[#keep + 1] = m end
+    end
+    out = keep
+  end
+  table.sort(out, function(a, b) return a.name < b.name end)
+  return out
+end
+
 ---------------------------------------------------------------- проверка
 
 local TERMINATORS = U.set({ "Return", "Raise", "Break", "Continue" })
@@ -971,8 +1035,27 @@ function M.check(ast, file, genv, hdr, opts)
     return ANY
   end
 
+  -- Снимок видимых имён с типами (для автодополнения в редакторах)
+  local function scope_snapshot()
+    local out = {}
+    local s = scope
+    while s do
+      for name, rec in pairs(s.vars) do
+        if out[name] == nil then out[name] = narrowed(name, rec) end
+      end
+      s = s.parent
+    end
+    return out
+  end
+
   function X.Call(n)
     local f = n.fn
+    -- служебный вызов редакторского режима: __cubic_probe(выражение) сообщает тип выражения и видимые имена
+    if f.tag == "Name" and f.name == "__cubic_probe" and opts and opts.probe then
+      local t = n.args[1] and infer(n.args[1]) or ANY
+      opts.probe(t, scope_snapshot(), genv)
+      return ANY
+    end
     if f.tag == "Name" and not lookup_var(f.name) then
       if (f.name == "copy" or f.name == "deepcopy") and #n.args == 1 then
         return infer(n.args[1])
@@ -1782,6 +1865,11 @@ function M.check(ast, file, genv, hdr, opts)
 
   if opts and opts.exports_mode then
     return M.build_exports(ast, scope, genv, lookup_var)
+  end
+
+  if opts and opts.collect then
+    for _, e in ipairs(errors) do opts.collect[#opts.collect + 1] = e end
+    return
   end
 
   if #errors > 0 then
