@@ -1,0 +1,316 @@
+# Демонстрация Cube Graphics Library: заставка, плазма, огонь, трёхмерная сцена, галерея фигур и окно, логотип.
+# Запуск в игре: game/cgl_demo.lua (стрелки: сцена, D: дизеринг телетекста, M: смена вывода, Q: выход, мышь: частицы)
+#
+# main(opts): backend, term, auto (переключать сцены каждые N кадров и выйти, для проверок), wait, clock.
+# Работает с CC: Graphics (пиксели 6x9 на клетку) и на обычном цветном терминале (телетекст, 2x3 пикселя на клетку).
+
+import cgl
+import cgl.surface as sf
+import cgl.color as color
+import cgl.fx as fx
+import cgl.g3d as g3d
+import cgl.anim as anim
+import cgl.cimg as cimg
+import font as fontlib
+import unicode
+
+const ROOT = "/repo"
+
+def _scale(ctx, graphics_value, text_value):
+    return ctx.screen.kind == "graphics" and graphics_value or text_value
+
+# ---------------------------------------------------------------- вспомогательное
+
+# текст по центру с контуром и тенью
+def centered(ctx, msg, y, c, scale, outline=nil):
+    w = sf.measure(ctx.font, msg, 0, scale)
+    ctx.s:text(ctx.font, math.floor((ctx.w - w) / 2), y, msg, c, {scale: scale, outline: outline, shadow: outline == nil and {color: ctx.black, dx: 1, dy: 1} or nil})
+
+def label(ctx, x, y, msg, c):
+    ctx.s:text(ctx.font, x, y, msg, c, {outline: ctx.black})
+
+# ---------------------------------------------------------------- сцена 1: заставка
+
+class Title:
+    def init(self, ctx):
+        self.sky = ctx.pal:ramp([[6, 8, 36], [30, 20, 80], [150, 50, 120], [250, 130, 80], [255, 210, 120]], 30)
+        self.stars = fx.Starfield(ctx.w, ctx.h, 40, {speed: 0.05})
+        self.animator = anim.Animator()
+        self.drop = {y: -40}
+        let me = self
+        self.animator:add(anim.tween({from: -40, to: math.floor(ctx.h * 0.18), time: 1.4, ease: "out_bounce", delay: 0.2,
+            on_update: (v) => me:set_drop(v)}))
+        self.typed = {n: 0}
+        self.sub = "Cube Graphics Library"
+        self.animator:add(anim.tween({from: 0, to: unicode.length(self.sub), time: 1.6, delay: 1.2, on_update: (v) => me:set_typed(v)}))
+        self.sun = {y: 0}
+        self.sun_ramp = ctx.pal:ramp([[255, 240, 160], [255, 150, 60], [230, 60, 90]], 6)
+
+    def set_drop(self, v):
+        self.drop.y = v
+
+    def set_typed(self, v):
+        self.typed.n = math.floor(v)
+
+    def draw(self, ctx, dt, t):
+        s = ctx.s
+        self.animator:update(dt)
+        s:fill_gradient(0, 0, ctx.w, ctx.h, self.sky, "v")
+        self.stars:update(dt)
+        self.stars:draw(s, [ctx.dark_gray, ctx.light_gray, ctx.white])
+        # солнце над горизонтом, горизонт и волны
+        horizon = math.floor(ctx.h * 0.72)
+        r = math.floor(ctx.h * 0.22)
+        sx = math.floor(ctx.w / 2)
+        n = len(self.sun_ramp)
+        bh = math.ceil(r / n)
+        for i in range[0, n - 1]:
+            s:push_clip(0, horizon - r + i * bh, ctx.w, bh)
+            s:circle(sx, horizon, r, self.sun_ramp[i + 1], true)
+            s:pop_clip()
+        s:fill_rect(0, horizon, ctx.w, ctx.h - horizon, ctx.deep)
+        for k in range[0, 3]:
+            yy = horizon + 2 + k * k * math.floor(ctx.h / 40) + k
+            prev_x = 0
+            prev_y = yy
+            for x in range[0, ctx.w - 1] step 2:
+                y2 = yy + math.floor(math.sin(x / (6 + k * 2) + t * (1 + k * 0.4)) * (1 + k * 0.5))
+                s:line(prev_x, prev_y, x, y2, ctx.waves[k + 1])
+                prev_x = x
+                prev_y = y2
+        # заголовок
+        scale = math.max(1, math.floor(ctx.w / 70))
+        centered(ctx, "CGL", math.floor(self.drop.y), ctx.white, scale, ctx.black)
+        sub = unicode.sub(self.sub, 1, self.typed.n)
+        if self.typed.n > 0:
+            centered(ctx, sub, math.floor(self.drop.y) + 9 * scale + 3, ctx.yellow, 1, ctx.black)
+        # полоса всей палитры внизу
+        if ctx.screen.kind == "graphics":
+            for i in range[0, 255]:
+                s:fill_rect(math.floor(i * ctx.w / 256), ctx.h - 4, math.ceil(ctx.w / 256), 4, i)
+
+# ---------------------------------------------------------------- сцена 2: плазма
+
+class PlasmaScene:
+    def init(self, ctx):
+        self.k = _scale(ctx, 3, 1)
+        self.small = sf.new(math.ceil(ctx.w / self.k), math.ceil(ctx.h / self.k), 0)
+        ramp = ctx.pal:ramp(color.rainbow_stops(12, 0.9, 1), 48)
+        self.plasma = fx.Plasma(self.small.w, self.small.h, ramp)
+
+    def draw(self, ctx, dt, t):
+        self.plasma:draw(self.small, t)
+        ctx.s:blit(self.small, 0, 0, {scale: self.k})
+        centered(ctx, "Plasma", math.floor(ctx.h / 2) - 5, ctx.white, _scale(ctx, 2, 1), ctx.black)
+
+# ---------------------------------------------------------------- сцена 3: огонь
+
+class FireScene:
+    def init(self, ctx):
+        self.k = _scale(ctx, 3, 1)
+        self.fw = math.ceil(ctx.w / self.k)
+        self.fh = math.ceil(ctx.h / self.k * 0.8)
+        ramp = ctx.pal:ramp([[0, 0, 0], [60, 0, 0], [180, 20, 0], [255, 110, 0], [255, 200, 40], [255, 255, 200], [255, 255, 255]], 28)
+        self.fire = fx.Fire(self.fw, self.fh, ramp)
+        self.small = sf.new(self.fw, self.fh, 0)
+        self.ramp = ramp
+
+    def draw(self, ctx, dt, t):
+        ctx.s:clear(ctx.black)
+        self.fire:set_fuel(0.7 + 0.3 * math.sin(t * 2))
+        self.fire:step()
+        self.fire:draw(self.small)
+        ctx.s:blit(self.small, 0, ctx.h - self.fh * self.k, {scale: self.k})
+        centered(ctx, "Fire", math.floor(ctx.h * 0.18), ctx.orange, _scale(ctx, 3, 1), ctx.black)
+        centered(ctx, "палитра, дизеринг, дифф кадров", math.floor(ctx.h * 0.18) + _scale(ctx, 30, 11), ctx.light_gray, 1, ctx.black)
+
+# ---------------------------------------------------------------- сцена 4: трёхмерная графика
+
+class Scene3D:
+    def init(self, ctx):
+        self.stars = fx.Starfield(ctx.w, ctx.h, 60, {speed: 0.35})
+        self.torus = g3d.torus(1, 0.42, 18, 10)
+        self.cube = g3d.cube(1)
+        self.ramp = ctx.pal:ramp([[8, 20, 60], [30, 90, 200], [90, 200, 255], [255, 255, 255]], 10)
+        self.ramp2 = ctx.pal:ramp([[40, 10, 10], [200, 60, 40], [255, 200, 90]], 6)
+
+    def draw(self, ctx, dt, t):
+        s = ctx.s
+        s:clear(ctx.deep)
+        self.stars:update(dt)
+        self.stars:draw(s, [ctx.dark_gray, ctx.gray, ctx.light_gray, ctx.white])
+        g3d.render(s, self.torus, {mode: "flat", ramp: self.ramp, rx: t * 0.7, ry: t * 0.45, z: 3.6, fov: ctx.h * 1.3})
+        size = math.floor(ctx.h * 0.3)
+        g3d.render(s, self.cube, {mode: "flat", ramp: self.ramp2, rx: t * 0.9, ry: t * 1.3, rz: t * 0.3, z: 5, fov: ctx.h * 1.2,
+            cx: ctx.w - size, cy: size})
+        g3d.render(s, self.cube, {mode: "wire", color: ctx.green, rx: -t * 0.6, ry: t * 0.8, z: 5, fov: ctx.h * 1.2,
+            cx: size, cy: ctx.h - size})
+        label(ctx, 2, 2, "g3d: flat + wire", ctx.white)
+
+# ---------------------------------------------------------------- сцена 5: фигуры и окно
+
+class Gallery:
+    def init(self, ctx):
+        self.particles = fx.Particles({gravity: 60})
+        self.bar = {v: 0}
+        self.animator = anim.Animator()
+        let me = self
+        self.animator:add(anim.tween({from: 0, to: 1, time: 2.5, ease: "in_out_sine", repeat: -1, yoyo: true,
+            on_update: (v) => me:set_bar(v)}))
+        self.bg = ctx.pal:ramp([[18, 24, 48], [40, 56, 96]], 16)
+        self.hue = ctx.pal:ramp(color.rainbow_stops(6, 0.8, 1), 24)
+
+    def set_bar(self, v):
+        self.bar.v = v
+
+    def click(self, ctx, x, y):
+        self.particles:burst(x, y, 40, {speed: 70, life: 1.4, color: [ctx.yellow, ctx.orange, ctx.red, ctx.white]})
+
+    def draw(self, ctx, dt, t):
+        s = ctx.s
+        self.animator:update(dt)
+        s:fill_gradient(0, 0, ctx.w, ctx.h, self.bg, "v")
+        k = _scale(ctx, 1, 0.5)
+        wx = math.floor(ctx.w * 0.1)
+        wy = math.floor(ctx.h * 0.12)
+        ww = math.floor(ctx.w * 0.8)
+        wh = math.floor(ctx.h * 0.76)
+        # окно: тень, тело, заголовок
+        s:round_rect(wx + 3, wy + 3, ww, wh, 4, ctx.black, true)
+        s:round_rect(wx, wy, ww, wh, 4, ctx.panel, true)
+        s:round_rect(wx, wy, ww, wh, 4, ctx.light_gray, false)
+        s:push_clip(wx, wy, ww, 11)
+        s:fill_gradient(wx, wy, ww, 11, self.hue, "h")
+        s:pop_clip()
+        s:circle(wx + 7, wy + 5, 2, ctx.red, true)
+        s:circle(wx + 14, wy + 5, 2, ctx.yellow, true)
+        s:circle(wx + 21, wy + 5, 2, ctx.green, true)
+        s:text(ctx.font, wx + 28, wy + 1, "cgl: окно", ctx.black)
+        # содержимое: полоса прогресса, узор, круги, эллипс
+        px = wx + 6
+        py = wy + 16
+        pw = ww - 12
+        s:rect(px, py, pw, 7, ctx.light_gray)
+        s:fill_rect(px + 1, py + 1, math.floor((pw - 2) * self.bar.v), 5, ctx.green)
+        s:fill_pattern(px, py + 11, math.floor(pw / 3), 14, [0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA], ctx.cyan, ctx.blue)
+        s:ellipse(px + math.floor(pw * 0.55), py + 18, 14, 7, ctx.orange, true)
+        s:ellipse(px + math.floor(pw * 0.55), py + 18, 14, 7, ctx.white, false)
+        for i in range[0, 4]:
+            s:circle(px + 6 + i * 10, py + 36 + math.floor(math.sin(t * 3 + i) * 3), 4, self.hue[i * 4 + 1], true)
+        s:triangle(px + pw - 24, py + 30, px + pw - 4, py + 30, px + pw - 14, py + 44, ctx.yellow, true)
+        s:triangle(px + pw - 24, py + 30, px + pw - 4, py + 30, px + pw - 14, py + 44, ctx.white, false)
+        s:text(ctx.font, px, wy + wh - 11, "Клик: частицы", ctx.white)
+        self.particles:update(dt)
+        self.particles:draw(s)
+
+# ---------------------------------------------------------------- сцена 6: логотип
+
+class LogoScene:
+    def init(self, ctx):
+        self.logo = cimg.read_file(ROOT .. "/assets/images/cubeos-logo.cimg")
+        self.bg = ctx.pal:ramp([[10, 14, 30], [30, 40, 80]], 12)
+
+    def draw(self, ctx, dt, t):
+        s = ctx.s
+        s:fill_gradient(0, 0, ctx.w, ctx.h, self.bg, "v")
+        bounce = math.abs(math.sin(t * 2.2))
+        base = math.floor(ctx.h * 0.78)
+        k = ctx.h >= 120 and 1 or 0.4
+        lw = math.floor(self.logo.w * k)
+        lh = math.floor(self.logo.h * k)
+        y = base - lh - math.floor(bounce * ctx.h * 0.25)
+        # тень на полу уменьшается с высотой
+        sh = math.floor(lw * (0.6 - bounce * 0.25))
+        s:ellipse(math.floor(ctx.w / 2), base + 2, math.max(2, sh), math.max(1, math.floor(sh / 4)), ctx.black, true)
+        # «монета»: сжатие по горизонтали
+        squeeze = math.abs(math.cos(t * 1.1))
+        sw = math.max(1, lw * squeeze)
+        s:blit(self.logo, math.floor((ctx.w - sw) / 2), y, {scale_x: sw / self.logo.w, scale_y: k, flip_x: math.cos(t * 1.1) < 0})
+        centered(ctx, "CubeOS", base + 8, ctx.white, 1, ctx.black)
+
+# ---------------------------------------------------------------- запуск
+
+export def main(opts=nil):
+    o = opts ?? {}
+    backend = o.backend ?? "auto"
+    screen = cgl.open({backend: backend, term: o.term})
+    fnt = fontlib.default(ROOT .. "/assets")
+    ctx = {screen: screen, s: screen.surface, w: screen.w, h: screen.h, font: fnt, pal: screen.palette, t: 0}
+    p = screen.palette
+    ctx.black = p:nearest(0, 0, 0)
+    ctx.white = p:nearest(255, 255, 255)
+    ctx.deep = p:nearest(6, 8, 24)
+    ctx.dark_gray = p:nearest(60, 60, 70)
+    ctx.gray = p:nearest(110, 110, 120)
+    ctx.light_gray = p:nearest(190, 190, 200)
+    ctx.yellow = p:nearest(255, 220, 60)
+    ctx.orange = p:nearest(255, 140, 30)
+    ctx.red = p:nearest(230, 60, 60)
+    ctx.green = p:nearest(70, 220, 90)
+    ctx.cyan = p:nearest(70, 200, 230)
+    ctx.blue = p:nearest(40, 70, 190)
+    ctx.panel = p:nearest(34, 40, 66)
+    ctx.waves = [p:nearest(250, 150, 90), p:nearest(220, 90, 130), p:nearest(150, 60, 150), p:nearest(80, 40, 120)]
+    classes = [Title, PlasmaScene, FireScene, Scene3D, Gallery, LogoScene]
+    names = ["Заставка", "Плазма", "Огонь", "3D", "Фигуры", "Логотип"]
+    state = {index: 1, scene: nil, quit: false, flip: false}
+
+    def enter(i):
+        state.index = i
+        state.scene = classes[i](ctx)
+
+    def key(code):
+        if code == keys.right or code == keys.space:
+            enter(state.index % len(classes) + 1)
+        elif code == keys.left:
+            enter((state.index - 2) % len(classes) + 1)
+        elif code == keys.q:
+            state.quit = true
+        elif code == keys.d and ctx.screen.kind == "teletext":
+            q = ctx.screen.display.quant
+            q.dither = not q.dither
+            q:rebuild()
+            ctx.screen.display:invalidate()
+        elif code == keys.m:
+            state.flip = true
+            ctx.screen:stop()
+
+    def on_event(ev, a, b, c):
+        if ev == "key":
+            key(a)
+        elif ev == "mouse_click" and state.index == 5 and state.scene.click != nil:
+            px, py = ctx.screen:to_pixel(b, c)
+            state.scene:click(ctx, px, py)
+        elif ev == "term_resize":
+            state.flip = true
+            ctx.screen:stop()
+        return state.quit
+
+    def update(dt, frame):
+        ctx.t += dt
+        if o.auto != nil and frame > 0 and frame % o.auto == 0:
+            if state.index == len(classes):
+                state.quit = true
+            else:
+                enter(state.index + 1)
+        ctx.s = ctx.screen.surface
+        state.scene:draw(ctx, dt, ctx.t)
+        label(ctx, 2, ctx.h - 10, names[state.index] .. "  " .. math.floor(ctx.screen.fps + 0.5) .. " fps  [" .. ctx.screen.kind .. "]", ctx.white)
+        return not state.quit
+
+    enter(1)
+    while not state.quit:
+        state.flip = false
+        ctx.screen:run(update, {fps: 20, on_event: on_event, wait: o.wait, clock: o.clock})
+        if state.flip and not state.quit:
+            kind = ctx.screen.kind == "graphics" and "teletext" or "graphics"
+            ctx.screen:close()
+            ctx.screen = cgl.open({backend: kind, term: o.term})
+            ctx.s = ctx.screen.surface
+            ctx.w = ctx.screen.w
+            ctx.h = ctx.screen.h
+            ctx.pal = ctx.screen.palette
+            enter(state.index)
+        else:
+            state.quit = true
+    ctx.screen:close()

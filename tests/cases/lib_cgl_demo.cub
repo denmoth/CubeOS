@@ -1,0 +1,38 @@
+import t
+import ../../examples/cgl_demo as demo
+eq = t.eq
+
+def push(list, value):
+    list[len(list) + 1] = value
+
+# заглушка терминала: принимает всё, ничего не рисует
+def make_term(cols, rows, pixel_mode):
+    api = {}
+    def get_size(px):
+        if px:
+            return cols * 6, rows * 9
+        return cols, rows
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "setGraphicsMode",
+            "drawPixels", "setFrozen"]:
+        api[name] = nothing
+    if not pixel_mode:
+        api.setGraphicsMode = nil
+        api.drawPixels = nil
+        api.setFrozen = nil
+    return api
+
+now = 0
+def clock():
+    now += 0.05
+    return now
+def wait(seconds):
+    return false
+
+demo.main({term: make_term(51, 19, true), auto: 3, wait: wait, clock: clock})
+print("pixel demo ran")
+demo.main({term: make_term(51, 19, false), auto: 3, wait: wait, clock: clock})
+print("teletext demo ran")
+print("done")

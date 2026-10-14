@@ -170,12 +170,36 @@ export class Palette:
             out[i + 1] = self:nearest(r, g, b)
         return out
 
+    # n номеров вдоль ломаной через заданные цвета: stops это список [r, g, b] (минимум один); хорошо для огня, неба, радуги
+    def ramp(self, stops, n, first=0, last=nil):
+        out = []
+        count = len(stops)
+        for i in range[0, n - 1]:
+            pos = n == 1 and 0 or i / (n - 1) * (count - 1)
+            k = math.min(math.floor(pos), count - 2)
+            if k < 0:
+                k = 0
+            a = stops[k + 1]
+            b = stops[math.min(k + 2, count)]
+            t = pos - k
+            r, g, bl = lerp_rgb(a[1], a[2], a[3], b[1], b[2], b[3], t)
+            out[i + 1] = self:nearest(r, g, bl, first, last)
+        return out
+
     # цвет, смешанный из двух номеров
     def mix(self, a, b, t):
         r1, g1, b1 = self:get(a)
         r2, g2, b2 = self:get(b)
         r, g, bl = lerp_rgb(r1, g1, b1, r2, g2, b2, t)
         return self:nearest(r, g, bl)
+
+# n цветов радуги (оттенок по кругу) в виде списка [r, g, b]
+export def rainbow_stops(n, saturation=1, value=1):
+    out = []
+    for i in range[0, n - 1]:
+        r, g, b = hsv_to_rgb(360 * i / n, saturation, value)
+        out[i + 1] = [r, g, b]
+    return out
 
 # стандартная палитра из 256 цветов (16 цветов CC, куб 6x6x6, 24 серых)
 export def default_palette():

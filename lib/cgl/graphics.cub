@@ -83,32 +83,52 @@ export class GraphicsDisplay:
         h = math.min(self.h, s.h)
         prev = self.prev
         full = prev == nil
-        cur = []
+        # два буфера по очереди: прошлый кадр и текущий, без новых таблиц на каждый кадр
+        cur = self.spare ?? []
         spans_a = []
         spans_b = []
         spx = s.px
         sw = s.w
         mode2 = self.mode == 2
         clear_color = self.clear_color
+        quant_obj = self.quant
         for y in range[0, h - 1]:
-            base = y * w
+            base = y * w + 1
             sbase = y * sw + 1
             a = nil
             b = nil
-            for x in range[0, w - 1]:
-                v = spx[sbase + x]
-                c = nil
-                if mode2:
-                    c = v < 0 and clear_color or v
-                else:
-                    c = 2 ** self.quant:pick(v, x, y)
-                cur[base + x + 1] = c
-                if full or prev[base + x + 1] != c:
-                    if a == nil:
-                        a = x
-                    b = x
+            if full:
+                for x in range[0, w - 1]:
+                    v = spx[sbase + x]
+                    if mode2:
+                        if v < 0:
+                            v = clear_color
+                        cur[base + x] = v
+                    else:
+                        cur[base + x] = 2 ** quant_obj:pick(v, x, y)
+                a = 0
+                b = w - 1
+            elif mode2:
+                for x in range[0, w - 1]:
+                    v = spx[sbase + x]
+                    if v < 0:
+                        v = clear_color
+                    cur[base + x] = v
+                    if prev[base + x] != v:
+                        if a == nil:
+                            a = x
+                        b = x
+            else:
+                for x in range[0, w - 1]:
+                    v = 2 ** quant_obj:pick(spx[sbase + x], x, y)
+                    cur[base + x] = v
+                    if prev[base + x] != v:
+                        if a == nil:
+                            a = x
+                        b = x
             spans_a[y + 1] = a
             spans_b[y + 1] = b
+        self.spare = prev
         self.prev = cur
         self.stats.frames += 1
         # прямоугольники из построчных промежутков

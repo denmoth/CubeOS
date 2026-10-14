@@ -35,4 +35,14 @@ bb = cimg.decode(cimg.encode(big))
 eq(bb:equals(big), true, "larger image")
 eq(len(cimg.encode(big)) < 120 * 80 / 4, true, "gradients compress well")
 
+# файлы, сделанные tools/png2cimg.py
+logo, lp = cimg.read_file("/repo/assets/images/cubeos-logo.cimg") 
+eq([logo.w, logo.h], [96, 96], "logo size")
+eq(lp, nil, "default palette is not stored")
+eq(logo:get(0, 0), sf.CLEAR, "logo corner is transparent")
+eq(logo:get(48, 30) != sf.CLEAR, true, "logo body is opaque")
+logo2, lp2 = cimg.read_file("/repo/assets/images/cubeos-logo-adaptive.cimg")
+eq(lp2 != nil and lp2.size > 3, true, "adaptive palette is stored")
+eq(logo2:get(0, 0), sf.CLEAR, "adaptive logo corner is transparent")
+
 print("done")
