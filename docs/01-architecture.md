@@ -7,7 +7,7 @@ CraftOS (BIOS, shell, fs, term)    <- базовый терминал, не ме
 └─ Загрузчик      (startup.lua, recovery)
    └─ Ядро        (процессы-корутины, события, планировщик, IPC)
       └─ HAL      (gfx, audio, net, storage, input)
-         └─ Сервисы (wm, fontd, audiod, netd, pkgd, notifyd, clipboard, vfs)
+         └─ Сервисы (wm, fontd, audiod, netd, stewd, notifyd, clipboard, vfs)
             └─ API пользователя (`cube.*`)
                └─ Приложения
 ```
