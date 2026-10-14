@@ -1,0 +1,202 @@
+import t
+import ui.shell as shell_mod
+import ui.widget as w
+import ui.controls as ctl
+import ui.theme as theme
+import unicode
+eq = t.eq
+
+class StubOut:
+    def init(self, cols, rows):
+        self.cols = cols
+        self.rows = rows
+        self.last = nil
+        self.theme_changes = 0
+    def size(self):
+        return self.cols, self.rows
+    def present(self, c):
+        self.last = c:to_lines()
+        c:clean()
+        return 1
+    def to_cell(self, x, y):
+        return x - 1, y - 1
+    def open(self):
+        pass
+    def close(self):
+        pass
+    def set_theme(self, th):
+        self.theme_changes += 1
+    def invalidate(self):
+        pass
+    def tick(self, dt):
+        pass
+
+def make(cols=50, rows=12):
+    made_out = StubOut(cols, rows)
+    made_sh = shell_mod.new(made_out, {clock: () => "14:32", animations: false})
+    return made_sh, made_out
+
+def all_text(out):
+    return table.concat(out.last, "\n")
+
+def note_app(text):
+    def launch(app):
+        app:set_root(w.vbox([w.label(text), ctl.button("кнопка")]))
+    return launch
+
+def col_of(line, needle):
+    pos = string.find(line, needle, 1, true)
+    return unicode.length(string.sub(line, 1, pos - 1)) + 1
+
+# ---------------------------------------------------------------- запуск и вкладки
+sh, out = make()
+sh:register({id: "files", name: "Файлы", icon: "▤", desc: "папки", launch: note_app("страница файлов")})
+sh:register({id: "edit", name: "Редактор", icon: "✎", desc: "текст", launch: note_app("страница редактора")})
+sh:render()
+eq(string.find(all_text(out), "Нет запущенных программ", 1, true) != nil, true, "empty desktop message")
+eq(string.find(out.last[1], "14:32", 1, true) != nil, true, "the clock is in the top bar")
+a1 = sh:launch("files")
+sh:render()
+eq(string.find(out.last[2], "страница файлов", 1, true) != nil, true, "the app page is under the top bar")
+eq(string.find(out.last[1], "Файлы", 1, true) != nil, true, "a tab for the app")
+eq(sh.current == a1, true, "the launched app is current")
+a2 = sh:launch("edit")
+sh:render()
+eq(sh.current == a2, true, "the second app is current")
+eq(string.find(out.last[2], "страница редактора", 1, true) != nil, true, "second page shown")
+eq(string.find(out.last[1], "Файлы", 1, true) != nil and string.find(out.last[1], "Редактор", 1, true) != nil, true, "both tabs")
+eq(sh:launch("nonexistent"), nil, "unknown app id")
+
+# ---------------------------------------------------------------- переключение
+sh:handle("key", keys.leftAlt)
+sh:handle("key", keys.left)
+sh:render()
+eq(sh.current == a1, true, "Alt+Left goes to the previous app")
+eq(string.find(out.last[2], "страница файлов", 1, true) != nil, true, "its page is shown")
+sh:handle("key", keys.right)
+eq(sh.current == a2, true, "Alt+Right goes to the next app")
+sh:handle("key", keys.right)
+eq(sh.current == a1, true, "and wraps around")
+sh:handle("key", keys.two)
+eq(sh.current == a2, true, "Alt+2 jumps to the second app")
+sh:handle("key_up", keys.leftAlt)
+
+# клик по вкладке
+sh:render()
+sh:handle("mouse_click", 1, col_of(out.last[1], "Файлы"), 1)
+eq(sh.current == a1, true, "a click on a tab switches the app")
+
+# ---------------------------------------------------------------- программы работают в фоне
+ticks = []
+def bg_launch(app):
+    app:set_root(w.label("фоновая"))
+    app.ui:every(1, () => table.insert(ticks, "t"))
+bg = sh:launch_spec({id: "bg", name: "Фон", launch: bg_launch})
+sh:switch_to(a1)
+sh:tick(1.1)
+sh:tick(1)
+eq(len(ticks), 2, "an app that is not on screen keeps its timers running")
+eq(sh:needs_ticks(), true, "background timers need ticks")
+
+# ---------------------------------------------------------------- виджеты в верхней полосе
+seconds = {n: 0}
+item = bg:add_bar_item({id: "watch", text: () => "⏱ " .. seconds.n .. "с", priority: 50})
+sh:tick(0.1)
+sh:render()
+eq(string.find(out.last[1], "⏱ 0с", 1, true) != nil, true, "a bar widget of a background app is visible from another app")
+seconds.n = 7
+sh:tick(0.1)
+sh:render()
+eq(string.find(out.last[1], "⏱ 7с", 1, true) != nil, true, "the widget text updates by itself")
+item.text = "готово"
+sh:tick(0.1)
+sh:render()
+eq(string.find(out.last[1], "готово", 1, true) != nil, true, "static text can be replaced")
+clicked = []
+item.on_click = () => table.insert(clicked, "click")
+sh:render()
+sh:handle("mouse_click", 1, col_of(out.last[1], "готово"), 1)
+eq(clicked, ["click"], "a click on a bar widget calls its handler")
+bg:remove_bar_item(item)
+sh:tick(0.1)
+sh:render()
+eq(string.find(out.last[1], "готово", 1, true), nil, "the widget disappears when removed")
+
+# нехватка места: малоприоритетное исчезает первым
+narrow_sh, narrow_out = make(40, 6)
+narrow_sh:register({id: "x", name: "X", launch: note_app("x")})
+xa = narrow_sh:launch("x")
+xa:add_bar_item({id: "a", text: "высокий приоритет", priority: 90})
+xa:add_bar_item({id: "b", text: "низкий приоритет", priority: 5})
+narrow_sh:tick(0.1)
+narrow_sh:render()
+eq(string.find(narrow_out.last[1], "высокий", 1, true) != nil, true, "the high priority widget stays")
+eq(string.find(narrow_out.last[1], "низкий", 1, true), nil, "the low priority one is dropped when there is no room")
+
+# ---------------------------------------------------------------- ввод и подсказки
+sh:switch_to(a1)
+sh:render()
+eq(string.find(out.last[12], "Alt", 1, true) != nil, true, "the footer shows shell hints")
+eq(string.find(out.last[12], "нажать", 1, true) != nil, true, "and hints of the focused control inside the app")
+presses = []
+btn = a1.ui.root.children[2]
+btn:on("press", (wd) => table.insert(presses, "p"))
+sh:handle("key", keys.enter)
+eq(presses, ["p"], "keys go to the app that is on screen")
+sh:handle("mouse_click", 1, 2, 3)
+eq(len(presses), 2, "mouse clicks are translated into the app area")
+
+# ---------------------------------------------------------------- уведомления и закрытие
+a2:notify("Сохранено")
+sh:render()
+eq(a2.badge, true, "a notification from a hidden app marks its tab")
+eq(string.find(all_text(out), "Редактор: Сохранено", 1, true) != nil, true, "the toast names the app")
+sh:switch_to(a2)
+eq(a2.badge, false, "the mark disappears when the app is opened")
+sh:handle("key", keys.leftAlt)
+sh:handle("key", keys.w)
+sh:handle("key_up", keys.leftAlt)
+eq(a2.closed, true, "Alt+W closes the current app")
+eq(sh.current != a2, true, "another app becomes current")
+eq(len(sh.apps), 2, "two apps remain")
+
+# список программ
+sh:tick(5)
+sh:handle("key", keys.f9)
+eq(len(sh.ui.overlays), 1, "F9 opens the launcher")
+sh:render()
+eq(string.find(all_text(out), "Редактор", 1, true) != nil, true, "launcher lists the apps")
+sh:handle("key", keys.down)
+sh:handle("key", keys.enter)
+eq(len(sh.ui.overlays), 0, "choosing closes the launcher")
+eq(sh.current.name, "Редактор", "and launches the chosen app")
+
+# ---------------------------------------------------------------- тема и размер
+sh:set_theme(theme.get("retro"))
+eq(out.theme_changes >= 1, true, "the output got the theme")
+eq(sh.current.ui.theme.name, "retro", "apps get the theme too")
+out.cols = 40
+out.rows = 8
+sh:resize()
+sh:render()
+eq([sh.current.out.cols, sh.current.out.rows], [40, 6], "apps are resized to the area under the bar")
+
+# ---------------------------------------------------------------- переход скольжением
+sh2, out2 = make(30, 6)
+sh2.ui.animations = true
+sh2:register({id: "a", name: "A", launch: note_app("первая")})
+sh2:register({id: "b", name: "B", launch: note_app("вторая")})
+sa = sh2:launch("a")
+sb = sh2:launch("b")
+sh2:render()
+sh2:tick(0.05)
+sh2:render()
+eq(sh2.host.transition != nil, true, "switching animates")
+mid = out2.last[2]
+eq(string.find(mid, "первая", 1, true) != nil or string.find(mid, "вторая", 1, true) != nil, true, "during the slide a page is partly visible")
+sh2:tick(0.5)
+sh2:render()
+eq(sh2.host.transition, nil, "the slide ends")
+eq(string.find(out2.last[2], "вторая", 1, true) != nil, true, "the new page is fully shown")
+
+print("done")

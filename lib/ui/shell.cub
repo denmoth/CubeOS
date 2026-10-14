@@ -1,0 +1,515 @@
+# ui.shell: оболочка: несколько программ, переключение между ними, верхняя полоса (вкладки программ, виджеты программ, часы),
+# подвал с подсказками клавиш, запуск программ из списка
+#
+#   shell = shell.new(out, {theme: theme.get("cubeos")})
+#   shell:register({id: "files", name: "Файлы", icon: "▤", launch: (app) => app:set_root(...)})
+#   shell:launch("files")                      запускает программу (вторая копия, если запущена ещё раз)
+#   shell:run()                                цикл событий (для CC); либо вручную: shell:handle(...), shell:tick(dt), shell:render()
+#
+# Каждая программа это отдельная среда ui.runtime со своим буфером клеток, фокусом, таймерами и анимациями. Невидимые программы
+# продолжают работать: таймеры, секундомер или плеер в фоне не останавливаются. Программа может вывести свой виджет в верхнюю
+# полосу (app:add_bar_item), и он виден из любой другой программы.
+#
+# Клавиши оболочки: Alt+вправо / Alt+влево листают программы, Alt+1..9 переход по номеру, Alt+W закрыть программу,
+# F9 или Alt+Space список программ.
+
+import cgl.anim as anim
+import ui.runtime as runtime
+import ui.theme as th
+import ui.text as txt
+import ui.widget as widget
+import ui.lists as lists
+import ui.dialogs as dialogs
+import ui.cells as cells_mod
+import unicode
+
+# виртуальный вывод программы: ничего не рисует на экран, буфер клеток забирает оболочка
+export class VirtualOut:
+    def init(self, cols, rows):
+        self.cols = cols
+        self.rows = rows
+        self.kind = "virtual"
+
+    def size(self):
+        return self.cols, self.rows
+
+    def present(self, c):
+        c:clean()
+        return 0
+
+    def to_cell(self, x, y):
+        return x, y
+
+    def open(self):
+        pass
+
+    def close(self):
+        pass
+
+    def set_theme(self, t):
+        pass
+
+    def invalidate(self):
+        pass
+
+    def tick(self, dt):
+        pass
+
+export class App:
+    def init(self, shell, id, spec):
+        self.shell = shell
+        self.id = id
+        self.spec = spec
+        self.name = spec.name ?? spec.id ?? "app"
+        self.icon = spec.icon ?? "▪"
+        self.title = self.name
+        self.bar_items = []
+        self.badge = false
+        self.closed = false
+        cols, rows = shell:app_size()
+        self.out = VirtualOut(cols, rows)
+        self.ui = runtime.new(self.out, {theme: shell.ui.theme, keymap: shell.ui.keymap, animations: shell.ui.animations,
+            speed: shell.ui.speed})
+
+    def set_root(self, root):
+        self.ui:set_root(root)
+
+    # заголовок во вкладке (по умолчанию имя программы)
+    def set_title(self, text):
+        self.title = text
+        self.shell.ui:invalidate()
+
+    # виджет в верхней полосе, виден из любой программы. spec: id, text (строка или функция без аргументов), fg (место палитры),
+    # priority (чем больше, тем правее и тем позже исчезает при нехватке места), on_click (нажатие мышью)
+    # возвращает spec: меняйте spec.text, чтобы менять надпись; app:remove_bar_item(spec) убирает
+    def add_bar_item(self, spec):
+        spec.priority = spec.priority ?? 10
+        self.bar_items[len(self.bar_items) + 1] = spec
+        self.shell.ui:invalidate()
+        return spec
+
+    def remove_bar_item(self, spec):
+        for i, s in self.bar_items:
+            if s == spec:
+                table.remove(self.bar_items, i)
+                self.shell.ui:invalidate()
+                return true
+        return false
+
+    # короткое уведомление над подвалом; если программа не на экране, во вкладке загорается метка
+    def notify(self, text, opts=nil):
+        o = opts ?? {}
+        if self.shell.current == self:
+            dialogs.toast(self.shell.ui, text, o)
+        else:
+            self.badge = true
+            dialogs.toast(self.shell.ui, self.name .. ": " .. text, o)
+            self.shell.ui:invalidate()
+
+    def close(self):
+        self.shell:close_app(self)
+
+# виджет, показывающий буфер текущей программы
+class AppHost(widget.Widget):
+    def init(self, shell):
+        super.init(self, {})
+        self.shell = shell
+        self.focusable = true
+        self.transition = nil
+
+    def _app(self):
+        return self.shell.current
+
+    # режим ввода текста определяется фокусом внутри программы
+    def _text_mode(self):
+        a = self.shell.current
+        return a != nil and a.ui.focus != nil and a.ui.focus.captures_text
+
+    def key(self, action, code):
+        a = self.shell.current
+        if a == nil:
+            return false
+        return a.ui:dispatch_action(action, code)
+
+    def char(self, ch):
+        a = self.shell.current
+        if a == nil or a.ui.focus == nil:
+            return false
+        return a.ui.focus:char(ch)
+
+    def mouse(self, kind, mx, my, button):
+        a = self.shell.current
+        if a == nil:
+            return false
+        return a.ui:_on_mouse(kind, mx - self.x, my - self.y, button)
+
+    def hints(self):
+        a = self.shell.current
+        if a == nil:
+            return []
+        return a.ui:hints()
+
+    def _draw(self, c, t):
+        a = self.shell.current
+        tr = self.transition
+        if tr != nil and tr.from_app != nil and tr.to_app != nil and tr.t < 1:
+            self:_draw_transition(c, tr)
+            return
+        if a != nil:
+            a.ui:render()
+            c:blit(a.ui.cells, self.x, self.y)
+        else:
+            msg = "Нет запущенных программ"
+            c:text(self.x + math.max(0, math.floor((self.w - txt.width(msg)) / 2)), self.y + math.floor(self.h / 2), msg, th.MUTED, th.BG)
+            hint = "F9: список программ"
+            c:text(self.x + math.max(0, math.floor((self.w - txt.width(hint)) / 2)), self.y + math.floor(self.h / 2) + 1, hint, th.LINE, th.BG)
+
+    # скольжение: старая программа уезжает, новая приезжает (по горизонтали)
+    def _draw_transition(self, c, tr):
+        tr.from_app.ui:render()
+        tr.to_app.ui:render()
+        shift = math.floor(tr.t * self.w + 0.5)
+        sign = tr.dir
+        # старая сдвигается на shift, новая стоит впритык
+        c:push_clip(self.x, self.y, self.w, self.h)
+        c:blit(tr.from_app.ui.cells, self.x - sign * shift, self.y)
+        c:blit(tr.to_app.ui.cells, self.x + sign * (self.w - shift), self.y)
+        c:pop_clip()
+
+# верхняя полоса
+class TopBar(widget.Widget):
+    def init(self, shell):
+        super.init(self, {})
+        self.shell = shell
+        self.regions = []
+        self.focusable = false
+
+    def _measure(self, max_w, max_h):
+        return max_w, 1
+
+    def _right_items(self):
+        items = []
+        for a in self.shell.apps:
+            for it in a.bar_items:
+                items[len(items) + 1] = it
+        for it in self.shell.system_items:
+            items[len(items) + 1] = it
+        table.sort(items, (p, q) => p.priority < q.priority)
+        return items
+
+    def _text_of(self, it):
+        v = it.text
+        if type(v) == "function":
+            v = v()
+        return v ?? ""
+
+    def _draw(self, c, t):
+        shell = self.shell
+        self.regions = []
+        c:fill(self.x, self.y, self.w, 1, 32, th.TEXT, th.PANEL)
+        # правая часть: виджеты по приоритету, малоприоритетные пропадают первыми
+        items = self:_right_items()
+        right = []
+        used = 0
+        for i in range[len(items), 1] step -1:
+            it = items[i]
+            label = " " .. self:_text_of(it) .. " "
+            n = txt.width(label)
+            if used + n + 1 <= math.floor(self.w / 2):
+                right[len(right) + 1] = {item: it, label: label, width: n}
+                used += n + 1
+        x = self.x + self.w
+        for r in right:
+            x -= r.width + 1
+            fg = r.item.fg ?? th.TEXT
+            c:text(x, self.y, r.label, fg, th.PANEL)
+            c:set(x + r.width, self.y, 0x2502, th.LINE, th.PANEL)
+            self.regions[len(self.regions) + 1] = {kind: "item", x: x, w: r.width, item: r.item}
+        right_edge = x
+        # левая часть: кнопка списка программ и вкладки
+        x = self.x
+        mark = " ◆ " .. "CubeOS "
+        c:text(x, self.y, mark, th.BG, th.ACCENT)
+        self.regions[len(self.regions) + 1] = {kind: "menu", x: x, w: txt.width(mark)}
+        x += txt.width(mark) + 1
+        for i, a in shell.apps:
+            label = " " .. a.icon .. " " .. a.title .. (a.badge and " •" or "") .. " "
+            n = txt.width(label)
+            if x + n > right_edge - 1:
+                label = txt.ellipsize(label, math.max(4, right_edge - 1 - x))
+                n = txt.width(label)
+            if x + n > right_edge:
+                break
+            active = a == shell.current
+            fg = active and th.SEL_FG or th.MUTED
+            bg = active and th.SEL_BG or th.PANEL
+            if a.badge and not active:
+                fg = th.WARN
+            c:text(x, self.y, label, fg, bg)
+            self.regions[len(self.regions) + 1] = {kind: "tab", x: x, w: n, app: a}
+            x += n + 1
+
+    def mouse(self, kind, mx, my, button):
+        if kind != "down":
+            return true
+        for r in self.regions:
+            if mx >= r.x and mx < r.x + r.w:
+                if r.kind == "menu":
+                    self.shell:open_launcher()
+                elif r.kind == "tab":
+                    self.shell:switch_to(r.app)
+                elif r.kind == "item" and r.item.on_click != nil:
+                    r.item.on_click()
+                return true
+        return true
+
+# подвал: подсказки клавиш
+class Footer(widget.Widget):
+    def init(self, shell):
+        super.init(self, {})
+        self.shell = shell
+
+    def _measure(self, max_w, max_h):
+        return max_w, 1
+
+    def _draw(self, c, t):
+        c:fill(self.x, self.y, self.w, 1, 32, th.MUTED, th.PANEL)
+        x = self.x + 1
+        hints = self.shell.ui:hints()
+        # подсказки оболочки в конце
+        extra = [["Alt+←→", "программы"], ["F9", "меню"]]
+        for h in extra:
+            hints[len(hints) + 1] = h
+        for h in hints:
+            key = h[1]
+            label = h[2]
+            n = txt.width(key) + 1 + txt.width(label) + 2
+            if x + n > self.x + self.w:
+                break
+            c:text(x, self.y, key, th.ACCENT, th.PANEL)
+            c:text(x + txt.width(key) + 1, self.y, label, th.TEXT, th.PANEL)
+            x += n
+
+export class Shell:
+    # opts: theme, keys, animations, speed, clock (функция: строка времени для часов; по умолчанию часы компьютера)
+    def init(self, out, opts=nil):
+        o = opts ?? {}
+        self.out = out
+        self.ui = runtime.new(out, {theme: o.theme, keys: o.keys, animations: o.animations, speed: o.speed})
+        self.apps = []
+        self.current = nil
+        self.registry = []
+        self.next_id = 1
+        self.clock = o.clock ?? _clock_text
+        self.system_items = []
+        self.chrome_root = nil
+        self.host = AppHost(self)
+        self.top = TopBar(self)
+        self.footer = Footer(self)
+        self.quit = false
+        root = widget.vbox([self.top, self.host, self.footer], {})
+        self.host.height = "fill"
+        self.host.stretch = true
+        self.ui:set_root(root)
+        self.ui:focus_widget(self.host)
+        clock_fn = self.clock
+        self.clock_item = {id: "clock", text: () => clock_fn(), priority: 0, fg: th.BRIGHT}
+        self.system_items[1] = self.clock_item
+        self:_install_hotkeys()
+
+    def _install_hotkeys(self):
+        let me = self
+        self.ui:hotkey("alt+right", () => me:cycle(1))
+        self.ui:hotkey("alt+left", () => me:cycle(-1))
+        self.ui:hotkey("alt+w", () => me:close_current())
+        self.ui:hotkey("f9", () => me:open_launcher())
+        self.ui:hotkey("alt+space", () => me:open_launcher())
+        names = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
+        for i, n in names:
+            self.ui:hotkey("alt+" .. n, () => me:switch_index(i))
+
+    # размер области программы: весь экран без верхней полосы и подвала
+    def app_size(self):
+        cols, rows = self.out:size()
+        return cols, math.max(1, rows - 2)
+
+    # ------------------------------------------------------------ реестр и запуск
+
+    # описание программы: id, name, icon, desc, launch(app); показывается в списке программ
+    def register(self, spec):
+        self.registry[len(self.registry) + 1] = spec
+
+    def launch(self, id, opts=nil):
+        spec = nil
+        for s in self.registry:
+            if s.id == id:
+                spec = s
+        if spec == nil:
+            return nil
+        return self:launch_spec(spec)
+
+    def launch_spec(self, spec):
+        app = App(self, self.next_id, spec)
+        self.next_id += 1
+        self.apps[len(self.apps) + 1] = app
+        if spec.launch != nil:
+            spec.launch(app)
+        self:switch_to(app, self.current == nil)
+        return app
+
+    def switch_to(self, app, instant=false):
+        if app == self.current or app.closed:
+            return
+        old = self.current
+        self.current = app
+        app.badge = false
+        app.ui:invalidate_layout()
+        self.ui:invalidate()
+        if old != nil and not instant and self.ui.animations and old.ui != nil:
+            a = self:index_of(app)
+            b = self:index_of(old)
+            tr = {from_app: old, to_app: app, t: 0, dir: a > b and 1 or -1}
+            self.host.transition = tr
+            self.ui:animate(tr, "t", 1, 0.22, "out_cubic", () => self:_transition_done())
+
+    def _transition_done(self):
+        self.host.transition = nil
+        self.ui:invalidate()
+
+    def index_of(self, app):
+        for i, a in self.apps:
+            if a == app:
+                return i
+        return 0
+
+    def switch_index(self, i):
+        if self.apps[i] != nil:
+            self:switch_to(self.apps[i])
+
+    def cycle(self, step):
+        n = len(self.apps)
+        if n < 2:
+            return
+        i = self:index_of(self.current) + step
+        if i > n:
+            i = 1
+        if i < 1:
+            i = n
+        self:switch_to(self.apps[i])
+
+    def close_app(self, app):
+        i = self:index_of(app)
+        if i == 0:
+            return
+        app.closed = true
+        table.remove(self.apps, i)
+        app.ui.root:detach()
+        if self.current == app:
+            self.current = self.apps[math.min(i, len(self.apps))]
+            self.host.transition = nil
+        self.ui:invalidate()
+
+    def close_current(self):
+        if self.current != nil:
+            self:close_app(self.current)
+
+    def open_launcher(self):
+        items = []
+        for s in self.registry:
+            items[len(items) + 1] = {text: (s.icon ?? "▪") .. " " .. (s.name ?? s.id), hint: s.desc}
+        if len(items) == 0:
+            return
+        let me = self
+        lists.popup_menu(self.ui, items, 0, 1, (index, item) => me:launch_spec(me.registry[index]), 1, {min_w: 28})
+
+    # ------------------------------------------------------------ тема и размер
+
+    def set_theme(self, t):
+        self.ui:set_theme(t)
+        for a in self.apps:
+            a.ui.theme = t
+            a.ui:invalidate()
+
+    def resize(self):
+        self.ui:resize()
+        cols, rows = self:app_size()
+        for a in self.apps:
+            a.out.cols = cols
+            a.out.rows = rows
+            a.ui:resize()
+
+    # ------------------------------------------------------------ цикл
+
+    def handle(self, name, a=nil, b=nil, c=nil):
+        if name == "term_resize" or name == "monitor_resize":
+            self:resize()
+            return true
+        if self.host.captures_text != self.host:_text_mode():
+            self.host.captures_text = self.host:_text_mode()
+        return self.ui:handle(name, a, b, c)
+
+    def tick(self, dt):
+        changed = false
+        for ap in self.apps:
+            ap.ui:tick(dt)
+            if ap == self.current and (ap.ui.draw_dirty or ap.ui.layout_dirty):
+                changed = true
+        # виджеты верхней полосы и часы
+        sig = self:_bar_signature()
+        if sig != self.bar_sig:
+            self.bar_sig = sig
+            changed = true
+        if changed:
+            self.ui:invalidate()
+        self.host.captures_text = self.host:_text_mode()
+        return self.ui:tick(dt)
+
+    def _bar_signature(self):
+        parts = []
+        for it in self.top:_right_items():
+            parts[len(parts) + 1] = self.top:_text_of(it)
+        for ap in self.apps:
+            parts[len(parts) + 1] = (ap.badge and "!" or "") .. ap.title
+        return table.concat(parts, "|")
+
+    def needs_ticks(self):
+        # программы в фоне живут, поэтому тик нужен, пока у кого-то есть таймеры или анимации
+        if self.ui:needs_ticks():
+            return true
+        for a in self.apps:
+            if a.ui:needs_ticks():
+                return true
+        return false
+
+    def render(self):
+        return self.ui:render()
+
+    # готовый цикл для CC
+    def run(self, opts=nil):
+        o = opts ?? {}
+        pull = o.pull ?? os.pullEventRaw
+        self.out:open()
+        self.bar_sig = nil
+        self:tick(0)
+        self:render()
+        last = os.epoch("utc") / 1000
+        timer = os.startTimer(0.05)
+        while not self.quit:
+            ev, a, b, c = pull()
+            if ev == "terminate":
+                break
+            if ev == "timer" and a == timer:
+                now = os.epoch("utc") / 1000
+                self:tick(math.min(0.25, now - last))
+                last = now
+                timer = os.startTimer(self:needs_ticks() and 0.05 or 0.5)
+            else:
+                self:handle(ev, a, b, c)
+            self:render()
+        self.out:close()
+
+def _clock_text():
+    return os.date("%H:%M", os.epoch("local") / 1000)
+
+export def new(out, opts=nil):
+    return Shell(out, opts)
