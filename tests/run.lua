@@ -82,6 +82,9 @@ local function run_case(name, label, force)
       env = opts.env,
     })
     opts.import = L.import_for(ROOT .. "/tests/cases")
+    opts.loader = L
+    opts.base_dir = ROOT .. "/tests/cases"
+    opts.header_cache = ROOT .. "/build/cuh-cache"
   end
 
   local ok, runner, lua = pcall(cubic.load, src, name .. ".cub", opts)
@@ -147,6 +150,25 @@ for _, n in ipairs(names) do
     if not has_err then
       local ok2, err2 = pcall(run_case, n, "min:" .. n, { minify = true })
       if not ok2 then record("min:" .. n, false, "test runner error: " .. tostring(err2)) end
+    end
+  end
+end
+
+-- unit-тесты на Lua: tests/unit/*.lua вызываются как chunk(cubic, ROOT, record)
+if not only or ("unit"):find(only, 1, true) then
+  if fs.isDir(ROOT .. "/tests/unit") then
+    for _, f in ipairs(fs.list(ROOT .. "/tests/unit")) do
+      if f:match("%.lua$") then
+        local fn, lerr = loadfile(ROOT .. "/tests/unit/" .. f)
+        if not fn then
+          record("unit:" .. f, false, tostring(lerr))
+        else
+          local ok, err = pcall(fn, cubic, ROOT, function(name, passed, detail)
+            record("unit:" .. name, passed, detail)
+          end)
+          if not ok then record("unit:" .. f, false, tostring(err)) end
+        end
+      end
     end
   end
 end

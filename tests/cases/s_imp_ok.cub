@@ -1,0 +1,15 @@
+#!strict
+import typed
+from typed import add, Counter as Cnt
+n: num = typed.add(1, 2)
+s: str = typed.greet("bob")
+w: num = typed.count_words("a b c")
+m: str? = typed.maybe(true)
+limit: num = typed.LIMIT
+c = typed.Counter(5)
+v: num = c:inc()
+d: str = c:describe()
+k: Cnt = Cnt(1)
+c2: typed.Counter = typed.Counter(2)
+print(n, s, w, m, limit, v, d, k.value, c2.label)
+print(add(2, 3))

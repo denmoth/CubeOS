@@ -80,6 +80,7 @@ local function find_project_file(start_dir)
   end
 end
 
+local project_cfg = nil
 local project_file, project_dir = find_project_file(fs.getDir(input))
 if project_file then
   local loader = cubic.new_loader({ roots = { ROOT .. "/lib" } })
@@ -89,6 +90,7 @@ if project_file then
     say("error: " .. project_file .. ": " .. tostring(cfg))
     return finish(1)
   end
+  project_cfg = cfg
   say("project: " .. project_file)
   if cfg.strict and opts.strict == nil then opts.strict = true end
   if cfg.minify and opts.minify == nil then opts.minify = true end
@@ -110,6 +112,20 @@ if type(flags["mods"]) == "string" then
   opts.mods = opts.mods or {}
   for id in flags["mods"]:gmatch("[^,]+") do opts.mods[#opts.mods + 1] = id end
 end
+-- module loader: project libs, the project directory, the source directory and the system lib/
+local roots = {}
+local input_dir = fs.getDir(input)
+if project_dir then roots[#roots + 1] = project_dir end
+for _, rel in ipairs(project_cfg and project_cfg.libs or {}) do
+  roots[#roots + 1] = fs.combine(project_dir or input_dir, rel)
+end
+roots[#roots + 1] = input_dir
+roots[#roots + 1] = ROOT .. "/lib"
+local loader = cubic.new_loader({ roots = roots, base = input_dir })
+opts.loader = loader
+opts.base_dir = input_dir
+opts.header_cache = (project_cfg and project_cfg.cache) or (ROOT .. "/build/cuh-cache")
+
 local lua, linemap, warnings = cubic.try_compile(src, name, opts)
 if not lua then
   say("error: " .. tostring(linemap))
@@ -128,6 +144,7 @@ if cmd == "compile" then
   end
 elseif cmd == "run" then
   opts.env = setmetatable({ print = say }, { __index = _G })
+  opts.import = loader.import_for(input_dir)
   local ok, err = pcall(cubic.run, src, name, opts)
   if not ok then
     say("runtime error: " .. tostring(err))

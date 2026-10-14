@@ -1,0 +1,4 @@
+#!strict
+import typed
+c = typed.Counter(1)
+x: str = c:inc()

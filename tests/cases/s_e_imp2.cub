@@ -1,0 +1,3 @@
+#!strict
+import typed
+x: str = typed.add(1, 2)

@@ -792,9 +792,9 @@ local function make(toks, file, src, hdr)
       local p = { name = n.v, line = n.line }
       if accept(":") then p.type = parse_type() end
       if accept("=") then
-        if hdr and peek().t == "." then
+        if hdr and (peek().t == "." or peek().t == "..") then
           -- в заголовках значение по умолчанию можно писать как `...`
-          while peek().t == "." do next_tok() end
+          while peek().t == "." or peek().t == ".." do next_tok() end
           p.optional = true
         else
           p.default = parse_expr()

@@ -1,0 +1,33 @@
+# модуль с аннотациями и без них, для проверки автоматических заголовков
+export def add(a: num, b: num) -> num:
+    return a + b
+
+export def greet(name: str, greeting: str? = nil) -> str:
+    return (greeting ?? "hello") .. " " .. name
+
+# без аннотаций: возврат выводится по return
+export def count_words(text):
+    return 5
+
+export def maybe(flag):
+    if flag:
+        return "yes"
+    return nil
+
+export const LIMIT = 10
+export names = ["a", "b"]
+
+export class Counter:
+    def init(self, start: num):
+        self.value = start
+        self.label = "counter"
+
+    def inc(self) -> num:
+        self.value += 1
+        return self.value
+
+    def describe(self):
+        return self.label .. "=" .. self.value
+
+def hidden():
+    return 1

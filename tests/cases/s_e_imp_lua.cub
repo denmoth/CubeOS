@@ -1,0 +1,3 @@
+#!strict
+import legacy
+legacy.hello("a", "b", "c")

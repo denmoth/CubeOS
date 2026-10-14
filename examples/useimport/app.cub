@@ -1,0 +1,7 @@
+#!strict
+import std.str as strs
+import semver
+parts = strs.split("a,b,c", ",")
+ok: bool = semver.satisfies("1.2.3", "^1.0.0")
+wrong: str = semver.satisfies("1.2.3", "^1.0.0")
+strs.nonexistent()

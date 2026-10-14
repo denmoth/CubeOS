@@ -1,0 +1,3 @@
+#!strict
+import typed
+m: num = typed.maybe(true)

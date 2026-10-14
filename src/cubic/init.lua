@@ -39,6 +39,12 @@ C.VERSION = "0.3.0"
 C.rt = rt
 C.util = U
 
+local function path_dirname(p)
+  return (p:match("^(.*)/[^/]*$")) or ""
+end
+
+local modtypes = load_module("modtypes", U, parser, checker, read_file, path_dirname, C.VERSION)
+
 local env_cache = {}
 
 local function build_env(extra)
@@ -97,13 +103,26 @@ function C.compile(src, file, opts)
   opts = opts or {}
   local ast = parser.parse(src, file)
   if checker.needs_check(ast, opts) then
-    checker.check(ast, file, type_env(opts), false, opts)
+    local env = type_env(opts)
+    local check_opts = opts
+    if opts.loader then
+      check_opts = setmetatable({ module_types = modtypes.make_resolver(file, opts, env, {}) }, { __index = opts })
+    end
+    checker.check(ast, file, env, false, check_opts)
   end
   local gen_opts = setmetatable({
     version = C.VERSION,
     src_info = "size=" .. #src .. " adler32=" .. adler32(src),
   }, { __index = opts })
   return codegen.generate(ast, file, gen_opts)
+end
+
+-- Header text (.cuh) describing the exports of a module file; the same text the compiler caches.
+function C.module_header(path, opts)
+  opts = opts or {}
+  local env = type_env(opts)
+  local text, open = modtypes.header_text(path, opts, env, {})
+  return text, open
 end
 
 -- Reads the banner of a file produced by the compiler: { version, file, size, adler32 } or nil.

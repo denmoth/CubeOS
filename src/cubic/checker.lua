@@ -408,6 +408,7 @@ function M.check(ast, file, genv, hdr, opts)
   local narrow = { {} }
   local deferred = {}
   local cur_ret, cur_cls = nil, nil
+  local ret_collect = nil
 
   local function err(line, msg)
     if strict_now then errors[#errors + 1] = { line = line or 0, msg = msg } end
@@ -1288,10 +1289,38 @@ function M.check(ast, file, genv, hdr, opts)
 
   function C.LuaBlock() end
 
-  function C.Import(s) assign_name(s.name, ANY, s.line) end
+  -- type of an imported module from the resolver (opts.module_types), or any
+  local function module_type(spec, alias)
+    local resolver = opts and opts.module_types
+    if not resolver then return nil end
+    local info = resolver(spec)
+    if not info then return nil end
+    -- classes of the module become usable as types: alias.ClassName
+    for cname, cty in pairs(info.members) do
+      if cty.k == "classobj" then types[alias .. "." .. cname] = mk_inst(cty.cls) end
+    end
+    return { k = "ns", name = alias, members = info.members, open = info.open }
+  end
+
+  function C.Import(s)
+    assign_name(s.name, module_type(s.path, s.name) or ANY, s.line)
+  end
 
   function C.FromImport(s)
-    for _, n in ipairs(s.names) do assign_name(n.alias, ANY, s.line) end
+    local info = opts and opts.module_types and opts.module_types(s.path)
+    for _, n in ipairs(s.names) do
+      local ty = ANY
+      if info then
+        local m = info.members[n.name]
+        if m then
+          ty = m
+          if m.k == "classobj" then types[n.alias] = mk_inst(m.cls) end
+        elseif not info.open then
+          err(n.line or s.line, "module '" .. s.path .. "' has no export '" .. n.name .. "'")
+        end
+      end
+      assign_name(n.alias, ty, s.line)
+    end
   end
 
   function C.AnnAssign(s)
@@ -1393,9 +1422,13 @@ function M.check(ast, file, genv, hdr, opts)
   function C.Override(s) let_like(s, { s.name }) end
 
   function C.Return(s)
-    if #s.values == 0 then return end
+    if #s.values == 0 then
+      if ret_collect then ret_collect[#ret_collect + 1] = NIL end
+      return
+    end
     local want = cur_ret
     local first = infer(s.values[1], want and want.k ~= "any" and want or nil)
+    if ret_collect then ret_collect[#ret_collect + 1] = (#s.values == 1) and first or ANY end
     for i = 2, #s.values do infer(s.values[i]) end
     if #s.values == 1 and want and want.k ~= "any" then
       expect_assignable(first, want, s.line, "wrong return type")
@@ -1524,12 +1557,13 @@ function M.check(ast, file, genv, hdr, opts)
   -- функции и классы
 
   local function check_function_body(def, ft, cls, def_scope)
-    local saved = { scope, narrow, cur_ret, cur_cls }
+    local saved = { scope, narrow, cur_ret, cur_cls, ret_collect }
     scope = def_scope
     push_scope("fn")
     narrow = { {} }
     cur_ret = ft.ret
     cur_cls = cls
+    ret_collect = {}
     local start = 1
     if cls and def.params[1] and def.params[1].name == "self" then
       declare("self", mk_inst(cls), true)
@@ -1547,7 +1581,10 @@ function M.check(ast, file, genv, hdr, opts)
       if not scope.vars[nm] and not lookup_var(nm) then declare(nm, nil, false, true) end
     end
     for _, s in ipairs(def.body) do check_stmt(s) end
-    scope, narrow, cur_ret, cur_cls = saved[1], saved[2], saved[3], saved[4]
+    if def.ret == nil then
+      ft.inferred = (#ret_collect > 0) and union(ret_collect) or ANY
+    end
+    scope, narrow, cur_ret, cur_cls, ret_collect = saved[1], saved[2], saved[3], saved[4], saved[5]
   end
 
   function C.FuncDef(s)
@@ -1743,6 +1780,10 @@ function M.check(ast, file, genv, hdr, opts)
     i = i + 1
   end
 
+  if opts and opts.exports_mode then
+    return M.build_exports(ast, scope, genv, lookup_var)
+  end
+
   if #errors > 0 then
     table.sort(errors, function(a, b) return a.line < b.line end)
     local parts = {}
@@ -1755,6 +1796,161 @@ function M.check(ast, file, genv, hdr, opts)
     end
     U.fail(file, errors[1].line, 1, table.concat(parts, "\n"))
   end
+end
+
+-- Builds .cuh header text for the exports of a checked module (types inferred where there are no annotations).
+function M.build_exports(ast, scope, genv, lookup_var)
+  local names, seen = {}, {}
+  local function add(n)
+    if not seen[n] then
+      seen[n] = true
+      names[#names + 1] = n
+    end
+  end
+  for _, s in ipairs(ast.body) do
+    if s.exported then
+      local tag = s.tag
+      if tag == "FuncDef" or tag == "ClassDef" or tag == "Import" or tag == "AnnAssign" or tag == "Const" then
+        add(s.name)
+      elseif tag == "Let" then
+        for _, n in ipairs(s.names) do add(n) end
+      elseif tag == "Assign" then
+        for _, t in ipairs(s.targets) do
+          if t.tag == "Name" then add(t.name) end
+        end
+      end
+    end
+  end
+
+  local classes = {}
+  local function var_type(n)
+    local rec = lookup_var(n)
+    return rec and rec.type or ANY
+  end
+  for _, n in ipairs(names) do
+    local ty = var_type(n)
+    if ty.k == "classobj" then classes[ty.cls] = true end
+  end
+
+  local function known_class(cls)
+    if classes[cls] then return true end
+    local g = genv.types[cls.name]
+    return g ~= nil and g.cls == cls
+  end
+
+  local ser
+  local function ident(s)
+    return type(s) == "string" and s:match("^[%a_][%w_]*$") ~= nil
+  end
+
+  function ser(t)
+    local k = t.k
+    if k == "num" or k == "str" or k == "bool" or k == "nil" or k == "any" then return k end
+    if k == "list" then return "list[" .. ser(t.elem) .. "]" end
+    if k == "dict" then return "dict[" .. ser(t.key) .. ", " .. ser(t.val) .. "]" end
+    if k == "rec" then
+      local keys = {}
+      for n in pairs(t.fields) do
+        if not ident(n) then return "any" end
+        keys[#keys + 1] = n
+      end
+      table.sort(keys)
+      local parts = {}
+      for i, n in ipairs(keys) do parts[i] = n .. ": " .. ser(t.fields[n]) end
+      return "{" .. table.concat(parts, ", ") .. "}"
+    end
+    if k == "union" then
+      local function wrap(x)
+        local s = ser(x)
+        if x.k == "union" or x.k == "fn" then s = "(" .. s .. ")" end
+        return s
+      end
+      if #t.items == 2 and has_nil(t) then return wrap(strip_nil(t)) .. "?" end
+      local parts = {}
+      for i, x in ipairs(t.items) do parts[i] = wrap(x) end
+      return table.concat(parts, " | ")
+    end
+    if k == "fn" then
+      if t.loose then return "fn" end
+      local parts = {}
+      for i, p in ipairs(t.params) do parts[i] = ser(p.type) end
+      if t.rest then parts[#parts + 1] = "*" .. ser(t.rest) end
+      local ret = t.ret
+      if t.inferred and ret.k == "any" then ret = t.inferred end
+      return "fn(" .. table.concat(parts, ", ") .. ") -> " .. ser(ret)
+    end
+    if k == "inst" then
+      if known_class(t.cls) then return t.cls.name end
+      return "any"
+    end
+    return "any"
+  end
+
+  local function ser_params(ft, with_self)
+    local parts = {}
+    if with_self then parts[1] = "self" end
+    for _, p in ipairs(ft.params) do
+      local item = (ident(p.name) and p.name or "arg") .. ": " .. ser(p.type)
+      if p.optional then item = item .. " = ..." end
+      parts[#parts + 1] = item
+    end
+    if ft.rest then parts[#parts + 1] = "*rest: " .. ser(ft.rest) end
+    return table.concat(parts, ", ")
+  end
+
+  local function ser_ret(ft)
+    local ret = ft.ret
+    if ft.inferred and ret.k == "any" then ret = ft.inferred end
+    return " -> " .. ser(ret)
+  end
+
+  local function sorted_keys(tbl)
+    local keys = {}
+    for n in pairs(tbl) do keys[#keys + 1] = n end
+    table.sort(keys)
+    return keys
+  end
+
+  local out = {}
+  for _, n in ipairs(names) do
+    local ty = var_type(n)
+    if ty.k == "classobj" then
+      local cls = ty.cls
+      local head = "class " .. cls.name
+      if cls.base and known_class(cls.base) then head = head .. "(" .. cls.base.name .. ")" end
+      out[#out + 1] = head .. ":"
+      local members = 0
+      for _, f in ipairs(sorted_keys(cls.fields)) do
+        if ident(f) then
+          out[#out + 1] = "    " .. f .. ": " .. ser(cls.fields[f])
+          members = members + 1
+        end
+      end
+      for _, f in ipairs(sorted_keys(cls.statics)) do
+        if ident(f) and cls.fields[f] == nil then
+          out[#out + 1] = "    " .. f .. ": " .. ser(cls.statics[f])
+          members = members + 1
+        end
+      end
+      for _, f in ipairs(sorted_keys(cls.methods)) do
+        local m = cls.methods[f]
+        if ident(f) then
+          out[#out + 1] = "    def " .. f .. "(" .. ser_params(m, true) .. ")" .. ser_ret(m)
+          members = members + 1
+        end
+      end
+      if members == 0 then out[#out + 1] = "    pass" end
+    end
+  end
+  for _, n in ipairs(names) do
+    local ty = var_type(n)
+    if ty.k == "fn" and not ty.loose then
+      out[#out + 1] = "def " .. n .. "(" .. ser_params(ty, false) .. ")" .. ser_ret(ty)
+    elseif ty.k ~= "classobj" then
+      out[#out + 1] = n .. ": " .. ser(ty)
+    end
+  end
+  return table.concat(out, "\n") .. "\n"
 end
 
 return M

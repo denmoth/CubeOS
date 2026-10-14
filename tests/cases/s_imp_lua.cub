@@ -1,0 +1,4 @@
+#!strict
+import legacy
+print(legacy.hello("x"), legacy.VERSION, legacy.vararg(1, 2, 3))
+print(legacy.somethingElse == nil)

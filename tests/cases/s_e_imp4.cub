@@ -1,0 +1,3 @@
+#!strict
+import typed
+typed.hidden()
