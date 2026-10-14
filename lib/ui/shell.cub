@@ -2,7 +2,7 @@
 # подвал с подсказками клавиш, запуск программ из списка
 #
 #   shell = shell.new(out, {theme: theme.get("cubeos")})
-#   shell:register({id: "files", name: "Файлы", icon: "▤", launch: (app) => app:set_root(...)})
+#   shell:register({id: "files", name: "Файлы", icon: "≡", launch: (app) => app:set_root(...)})
 #   shell:launch("files")                      запускает программу (вторая копия, если запущена ещё раз)
 #   shell:run()                                цикл событий (для CC); либо вручную: shell:handle(...), shell:tick(dt), shell:render()
 #
@@ -232,15 +232,23 @@ class TopBar(widget.Widget):
         c:text(x, self.y, mark, th.BG, th.ACCENT)
         self.regions[len(self.regions) + 1] = {kind: "menu", x: x, w: txt.width(mark)}
         x += txt.width(mark) + 1
+        # вкладки; если все названия не помещаются, у неактивных остаются только значки
+        budget = right_edge - 1 - x
+        full_width = 0
         for i, a in shell.apps:
+            full_width += txt.width(" " .. a.icon .. " " .. a.title .. (a.badge and " •" or "") .. " ") + 1
+        compact = full_width > budget
+        for i, a in shell.apps:
+            active = a == shell.current
             label = " " .. a.icon .. " " .. a.title .. (a.badge and " •" or "") .. " "
+            if compact and not active:
+                label = " " .. a.icon .. (a.badge and "•" or " ")
             n = txt.width(label)
             if x + n > right_edge - 1:
-                label = txt.ellipsize(label, math.max(4, right_edge - 1 - x))
+                label = txt.ellipsize(label, math.max(3, right_edge - 1 - x))
                 n = txt.width(label)
             if x + n > right_edge:
                 break
-            active = a == shell.current
             fg = active and th.SEL_FG or th.MUTED
             bg = active and th.SEL_BG or th.PANEL
             if a.badge and not active:
@@ -444,6 +452,16 @@ export class Shell:
         if name == "term_resize" or name == "monitor_resize":
             self:resize()
             return true
+        if name == "monitor_touch":
+            # касание монитора приходит как клетка (x, y); превращаем в нажатие и отпускание мыши (в пикселях для пиксельного вывода)
+            px = b
+            py = c
+            if self.out.kind == "pixel":
+                px = (b - 1) * self.out.cell_w
+                py = (c - 1) * self.out.cell_h
+            handled = self.ui:handle("mouse_click", 1, px, py)
+            self.ui:handle("mouse_up", 1, px, py)
+            return handled
         if self.host.captures_text != self.host:_text_mode():
             self.host.captures_text = self.host:_text_mode()
         return self.ui:handle(name, a, b, c)

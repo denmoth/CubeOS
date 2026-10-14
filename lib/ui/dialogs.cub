@@ -14,7 +14,7 @@ import ui.widget as widget
 import ui.controls as ctl
 
 const KIND_COLOR = {info: th.ACCENT, ok: th.OK, warn: th.WARN, error: th.ERR, question: th.ACCENT}
-const KIND_MARK = {info: "i", ok: "✓", warn: "!", error: "✗", question: "?"}
+const KIND_MARK = {info: "i", ok: "√", warn: "!", error: "×", question: "?"}
 
 # opts: title, text, buttons (["OK"]), kind, width (44), on_choice(index, label): index nil при закрытии клавишей Esc.
 # Возвращает слой

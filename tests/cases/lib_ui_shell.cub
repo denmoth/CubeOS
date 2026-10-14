@@ -50,7 +50,7 @@ def col_of(line, needle):
 
 # ---------------------------------------------------------------- запуск и вкладки
 sh, out = make()
-sh:register({id: "files", name: "Файлы", icon: "▤", desc: "папки", launch: note_app("страница файлов")})
+sh:register({id: "files", name: "Файлы", icon: "≡", desc: "папки", launch: note_app("страница файлов")})
 sh:register({id: "edit", name: "Редактор", icon: "✎", desc: "текст", launch: note_app("страница редактора")})
 sh:render()
 eq(string.find(all_text(out), "Нет запущенных программ", 1, true) != nil, true, "empty desktop message")
@@ -86,6 +86,12 @@ sh:render()
 sh:handle("mouse_click", 1, col_of(out.last[1], "Файлы"), 1)
 eq(sh.current == a1, true, "a click on a tab switches the app")
 
+# касание монитора работает как нажатие мышью
+sh:switch_to(a2)
+sh:render()
+sh:handle("monitor_touch", "monitor_0", col_of(out.last[1], "Файлы"), 1)
+eq(sh.current == a1, true, "a monitor touch on a tab switches the app")
+
 # ---------------------------------------------------------------- программы работают в фоне
 ticks = []
 def bg_launch(app):
@@ -100,14 +106,14 @@ eq(sh:needs_ticks(), true, "background timers need ticks")
 
 # ---------------------------------------------------------------- виджеты в верхней полосе
 seconds = {n: 0}
-item = bg:add_bar_item({id: "watch", text: () => "⏱ " .. seconds.n .. "с", priority: 50})
+item = bg:add_bar_item({id: "watch", text: () => "◎ " .. seconds.n .. "с", priority: 50})
 sh:tick(0.1)
 sh:render()
-eq(string.find(out.last[1], "⏱ 0с", 1, true) != nil, true, "a bar widget of a background app is visible from another app")
+eq(string.find(out.last[1], "◎ 0с", 1, true) != nil, true, "a bar widget of a background app is visible from another app")
 seconds.n = 7
 sh:tick(0.1)
 sh:render()
-eq(string.find(out.last[1], "⏱ 7с", 1, true) != nil, true, "the widget text updates by itself")
+eq(string.find(out.last[1], "◎ 7с", 1, true) != nil, true, "the widget text updates by itself")
 item.text = "готово"
 sh:tick(0.1)
 sh:render()

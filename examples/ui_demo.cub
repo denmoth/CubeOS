@@ -17,12 +17,12 @@ import unicode
 
 def home_app(shell):
     def launch(app):
-        left = ui.list([], {max_rows: 12})
+        left = ui.list([], {max_rows: 14, height: "fill"})
         info = ui.vbox([], {padding: [1, 0]})
         title = ui.label("CubeOS", {fg: themes.BRIGHT})
-        sub = ui.label("текстовый интерфейс на клетках, написан на Cubic", {fg: themes.MUTED})
+        sub = ui.label("текстовый интерфейс на клетках, написан на Cubic", {fg: themes.MUTED, wrap: true})
         desc = ui.label("", {wrap: true})
-        stats = ui.label("", {fg: themes.MUTED})
+        stats = ui.label("", {fg: themes.MUTED, wrap: true})
         info:add(title)
         info:add(sub)
         info:add(ui.spacer(1))
@@ -42,21 +42,21 @@ def home_app(shell):
         left:on("activate", (wd, index, item) => shell:launch_spec(items[index].data))
         show(1)
         stats:set_text("Программ запущено: " .. len(shell.apps) .. "   Enter открыть, Alt+←→ переключать")
-        body = ui.hbox([ui.frame("Программы", left, {width: 30}), ui.frame("О программе", info, {width: "fill", padding: 1})], {gap: 1})
-        app:set_root(ui.vbox([body], {padding: 1}))
+        body = ui.hbox([ui.frame("Программы", left, {width: 25}), ui.frame("О программе", info, {width: "fill", padding: 1})], {gap: 1, height: "fill"})
+        app:set_root(ui.vbox([body], {padding: [1, 0]}))
         app.ui:every(1, () => stats:set_text("Программ запущено: " .. len(shell.apps) .. "   Enter открыть, Alt+←→ переключать"))
-    return {id: "home", name: "Главная", icon: "⌂", desc: "список программ", launch: launch}
+    return {id: "home", name: "Главная", icon: "◇", desc: "список программ", launch: launch}
 
 # ---------------------------------------------------------------- Файлы
 
 def files_app(shell):
     def launch(app):
         state = {path: "/"}
-        columns = [{title: "Имя", width: "fill"}, {title: "Размер", width: 9, align: "right"}]
+        columns = [{title: "Имя", width: "fill"}, {title: "Размер", width: 8, align: "right"}]
         tbl = ui.table_view(columns, [], {max_rows: 14})
         crumb = ui.label("/", {fg: themes.INFO})
         status = ui.label("", {fg: themes.MUTED})
-        viewer = ui.text_view("", {})
+        viewer = ui.text_view("", {height: "fill"})
         def human(n):
             if n < 1024:
                 return n .. " Б"
@@ -108,9 +108,10 @@ def files_app(shell):
             dialogs.message(app.ui, {title: full, text: "Файл открыт справа: " .. string.len(data) .. " байт.", kind: "info"})
         tbl:on("activate", (wd, index, row) => open_row(index))
         refresh()
-        body = ui.hbox([ui.vbox([crumb, tbl, status], {width: 36}), ui.frame("Просмотр", viewer, {width: "fill"})], {gap: 1})
-        app:set_root(ui.vbox([body], {padding: 1}))
-    return {id: "files", name: "Файлы", icon: "▤", desc: "папки и файлы компьютера, просмотр текста", launch: launch}
+        tbl.height = "fill"
+        body = ui.hbox([ui.vbox([crumb, tbl, status], {width: 27}), ui.frame("Просмотр", viewer, {width: "fill", padding: 0})], {gap: 1, height: "fill"})
+        app:set_root(ui.vbox([body], {padding: [1, 0]}))
+    return {id: "files", name: "Файлы", icon: "≡", desc: "папки и файлы компьютера, просмотр текста", launch: launch}
 
 # ---------------------------------------------------------------- Настройки
 
@@ -167,9 +168,9 @@ def settings_app(shell):
             ui.spacer(1),
             ui.label("Темы: cubeos, dark, light, retro (развёртка и мерцание в пикселях), hacker, amber, contrast.", {wrap: true, fg: themes.MUTED}),
             ui.label("Клавиши WASD и Vim работают везде, кроме полей ввода: там буквы остаются буквами.", {wrap: true, fg: themes.MUTED})
-        ], {gap: 1})
-        app:set_root(ui.vbox([ui.frame("Вид и управление", page, {padding: 1})], {padding: 1}))
-    return {id: "settings", name: "Настройки", icon: "⚙", desc: "тема, рамки, клавиши, анимации", launch: launch}
+        ], {gap: 0})
+        app:set_root(ui.vbox([ui.frame("Вид и управление", page, {padding: [1, 0], height: "fill"})], {padding: [1, 0]}))
+    return {id: "settings", name: "Настройки", icon: "※", desc: "тема, рамки, клавиши, анимации", launch: launch}
 
 # ---------------------------------------------------------------- Секундомер (в фоне, виджет в верхней полосе)
 
@@ -182,7 +183,7 @@ def stopwatch_app(shell):
             m = math.floor(sec / 60)
             s = sec - m * 60
             return string.format("%02d:%04.1f", m, s)
-        item = app:add_bar_item({id: "stopwatch", priority: 60, fg: themes.WARN, text: () => (st.running and "⏱ " or "⏸ ") .. fmt(st.elapsed)})
+        item = app:add_bar_item({id: "stopwatch", priority: 60, fg: themes.WARN, text: () => (st.running and "◎ " or "‖ ") .. fmt(st.elapsed)})
         def tick():
             if st.running:
                 st.elapsed += 0.1
@@ -210,8 +211,8 @@ def stopwatch_app(shell):
                 items[i] = "Круг " .. i .. "   " .. fmt(v)
             laps_list:set_items(items)
         page = ui.vbox([big, ui.spacer(1), ui.hbox([start, reset, lap], {gap: 2, justify: "center"}), ui.spacer(1), ui.frame("Круги", laps_list, {})], {gap: 0})
-        app:set_root(ui.vbox([ui.frame("Секундомер", page, {padding: 1})], {padding: 1}))
-    return {id: "stopwatch", name: "Секундомер", icon: "⏱", desc: "работает в фоне, время видно сверху", launch: launch}
+        app:set_root(ui.vbox([ui.frame("Секундомер", page, {padding: [1, 0], height: "fill"})], {padding: [1, 0]}))
+    return {id: "stopwatch", name: "Секундомер", icon: "◎", desc: "работает в фоне, время видно сверху", launch: launch}
 
 # ---------------------------------------------------------------- Плеер (имитация: прогресс идёт в фоне)
 
@@ -228,7 +229,7 @@ def player_app(shell):
         now = ui.label("Calm  0:00", {fg: themes.BRIGHT})
         def fmt(sec):
             return string.format("%d:%02d", math.floor(sec / 60), math.floor(sec) % 60)
-        item = app:add_bar_item({id: "player", priority: 40, fg: themes.INFO, text: () => (st.playing and "♪ " or "· ") .. tracks[st.index].name})
+        item = app:add_bar_item({id: "player", priority: 40, fg: themes.INFO, text: () => (st.playing and "▶ " or "· ") .. tracks[st.index].name})
         def refresh():
             tr = tracks[st.index]
             bar:set_value(st.pos / tr.len)
@@ -242,7 +243,7 @@ def player_app(shell):
                     tlist:select(st.index, true)
                 refresh()
         app.ui:every(1, tick)
-        play = ui.button("▶ / ⏸")
+        play = ui.button("▶ / ‖")
         nxt = ui.button("Дальше")
         play:on("press", (wd) => toggle_play())
         def toggle_play():
@@ -261,19 +262,19 @@ def player_app(shell):
             st.playing = true
             refresh()
         page = ui.vbox([now, bar, ui.spacer(1), ui.hbox([play, nxt], {gap: 2}), ui.spacer(1), ui.frame("Треки", tlist, {})], {})
-        app:set_root(ui.vbox([ui.frame("Плеер (имитация)", page, {padding: 1})], {padding: 1}))
-    return {id: "player", name: "Плеер", icon: "♪", desc: "музыка в фоне, название видно сверху", launch: launch}
+        app:set_root(ui.vbox([ui.frame("Плеер (имитация)", page, {padding: [1, 0], height: "fill"})], {padding: [1, 0]}))
+    return {id: "player", name: "Плеер", icon: "▶", desc: "музыка в фоне, название видно сверху", launch: launch}
 
 # ---------------------------------------------------------------- Виджеты и диалоги
 
 def widgets_app(shell):
     def launch(app):
-        name = ui.input({placeholder: "Ваше имя", width: 24})
+        name = ui.input({placeholder: "Ваше имя", width: 20})
         check = ui.checkbox("Запомнить меня", true)
         sw = ui.switch("Уведомления", true)
-        sl = ui.slider(0, 100, 40, {step: 5, width: 24})
+        sl = ui.slider(0, 100, 40, {step: 5, width: 20})
         sel = ui.dropdown(["Малый", "Средний", "Большой"], 2)
-        bar = ui.progress(0.35, {width: 30})
+        bar = ui.progress(0.35, {width: 22})
         spin = ui.spinner()
         sl:on("change", (wd, v) => bar:set_value(v / 100))
         b_msg = ui.button("Сообщение")
@@ -295,8 +296,8 @@ def widgets_app(shell):
         b_toast:on("press", (wd) => app:notify("Готово: действие выполнено", {kind: "ok"}))
         col1 = ui.vbox([ui.label("Имя"), name, ui.spacer(1), check, sw, ui.spacer(1), ui.label("Размер"), sel], {gap: 0})
         col2 = ui.vbox([ui.label("Значение"), sl, ui.label("Прогресс"), bar, ui.hbox([ui.label("Ожидание "), spin]), ui.spacer(1),
-            ui.hbox([b_msg, b_yes], {gap: 1}), ui.hbox([b_pr, b_toast], {gap: 1})], {gap: 0})
-        app:set_root(ui.vbox([ui.hbox([ui.frame("Ввод", col1, {padding: 1, width: 34}), ui.frame("Значения и диалоги", col2, {padding: 1, width: "fill"})], {gap: 1})], {padding: 1}))
+            b_msg, b_yes, b_pr, b_toast], {gap: 0})
+        app:set_root(ui.vbox([ui.hbox([ui.frame("Ввод", col1, {padding: [1, 0], width: 25}), ui.frame("Значения", col2, {padding: [1, 0], width: "fill"})], {gap: 1, height: "fill"})], {padding: [1, 0]}))
     return {id: "widgets", name: "Виджеты", icon: "▣", desc: "все элементы, диалоги и уведомления", launch: launch}
 
 # ---------------------------------------------------------------- заставки как программы
@@ -305,7 +306,7 @@ def toy_app(entry):
     def launch(app):
         toy = entry.make({})
         app:set_root(ui.vbox([toy], {}))
-    return {id: "toy_" .. entry.id, name: entry.name, icon: "✦", desc: "заставка", launch: launch}
+    return {id: "toy_" .. entry.id, name: entry.name, icon: "‣", desc: "заставка", launch: launch}
 
 export def main(opts=nil):
     o = opts ?? {}
