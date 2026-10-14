@@ -1,0 +1,97 @@
+# boot.greeter: текстовый экран входа и первичная настройка (до появления библиотеки интерфейса)
+#
+#   g = TextGreeter(console, auth, sessions)
+#   result = g:login()      сессия (открытая), или {action: "shutdown"|"reboot"}, или nil (повторить показ)
+#
+# Тексты английские: родной терминал CC не умеет русские буквы (решение D135); локализованный экран входа
+# придёт вместе с графической и плиточной библиотекой интерфейса.
+
+export class TextGreeter:
+    # opts: title (по умолчанию "CubeOS"), allow_guest (true), retries (3)
+    def init(self, console, auth, sessions, opts=nil):
+        o = opts ?? {}
+        self.console = console
+        self.auth = auth
+        self.sessions = sessions
+        self.title = o.title ?? "CubeOS"
+        self.retries = o.retries ?? 3
+
+    def _header(self):
+        self.console:clear()
+        self.console:write_line(self.title)
+        self.console:write_line("")
+
+    # первая загрузка: создаём первого пользователя-администратора
+    def first_run(self):
+        c = self.console
+        self:_header()
+        c:write_line("Welcome! Create the first account (administrator).")
+        while true:
+            name = c:read_line("Name: ")
+            if name == nil:
+                return nil
+            password = c:read_line("Password (empty for none): ", true)
+            if password == nil:
+                return nil
+            if password != "":
+                again = c:read_line("Repeat the password: ", true)
+                if again != password:
+                    c:write_line("The passwords do not match.")
+                    continue
+            ok, err = pcall(() => self.auth:create_user({name: name}, password != "" and password or nil, true))
+            if not ok:
+                c:write_line("Cannot create the account: " .. tostring(err))
+                continue
+            return self.sessions:open(name, password != "" and password or nil)
+
+    def login(self):
+        c = self.console
+        if not self.auth:has_users():
+            return self:first_run()
+        self:_header()
+        users = self.auth:list()
+        for i, u in users:
+            c:write_line("  " .. i .. ". " .. u.display .. (u.temp and " (guest)" or "") .. (u.passwordless and "" or ""))
+        c:write_line("  s. Shut down")
+        c:write_line("  r. Restart")
+        c:write_line("")
+        choice = c:read_line("User (number or name): ")
+        if choice == nil:
+            return nil
+        lowered = string.lower(choice)
+        if lowered == "s" or lowered == "shutdown":
+            return {action: "shutdown"}
+        if lowered == "r" or lowered == "reboot" or lowered == "restart":
+            return {action: "reboot"}
+        name = nil
+        n = tonumber(choice)
+        if n != nil and users[n] != nil:
+            name = users[n].name
+        elif self.auth:user(choice) != nil:
+            name = self.auth:user(choice).name
+        if name == nil:
+            c:write_line("No such user.")
+            return nil
+        rec = self.auth:user(name)
+        # без пароля: входим сразу
+        if self.auth.shadow[rec.name] == nil:
+            s, why = self.sessions:open(name, "")
+            if s != nil:
+                return s
+            c:write_line("Cannot sign in: " .. tostring(why))
+            return nil
+        for attempt in range[1, self.retries]:
+            password = c:read_line("Password for " .. rec.display .. ": ", true)
+            if password == nil:
+                return nil
+            s, why, wait = self.sessions:open(name, password)
+            if s != nil:
+                return s
+            if why == "locked":
+                c:write_line("Too many attempts. Wait " .. tostring(wait) .. " s.")
+                return nil
+            c:write_line("Wrong password.")
+        return nil
+
+export def new(console, auth, sessions, opts=nil):
+    return TextGreeter(console, auth, sessions, opts)

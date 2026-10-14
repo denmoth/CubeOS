@@ -407,6 +407,8 @@ export class CFS:
         self:_need(sub, real, "w")
         self:_check_important(sub, path, real, "mkdir")
         parent_real = paths.parent(real)
+        if parent_real == real:
+            errors.fail("ENOENT", "the root directory of the mount does not exist", real)
         pst = self:_raw_stat(parent_real)
         if pst == nil or pst.virtual:
             if o.parents:

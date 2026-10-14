@@ -1,0 +1,188 @@
+import t
+import cfs
+import boot
+import boot.console as console_mod
+import boot.state as state_mod
+import boot.auth as auth_mod
+eq = t.eq
+
+clock = {now: 1000}
+def now():
+    return clock.now
+
+log = []
+def say(text):
+    log[len(log) + 1] = text
+
+def settle(system, steps=80):
+    for i in range[1, steps]:
+        system.kernel:run_ready()
+        clock.now = clock.now + 100
+        system.kernel:tick()
+        if system.power_action != nil:
+            break
+    system.kernel:run_ready()
+
+def build_fs():
+    let fsys = cfs.new({clock: now})
+    fsys:mount("/", cfs.memory({now: now}))
+    fsys:mount("/cubeos/tmp", cfs.tmp(65536, now))
+    cfs.install_defaults(fsys)
+    fsys:mkdir(nil, "/cubeos/sys/services", {parents: true})
+    fsys:mkdir(nil, "/cubeos/sys/cfg", {parents: true})
+    fsys:mkdir(nil, "/cubeos/var", {parents: true})
+    fsys:mkdir(nil, "/cubeos/shared", {parents: true})
+    fsys:write_file(nil, "/cubeos/sys/services/logd.conf", "{name: 'logd', module: 'svc.logd'}")
+    fsys:write_file(nil, "/cubeos/sys/services/netd.conf", "{name: 'netd', module: 'svc.netd', requires: ['logd']}")
+    fsys:write_file(nil, "/cubeos/sys/services/extra.conf", "{name: 'extra', module: 'svc.extra', safe: false}")
+    fsys:write_file(nil, "/cubeos/sys/cfg/boot.conf", "{rounds: 2, lang: 'ru'}")
+    return fsys
+
+def svc_main(name):
+    def main(sys, args):
+        say("start " .. name)
+        sys.register(name)
+        while true:
+            sys.sleep(1)
+    return main
+
+modules = {"svc.logd": {main: svc_main("logd")}, "svc.netd": {main: svc_main("netd")}, "svc.extra": {main: svc_main("extra")}}
+def importer(path):
+    return modules[path]
+
+power = {calls: []}
+def power_off():
+    power.calls[len(power.calls) + 1] = "shutdown"
+def power_restart():
+    power.calls[len(power.calls) + 1] = "reboot"
+
+def mk_boot(fsys, con, extra=nil):
+    o = extra ?? {}
+    o.fsys = fsys
+    o.console = con
+    o.clock = now
+    o.import = importer
+    o.power = {shutdown: power_off, reboot: power_restart}
+    if o.kernel == nil:
+        o.kernel = {clock: now}
+    return boot.new(o)
+
+def shell_for(session):
+    def shell(sys, args):
+        fv = sys.view()
+        fv:write("$home/shell-ran.txt", "hello " .. session.user)
+        say("shell " .. session.user)
+    return shell
+
+# ---------------------------------------------------------------- первая загрузка: создаём администратора и входим
+fsys = build_fs()
+con = console_mod.ScriptedConsole(["ivan", "secret", "secret", "s"])
+b = mk_boot(fsys, con, {shell: shell_for})
+system = b:start()
+eq(system.mode, "normal", "first boot is normal")
+eq(system.auth:has_users(), false, "no users yet")
+settle(system)
+eq(log, ["start extra", "start logd", "start netd", "shell ivan"], "services start by dependencies (alphabetical otherwise), then the shell runs")
+eq(system.auth:has_users(), true, "first account created")
+eq(system.auth:is_admin("ivan"), true, "the first user is an administrator")
+eq(fsys:read_file(nil, "/cubeos/users/ivan/home/shell-ran.txt"), "hello ivan", "the shell ran as the user with the user's files")
+eq(system.power_action, "shutdown", "shutdown chosen on the login screen")
+eq(power.calls, ["shutdown"], "power hook called")
+eq(string.find(con:text(), "Create the first account", 1, true) != nil, true, "first run text")
+eq(len(system.sessions:list()), 0, "sessions closed at shutdown")
+st = state_mod.new(fsys)
+st:load()
+eq([st.data.pending, st.data.failures, st.data.clean, st.data.boots], [false, 0, true, 1], "boot state after a clean cycle")
+eq(system.services:state("logd"), "stopped", "services stopped at shutdown")
+
+# ---------------------------------------------------------------- главный цикл ядра доводит загрузку до выключения сам
+log = []
+power.calls = []
+polls = {n: 0}
+def advancing_pull(timeout):
+    polls.n = polls.n + 1
+    if polls.n > 3000:
+        error("the kernel loop did not stop after the shutdown")
+    clock.now = clock.now + 100
+    return nil
+con = console_mod.ScriptedConsole(["1", "secret", "s"])
+b = mk_boot(fsys, con, {shell: shell_for, kernel: {clock: now, pull: advancing_pull}})
+system = b:start()
+system.kernel:run()
+eq(system.power_action, "shutdown", "run() finished by itself after the shutdown choice")
+eq(log[len(log)], "shell ivan", "the whole boot ran under run()")
+eq(power.calls, ["shutdown"], "shutdown hook under run()")
+
+# ---------------------------------------------------------------- вторая загрузка: вход с паролем
+log = []
+power.calls = []
+con = console_mod.ScriptedConsole(["1", "wrong", "secret", "r"])
+b = mk_boot(fsys, con, {shell: shell_for})
+system = b:start()
+settle(system)
+eq(string.find(con:text(), "Wrong password.", 1, true) != nil, true, "wrong password message")
+eq(log[len(log)], "shell ivan", "signed in after the second try")
+eq(system.power_action, "reboot", "reboot chosen")
+eq(power.calls, ["reboot"], "reboot hook")
+
+# ---------------------------------------------------------------- автовход
+log = []
+fsys:write_file(nil, "/cubeos/sys/cfg/boot.conf", "{rounds: 2, autologin: 'ivan'}")
+con = console_mod.ScriptedConsole(["s"])
+b = mk_boot(fsys, con, {shell: shell_for})
+system = b:start()
+settle(system)
+eq(log[len(log)], "shell ivan", "autologin opened a session without asking")
+eq(string.find(con:text(), "Password", 1, true), nil, "no password prompt with autologin")
+fsys:write_file(nil, "/cubeos/sys/cfg/boot.conf", "{rounds: 2}")
+
+# ---------------------------------------------------------------- блокировка после неудач
+log = []
+auth_check = auth_mod.new(fsys, {rounds: 2, clock: now})
+auth_check:load()
+auth_check:create_user({name: "anna"}, "pass1")
+con = console_mod.ScriptedConsole(["2", "x", "x", "x", "2", "pass1", "s"])
+b = mk_boot(fsys, con, {shell: shell_for})
+system = b:start()
+settle(system, 30)
+eq(string.find(con:text(), "Too many attempts", 1, true) != nil, true, "after three bad tries the account is locked for a while")
+eq(string.find(con:text(), "Wait", 1, true) != nil, true, "the next attempt reports the wait time")
+clock.now = clock.now + 70000
+
+# ---------------------------------------------------------------- незаконченные загрузки: безопасный режим и восстановление
+fsys2 = build_fs()
+b1 = mk_boot(fsys2, nil)
+s1 = b1:start()
+eq(s1.mode, "normal", "clean state: normal")
+b2 = mk_boot(fsys2, nil)
+s2 = b2:start()
+eq(s2.mode, "safe", "one unfinished boot: safe mode")
+eq(s2.reason, "the previous boot did not finish", "safe reason")
+settle(s2, 40)
+eq(s2.services:state("extra"), nil, "the safe mode skips services marked safe: false")
+eq(s2.services:state("logd"), "running", "essential services still run in the safe mode")
+b3 = mk_boot(fsys2, nil)
+s3 = b3:start()
+eq(s3.mode, "normal", "a boot that reached the login screen clears the failure counter")
+fsys3 = build_fs()
+mk_boot(fsys3, nil):start()
+mk_boot(fsys3, nil):start()
+s4 = mk_boot(fsys3, nil):start()
+eq(s4.mode, "recovery", "two unfinished boots lead to recovery")
+eq(s4.kernel, nil, "recovery does not start the kernel")
+fsys4 = build_fs()
+s5 = mk_boot(fsys4, nil, {ctrl: true}):start()
+eq([s5.mode, s5.reason], ["recovery", "Ctrl was held at startup"], "Ctrl forces recovery")
+
+# вход в режим восстановления: пароль администратора
+a_rec = auth_mod.new(fsys, {rounds: 2, clock: now})
+a_rec:load()
+c1 = console_mod.ScriptedConsole(["secret"])
+eq(boot.recovery_login(c1, a_rec), true, "administrator password opens recovery")
+c2 = console_mod.ScriptedConsole(["x", "y", "z"])
+eq(boot.recovery_login(c2, a_rec, 3), false, "three wrong passwords close recovery")
+fresh_fs = build_fs()
+a_empty = auth_mod.new(fresh_fs, {rounds: 2})
+a_empty:load()
+eq(boot.recovery_login(console_mod.ScriptedConsole([]), a_empty), true, "recovery is open when there are no accounts")
+print("done")

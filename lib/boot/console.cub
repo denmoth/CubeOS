@@ -1,0 +1,72 @@
+# boot.console: текстовый ввод и вывод для загрузки и входа (до появления библиотеки интерфейса)
+#
+# Интерфейс консоли (любой объект с этими методами):
+#   write(text), write_line(text), clear()
+#   read_line(prompt, hidden) -> строка или nil, если ввод отменён (hidden: показывать звёздочки вместо символов)
+#
+# ScriptedConsole: для тестов (ввод из списка, вывод копится).
+# TermConsole: настоящий терминал CC (term, read).
+
+export class ScriptedConsole:
+    def init(self, inputs=nil):
+        self.inputs = inputs ?? []
+        self.pos = 0
+        self.output = []
+        self.prompts = []
+
+    def push(self, text):
+        self.inputs[len(self.inputs) + 1] = text
+
+    def write(self, text):
+        self.output[len(self.output) + 1] = text
+
+    def write_line(self, text):
+        self.output[len(self.output) + 1] = text .. "\n"
+
+    def clear(self):
+        self.output[len(self.output) + 1] = "<clear>"
+
+    def read_line(self, prompt, hidden=false):
+        self.prompts[len(self.prompts) + 1] = prompt
+        self.pos += 1
+        return self.inputs[self.pos]
+
+    # весь вывод одной строкой
+    def text(self):
+        return table.concat(self.output)
+
+    def remaining(self):
+        return len(self.inputs) - self.pos
+
+export class TermConsole:
+    def init(self):
+        pass
+
+    def write(self, text):
+        term.write(text)
+
+    def write_line(self, text):
+        term.write(text)
+        x, y = term.getCursorPos()
+        w, h = term.getSize()
+        if y >= h:
+            term.scroll(1)
+            term.setCursorPos(1, h)
+        else:
+            term.setCursorPos(1, y + 1)
+
+    def clear(self):
+        term.clear()
+        term.setCursorPos(1, 1)
+
+    def read_line(self, prompt, hidden=false):
+        term.write(prompt)
+        line = read(hidden and "*" or nil)
+        x, y = term.getCursorPos()
+        w, h = term.getSize()
+        if y >= h:
+            term.scroll(1)
+            term.setCursorPos(1, h)
+        else:
+            term.setCursorPos(1, y + 1)
+        return line

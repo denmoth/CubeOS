@@ -1,0 +1,216 @@
+# boot: загрузка CubeOS: состояние загрузки и режим восстановления, пользователи, ядро, службы, экран входа, сессии
+#
+#   b = boot.new({fsys: fsys, console: console, kernel: {clock: ..., pull: ..., rt: cubic.rt, cubic: cubic}, import: loader.import,
+#                 shell: (session) => program, power: {shutdown: ..., reboot: ...}, ctrl: false})
+#   system = b:start()          готовит всё и ставит процессы init (службы) и login (вход) в очередь ядра
+#   system.kernel:run()         настоящий CC (в тестах ядро крутят вручную)
+#
+# system: {mode ("normal"|"safe"|"recovery"), reason, state, conf, auth, kernel, sessions, services, init_pid, login_pid}.
+# В режиме recovery ядро не запускается: стартовый файл проверяет пароль администратора (boot.recovery_login) и открывает чистый CraftOS.
+#
+# Порядок: журнал загрузок, настройки boot.conf, пользователи, ядро и менеджеры, init (службы по зависимостям),
+# login (ждёт готовности служб, снимает отметку «загрузка не закончена», показывает вход, запускает оболочку сессии).
+# Подробности: docs/spec/boot.md
+
+import json5
+import cfs.rules as rules_mod
+import kernel
+import boot.auth as auth_mod
+import boot.session as session_mod
+import boot.services as services_mod
+import boot.state as state_mod
+import boot.greeter as greeter_mod
+
+export const BOOT_CONF = "/cubeos/sys/cfg/boot.conf"
+export const OS_RELEASE = "/cubeos/sys/cfg/os-release.conf"
+
+const DEFAULTS = {autologin: nil, lang: "ru", de: "tui", elevate_ms: 300000, rounds: 1000, title: "CubeOS"}
+
+def _read_conf(fsys, path):
+    if not fsys:exists(nil, path):
+        return {}
+    ok, data = pcall(() => json5.parse(fsys:read_file(nil, path)))
+    if ok and data != nil:
+        return data
+    return {}
+
+# запрос пароля администратора для режима восстановления; true, если можно продолжать
+export def recovery_login(console, auth, attempts=3):
+    admins = []
+    for u in auth:list():
+        if u.admin:
+            admins[len(admins) + 1] = u
+    if len(admins) == 0:
+        console:write_line("No administrator account exists; recovery is open.")
+        return true
+    for i in range[1, attempts]:
+        name = admins[1].name
+        if len(admins) > 1:
+            name = console:read_line("Administrator: ")
+            if name == nil:
+                return false
+        password = console:read_line("Password for " .. name .. ": ", true)
+        if password == nil:
+            return false
+        if auth:is_admin(name):
+            ok, why = auth:verify(name, password)
+            if ok:
+                return true
+        console:write_line("Access denied.")
+    return false
+
+export class Boot:
+    # opts: fsys (обязательно), console, kernel (параметры ядра), import, shell, power, ctrl, auth (параметры Auth), clock
+    def init(self, opts):
+        self.opts = opts
+        self.fsys = opts.fsys
+        self.console = opts.console
+        self.system = nil
+        self.first_login = true
+
+    def _say(self, text):
+        if self.console != nil:
+            self.console:write_line(text)
+
+    # ------------------------------------------------------------ запуск
+
+    def start(self):
+        o = self.opts
+        fsys = self.fsys
+        sys_state = state_mod.new(fsys, {clock: o.clock})
+        mode, reason = sys_state:begin(o.ctrl ?? false)
+        conf = {}
+        for k, v in DEFAULTS:
+            conf[k] = v
+        for k, v in _read_conf(fsys, BOOT_CONF):
+            conf[k] = v
+        release = _read_conf(fsys, OS_RELEASE)
+        auth_opts = o.auth ?? {}
+        if auth_opts.rounds == nil:
+            auth_opts.rounds = conf.rounds
+        if auth_opts.clock == nil:
+            auth_opts.clock = o.clock
+        auth = auth_mod.new(fsys, auth_opts)
+        auth:load()
+        system = {mode: mode, reason: reason, state: sys_state, conf: conf, release: release, auth: auth, fsys: fsys,
+            console: self.console}
+        self.system = system
+        if mode == "recovery":
+            self:_say("Recovery mode: " .. tostring(reason))
+            return system
+        if mode == "safe":
+            self:_say("Safe mode: " .. tostring(reason))
+        kernel_opts = o.kernel ?? {}
+        kernel_opts.fsys = fsys
+        if kernel_opts.clock == nil:
+            kernel_opts.clock = o.clock
+        k = kernel.new(kernel_opts)
+        system.kernel = k
+        sessions = session_mod.new(fsys, auth, {kernel: k, clock: o.clock, elevate_ms: conf.elevate_ms, lang: conf.lang, de: conf.de})
+        system.sessions = sessions
+        system_subject = rules_mod.subject("system", ["system"])
+        system.subject = system_subject
+        manifests, problems = services_mod.load_manifests(fsys, o.services_dir)
+        for p in problems:
+            k:log("service manifest: " .. p)
+        if mode == "safe":
+            kept = []
+            for m in manifests:
+                if m.safe != false:
+                    kept[len(kept) + 1] = m
+            manifests = kept
+        mgr = services_mod.new(k, {import: o.import, subject: system_subject})
+        mgr:add_all(manifests)
+        system.services = mgr
+        let me = self
+        system.init_pid = k:spawn((sys, args) => mgr:run_init(sys, args), [], {name: "init", subject: system_subject})
+        system.login_pid = k:spawn((sys, args) => me:_login_loop(sys), [], {name: "login", subject: system_subject, ui: true})
+        return system
+
+    # ------------------------------------------------------------ вход
+
+    def _default_shell(self, session):
+        return (sys, args) => sys.out("Welcome, " .. session.display .. "\n")
+
+    def _login_loop(self, sys):
+        system = self.system
+        o = self.opts
+        sys.wait(system.init_pid)
+        system.state:mark_ok()
+        greeter = o.greeter
+        if greeter == nil and self.console != nil:
+            greeter = greeter_mod.new(self.console, system.auth, system.sessions, {title: system.conf.title})
+        while not system.stopping:
+            session = nil
+            action = nil
+            if self.first_login and system.conf.autologin != nil and system.auth:user(system.conf.autologin) != nil:
+                self.first_login = false
+                session = system.sessions:open(system.conf.autologin, nil, true)
+            elif greeter == nil:
+                return
+            else:
+                self.first_login = false
+                result = greeter:login()
+                if result != nil:
+                    if result.action != nil:
+                        action = result.action
+                    else:
+                        session = result
+            if action != nil:
+                self:power(action, sys)
+                return
+            if session != nil:
+                self:_run_session(sys, session)
+
+    # запускает оболочку сессии и ждёт её завершения (выход пользователя), затем закрывает сессию
+    def _run_session(self, sys, session):
+        system = self.system
+        o = self.opts
+        program = nil
+        if o.shell != nil:
+            program = o.shell(session)
+        if program == nil:
+            program = self:_default_shell(session)
+        out = nil
+        if self.console != nil:
+            let con = self.console
+            out = (text) => con:write(text)
+        pid = system.sessions:spawn(session.id, program, [], {name: "shell", ui: true, out: out})
+        system.kernel:set_focus(pid)
+        code, err = sys.wait(pid)
+        if err != nil and self.console != nil:
+            self.console:write_line("The session shell crashed: " .. tostring(err))
+        system.sessions:close(session.id)
+
+    # ------------------------------------------------------------ выключение
+
+    # выключение или перезагрузка: закрываем сессии, останавливаем службы (если есть sys, ждём их завершения), снимаем отметку загрузки
+    def power(self, action, sys=nil):
+        system = self.system
+        o = self.opts
+        system.stopping = true
+        for s in system.sessions:list():
+            system.sessions:close(s.id)
+        system.services:stop_all()
+        if sys != nil:
+            waited = 0
+            while waited < 50:
+                busy = false
+                for entry in system.services:list():
+                    if entry.state == "running" or entry.state == "starting":
+                        busy = true
+                if not busy:
+                    break
+                sys.sleep(0.1)
+                waited += 1
+        system.state:mark_shutdown()
+        system.power_action = action
+        if o.power != nil:
+            if action == "reboot" and o.power.reboot != nil:
+                o.power.reboot()
+            elif o.power.shutdown != nil:
+                o.power.shutdown()
+        system.kernel:stop()
+
+export def new(opts):
+    return Boot(opts)

@@ -408,7 +408,10 @@ def _number_text(v, strict=false):
     if v == -math.huge:
         return "-Infinity"
     if v == math.floor(v) and v > -9007199254740992 and v < 9007199254740992:
-        return string.format("%d", v)
+        if v == 0:
+            return "0"
+        # %d на платформах с 32-битным long не принимает числа вроде os.epoch("utc"); %.0f точен до 2^53
+        return string.format("%.0f", v)
     text = string.format("%.14g", v)
     if tonumber(text) != v:
         text = string.format("%.17g", v)

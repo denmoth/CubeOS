@@ -10,7 +10,8 @@
 #     max_restarts: 5, restart_delay: 1000,
 #     ready: "register",              "register": готова, когда вызвала sys.register(имя); "immediate": сразу после запуска
 #     timeout: 10000,                 сколько ждать готовности (мс)
-#     enabled: true
+#     enabled: true,
+#     safe: false                     не запускать в безопасном режиме (по умолчанию запускается)
 #   }
 #
 # Состояния: stopped, starting, running, failed (исчерпаны перезапуски или не стала готова), blocked (не запустились нужные службы),
@@ -33,7 +34,7 @@ export def normalize(raw, source="?"):
     return {name: raw.name, module: raw.module, program: raw.program, description: raw.description ?? "",
         requires: _list(raw.requires), after: _list(raw.after), restart: raw.restart ?? "on-failure",
         max_restarts: raw.max_restarts ?? 5, restart_delay: raw.restart_delay ?? 1000, ready: raw.ready ?? "register",
-        timeout: raw.timeout ?? 10000, enabled: raw.enabled != false}
+        timeout: raw.timeout ?? 10000, enabled: raw.enabled != false, safe: raw.safe}
 
 # читает все манифесты каталога; ошибочные пропускает и возвращает список ошибок вторым значением
 export def load_manifests(fsys, dir=nil):

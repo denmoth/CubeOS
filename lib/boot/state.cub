@@ -1,0 +1,76 @@
+# boot.state: журнал загрузок и решение «обычная, безопасная или режим восстановления»
+#
+# Каждая загрузка отмечает «начата» (pending). Когда система дошла до экрана входа, отметка снимается (mark_ok).
+# Если при следующем старте отметка осталась, прошлая загрузка не удалась: failures растёт.
+#   failures = 0: обычная загрузка
+#   failures = 1: безопасная загрузка (без необязательных служб)
+#   failures >= 2 или зажат Ctrl: режим восстановления (чистый CraftOS-шелл после пароля администратора)
+#
+# Файл: /cubeos/var/boot.state (JSON5): {boots, failures, pending, last_boot, last_ok, clean}
+
+import json5
+import cfs.path as paths
+
+export const STATE_PATH = "/cubeos/var/boot.state"
+
+def _default_clock():
+    return os.epoch("utc")
+
+export class BootState:
+    def init(self, fsys, opts=nil):
+        o = opts ?? {}
+        self.fsys = fsys
+        self.clock = o.clock ?? _default_clock
+        self.path = o.path ?? STATE_PATH
+        self.data = {boots: 0, failures: 0, pending: false, last_boot: 0, last_ok: 0, clean: true}
+
+    def load(self):
+        if self.fsys:exists(nil, self.path):
+            ok, data = pcall(() => json5.parse(self.fsys:read_file(nil, self.path)))
+            if ok and data != nil:
+                for k, v in data:
+                    self.data[k] = v
+
+    def save(self):
+        self.fsys:mkdir(nil, paths.parent(self.path), {parents: true})
+        self.fsys:write_file(nil, self.path, json5.stringify(self.data, {json5: true, indent: 2}) .. "\n")
+
+    # вызывается в начале загрузки; возвращает режим ("normal", "safe", "recovery") и причину
+    def begin(self, ctrl_held=false):
+        self:load()
+        if self.data.pending:
+            self.data.failures = (self.data.failures ?? 0) + 1
+        self.data.pending = true
+        self.data.clean = false
+        self.data.boots = (self.data.boots ?? 0) + 1
+        self.data.last_boot = self.clock()
+        self:save()
+        if ctrl_held:
+            return "recovery", "Ctrl was held at startup"
+        if self.data.failures >= 2:
+            return "recovery", "the last " .. self.data.failures .. " boots did not finish"
+        if self.data.failures == 1:
+            return "safe", "the previous boot did not finish"
+        return "normal", nil
+
+    # система дошла до экрана входа
+    def mark_ok(self):
+        self.data.pending = false
+        self.data.failures = 0
+        self.data.last_ok = self.clock()
+        self:save()
+
+    # корректное выключение или перезагрузка
+    def mark_shutdown(self):
+        self.data.pending = false
+        self.data.clean = true
+        self:save()
+
+    # ручной сброс (например, после починки в режиме восстановления)
+    def reset(self):
+        self.data.pending = false
+        self.data.failures = 0
+        self:save()
+
+export def new(fsys, opts=nil):
+    return BootState(fsys, opts)

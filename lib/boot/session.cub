@@ -244,7 +244,7 @@ export class SessionManager:
         subject = self:_subject(s)
         profile_subject = rules_mod.subject(s.profile, subject.roles, subject.groups)
         pid = self.kernel:spawn(program, args, {name: o.name, ui: o.ui, detached: true, subject: profile_subject,
-            view: self:view(id), parent: o.parent})
+            view: self:view(id), parent: o.parent, out: o.out})
         s.pids[len(s.pids) + 1] = pid
         return pid
 
