@@ -12,6 +12,9 @@
 -- Результат пишется в /repo/build/test-result.txt
 
 local ROOT = "/repo"
+-- В игре (CUBIC_GAME_TEST = true): компьютер не выключается, между тестами есть yield (иначе CC убьёт долгий код),
+-- результаты дописываются в /repo/build/progress.txt по мере выполнения.
+local IN_GAME = rawget(_G, "CUBIC_GAME_TEST") == true
 local cubic = loadfile(ROOT .. "/src/cubic/init.lua")(ROOT .. "/src/cubic")
 
 local function read(path)
@@ -33,6 +36,13 @@ end
 local results, failed, passed = {}, 0, 0
 
 local function record(name, ok, detail)
+  if IN_GAME then
+    local pf = fs.open(ROOT .. "/build/progress.txt", "a")
+    if pf then
+      pf.write((ok and "ok    " or "FAIL  ") .. name .. (ok and "" or ("\n" .. tostring(detail))) .. "\n")
+      pf.close()
+    end
+  end
   if ok then
     passed = passed + 1
     results[#results + 1] = "ok    " .. name
@@ -43,6 +53,10 @@ local function record(name, ok, detail)
 end
 
 local function run_case(name, label, force)
+  if IN_GAME then
+    os.queueEvent("cubic_yield")
+    os.pullEvent("cubic_yield")
+  end
   local base = ROOT .. "/tests/cases/" .. name
   local src = read(base .. ".cub")
   local want_out = read(base .. ".out")
@@ -176,4 +190,4 @@ end
 local out = fs.open(ROOT .. "/build/test-result.txt", "w")
 out.write(table.concat(results, "\n") .. "\n\n" .. passed .. " passed, " .. failed .. " failed\n")
 out.close()
-os.shutdown()
+if not IN_GAME then os.shutdown() end
