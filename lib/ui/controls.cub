@@ -267,7 +267,7 @@ export class Slider(widget.Widget):
         accent = self.focused and th.ACCENT or th.ACCENT_DIM
         for i in range[0, track - 1]:
             if i < pos:
-                c:set(self.x + i, self.y, 0x2501, accent, nil)
+                c:set(self.x + i, self.y, 0x2500, accent, nil)
             elif i == pos:
                 c:set(self.x + i, self.y, 0x25CF, self.focused and th.BRIGHT or th.TEXT, nil)
             else:

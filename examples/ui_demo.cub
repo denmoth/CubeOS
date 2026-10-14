@@ -308,10 +308,8 @@ def toy_app(entry):
         app:set_root(ui.vbox([toy], {}))
     return {id: "toy_" .. entry.id, name: entry.name, icon: "‣", desc: "заставка", launch: launch}
 
-export def main(opts=nil):
-    o = opts ?? {}
-    out = o.out ?? ui.open_out({term: o.term, backend: o.backend})
-    sh = ui.new_shell(out, {theme: themes.get(o.theme ?? "cubeos"), keys: o.keys ?? "arrows", animations: o.animations ?? true, clock: o.clock})
+# регистрирует все программы демо в оболочке
+export def register_all(sh):
     sh:register(home_app(sh))
     sh:register(files_app(sh))
     sh:register(settings_app(sh))
@@ -320,6 +318,12 @@ export def main(opts=nil):
     sh:register(widgets_app(sh))
     for entry in toys.all():
         sh:register(toy_app(entry))
+
+export def main(opts=nil):
+    o = opts ?? {}
+    out = o.out ?? ui.open_out({term: o.term, backend: o.backend})
+    sh = ui.new_shell(out, {theme: themes.get(o.theme ?? "cubeos"), keys: o.keys ?? "arrows", animations: o.animations ?? true, clock: o.clock})
+    register_all(sh)
     sh:launch("home")
     if o.frames != nil:
         # проверка без цикла: прогнать несколько кадров

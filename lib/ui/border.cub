@@ -6,7 +6,8 @@
 #
 # Ключи стиля: tl tr bl br (углы), h v (линии), lt rt tt bt (тройники: лево, право, верх, низ), x (крест),
 # top bottom left right (необязательно: отдельные символы для сторон; по умолчанию h и v).
-# Стили: single, double, rounded, heavy, dashed, ascii, block, none.
+# Стили: single, double, rounded, dashed, ascii, block (толстая рамка из блоков), none. В шрифте Monocraft нет жирных линий и угловых
+# блоков, поэтому «heavy» нет.
 
 import unicode
 
@@ -16,10 +17,9 @@ const STYLES = {
     single: SINGLE,
     double: {tl: 0x2554, tr: 0x2557, bl: 0x255A, br: 0x255D, h: 0x2550, v: 0x2551, lt: 0x2560, rt: 0x2563, tt: 0x2566, bt: 0x2569, x: 0x256C},
     rounded: {tl: 0x256D, tr: 0x256E, bl: 0x2570, br: 0x256F, h: 0x2500, v: 0x2502, lt: 0x251C, rt: 0x2524, tt: 0x252C, bt: 0x2534, x: 0x253C},
-    heavy: {tl: 0x250F, tr: 0x2513, bl: 0x2517, br: 0x251B, h: 0x2501, v: 0x2503, lt: 0x2523, rt: 0x252B, tt: 0x2533, bt: 0x253B, x: 0x254B},
     dashed: {tl: 0x250C, tr: 0x2510, bl: 0x2514, br: 0x2518, h: 0x2504, v: 0x2506, lt: 0x251C, rt: 0x2524, tt: 0x252C, bt: 0x2534, x: 0x253C},
     ascii: {tl: 43, tr: 43, bl: 43, br: 43, h: 45, v: 124, lt: 43, rt: 43, tt: 43, bt: 43, x: 43},
-    block: {tl: 0x259B, tr: 0x259C, bl: 0x2599, br: 0x259F, h: 0x2580, v: 0x258C, lt: 0x258C, rt: 0x2590, tt: 0x2580, bt: 0x2584, x: 0x2588, bottom: 0x2584, right: 0x2590},
+    block: {tl: 0x2588, tr: 0x2588, bl: 0x2588, br: 0x2588, h: 0x2580, v: 0x258C, lt: 0x258C, rt: 0x2590, tt: 0x2580, bt: 0x2584, x: 0x2588, top: 0x2580, bottom: 0x2584, left: 0x258C, right: 0x2590},
     none: {tl: 32, tr: 32, bl: 32, br: 32, h: 32, v: 32, lt: 32, rt: 32, tt: 32, bt: 32, x: 32}
 }
 

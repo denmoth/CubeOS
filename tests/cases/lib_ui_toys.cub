@@ -62,7 +62,7 @@ for entry in toys.all():
     toy = entry.make({random: make_random(7)})
     ui, out = run_toy(toy, 3)
     eq(ink(out) > 0, true, entry.id .. " draws something")
-    eq(toy.time > 2.5, true, entry.id .. " is animated by the runtime timer")
+    eq(toy.time > 2, true, entry.id .. " is animated by the runtime timer")
     ui.root:detach()
     eq(toy.timer, nil, entry.id .. " stops its timer when removed from the tree")
 

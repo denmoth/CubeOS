@@ -96,7 +96,7 @@ _add(Theme("retro", ["#020a03", "#04140a", "#082414", "#0f5a2b", "#1f9a46", "#35
 _add(Theme("hacker", ["#000000", "#001a05", "#003311", "#006622", "#00aa33", "#00dd44", "#b3ffc8", "#00ff55", "#007722", "#00ff55", "#ccff33", "#ff3b3b", "#66ffaa", "#00ff55", "#000000", "#000000"],
     {description: "Хакерская: матрица", border: "ascii"}))
 _add(Theme("amber", ["#0a0500", "#150b00", "#241300", "#6b3d00", "#b86e00", "#ffb000", "#ffe2a0", "#ffb000", "#8a5200", "#ffd24a", "#ffffff", "#ff5a3a", "#ffcf70", "#ffb000", "#0a0500", "#000000"],
-    {description: "Янтарный терминал", border: "heavy", effects: {scanlines: true, flicker: 0.03}}))
+    {description: "Янтарный терминал", border: "double", effects: {scanlines: true, flicker: 0.03}}))
 _add(Theme("contrast", ["#000000", "#000000", "#1a1a1a", "#ffffff", "#c0c0c0", "#ffffff", "#ffffff", "#00e5ff", "#008899", "#00ff00", "#ffff00", "#ff3030", "#00e5ff", "#ffff00", "#000000", "#000000"],
     {description: "Высокая контрастность", border: "double"}))
 

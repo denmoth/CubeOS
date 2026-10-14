@@ -50,9 +50,10 @@ c:clear()
 border.draw(c, 0, 0, 8, 4, "ascii", 5, 0)
 eq(c:to_lines(), ["+------+", "|      |", "|      |", "+------+"], "ascii frame")
 c:clear()
-border.draw(c, 0, 0, 8, 4, "heavy", 5, 0, {fill: 1})
+border.draw(c, 0, 0, 8, 4, "block", 5, 0, {fill: 1})
 eq(c:colors_lines("bg")[2], "01111110", "fill paints the inside only")
-eq(c:to_lines()[1], "┏━━━━━━┓", "heavy")
+eq(c:to_lines()[1], "█▀▀▀▀▀▀█", "block frame: thick corners and half-block edges")
+eq(unicode.sub(c:to_lines()[2], 1, 1), "▌", "block frame: left half block")
 
 # заголовок
 d = cells.new(14, 3)

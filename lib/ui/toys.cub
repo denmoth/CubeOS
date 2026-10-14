@@ -471,6 +471,11 @@ def _clock_text():
 # ---------------------------------------------------------------- бублик
 
 export class Donut(Toy):
+    def init(self, props=nil):
+        p = props ?? {}
+        p.fps = p.fps ?? 12
+        super.init(self, p)
+
     def setup(self):
         self.a = 0
         self.b = 0
@@ -489,6 +494,9 @@ export class Donut(Toy):
         cb = math.cos(self.b)
         sb = math.sin(self.b)
         scale = math.min(self.w / 2.2, self.h * 1.0)
+        # плотность точек зависит от размера: меньше экран, реже шаг; кадр не должен стоить слишком дорого
+        phi_step = math.max(0.035, 0.7 / (scale * 2))
+        theta_step = math.max(0.06, 1.2 / (scale * 3))
         theta = 0
         while theta < 6.283:
             ct = math.cos(theta)
@@ -510,8 +518,8 @@ export class Donut(Toy):
                         idx = math.max(1, math.min(12, lum + 1))
                         fg = idx > 9 and th.BRIGHT or (idx > 5 and th.ACCENT or th.ACCENT_DIM)
                         c:set(self.x + x, self.y + y, string.byte(shades, idx), fg, nil)
-                phi += 0.07
-            theta += 0.09
+                phi += phi_step
+            theta += theta_step
 
 export def matrix(props=nil):
     return Matrix(props)

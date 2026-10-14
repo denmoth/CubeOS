@@ -1,0 +1,69 @@
+# Снимки интерфейса без игры: рисует программы демо пиксельным выводом в CraftOS-PC и сохраняет кадры как PPM (build/ui_*.ppm).
+# Запуск: tools/ui_shots.sh (он же превращает кадры в PNG: build/ui_*.png). Нужно для проверки вида при разработке библиотеки.
+
+import ../../examples/ui_demo as demo
+import ui
+import ui.theme as themes
+
+def make_term(cols, rows):
+    api = {}
+    def get_size(px):
+        if px:
+            return cols * 6, rows * 9
+        return cols, rows
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "setGraphicsMode", "drawPixels", "setFrozen"]:
+        api[name] = nothing
+    return api
+
+def dump(screen, name):
+    s = screen.surface
+    pal = screen.palette
+    f = fs.open("/repo/build/" .. name .. ".ppm", "wb")
+    f.write("P6\n" .. s.w .. " " .. s.h .. "\n255\n")
+    for y in range[0, s.h - 1]:
+        parts = []
+        for x in range[0, s.w - 1]:
+            v = s.px[y * s.w + x + 1]
+            r, g, b = pal:get(v < 0 and 0 or v)
+            parts[x + 1] = string.char(r, g, b)
+        f.write(table.concat(parts))
+    f.close()
+
+def scene(theme_name, app_id, name, frames, cols=51, rows=19, keys_to_press=nil):
+    term_api = make_term(cols, rows)
+    out = ui.open_out({term: term_api, backend: "pixel", theme: themes.get(theme_name)})
+    sh = ui.new_shell(out, {theme: themes.get(theme_name), clock: () => "14:32"})
+    demo.register_all(sh)
+    sh:launch("home")
+    if app_id != "home":
+        sh:launch(app_id)
+    out:open()
+    for i in range[1, frames]:
+        sh:tick(0.1)
+        sh:render()
+    if keys_to_press != nil:
+        for k in keys_to_press:
+            sh:handle("key", k)
+            for i in range[1, 8]:
+                sh:tick(0.05)
+            sh:render()
+    dump(out.screen, name)
+
+scene("cubeos", "home", "ui_home", 5)
+scene("cubeos", "files", "ui_files", 5)
+scene("cubeos", "settings", "ui_settings", 5)
+scene("cubeos", "widgets", "ui_widgets", 5)
+scene("cubeos", "widgets", "ui_dialog", 5, 51, 19, [keys.down, keys.down, keys.down, keys.enter])
+scene("cubeos", "toy_aquarium", "ui_aquarium", 150)
+scene("cubeos", "toy_matrix", "ui_matrix", 60)
+scene("cubeos", "toy_pipes", "ui_pipes", 120)
+scene("cubeos", "toy_donut", "ui_donut", 20)
+scene("retro", "stopwatch", "ui_retro", 5)
+scene("hacker", "toy_matrix", "ui_hacker", 60)
+scene("light", "player", "ui_light", 5)
+scene("amber", "settings", "ui_amber", 5)
+scene("cubeos", "home", "ui_big", 5, 100, 40)
+print("done")
