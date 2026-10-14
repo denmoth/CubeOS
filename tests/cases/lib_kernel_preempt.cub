@@ -55,4 +55,21 @@ k4:run_ready()
 k4:feed("ping", "!")
 k4:run_ready()
 eq(k4.stdout_lines[e], "ping!2", "Cubic program talks to the kernel through sys and args")
+
+# главный цикл возвращает управление CC даже при всегда готовой программе
+ticking = {t: 5000}
+def fast_clock():
+    ticking.t = ticking.t + 10
+    return ticking.t
+polls = {n: 0}
+k5 = nil
+def counting_pull(timeout):
+    polls.n = polls.n + 1
+    if polls.n >= 5:
+        k5:stop()
+    return nil
+k5 = kernel.new({clock: fast_clock, cubic: cubic_host, rt: cubic_host.rt, slice_ms: 0, pull: counting_pull})
+k5:spawn_source("x = 0\nwhile true:\n    x += 1", "forever")
+k5:run()
+eq(polls.n >= 5, true, "the main loop polls events even if a program is always ready")
 print("done")

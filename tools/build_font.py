@@ -296,13 +296,29 @@ def build_5x8():
             glyphs[c] = ink_to_rows(g['rows'], 5)
     drawn = parse_drawn(os.path.join(SRC, 'cyrillic-5x8.txt'))
     glyphs.update(drawn)
+    # у Spleen 5x8 буквы с акцентами это пустые заглушки: пустые глифы (кроме пробелов) не включаем
+    for code in [c for c, rows in glyphs.items() if c not in (0x20, 0xA0) and not any('#' in r for r in rows)]:
+        del glyphs[code]
     # кириллица, совпадающая с латиницей, и Ё ё Ї ї
     same = {0x410: 'A', 0x412: 'B', 0x415: 'E', 0x41A: 'K', 0x41C: 'M', 0x41D: 'H', 0x41E: 'O', 0x420: 'P',
             0x421: 'C', 0x422: 'T', 0x425: 'X', 0x430: 'a', 0x435: 'e', 0x43E: 'o', 0x440: 'p', 0x441: 'c',
-            0x445: 'x', 0x443: 'y', 0x406: 'I', 0x456: 'i', 0x401: 'Ë', 0x451: 'ë', 0x407: 'Ï',
-            0x457: 'ï'}
+            0x445: 'x', 0x443: 'y', 0x406: 'I', 0x456: 'i'}
     for cyr, lat in same.items():
         glyphs[cyr] = glyphs[ord(lat)]
+
+    def with_dots(base_rows, dot_row, dots='.#.#.'):
+        rows = list(base_rows)
+        rows[dot_row] = dots
+        return rows
+
+    def without_top_dot(rows):
+        out = list(rows)
+        out[1] = '.....'
+        return out
+    glyphs[0x401] = with_dots(glyphs[0x415], 0)                       # Ё
+    glyphs[0x451] = with_dots(glyphs[0x435], 0)                       # ё
+    glyphs[0x407] = with_dots(glyphs[0x406], 0)                       # Ї
+    glyphs[0x457] = with_dots(without_top_dot(glyphs[0x456]), 1)      # ї
     # линии, блоки, стрелки и знаки
     for name, d in (('single', False), ('double', True)):
         pass

@@ -25,13 +25,31 @@ f5 = font.from_file("/repo/assets/fonts/cube-5x8.font")
 eq(f5.width, 5, "5x8 width")
 eq(f5.height, 8, "5x8 height")
 eq(f5.ascent, 7, "5x8 ascent")
-eq(f5.glyph_count > 300, true, "5x8 has many glyphs")
+eq(f5.glyph_count > 200, true, "5x8 has many glyphs")
 eq(string.find(f5.meta, "Spleen", 1, true) != nil, true, "5x8 credits Spleen")
 eq(f5:glyph_text(65), [".....", ".##..", "#..#.", "#..#.", "####.", "#..#.", "#..#.", "....."], "A")
 eq(f5:glyph_text(0x416), [".....", "#.#.#", "#.#.#", ".###.", "#.#.#", "#.#.#", "#.#.#", "....."], "Zhe")
 eq(f5:glyph_text(0x44F), [".....", ".....", ".###.", "#..#.", ".###.", ".#.#.", "#..#.", "....."], "ya")
 eq(f5:glyph_text(0x410), f5:glyph_text(65), "Cyrillic A shares the Latin shape")
-eq(f5:glyph_text(0x451)[1], f5:glyph_text(0xEB)[1], "yo shares e-diaeresis")
+eq(f5:glyph_text(0x451)[1], ".#.#.", "yo has diaeresis dots")
+eq(f5:glyph_text(0x407)[1], ".#.#.", "Yi has diaeresis dots")
+
+# у каждой нужной буквы есть хотя бы один закрашенный пиксель (пустые глифы это поломка)
+def has_ink(f, cp):
+    for row in f:glyph_text(cp):
+        if string.find(row, "#", 1, true) != nil:
+            return true
+    return false
+needed = []
+for cp in range[0x410, 0x44F]:
+    needed[len(needed) + 1] = cp
+for cp in [0x401, 0x451, 0x404, 0x454, 0x406, 0x456, 0x407, 0x457, 0x490, 0x491]:
+    needed[len(needed) + 1] = cp
+blank = []
+for cp in needed:
+    if not has_ink(f5, cp):
+        blank[len(blank) + 1] = cp
+eq(blank, [], "no blank Russian or Ukrainian glyphs in 5x8")
 
 all_ok = true
 for cp in range[0x410, 0x44F]:

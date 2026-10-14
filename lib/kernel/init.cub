@@ -270,14 +270,18 @@ export class Kernel:
         proc.slices += 1
         self.current = nil
 
-    # выполняет все готовые процессы (каждый по кванту); max_rounds защищает от бесконечного цикла
-    def run_ready(self, max_rounds=100000):
+    # выполняет готовые процессы (каждый по кванту); max_rounds защищает от бесконечного цикла, max_ms ограничивает
+    # время работы (главный цикл должен возвращать управление CC, иначе CC убьёт компьютер)
+    def run_ready(self, max_rounds=100000, max_ms=nil):
         rounds = 0
+        started = self.clock()
         while len(self.ready) > 0 and rounds < max_rounds:
             proc = table.remove(self.ready, 1)
             if proc.state == "ready":
                 self:_run_slice(proc)
             rounds += 1
+            if max_ms != nil and self.clock() - started >= max_ms:
+                break
         return rounds
 
     # запускает программу на Cubic из исходника (компилируется с автоматической отдачей управления);
@@ -421,7 +425,7 @@ export class Kernel:
             raise Error("kernel has no event source (opts.pull)")
         self.running = true
         while self.running:
-            self:run_ready()
+            self:run_ready(100000, 100)
             if until_empty and self:count() == 0:
                 break
             wake = self:next_wakeup()
