@@ -1,0 +1,179 @@
+import t
+import cfs
+eq = t.eq
+
+clock = {now: 1000}
+def now():
+    return clock.now
+
+def code_of(f):
+    try:
+        f()
+    except Error as e:
+        return e.code
+    return nil
+
+answers = {yes: true}
+def confirm(op, path, sub):
+    return answers.yes
+
+def system():
+    let fsys = cfs.new({clock: now, confirm: confirm})
+    fsys:mount("/", cfs.memory({now: now}))
+    fsys:mount("/cubeos/tmp", cfs.tmp(1000, now))
+    cfs.install_defaults(fsys)
+    for d in ["/cubeos/sys/sec", "/cubeos/var/log", "/cubeos/shared/apps", "/cubeos/shared/data", "/cubeos/users/ivan/home/documents", "/cubeos/users/ivan/data/chess", "/cubeos/users/anna/home/documents", "/cubeos/drives"]:
+        fsys:mkdir(nil, d, {parents: true})
+    fsys:write_file(nil, "/cubeos/sys/sec/shadow", "secret")
+    fsys:write_file(nil, "/cubeos/sys/readme", "system file")
+    return fsys
+
+ivan = cfs.subject("ivan")
+anna = cfs.subject("anna")
+boss = cfs.subject("boss", ["admin"])
+
+fsys = system()
+v = cfs.view(fsys, ivan, {aliases: cfs.default_aliases("ivan", "chess")})
+
+# ---------------------------------------------------------------- алиасы и обычная работа
+v:write("$home/documents/note.txt", "hi")
+eq(v:read("/cubeos/users/ivan/home/documents/note.txt"), "hi", "write via alias, read via real path")
+eq(v:read("$docs/note.txt"), "hi", "nested alias")
+v:write("$appdata/save.json", "{}")
+eq(v:read("/cubeos/users/ivan/data/chess/save.json"), "{}", "appdata alias")
+eq(v:exists("$docs/note.txt"), true, "exists")
+eq(v:is_file("$docs/note.txt"), true, "is_file")
+eq(v:is_dir("$docs"), true, "is_dir")
+eq(v:stat("$docs/note.txt").path, "/cubeos/users/ivan/home/documents/note.txt", "stat path")
+v:append("$docs/note.txt", " there")
+eq(v:read("$docs/note.txt"), "hi there", "append")
+v:mkdir("$home/projects/a/b", {parents: true})
+v:write("$projects/a/b/main.cub", "print(1)")
+v:write("$projects/a/util.cub", "x = 1")
+v:write("$projects/readme.md", "r")
+v:write("$projects/a/.hidden", "h")
+eq(v:glob("$projects/**/*.cub"), ["/cubeos/users/ivan/home/projects/a/b/main.cub", "/cubeos/users/ivan/home/projects/a/util.cub"], "glob")
+eq(v:glob("$projects/*.md"), ["/cubeos/users/ivan/home/projects/readme.md"], "glob single level")
+eq(v:glob("$projects/**/*", {type: "dir"}), ["/cubeos/users/ivan/home/projects/a", "/cubeos/users/ivan/home/projects/a/b"], "glob dirs")
+eq(v:glob("$projects/readme.md"), ["/cubeos/users/ivan/home/projects/readme.md"], "glob exact")
+eq(v:glob("$projects/nothing.md"), [], "glob exact missing")
+eq(v:glob("$projects/a/.h*"), ["/cubeos/users/ivan/home/projects/a/.hidden"], "glob dotfile when asked")
+eq(len(v:glob("$projects/**/*")), 5, "glob skips hidden by default")
+walked = v:walk("$projects")
+rels = []
+for w in walked:
+    rels[len(rels) + 1] = w.rel
+eq(rels, ["a", "a/b", "a/b/main.cub", "a/util.cub", "readme.md"], "walk")
+v:chdir("$projects")
+eq(v:read("readme.md"), "r", "relative path after chdir")
+eq(v:read("a/util.cub"), "x = 1", "relative deeper")
+v:chdir("$home")
+eq(v:read("documents/note.txt"), "hi there", "relative after second chdir")
+
+# ---------------------------------------------------------------- права по умолчанию
+eq(code_of(() => v:read("/cubeos/users/anna/home/documents/x")), "EACCES", "other user closed")
+eq(code_of(() => v:read("/cubeos/sys/sec/shadow")), "EACCES", "sec closed")
+eq(v:read("/cubeos/sys/readme"), "system file", "sys readable")
+eq(code_of(() => v:write("/cubeos/sys/readme", "x")), "EACCES", "sys not writable")
+eq(code_of(() => v:write("/cubeos/shared/x", "x")), "EACCES", "shared not writable for user")
+av = cfs.view(fsys, boss, {aliases: cfs.default_aliases("boss")})
+av:write("/cubeos/shared/x", "adm")
+eq(v:read("/cubeos/shared/x"), "adm", "user reads what admin wrote")
+fsys:write_file(nil, "/cubeos/users/anna/home/documents/secret", "s")
+eq(av:read("/cubeos/users/anna/home/documents/secret"), "s", "admin reads other homes")
+eq(code_of(() => av:write("/cubeos/users/anna/home/documents/secret", "x")), "EACCES", "admin cannot write other homes")
+eq(v:rights("$docs/note.txt"), "rwxl", "rights query")
+eq(v:rights("/cubeos/sys/readme"), "rxl", "rights query sys")
+# tmp окончательное удаление, дом уходит в корзину
+v:write("/cubeos/tmp/a", "1")
+v:remove("/cubeos/tmp/a")
+eq(len(v:trash_items()), 0, "tmp delete is final")
+v:remove("$docs/note.txt")
+eq(len(v:trash_items()), 1, "home delete goes to trash")
+eq(v:trash_items()[1].original, "/cubeos/users/ivan/home/documents/note.txt", "trash original")
+v:trash_restore(v:trash_items()[1].id)
+eq(v:read("$docs/note.txt"), "hi there", "restored")
+eq(v:space("/cubeos/tmp").capacity, 1000, "space via view")
+
+# ---------------------------------------------------------------- виртуальный корень
+app = cfs.view(fsys, ivan, {aliases: cfs.default_aliases("ivan", "chess"), binds: [
+    {path: "/data", to: "$appdata", mode: "rw"},
+    {path: "/docs", to: "$docs", mode: "ro"},
+]})
+app:write("/data/state", "s1")
+eq(fsys:read_file(nil, "/cubeos/users/ivan/data/chess/state"), "s1", "bind writes to the real place")
+eq(app:read("/docs/note.txt"), "hi there", "bind read-only reads")
+eq(code_of(() => app:write("/docs/note.txt", "x")), "EROFS", "ro bind blocks writes")
+eq(code_of(() => app:read("/home/documents/note.txt")), "ENOENT", "unbound path is invisible")
+eq(code_of(() => app:read("/cubeos/users/ivan/home/documents/note.txt")), "ENOENT", "real paths are invisible")
+eq(code_of(() => app:read("/data/../docs/note.txt")), nil, "dotdot stays inside the view mapping")
+eq(code_of(() => app:read("/../../cubeos/sys/readme")), "ENOENT", "cannot escape with dotdot")
+eq(app:stat("/data/state").path, "/data/state", "stat path is virtual")
+eq(app:list("/data")[1].name, "save.json", "list in view")
+try:
+    app:read("/nothing/here")
+except Error as e:
+    eq(e.path, "/nothing/here", "errors show the virtual path")
+# ссылка не должна выводить за пределы привязок
+fsys:link(nil, "/cubeos/shared/x", "/cubeos/users/ivan/data/chess/out-link")
+eq(code_of(() => app:read("/data/out-link")), "EACCES", "link leaving the view is blocked")
+fsys:link(nil, "/cubeos/users/ivan/home/documents/note.txt", "/cubeos/users/ivan/data/chess/in-link")
+eq(app:read("/data/in-link"), "hi there", "link inside another bind works")
+app:link("/data/state", "/data/state-link")
+eq(app:read("/data/state-link"), "s1", "link made in the view")
+eq(app:readlink("/data/state-link"), "/data/state", "readlink is virtual")
+# события в виртуальном виде
+seen = []
+def on_event(ev):
+    seen[len(seen) + 1] = ev.kind .. ":" .. ev.path
+wid = app:watch("/data", on_event)
+app:write("/data/new", "1")
+fsys:write_file(nil, "/cubeos/users/ivan/home/documents/other", "1")
+eq(seen, ["create:/data/new"], "watch maps paths and hides outside events")
+app:unwatch(wid)
+
+# ---------------------------------------------------------------- замещённый fs
+lv = cfs.view(fsys, ivan, {aliases: cfs.default_aliases("ivan")})
+lfs = cfs.legacy_fs(lv)
+lfs.makeDir("/cubeos/users/ivan/home/old/sub")
+h = lfs.open("/cubeos/users/ivan/home/old/sub/a.txt", "w")
+h.write("line1")
+h.writeLine("")
+h.writeLine("line2")
+h.close()
+eq(lfs.exists("/cubeos/users/ivan/home/old/sub/a.txt"), true, "legacy exists")
+eq(lfs.isDir("/cubeos/users/ivan/home/old"), true, "legacy isDir")
+eq(lfs.getSize("/cubeos/users/ivan/home/old/sub/a.txt"), 12, "legacy size")
+eq(lfs.list("/cubeos/users/ivan/home/old"), ["sub"], "legacy list")
+h = lfs.open("/cubeos/users/ivan/home/old/sub/a.txt", "r")
+eq(h.readLine(), "line1", "legacy readLine")
+eq(h.readLine(true), "line2\n", "legacy readLine with trailing")
+eq(h.readLine(), nil, "legacy eof")
+h.close()
+h = lfs.open("/cubeos/users/ivan/home/old/sub/a.txt", "rb")
+eq(h.read(), 108, "legacy binary byte")
+eq(h.read(4), "ine1", "legacy read count")
+h.close()
+h = lfs.open("/cubeos/users/ivan/home/old/sub/a.txt")
+eq(h.readAll(), "line1\nline2\n", "legacy readAll")
+h.close()
+eq(lfs.open("/cubeos/users/ivan/home/old/none", "r"), nil, "legacy open missing returns nil")
+nilh, why = lfs.open("/cubeos/users/anna/home/documents/secret", "r")
+eq(nilh, nil, "legacy open denied")
+eq(why, "/cubeos/users/anna/home/documents/secret: Access denied", "legacy reason")
+lfs.copy("/cubeos/users/ivan/home/old/sub/a.txt", "/cubeos/users/ivan/home/old/b.txt")
+eq(lfs.exists("/cubeos/users/ivan/home/old/b.txt"), true, "legacy copy")
+lfs.move("/cubeos/users/ivan/home/old/b.txt", "/cubeos/users/ivan/home/old/c.txt")
+eq(lfs.exists("/cubeos/users/ivan/home/old/c.txt"), true, "legacy move")
+eq(lfs.find("/cubeos/users/ivan/home/old/*.txt"), ["cubeos/users/ivan/home/old/c.txt"], "legacy find")
+lfs.delete("/cubeos/users/ivan/home/old")
+eq(lfs.exists("/cubeos/users/ivan/home/old"), false, "legacy delete is recursive and final")
+eq(len(lv:trash_items()), 0, "legacy delete skips trash")
+eq(lfs.combine("a", "b/../c"), "a/c", "legacy combine")
+eq(lfs.getName("/a/b/c.txt"), "c.txt", "legacy getName")
+eq(lfs.getDir("/a/b/c.txt"), "a/b", "legacy getDir")
+eq(lfs.isReadOnly("/cubeos/sys/readme"), true, "legacy isReadOnly")
+eq(lfs.attributes("/cubeos/sys/readme").size, 11, "legacy attributes")
+ok, msg = pcall(lfs.list, "/nowhere")
+eq(ok, false, "legacy list error")
+print("done")

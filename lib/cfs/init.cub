@@ -1,0 +1,53 @@
+# cfs: Cube File System, виртуальная файловая система CubeOS
+#
+#   import cfs
+#   fsys = cfs.new()                                   ядро: точки монтирования, права, корзина
+#   fsys:mount("/", cfs.host("/cubeos-data"))          настоящий диск
+#   fsys:mount("/cubeos/tmp", cfs.tmp(65536))          tmp в памяти с лимитом
+#   cfs.install_defaults(fsys)                         стандартные права /cubeos
+#   v = cfs.view(fsys, cfs.subject("ivan"), {aliases: cfs.default_aliases("ivan", "myapp")})
+#   v:write("$appdata/save.json", "{}")
+#
+# Подробности: docs/spec/cfs.md
+
+import cfs.core as core_mod
+import cfs.memory as memory_mod
+import cfs.host as host_mod
+import cfs.view as view_mod
+import cfs.rules as rules_mod
+import cfs.defaults as defaults_mod
+import cfs.legacy as legacy_mod
+import cfs.errors as errors_mod
+import cfs.path as path_mod
+
+export errors = errors_mod
+export path = path_mod
+export rules = rules_mod
+
+export def new(opts=nil):
+    return core_mod.new(opts)
+
+export def memory(opts=nil):
+    return memory_mod.new(opts)
+
+export def host(root="/", opts=nil):
+    return host_mod.new(root, opts)
+
+export def tmp(limit=65536, clock=nil):
+    return defaults_mod.tmp_provider(limit, clock)
+
+export def subject(name, roles=nil, groups=nil):
+    return rules_mod.subject(name, roles, groups)
+
+export def view(fsys, subj, opts=nil):
+    return view_mod.new(fsys, subj, opts)
+
+export def default_aliases(user, app_id=nil):
+    return view_mod.default_aliases(user, app_id)
+
+export def install_defaults(fsys, opts=nil):
+    defaults_mod.install(fsys, opts)
+
+# замещённый fs для программ без API CubeOS
+export def legacy_fs(v):
+    return legacy_mod.make(v)

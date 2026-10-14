@@ -1,0 +1,329 @@
+# cfs.view: вид файловой системы для процесса
+#
+# Вид это то, чем пользуются программы: он знает субъекта (пользователя), $алиасы, рабочий каталог и, при необходимости,
+# виртуальный корень (binds): приложение видит только разрешённые ему пути, настоящие пути скрыты.
+#
+#   v = cfs.view(fsys, ivan, {aliases: cfs.default_aliases("ivan", "chess")})
+#   v:write("$appdata/save.json", text)
+#   for e in v:list("$home/documents"): print(e.name)
+#   for p in v:glob("$projects/**/*.cub"): print(p)
+#
+#   сужение: {binds: [{path: "/data", to: "$appdata", mode: "rw"}, {path: "/docs", to: "$docs", mode: "ro"}]}
+#   приложение видит только /data и /docs; ссылки .sym не выводят за пределы привязок.
+
+import cfs.path as paths
+import cfs.errors as errors
+import cfs.rules as rules_mod
+
+export def default_aliases(user, app_id=nil):
+    a = {sys: "/cubeos/sys", var: "/cubeos/var", shared: "/cubeos/shared", apps: "/cubeos/shared/apps",
+        user: "/cubeos/users/" .. user, home: "$user/home", userapps: "$user/apps", docs: "$home/documents",
+        pictures: "$home/pictures", videos: "$home/videos", projects: "$home/projects", desktop: "$user/desktop",
+        cfg: "$user/cfg", cache: "$user/cache", trash: "$user/trash", tmp: "/cubeos/tmp", mnt: "/cubeos/drives"}
+    if app_id != nil:
+        a.appdata = "$user/data/" .. app_id
+        a.shareddata = "/cubeos/shared/data/" .. app_id
+    return a
+
+def _merge(a, b):
+    out = {}
+    for k, v in a:
+        out[k] = v
+    for k, v in b:
+        out[k] = v
+    return out
+
+export class View:
+    # opts: aliases, binds, cwd
+    def init(self, fsys, subject, opts=nil):
+        o = opts ?? {}
+        self.fsys = fsys
+        self.subject = subject
+        self.aliases = _merge(fsys.aliases, o.aliases ?? {})
+        self.binds = o.binds
+        self.cwd = o.cwd ?? "/"
+
+    # ------------------------------------------------------------ пути
+
+    def expand(self, path):
+        return paths.expand(path, self.aliases)
+
+    def _bind_for(self, p):
+        best = nil
+        for b in self.binds:
+            if paths.is_inside(p, b.path) and (best == nil or len(b.path) > len(best.path)):
+                best = b
+        return best
+
+    def _target_of(self, b):
+        return paths.normalize(paths.expand(b.to, self.aliases))
+
+    # виртуальный путь -> настоящий; writing=true требует привязку с записью
+    def _real(self, path, writing=false):
+        p = paths.join(self.cwd, self:expand(path))
+        if self.binds == nil:
+            return p
+        b = self:_bind_for(p)
+        if b == nil:
+            errors.fail("ENOENT", "no such path", path)
+        if writing and (b.mode ?? "rw") != "rw":
+            errors.fail("EROFS", "read-only here", path)
+        rest = string.sub(p, len(b.path) + 1)
+        if b.path == "/":
+            rest = p
+        return paths.normalize(self:_target_of(b) .. rest)
+
+    # настоящий путь -> виртуальный (nil, если он вне вида)
+    def virtual(self, real):
+        if self.binds == nil:
+            return real
+        best = nil
+        best_target = nil
+        for b in self.binds:
+            target = self:_target_of(b)
+            if paths.is_inside(real, target) and (best == nil or len(target) > len(best_target)):
+                best = b
+                best_target = target
+        if best == nil:
+            return nil
+        rest = string.sub(real, len(best_target) + 1)
+        if best_target == "/":
+            rest = real
+        return paths.normalize(best.path .. rest)
+
+    # ссылки не должны выводить за пределы привязок
+    def _contained(self, real_path, follow, writing, original):
+        if self.binds == nil:
+            return
+        resolved = self.fsys:resolve(real_path, follow)
+        inside = false
+        for b in self.binds:
+            if paths.is_inside(resolved, self:_target_of(b)):
+                if not writing or (b.mode ?? "rw") == "rw":
+                    inside = true
+        if not inside:
+            errors.fail("EACCES", "the path leaves this view", original)
+
+    def _prep(self, path, writing=false, follow=true):
+        real = self:_real(path, writing)
+        self:_contained(real, follow, writing, path)
+        return real
+
+    # в ограниченном виде ошибки показывают виртуальный путь, а не настоящий
+    def _guard(self, path, f):
+        if self.binds == nil:
+            return f()
+        try:
+            return f()
+        except Error as e:
+            if isinstance(e, errors.CfsError):
+                raise errors.CfsError(e.code, e.detail, path)
+            raise e
+
+    def chdir(self, path):
+        real = self:_prep(path)
+        st = self.fsys:stat(self.subject, real)
+        if st == nil or st.type != "dir":
+            errors.fail("ENOTDIR", "not a directory", path)
+        self.cwd = paths.join(self.cwd, self:expand(path))
+
+    # ------------------------------------------------------------ чтение
+
+    def read(self, path):
+        def go():
+            return self.fsys:read_file(self.subject, self:_prep(path))
+        return self:_guard(path, go)
+
+    def exists(self, path):
+        def go():
+            return self.fsys:exists(self.subject, self:_prep(path))
+        if self.binds == nil:
+            return go()
+        try:
+            return go()
+        except Error as e:
+            return false
+
+    def stat(self, path):
+        def go():
+            e = self.fsys:stat(self.subject, self:_prep(path))
+            if e != nil:
+                e.path = self:virtual(e.path)
+            return e
+        return self:_guard(path, go)
+
+    def lstat(self, path):
+        def go():
+            e = self.fsys:lstat(self.subject, self:_prep(path, false, false))
+            if e != nil:
+                e.path = self:virtual(e.path)
+            return e
+        return self:_guard(path, go)
+
+    def is_file(self, path):
+        e = self:stat(path)
+        return e != nil and e.type == "file"
+
+    def is_dir(self, path):
+        e = self:stat(path)
+        return e != nil and e.type == "dir"
+
+    def readlink(self, path):
+        def go():
+            target = self.fsys:readlink(self.subject, self:_prep(path, false, false))
+            return self:virtual(target) ?? target
+        return self:_guard(path, go)
+
+    # список каталога (opts.hidden показывает скрытые)
+    def list(self, path, opts=nil):
+        def go():
+            return self.fsys:list(self.subject, self:_prep(path), opts)
+        return self:_guard(path, go)
+
+    def open(self, path, mode="r"):
+        def go():
+            return self.fsys:open(self.subject, self:_prep(path, string.sub(mode, 1, 1) != "r"), mode)
+        return self:_guard(path, go)
+
+    # ------------------------------------------------------------ запись
+
+    def write(self, path, data):
+        def go():
+            self.fsys:write_file(self.subject, self:_prep(path, true), data)
+        self:_guard(path, go)
+
+    def append(self, path, data):
+        def go():
+            self.fsys:write_file(self.subject, self:_prep(path, true), data, {append: true})
+        self:_guard(path, go)
+
+    def mkdir(self, path, opts=nil):
+        def go():
+            self.fsys:mkdir(self.subject, self:_prep(path, true), opts)
+        self:_guard(path, go)
+
+    def remove(self, path, opts=nil):
+        def go():
+            self.fsys:remove(self.subject, self:_prep(path, true, false), opts)
+        self:_guard(path, go)
+
+    def copy(self, src, dst, opts=nil):
+        def go():
+            result = self.fsys:copy(self.subject, self:_prep(src, false, false), self:_prep(dst, true), opts)
+            return self:virtual(result)
+        return self:_guard(src, go)
+
+    def move(self, src, dst, opts=nil):
+        def go():
+            result = self.fsys:move(self.subject, self:_prep(src, true, false), self:_prep(dst, true), opts)
+            return self:virtual(result)
+        return self:_guard(src, go)
+
+    # ссылка linkpath -> target; цель хранится настоящим путём (относительные цели без изменений)
+    def link(self, target, linkpath):
+        def go():
+            stored = target
+            if string.sub(target, 1, 1) == "/" or string.sub(target, 1, 1) == "$":
+                stored = self:_prep(target)
+            self.fsys:link(self.subject, stored, self:_prep(linkpath, true, false))
+        self:_guard(linkpath, go)
+
+    # ------------------------------------------------------------ обход и поиск
+
+    # все элементы под path (в глубину, по именам): {path, rel, name, type, size, modified, ...}
+    def walk(self, path, opts=nil):
+        o = opts ?? {}
+        out = []
+        base = paths.join(self.cwd, self:expand(path))
+        self:_walk(base, "", out, o, 0)
+        return out
+
+    def _walk(self, dir, rel, out, o, depth):
+        if depth > 32:
+            return
+        entries = self:list(dir, {hidden: o.hidden ?? false})
+        for e in entries:
+            full = paths.join(dir, e.name)
+            item = {path: full, rel: rel == "" and e.name or rel .. "/" .. e.name, name: e.name, type: e.type,
+                size: e.size, modified: e.modified, hidden: e.hidden}
+            out[len(out) + 1] = item
+            if e.type == "dir" and not e.mount:
+                self:_walk(full, item.rel, out, o, depth + 1)
+
+    # пути, подходящие под шаблон ($алиасы, *, ?, **); opts.type "file" или "dir", opts.hidden
+    def glob(self, pattern, opts=nil):
+        o = opts ?? {}
+        expanded = paths.join(self.cwd, self:expand(pattern))
+        segs = paths.split(expanded)
+        base_parts = []
+        has_wild = false
+        wants_hidden = o.hidden ?? false
+        for seg in segs:
+            if string.sub(seg, 1, 1) == ".":
+                wants_hidden = true
+            if not has_wild and string.find(seg, "[%*%?]") != nil:
+                has_wild = true
+            if not has_wild:
+                base_parts[len(base_parts) + 1] = seg
+        if not has_wild:
+            if self:exists(expanded):
+                e = self:stat(expanded)
+                if o.type == nil or e.type == o.type:
+                    return [expanded]
+            return []
+        out = []
+        found = self:walk(paths.join_parts(base_parts), {hidden: wants_hidden})
+        for item in found:
+            if paths.match(expanded, item.path) and (o.type == nil or item.type == o.type):
+                out[len(out) + 1] = item.path
+        table.sort(out)
+        return out
+
+    # ------------------------------------------------------------ блокировки, события, корзина, место
+
+    def lock(self, path, mode="exclusive", owner=nil):
+        return self.fsys:lock(owner ?? self.subject.name, self:_prep(path), mode)
+
+    def unlock(self, path, owner=nil):
+        return self.fsys:unlock(owner ?? self.subject.name, self:_prep(path))
+
+    # fn({kind, path, to}) с виртуальными путями; события вне вида скрываются
+    def watch(self, prefix, fn):
+        def relay(ev):
+            vp = self:virtual(ev.path)
+            if vp == nil:
+                return
+            vto = nil
+            if ev.to != nil:
+                vto = self:virtual(ev.to)
+            fn({kind: ev.kind, path: vp, to: vto})
+        return self.fsys:watch(self:_prep(prefix), relay)
+
+    def unwatch(self, id):
+        self.fsys:unwatch(id)
+
+    def space(self, path="/"):
+        return self.fsys:space(self:_prep(path))
+
+    # права субъекта на путь: строка из r, w, x, l
+    def rights(self, path):
+        real = self:_real(path)
+        return self.fsys.rules:rights(self.subject, real)
+
+    def trash_items(self):
+        return self.fsys:trash_items(self.subject)
+
+    def trash_restore(self, id, to=nil):
+        target = nil
+        if to != nil:
+            target = self:_prep(to, true)
+        return self.fsys:trash_restore(self.subject, id, target)
+
+    def trash_purge(self, id):
+        self.fsys:trash_purge(self.subject, id)
+
+    def trash_empty(self):
+        return self.fsys:trash_empty(self.subject)
+
+export def new(fsys, subject, opts=nil):
+    return View(fsys, subject, opts)

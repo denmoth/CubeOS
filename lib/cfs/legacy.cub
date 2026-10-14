@@ -1,0 +1,182 @@
+# cfs.legacy: замещённый fs для программ без API CubeOS
+#
+#   fs_for_program = legacy.make(view)
+# Возвращает таблицу с функциями стандартного fs CC: Tweaked (list, exists, isDir, open, delete, ...),
+# которые работают через вид CFS: права, виртуальный корень и ссылки действуют и для старых программ.
+# Ошибки превращаются в строки вида "/путь: причина", как в настоящем fs.
+
+import cfs.path as paths
+import cfs.errors as errors
+
+const REASONS = {ENOENT: "No such file", EEXIST: "File exists", ENOTDIR: "Not a directory", EISDIR: "Is a directory",
+    EACCES: "Access denied", ENAME: "Invalid name", ENOSPC: "Out of space", EROFS: "Access denied", ELOOP: "Too many links",
+    ENOTEMPTY: "Directory not empty", ECONFIRM: "Access denied", EBUSY: "Resource busy", EINVAL: "Invalid argument"}
+
+def _fail(e, path):
+    reason = REASONS[e.code] ?? e.detail
+    error("/" .. string.gsub(paths.normalize(path), "^/", "") .. ": " .. reason, 3)
+
+def _strip(p):
+    return string.gsub(p, "^/", "")
+
+# fs.combine: объединяет и нормализует, результат без начального слэша
+def combine(base, *rest):
+    result = base
+    for part in rest:
+        result = result .. "/" .. part
+    return _strip(paths.normalize(result))
+
+# дескриптор в стиле CC: таблица функций, вызываются через точку (h.write(...)), text и binary режимы
+def make_handle(h, binary):
+    api = {}
+    api.readAll = () => h:read_all()
+    api.readLine = (with_trailing) => h:read_line(with_trailing)
+
+    def read(count):
+        if count == nil:
+            piece = h:read(1)
+            if piece == nil:
+                return nil
+            if binary:
+                return string.byte(piece)
+            return piece
+        return h:read(count)
+    api.read = read
+
+    def write(data):
+        if type(data) == "number" and binary:
+            h:write(string.char(data % 256))
+        else:
+            h:write(tostring(data))
+    api.write = write
+
+    api.writeLine = (data) => h:write_line(tostring(data))
+    api.flush = () => h:flush()
+    api.seek = (whence, offset) => h:seek(whence ?? "cur", offset ?? 0)
+    api.close = () => h:close()
+    return api
+
+export def make(view):
+    api = {}
+
+    def run(path, f):
+        try:
+            return f()
+        except Error as e:
+            if isinstance(e, errors.CfsError):
+                _fail(e, path)
+            raise e
+
+    api.combine = combine
+
+    api.getName = (path) => paths.basename(path) == "" and "root" or paths.basename(path)
+
+    def get_dir(path):
+        p = paths.normalize(path)
+        if p == "/":
+            return ".."
+        return _strip(paths.parent(p))
+    api.getDir = get_dir
+
+    def exists(path):
+        return view:exists(path)
+    api.exists = exists
+
+    def is_dir(path):
+        return view:is_dir(path)
+    api.isDir = is_dir
+
+    def is_read_only(path):
+        rights = view:rights(path)
+        return string.find(rights, "w", 1, true) == nil
+    api.isReadOnly = is_read_only
+
+    def list(path):
+        def go():
+            names = []
+            for e in view:list(path, {hidden: true}):
+                names[len(names) + 1] = e.name
+            return names
+        return run(path, go)
+    api.list = list
+
+    def get_size(path):
+        def go():
+            st = view:stat(path)
+            if st == nil:
+                errors.fail("ENOENT", "no such file", path)
+            return st.size
+        return run(path, go)
+    api.getSize = get_size
+
+    def make_dir(path):
+        def go():
+            view:mkdir(path, {parents: true})
+        run(path, go)
+    api.makeDir = make_dir
+
+    def delete(path):
+        def go():
+            if view:exists(path) or view:lstat(path) != nil:
+                view:remove(path, {recursive: true, permanent: true})
+        run(path, go)
+    api.delete = delete
+
+    def move(a, b):
+        def go():
+            view:move(a, b)
+        run(a, go)
+    api.move = move
+
+    def copy_file(a, b):
+        def go():
+            view:copy(a, b)
+        run(a, go)
+    api.copy = copy_file
+
+    def open(path, mode_arg):
+        mode = mode_arg ?? "r"
+        try:
+            letter = string.sub(mode, 1, 1)
+            if string.find(mode, "+", 1, true) != nil:
+                return nil, "Unsupported mode"
+            h = view:open(path, letter)
+            return make_handle(h, string.find(mode, "b", 1, true) != nil)
+        except Error as e:
+            if isinstance(e, errors.CfsError):
+                return nil, "/" .. _strip(paths.normalize(path)) .. ": " .. (REASONS[e.code] ?? e.detail)
+            raise e
+    api.open = open
+
+    def get_free_space(path):
+        sp = view:space(path)
+        return sp.free ?? 0
+    api.getFreeSpace = get_free_space
+
+    def get_capacity(path):
+        sp = view:space(path)
+        return sp.capacity
+    api.getCapacity = get_capacity
+
+    def get_drive(path):
+        return "hdd"
+    api.getDrive = get_drive
+
+    def find(wildcard):
+        found = view:glob(wildcard)
+        out = []
+        for p in found:
+            out[len(out) + 1] = _strip(p)
+        return out
+    api.find = find
+
+    def attributes(path):
+        def go():
+            st = view:stat(path)
+            if st == nil:
+                errors.fail("ENOENT", "no such file", path)
+            return {size: st.size, isDir: st.type == "dir", isReadOnly: st.readonly, created: st.modified, modified: st.modified}
+        return run(path, go)
+    api.attributes = attributes
+
+    return api

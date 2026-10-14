@@ -1,0 +1,31 @@
+# cfs.defaults: стандартные права и настройки CubeOS (дерево /cubeos, см. docs/02-filesystem.md)
+
+import cfs.memory as memory
+
+# правила доступа по умолчанию (формат: cfs.rules)
+export const RULES_TEXT = """[
+  {path: '/cubeos/sys/**', allow: {system: 'rwxl', '*': 'rxl'}},
+  {path: '/cubeos/sys/sec/**', allow: {system: 'rwl'}},
+  {path: '/cubeos/var/**', allow: {system: 'rwxl', admin: 'rl'}},
+  {path: '/cubeos/shared/**', allow: {'*': 'rxl', admin: 'rwxl'}},
+  {path: '/cubeos/users/*/**', allow: {admin: 'rl'}},
+  {path: '/cubeos/users/$user/**', allow: {'*': 'rwxl'}},
+  {path: '/cubeos/tmp/**', allow: {'*': 'rwxl'}},
+  {path: '/cubeos/drives/**', allow: {'*': 'rl', admin: 'rwxl'}},
+  {path: '/cubeos/hardware/**', allow: {'*': 'rl'}},
+  {path: '/cubeos/proc/**', allow: {'*': 'rl'}},
+  {path: '/cubeos/run/**', allow: {'*': 'rl'}},
+]"""
+
+# применяет стандартные правила и настройки к fsys: правила, список мест с окончательным удалением, очистка tmp
+# opts: tmp_max_age (мс, по умолчанию 1 час), tmp_interval (мс, по умолчанию 10 минут)
+export def install(fsys, opts=nil):
+    o = opts ?? {}
+    fsys.rules:clear()
+    fsys.rules:load(RULES_TEXT)
+    fsys.no_trash = ["/cubeos/tmp", "/cubeos/sys", "/cubeos/var", "/cubeos/proc", "/cubeos/run"]
+    fsys:schedule_clean("/cubeos/tmp", o.tmp_interval ?? 600000, o.tmp_max_age ?? 3600000)
+
+# провайдер tmp: в памяти, с лимитом размера (по умолчанию 64 КБ)
+export def tmp_provider(limit=65536, clock=nil):
+    return memory.new({limit: limit, now: clock})
