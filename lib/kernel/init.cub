@@ -372,11 +372,17 @@ export class Kernel:
         snapshot = []
         for pid, p in self.procs:
             snapshot[len(snapshot) + 1] = p
+        taken = 0
         for p in snapshot:
             if p.state == "waiting" and p.wait != nil and p.wait.kind == "event" and _matches(p.wait.filter, name):
                 self:_wake(p, self:_pack(ev))
+                taken += 1
             elif p.interest != nil and p.state != "dead" and _matches(p.interest, name):
                 self:_enqueue(p, ev)
+                taken += 1
+        # файлы, перетащенные на окно, когда их некому принять (экран входа): не теряем молча
+        if name == "file_transfer" and taken == 0:
+            self:log("dropped files were not taken: nothing is open to receive them (sign in and drop them on the terminal)", "warn")
 
     # ------------------------------------------------------------ журнал ввода (D220)
 

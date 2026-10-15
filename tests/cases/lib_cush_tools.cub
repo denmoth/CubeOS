@@ -155,6 +155,30 @@ eq(has("dropped"), true, "the first line was on the screen")
 eq(has("\ntoo"), false, "Ctrl+C drops the waiting lines")
 eq(has("kept"), true, "and the shell goes on")
 
+# ------------------------------------------------------------ перетаскивание файлов (событие file_transfer CC 1.120)
+def handle(name, data):
+    h = {closed: false}
+    h.getName = () => name
+    h.readAll = () => data
+    h.close = () => nil
+    return h
+def transfer(list):
+    tr = {}
+    tr.getFiles = () => list
+    return tr
+run("cd " .. DIR)
+fresh()
+proc:feed("file_transfer", transfer([handle("dropped.lua", "print('a')\nprint('b')\n"), handle("one.txt", "new")]))
+f = fs.open(DIR .. "/dropped.lua", "r")
+eq(f.readAll(), "print('a')\nprint('b')\n", "a dropped file is saved in the current folder with all its lines")
+f.close()
+eq(has("Received dropped.lua"), true, "and the shell says so")
+f = fs.open(DIR .. "/one.txt", "r")
+eq(f.readAll(), "hello\n", "an existing file is not overwritten")
+f.close()
+eq(fs.exists(DIR .. "/one (2).txt"), true, "the new one gets a numbered name")
+eq(has("one.txt was already there"), true, "and the message says why")
+
 fs.delete(DIR)
 fs.delete(HIST)
 print("done")

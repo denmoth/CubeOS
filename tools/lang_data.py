@@ -368,4 +368,5 @@ T = {
 "This month": ("Этот месяц", "Цей місяць"),
 "December 2026": ("Декабрь 2026", "Грудень 2026"),
 "paste from Windows (all lines with the MothPaste mod; Enter runs them)": ("вставить из Windows (все строки с модом MothPaste; Enter выполняет их)", "вставити з Windows (усі рядки з модом MothPaste; Enter виконує їх)"),
+"drop files from Windows onto the computer window: they are saved in the current folder, all lines": ("перетащите файлы из Windows на окно компьютера: они сохранятся в текущую папку целиком", "перетягніть файли з Windows на вікно комп'ютера: вони збережуться в поточну теку повністю"),
 }

@@ -891,6 +891,9 @@ msgstr "змінити розкладку (натиснути й відпуст�
 msgid "scroll the screen"
 msgstr "прокручування екрана"
 
+msgid "drop files from Windows onto the computer window: they are saved in the current folder, all lines"
+msgstr "перетягніть файли з Windows на вікно комп'ютера: вони збережуться в поточну теку повністю"
+
 msgid "-- more: Space next page, Enter next line, q quit --"
 msgstr "-- далі: Пробіл сторінка, Enter рядок, q вихід --"
 

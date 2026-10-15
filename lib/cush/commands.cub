@@ -267,4 +267,5 @@ export const KEY_HELP = [
     ["Ctrl+Z", "pause the program (fg / bg continue it)"],
     ["Ctrl+Shift", "switch the keyboard layout (press and release)"],
     ["Shift+PgUp / PgDn", "scroll the screen"],
+    ["Drag a file", "drop files from Windows onto the computer window: they are saved in the current folder, all lines"],
 ]

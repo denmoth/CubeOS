@@ -724,6 +724,49 @@ export class Shell:
                 return
 
     # печатает сообщение, не ломая строку ввода
+    # свободное имя рядом: «name.lua», потом «name (2).lua», «name (3).lua»...
+    def _free_name(self, path):
+        fsys = self.env.fs
+        if not fsys.exists(path):
+            return path
+        stem, ext = string.match(path, "^(.-)(%.[^%./]*)$")
+        if stem == nil:
+            stem = path
+            ext = ""
+        n = 2
+        while fsys.exists(stem .. " (" .. n .. ")" .. ext):
+            n += 1
+        return stem .. " (" .. n .. ")" .. ext
+
+    # сохранить перетащенные файлы в текущую папку; существующие не перезаписываются (новое имя с номером)
+    def receive_files(self, transfer):
+        ok, files = pcall(() => transfer.getFiles())
+        if not ok or type(files) != "table":
+            self:notify("e", "cush: cannot read the dropped files")
+            return
+        fsys = self.env.fs
+        for f in files:
+            okn, name = pcall(() => f.getName())
+            name = okn and tostring(name) or "dropped"
+            okr, data = pcall(() => f.readAll())
+            pcall(() => f.close())
+            base = string.match(name, "([^/]+)$") ?? name
+            target = self:_free_name(fsys.combine(self.dir, base))
+            written = false
+            if okr and data != nil:
+                h = fsys.open(target, "wb")
+                if h != nil:
+                    h.write(data)
+                    h.close()
+                    written = true
+            if written:
+                renamed = fsys.getName(target) != base and (" (" .. base .. " was already there)") or ""
+                self:notify("5", "Received " .. fsys.getName(target) .. "  " .. string.len(data) .. " bytes" .. renamed)
+                if self.log != nil:
+                    pcall(() => self.log("info", "file received by drag and drop: /" .. target .. " (" .. string.len(data) .. " bytes)"))
+            else:
+                self:notify("e", "cush: cannot save " .. base .. " here")
+
     def notify(self, letter, text):
         if self.editor.active:
             term = self.env.term
@@ -908,6 +951,13 @@ export class Shell:
         elif name == "cubeos_copy":
             if self.fg == nil:
                 self.editor:copy_selection()
+        elif name == "file_transfer":
+            # файлы, перетащенные из Windows на окно компьютера (CC 1.120): программа на переднем плане получает их сама
+            # (например import), иначе оболочка сохраняет их в текущую папку
+            if self.fg != nil:
+                self:deliver(self.fg, ev)
+            else:
+                self:receive_files(ev[2])
         else:
             for j in self:_live_jobs():
                 if not j.stopped:
