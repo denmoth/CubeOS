@@ -1,0 +1,139 @@
+import t
+import kernel
+import cfs
+import cfs.rules as rules
+import std.time as stime
+import svc.logd as logd
+import svc.rpc as rpc
+eq = t.eq
+
+mono = {now: 1000}
+wall = {ms: stime.from_date(2026, 10, 15, 12, 0, 0)}
+def advance(k, ms):
+    mono.now = mono.now + ms
+    wall.ms = wall.ms + ms
+    k:tick()
+    k:run_ready()
+def settle(k):
+    k:run_ready()
+    for i in range[1, 12]:
+        advance(k, 100)
+
+system = rules.subject("system", ["system"])
+def make(conf_text, old_log):
+    fsys = cfs.new({})
+    fsys:mount("/", cfs.memory())
+    fsys:mkdir(nil, "/cubeos/sys/cfg", {parents: true})
+    fsys:mkdir(nil, "/cubeos/var/log", {parents: true})
+    if conf_text != nil:
+        fsys:write_file(nil, "/cubeos/sys/cfg/log.conf", conf_text)
+    if old_log != nil:
+        fsys:write_file(nil, "/cubeos/var/log/system.log", old_log)
+    view = cfs.view(fsys, system, {})
+    k = kernel.new({clock: () => mono.now})
+    return fsys, view, k
+
+def start(k, view):
+    pid = k:spawn(logd.main, {view: view, clock: () => wall.ms, system: {kernel: k}}, {name: "logd", subject: system, view: view})
+    k:run_ready()
+    return pid
+
+# ---------------------------------------------------------------- формат строки
+eq(logd.iso(stime.from_date(2026, 3, 5, 7, 8, 9)), "2026-03-05T07:08:09Z", "ISO time in UTC")
+eq(logd.format_line(stime.from_date(2026, 3, 5, 7, 8, 9), "warn", "net d", "two\nlines"), "2026-03-05T07:08:09Z warn net_d two lines\n", "the source is cleaned and newlines become spaces")
+rec = logd.parse_line("2026-03-05T07:08:09Z warn timed the clock jumped")
+eq([rec.level, rec.source, rec.text], ["warn", "timed", "the clock jumped"], "lines parse back")
+eq(logd.parse_line("garbage"), nil, "lines out of format do not parse")
+eq([logd.rank("debug"), logd.rank("crit"), logd.rank("loud")], [1, 5, nil], "level ranks")
+
+# ---------------------------------------------------------------- запись, уровни, чтение
+fsys, view, k = make(nil, nil)
+start(k, view)
+got = {}
+def client(sys, args):
+    sys.log("info", "hello world")
+    sys.log("debug", "noise")
+    sys.log("warn", "careful")
+    sys.log("error", "second\nline")
+    got.all = rpc.call(sys, "logd", "read", {})
+    got.warn = rpc.call(sys, "logd", "read", {level: "warn"})
+    got.last = rpc.call(sys, "logd", "read", {n: 1})
+    got.own = rpc.call(sys, "logd", "read", {source: "client"})
+    got.list = rpc.call(sys, "logd", "list")
+    r, err = rpc.call(sys, "logd", "read", {level: "loud"})
+    got.bad = err
+    rpc.call(sys, "logd", "set_level", {level: "debug"})
+    sys.log("debug", "now visible")
+    got.after = rpc.call(sys, "logd", "read", {})
+    got.done = true
+k:spawn(client, [], {name: "client", subject: system})
+settle(k)
+eq(got.done, true, "the client finished")
+text = ""
+for line in got.all:
+    text = text .. line .. "\n"
+eq(string.find(text, "2026-10-15T12:00:00Z info logd log service started, level info", 1, true) != nil, true, "the start is logged")
+eq(string.find(text, "info client hello world", 1, true) != nil, true, "records carry the process name as the source")
+eq(string.find(text, "noise", 1, true), nil, "debug records are dropped at level info")
+eq(string.find(text, "error client second line", 1, true) != nil, true, "multi-line text is joined")
+eq(len(got.warn), 2, "the level filter keeps warn and error")
+eq(len(got.last), 1, "n limits the answer to the last lines")
+eq(string.find(got.last[1], "second line", 1, true) != nil, true, "and it is the newest line")
+eq(len(got.own), 3, "the per-source log has the client lines")
+eq(string.find(table.concat(got.list, ","), "client.log", 1, true) != nil, true, "list shows the per-source file")
+eq(string.find(got.bad, "unknown level", 1, true) != nil, true, "an unknown level is an error")
+eq(string.find(table.concat(got.after, "\n"), "now visible", 1, true) != nil, true, "set_level takes effect at once")
+eq(fsys:exists(nil, "/cubeos/var/log/system.log"), true, "system.log exists")
+
+# ---------------------------------------------------------------- ротация по размеру
+fsys, view, k = make("{max_size: 220, keep: 2}", nil)
+start(k, view)
+def spammer(sys, args):
+    for i in range[1, 30]:
+        sys.log("info", "line number " .. i)
+    sys.sleep(0.1)
+k:spawn(spammer, [], {name: "spammer", subject: system})
+settle(k)
+eq(fsys:exists(nil, "/cubeos/var/log/system.log.1"), true, "a full log is rotated")
+eq(fsys:exists(nil, "/cubeos/var/log/system.log.2"), true, "older archives shift up")
+eq(fsys:exists(nil, "/cubeos/var/log/system.log.3"), false, "no more archives than keep")
+eq(fsys:stat(nil, "/cubeos/var/log/system.log").size <= 220, true, "the current log stays under the limit")
+
+# ---------------------------------------------------------------- ротация при загрузке
+fsys, view, k = make(nil, "2026-10-14T00:00:00Z info old previous boot\n")
+start(k, view)
+eq(string.find(fsys:read_file(nil, "/cubeos/var/log/system.log.1"), "previous boot", 1, true) != nil, true, "the log of the previous boot becomes an archive")
+eq(string.find(fsys:read_file(nil, "/cubeos/var/log/system.log"), "previous boot", 1, true), nil, "and the new log starts empty")
+fsys, view, k = make("{rotate_boots: false}", "2026-10-14T00:00:00Z info old previous boot\n")
+start(k, view)
+eq(fsys:exists(nil, "/cubeos/var/log/system.log.1"), false, "rotate_boots false keeps appending")
+
+# ---------------------------------------------------------------- журнал ядра
+fsys, view, k = make("{level: 'debug'}", nil)
+k:log("early kernel line")
+start(k, view)
+def late(sys, args):
+    sys.sleep(0.2)
+k:spawn(late, [], {name: "late", subject: system})
+settle(k)
+sys_log = fsys:read_file(nil, "/cubeos/var/log/system.log")
+eq(string.find(sys_log, "debug kernel early kernel line", 1, true) != nil, true, "kernel lines from before the start are written")
+eq(string.find(sys_log, "debug kernel spawn", 1, true) != nil, true, "and later kernel lines arrive through the buffer")
+fsys, view, k = make("{level: 'debug', kernel: false}", nil)
+k:log("hidden kernel line")
+start(k, view)
+settle(k)
+eq(string.find(fsys:read_file(nil, "/cubeos/var/log/system.log"), "hidden kernel line", 1, true), nil, "kernel: false drops kernel lines")
+
+# ---------------------------------------------------------------- без logd запись идёт в журнал ядра
+k = kernel.new({clock: () => mono.now})
+def orphan(sys, args):
+    sys.log("warn", "no logd here")
+k:spawn(orphan, [], {name: "orphan", subject: system})
+k:run_ready()
+found = false
+for line in k.log_lines:
+    if string.find(line, "[warn] orphan: no logd here", 1, true) != nil:
+        found = true
+eq(found, true, "sys.log falls back to the kernel log")
+print("done")

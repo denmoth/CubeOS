@@ -21,6 +21,7 @@ import boot.session as session_mod
 import boot.services as services_mod
 import boot.state as state_mod
 import boot.greeter as greeter_mod
+import sysfs
 
 export const BOOT_CONF = "/cubeos/sys/cfg/boot.conf"
 export const OS_RELEASE = "/cubeos/sys/cfg/os-release.conf"
@@ -81,6 +82,7 @@ export class Boot:
         fsys = self.fsys
         sys_state = state_mod.new(fsys, {clock: o.clock})
         mode, reason = sys_state:begin(o.ctrl ?? false)
+        unclean = sys_state.prev_clean == false
         if o.mode == "safe" and mode == "normal":
             mode = "safe"
             reason = "chosen in the boot menu"
@@ -98,7 +100,7 @@ export class Boot:
         auth = auth_mod.new(fsys, auth_opts)
         auth:load()
         system = {mode: mode, reason: reason, state: sys_state, conf: conf, release: release, auth: auth, fsys: fsys,
-            console: self.console}
+            console: self.console, unclean: unclean, boot_ms: (o.clock ?? (() => os.epoch("utc")))()}
         self.system = system
         if mode == "recovery":
             self:_say("Recovery mode: " .. tostring(reason))
@@ -111,6 +113,7 @@ export class Boot:
             kernel_opts.clock = o.clock
         k = kernel.new(kernel_opts)
         system.kernel = k
+        self:_mount_virtual(system)
         sessions = session_mod.new(fsys, auth, {kernel: k, clock: o.clock, elevate_ms: conf.elevate_ms, lang: conf.lang, de: conf.de})
         system.sessions = sessions
         system_subject = rules_mod.subject("system", ["system"])
@@ -124,13 +127,22 @@ export class Boot:
                 if m.safe != false:
                     kept[len(kept) + 1] = m
             manifests = kept
-        mgr = services_mod.new(k, {import: o.import, subject: system_subject, view: cfs.view(fsys, system_subject, {})})
+        mgr = services_mod.new(k, {import: o.import, subject: system_subject, view: cfs.view(fsys, system_subject, {}), context: system})
         mgr:add_all(manifests)
         system.services = mgr
         let me = self
         system.init_pid = k:spawn((sys, args) => mgr:run_init(sys, args), [], {name: "init", subject: system_subject})
         system.login_pid = k:spawn((sys, args) => me:_login_loop(sys), [], {name: "login", subject: system_subject, ui: true})
         return system
+
+    # /cubeos/proc и /cubeos/run строятся из состояния ядра и загрузки (при повторном вызове заменяются)
+    def _mount_virtual(self, system):
+        fsys = self.fsys
+        k = system.kernel
+        fsys:umount("/cubeos/proc")
+        fsys:umount("/cubeos/run")
+        fsys:mount("/cubeos/proc", cfs.virtual(() => sysfs.proc_tree(k, {boot_ms: system.boot_ms})))
+        fsys:mount("/cubeos/run", cfs.virtual(() => sysfs.run_tree(system)))
 
     # ------------------------------------------------------------ вход
 

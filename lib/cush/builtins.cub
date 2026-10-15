@@ -5,6 +5,7 @@
 import term.chars as chars
 import unicode
 import clock
+import svc.logd as logd
 
 export const table_of = {}
 export const help_of = {}
@@ -594,6 +595,74 @@ def b_timedatectl(sh, args):
             return 1
     return 0
 add("timedatectl", "timedatectl [команда]  время: зона, источник, секунды, формат", b_timedatectl)
+
+const LEVEL_COLORS = {debug: "8", info: "0", warn: "4", error: "e", crit: "e"}
+
+# logs [-f] [-n N] [-l УРОВЕНЬ] [служба]: журнал /cubeos/var/log/<служба или system>.log; -f следит за новыми строками (Ctrl+C: выход)
+def b_logs(sh, args):
+    n = 20
+    level = nil
+    follow = false
+    source = "system"
+    i = 1
+    while i <= len(args):
+        a = args[i]
+        if a == "-f":
+            follow = true
+        elif a == "-n":
+            i += 1
+            n = tonumber(args[i])
+            if n == nil:
+                sh:eprint("logs: -n needs a number")
+                return 1
+        elif a == "-l":
+            i += 1
+            level = args[i]
+        elif string.sub(a, 1, 1) == "-":
+            sh:eprint("logs: unknown option " .. a)
+            return 1
+        else:
+            source = a
+        i += 1
+    want = 1
+    if level != nil:
+        want = logd.rank(level)
+        if want == nil:
+            sh:eprint("logs: unknown level " .. level .. " (debug, info, warn, error, crit)")
+            return 1
+    path = (sh.opts.log_dir ?? "/cubeos/var/log") .. "/" .. string.gsub(source, "[^%w_%-%.]", "_") .. ".log"
+    if not sh.env.fs.exists(path):
+        sh:eprint("logs: no log for " .. source)
+        return 1
+    def show(line):
+        rec = logd.parse_line(line)
+        if rec == nil or (logd.rank(rec.level) ?? 2) < want:
+            return false
+        sh:write_color("7", rec.time .. " ")
+        sh:write_color(LEVEL_COLORS[rec.level] ?? "0", string.sub(rec.level .. "     ", 1, 5) .. " ")
+        sh:write_color("3", rec.source .. " ")
+        sh:println(rec.text)
+        return true
+    lines = read_lines(sh, path)
+    shown = []
+    for line in lines:
+        if logd.parse_line(line) != nil and (logd.rank(logd.parse_line(line).level) ?? 2) >= want:
+            shown[len(shown) + 1] = line
+    first = math.max(1, len(shown) - n + 1)
+    for k in range[first, len(shown)]:
+        show(shown[k])
+    if follow:
+        seen = len(lines)
+        while true:
+            os.sleep(1)
+            lines = read_lines(sh, path)
+            if len(lines) < seen:
+                seen = 0
+            for k in range[seen + 1, len(lines)]:
+                show(lines[k])
+            seen = len(lines)
+    return 0
+add("logs", "logs [-f] [-n N] [-l уровень] [служба]  журнал системы или службы", b_logs)
 
 def b_whoami(sh, args):
     sh:println(sh.vars.USER)

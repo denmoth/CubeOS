@@ -95,3 +95,13 @@ export def view():
 # пишет в стандартный вывод процесса (ядро решает, куда он идёт)
 export def out(text):
     _call({op: "out", text: tostring(text)})
+
+# пишет в журнал: через службу logd (источник это имя процесса), а если её нет, в журнал ядра. level: debug, info, warn, error, crit.
+# В журнал нельзя писать пароли, ключи и другие секреты (D196).
+export def log(level, text):
+    name = info().name
+    pid = _check(_call({op: "lookup", name: "logd"})).pid
+    if pid != nil:
+        _call({op: "send", to: pid, msg: {op: "log", args: {level: level, source: name, text: tostring(text)}}})
+    else:
+        _call({op: "klog", text: "[" .. level .. "] " .. name .. ": " .. tostring(text)})

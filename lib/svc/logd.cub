@@ -1,0 +1,184 @@
+# svc.logd: служба журнала (docs/spec/logging.md). Принимает записи, пишет /cubeos/var/log/<источник>.log и общий system.log,
+# ротирует по размеру и по загрузкам, отдаёт строки на чтение. Строка: «2026-10-15T12:00:00Z info timed сообщение» (время UTC).
+#
+# Запросы (svc.rpc): log {level, source, text} (можно без ответа: sys.log), read {source, level, n}, list, rotate, set_level {level}.
+# Настройки /cubeos/sys/cfg/log.conf (JSON5): level (debug|info|warn|error|crit, по умолчанию info), max_size (байт, 65536), keep (архивов, 4),
+#   rotate_boots (true: system.log ротируется при каждом запуске), kernel (true: строки журнала ядра тоже идут в журнал, уровень debug).
+# Строки журнала ядра, накопленные до запуска logd, записываются при старте; дальше ядро отдаёт их через общий буфер.
+# Секреты в журнал не пишутся (D196): это обязанность того, кто вызывает sys.log.
+# main(sys, args): args.system (контекст загрузки; kernel), args.view, args.path (каталог журналов), args.conf_path, args.clock (мс UTC).
+
+import json5
+import std.time as stime
+import svc.rpc as rpc
+
+export const LOG_DIR = "/cubeos/var/log"
+export const CONF_PATH = "/cubeos/sys/cfg/log.conf"
+export const LEVELS = ["debug", "info", "warn", "error", "crit"]
+const DEFAULTS = {level: "info", max_size: 65536, keep: 4, rotate_boots: true, kernel: true}
+
+export def rank(level):
+    for i, name in LEVELS:
+        if name == level:
+            return i
+    return nil
+
+def _name(source):
+    s = string.gsub(tostring(source), "[^%w_%-%.]", "_")
+    if s == "" or s == "." or s == "..":
+        return "unknown"
+    return s
+
+export def iso(ms):
+    d = stime.to_date(ms)
+    return string.format("%04d-%02d-%02dT%02d:%02d:%02dZ", d.year, d.month, d.day, d.hour, d.minute, d.second)
+
+export def format_line(ms, level, source, text):
+    one_line = string.gsub(tostring(text), "[\r\n]+", " ")
+    return iso(ms) .. " " .. level .. " " .. _name(source) .. " " .. one_line .. "\n"
+
+# разбор строки журнала: время, уровень, источник, текст (nil, если строка не по формату)
+export def parse_line(line):
+    t, lv, src, text = string.match(line, "^(%S+) (%a+) (%S+) ?(.*)$")
+    if t == nil or string.match(t, "^%d%d%d%d%-%d%d%-%d%dT") == nil or rank(lv) == nil:
+        return nil
+    return {time: t, level: lv, source: src, text: text}
+
+export def main(sys, args):
+    a = args ?? {}
+    view = a.view ?? sys.view()
+    dir = a.path ?? LOG_DIR
+    clock = a.clock ?? (() => os.epoch("utc"))
+    conf = {}
+    for k, v in DEFAULTS:
+        conf[k] = v
+    cpath = a.conf_path ?? CONF_PATH
+    if view != nil and view:exists(cpath):
+        ok, data = pcall(() => json5.parse(view:read(cpath)))
+        if ok and type(data) == "table":
+            for k, v in data:
+                conf[k] = v
+    if rank(conf.level) == nil:
+        conf.level = "info"
+    min_rank = rank(conf.level)
+    pending = []
+    kernel = a.system != nil and a.system.kernel or nil
+
+    pcall(() => view:mkdir(dir, {parents: true}))
+
+    def rotate_file(path):
+        if not view:exists(path):
+            return
+        i = conf.keep
+        if view:exists(path .. "." .. i):
+            view:remove(path .. "." .. i)
+        while i > 1:
+            if view:exists(path .. "." .. (i - 1)):
+                view:move(path .. "." .. (i - 1), path .. "." .. i)
+            i -= 1
+        if conf.keep >= 1:
+            view:move(path, path .. ".1")
+        else:
+            view:remove(path)
+
+    def append(path, line):
+        st = view:stat(path)
+        if st != nil and st.size + len(line) > conf.max_size:
+            rotate_file(path)
+        view:append(path, line)
+
+    def write(level, source, text):
+        r = rank(level) ?? 2
+        if r < min_rank:
+            return false
+        line = format_line(clock(), LEVELS[r], source, text)
+        name = _name(source)
+        ok, err = pcall(() => append(dir .. "/system.log", line))
+        if name != "system":
+            pcall(() => append(dir .. "/" .. name .. ".log", line))
+        return ok
+
+    # загрузка: прошлый system.log уходит в архив, строки ядра до запуска записываются
+    if view != nil:
+        if conf.rotate_boots:
+            pcall(() => rotate_file(dir .. "/system.log"))
+        write("info", "logd", "log service started, level " .. conf.level)
+        if kernel != nil and conf.kernel:
+            for line in kernel.log_lines:
+                write("debug", "kernel", line)
+            def push(text):
+                pending[len(pending) + 1] = {level: "debug", source: "kernel", text: text}
+            kernel.log_fn = push
+
+    def flush():
+        while len(pending) > 0:
+            rec = table.remove(pending, 1)
+            if not conf.kernel and rec.source == "kernel":
+                continue
+            write(rec.level, rec.source, rec.text)
+            if len(pending) > 2000:
+                pending = []
+
+    def read_lines(path):
+        if not view:exists(path):
+            return []
+        out = []
+        for line in string.gmatch(view:read(path), "([^\n]*)\n"):
+            out[len(out) + 1] = line
+        return out
+
+    handlers = {}
+
+    def log(q, sender):
+        if q == nil:
+            raise Error("log needs level, source and text")
+        return write(q.level ?? "info", q.source ?? "unknown", q.text ?? "")
+    handlers.log = log
+
+    def read_log(q, sender):
+        o = q ?? {}
+        source = o.source ?? "system"
+        want = 1
+        if o.level != nil:
+            want = rank(o.level)
+            if want == nil:
+                raise Error("unknown level: " .. tostring(o.level))
+        lines = read_lines(dir .. "/" .. _name(source) .. ".log")
+        out = []
+        for line in lines:
+            rec = parse_line(line)
+            if rec != nil and (rank(rec.level) ?? 2) >= want:
+                out[len(out) + 1] = line
+        n = o.n ?? 50
+        if len(out) > n:
+            cut = []
+            for i in range[len(out) - n + 1, len(out)]:
+                cut[len(cut) + 1] = out[i]
+            out = cut
+        return out
+    handlers.read = read_log
+
+    def list_logs(q, sender):
+        names = []
+        for e in view:list(dir):
+            names[len(names) + 1] = e.name
+        table.sort(names)
+        return names
+    handlers.list = list_logs
+
+    def rotate_now(q, sender):
+        rotate_file(dir .. "/system.log")
+        return true
+    handlers.rotate = rotate_now
+
+    def set_level(q, sender):
+        r = rank(q.level)
+        if r == nil:
+            raise Error("unknown level: " .. tostring(q.level))
+        conf.level = q.level
+        min_rank = r
+        return true
+    handlers.set_level = set_level
+
+    sys.register("logd")
+    rpc.serve(sys, handlers, {tick: flush, timeout: () => 1})

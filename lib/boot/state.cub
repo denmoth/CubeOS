@@ -38,6 +38,7 @@ export class BootState:
     # вызывается в начале загрузки; возвращает режим ("normal", "safe", "recovery") и причину
     def begin(self, ctrl_held=false):
         self:load()
+        self.prev_clean = self.data.clean
         if self.data.pending:
             self.data.failures = (self.data.failures ?? 0) + 1
         self.data.pending = true

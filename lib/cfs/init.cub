@@ -12,6 +12,7 @@
 
 import cfs.core as core_mod
 import cfs.memory as memory_mod
+import cfs.virtual as virtual_mod
 import cfs.host as host_mod
 import cfs.view as view_mod
 import cfs.rules as rules_mod
@@ -29,6 +30,10 @@ export def new(opts=nil):
 
 export def memory(opts=nil):
     return memory_mod.new(opts)
+
+# провайдер только для чтения: build() возвращает дерево таблиц и строк (см. cfs.virtual)
+export def virtual(build, opts=nil):
+    return virtual_mod.new(build, opts)
 
 export def host(root="/", opts=nil):
     return host_mod.new(root, opts)

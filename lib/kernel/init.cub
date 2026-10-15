@@ -589,6 +589,11 @@ export class Kernel:
             return "value", {view: proc.view}
         h.view = view
 
+        def klog(proc, req):
+            k:log(tostring(req.text))
+            return "value", {ok: true}
+        h.klog = klog
+
         def out(proc, req):
             if proc.out != nil:
                 proc.out(req.text)

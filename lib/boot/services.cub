@@ -12,6 +12,7 @@
 #     timeout: 10000,                 сколько ждать готовности (мс)
 #     enabled: true,
 #     safe: false                     не запускать в безопасном режиме (по умолчанию запускается)
+#     args: {…}                       словарь для main(sys, args); к нему добавляется args.system (контекст загрузки)
 #   }
 #
 # Состояния: stopped, starting, running, failed (исчерпаны перезапуски или не стала готова), blocked (не запустились нужные службы),
@@ -34,7 +35,7 @@ export def normalize(raw, source="?"):
     return {name: raw.name, module: raw.module, program: raw.program, description: raw.description ?? "",
         requires: _list(raw.requires), after: _list(raw.after), restart: raw.restart ?? "on-failure",
         max_restarts: raw.max_restarts ?? 5, restart_delay: raw.restart_delay ?? 1000, ready: raw.ready ?? "register",
-        timeout: raw.timeout ?? 10000, enabled: raw.enabled != false, safe: raw.safe}
+        timeout: raw.timeout ?? 10000, enabled: raw.enabled != false, safe: raw.safe, args: raw.args ?? {}}
 
 # читает все манифесты каталога; ошибочные пропускает и возвращает список ошибок вторым значением
 export def load_manifests(fsys, dir=nil):
@@ -100,6 +101,7 @@ export class ServiceManager:
         self.importer = o.import
         self.subject = o.subject ?? rules_mod.subject("system", ["system"])
         self.view = o.view
+        self.context = o.context
         self.on_state = o.on_state
         self.log = o.log
         self.manifests = {}
@@ -157,6 +159,14 @@ export class ServiceManager:
             raise Error("module " .. m.module .. " has no main(sys, args)")
         return mod.main
 
+    # аргументы main(sys, args): args из манифеста и system (контекст загрузки: fsys, kernel, services, sessions...)
+    def _args_for(self, m):
+        a = {}
+        for k, v in m.args:
+            a[k] = v
+        a.system = self.context
+        return a
+
     # надзиратель: запускает службу, ждёт её конца, перезапускает по правилам; работает как процесс
     def _supervise(self, sys, m):
         let me = self
@@ -166,7 +176,7 @@ export class ServiceManager:
             if not ok:
                 self:_set(m.name, "failed", program)
                 return
-            pid = sys.spawn(program, [], {name: m.name, subject: self.subject, detached: true, view: self.view})
+            pid = sys.spawn(program, self:_args_for(m), {name: m.name, subject: self.subject, detached: true, view: self.view})
             st.pid = pid
             if m.ready == "immediate":
                 self:_set(m.name, "running")

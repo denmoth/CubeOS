@@ -1,0 +1,93 @@
+# cfs.virtual: провайдер CFS только для чтения, дерево строится заново при каждом обращении (/cubeos/proc, /run, /hardware)
+#
+#   fsys:mount("/cubeos/proc", virtual.new(() => {version: "0.3.0", 1: {status: "..."}}))
+#
+# build() возвращает вложенную таблицу: таблица это каталог, строка, число, булево или функция (строка по требованию) это файл.
+# Ключи (числа тоже) становятся именами. Любое изменение даёт EROFS. Интерфейс провайдера описан в cfs.memory.
+
+import cfs.path as paths
+import cfs.errors as errors
+
+def _default_now():
+    return os.epoch("utc")
+
+def _content(v):
+    if type(v) == "function":
+        v = v()
+    if type(v) == "string":
+        return v
+    return tostring(v)
+
+export class Virtual:
+    def init(self, build, opts=nil):
+        o = opts ?? {}
+        self.build = build
+        self.now = o.now ?? _default_now
+
+    def _find(self, rel):
+        node = self.build()
+        for seg in paths.split(rel):
+            if type(node) != "table":
+                return nil
+            child = node[seg]
+            if child == nil:
+                child = node[tonumber(seg)]
+            if child == nil:
+                return nil
+            node = child
+        return node
+
+    def is_readonly(self):
+        return true
+
+    def stat(self, rel):
+        node = self:_find(rel)
+        if node == nil:
+            return nil
+        if type(node) == "table":
+            return {type: "dir", size: 0, modified: self.now()}
+        return {type: "file", size: len(_content(node)), modified: self.now()}
+
+    def list(self, rel):
+        node = self:_find(rel)
+        if node == nil:
+            errors.fail("ENOENT", "no such directory", rel)
+        if type(node) != "table":
+            errors.fail("ENOTDIR", "not a directory", rel)
+        names = []
+        for name, child in node:
+            names[len(names) + 1] = tostring(name)
+        table.sort(names)
+        return names
+
+    def read(self, rel):
+        node = self:_find(rel)
+        if node == nil:
+            errors.fail("ENOENT", "no such file", rel)
+        if type(node) == "table":
+            errors.fail("EISDIR", "is a directory", rel)
+        return _content(node)
+
+    def write(self, rel, data):
+        errors.fail("EROFS", "read-only file system", rel)
+
+    def mkdir(self, rel):
+        errors.fail("EROFS", "read-only file system", rel)
+
+    def remove(self, rel):
+        errors.fail("EROFS", "read-only file system", rel)
+
+    def move(self, from_rel, to_rel):
+        errors.fail("EROFS", "read-only file system", from_rel)
+
+    def copy(self, from_rel, to_rel):
+        errors.fail("EROFS", "read-only file system", from_rel)
+
+    def free_space(self):
+        return nil
+
+    def capacity(self):
+        return nil
+
+export def new(build, opts=nil):
+    return Virtual(build, opts)

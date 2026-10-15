@@ -1,0 +1,48 @@
+import t
+import cfs
+import cfs.rules as rules
+eq = t.eq
+
+counter = {n: 0}
+def build():
+    counter.n = counter.n + 1
+    return {version: "0.3.0", 12: {status: "running", cpu: 5}, lazy: () => "lazy " .. counter.n, empty: {}}
+
+fsys = cfs.new({})
+fsys:mount("/", cfs.memory())
+fsys:mkdir(nil, "/cubeos", {parents: true})
+fsys:mount("/cubeos/proc", cfs.virtual(build))
+
+eq(fsys:read_file(nil, "/cubeos/proc/version"), "0.3.0", "a string is a file")
+eq(fsys:read_file(nil, "/cubeos/proc/12/status"), "running", "numeric keys are directories")
+eq(fsys:read_file(nil, "/cubeos/proc/12/cpu"), "5", "numbers are converted to text")
+eq(fsys:read_file(nil, "/cubeos/proc/lazy"), "lazy " .. counter.n, "functions give the content on demand")
+names = []
+for e in fsys:list(nil, "/cubeos/proc"):
+    names[len(names) + 1] = e.name
+eq(names, ["12", "empty", "lazy", "version"], "the listing is sorted and includes every key")
+eq(fsys:stat(nil, "/cubeos/proc/12").type, "dir", "tables are directories")
+eq(fsys:stat(nil, "/cubeos/proc/version").size, 5, "file size is the text length")
+eq(fsys:stat(nil, "/cubeos/proc/nothing"), nil, "a missing path has no stat")
+eq(fsys:exists(nil, "/cubeos/proc/12/status"), true, "exists")
+
+# изменения запрещены
+ok, err = pcall(() => fsys:write_file(nil, "/cubeos/proc/new", "x"))
+eq(ok, false, "writing is refused")
+eq(err.code, "EROFS", "with the read-only code")
+ok, err = pcall(() => fsys:mkdir(nil, "/cubeos/proc/dir"))
+eq(ok, false, "mkdir is refused")
+ok, err = pcall(() => fsys:remove(nil, "/cubeos/proc/version"))
+eq(ok, false, "remove is refused")
+
+# дерево перестраивается при каждом обращении
+before = counter.n
+fsys:read_file(nil, "/cubeos/proc/version")
+eq(counter.n > before, true, "the tree is rebuilt on access")
+mounts = fsys:mounts_info()
+found = false
+for m in mounts:
+    if m.path == "/cubeos/proc":
+        found = m.readonly
+eq(found, true, "the mount reports read-only")
+print("done")

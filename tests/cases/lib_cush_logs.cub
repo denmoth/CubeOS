@@ -1,0 +1,72 @@
+import t
+import term.vterm as vterm
+import compat.env as compat_env
+import compat.proc as compat_proc
+import cush.shell as cush
+eq = t.eq
+
+DIR = "/repo/build/logs-test"
+HIST = "/repo/build/cush_logs_history"
+if fs.exists(HIST):
+    fs.delete(HIST)
+if fs.exists(DIR):
+    fs.delete(DIR)
+fs.makeDir(DIR)
+
+def put(name, text):
+    f = fs.open(DIR .. "/" .. name, "w")
+    f.write(text)
+    f.close()
+
+put("system.log", "2026-10-15T12:00:00Z info logd log service started\n2026-10-15T12:00:01Z debug kernel spawn 3 init\n2026-10-15T12:00:02Z warn timed the clock jumped\n2026-10-15T12:00:03Z error netd cannot start\nnot a log line\n")
+put("timed.log", "2026-10-15T12:00:02Z warn timed the clock jumped\n")
+
+def make():
+    vt = vterm.new(80, 24, {history: 200})
+    env = compat_env.new({vterm: vt})
+    env.cush_opts = {history_path: HIST, greeting: false, user: "tester", host: "cube", log_dir: DIR}
+    proc = compat_proc.new(env, "cush", [], {name: "cush", main: cush.main})
+    proc:start()
+    return vt, proc
+
+def run(proc, text):
+    for i in range[1, string.len(text)]:
+        proc:feed("char", string.sub(text, i, i))
+    proc:feed("key", keys.enter, false)
+    proc:feed("key_up", keys.enter)
+
+def screen(vt):
+    lines = []
+    for y in range[1, vt.h]:
+        lines[y] = vt:line_text(y)
+    return table.concat(lines, "\n")
+
+def has(vt, text):
+    return string.find(screen(vt), text, 1, true) != nil
+
+vt, proc = make()
+run(proc, "logs")
+eq(has(vt, "info  logd log service started"), true, "logs shows lines with level and source")
+eq(has(vt, "kernel spawn 3 init"), true, "debug lines are shown by default")
+eq(has(vt, "not a log line"), false, "lines out of format are skipped")
+run(proc, "clear")
+run(proc, "logs -l warn")
+eq(has(vt, "the clock jumped"), true, "the level filter keeps warn")
+eq(has(vt, "cannot start"), true, "and error")
+eq(has(vt, "log service started"), false, "and drops info")
+run(proc, "clear")
+run(proc, "logs -n 1")
+eq(has(vt, "cannot start"), true, "-n 1 shows only the last line")
+eq(has(vt, "log service started"), false, "and nothing before it")
+run(proc, "clear")
+run(proc, "logs timed")
+eq(has(vt, "the clock jumped"), true, "a service name selects its log")
+eq(has(vt, "cannot start"), false, "without other services")
+run(proc, "logs nosuch")
+eq(has(vt, "no log for nosuch"), true, "a missing log is reported")
+run(proc, "logs -l loud")
+eq(has(vt, "unknown level loud"), true, "an unknown level is reported")
+run(proc, "logs -x")
+eq(has(vt, "unknown option -x"), true, "an unknown option is reported")
+fs.delete(DIR)
+print("done")
