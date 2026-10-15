@@ -46,7 +46,7 @@ export def spec(opts=nil):
         app.proc = proc
         app.vterm = vt
         proc:start()
-    return {id: o.id ?? "terminal", name: o.name ?? "Терминал", icon: o.icon ?? ">", desc: o.desc ?? "командная строка CraftOS", launch: launch}
+    return {id: o.id ?? "terminal", name: o.name ?? "Terminal", icon: o.icon ?? ">", desc: o.desc ?? "CraftOS command line", launch: launch}
 
 def on_exit(app, proc, ok, err, o):
     if o.exit_closes ?? true:

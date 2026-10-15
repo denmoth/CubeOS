@@ -6,13 +6,14 @@ import term.chars as chars
 import unicode
 import clock
 import svc.logd as logd
+import cush.help as help_mod
+import json5
 
+# имя -> функция; описания, флаги и примеры в реестре cush.commands (справка: cush.help)
 export const table_of = {}
-export const help_of = {}
 
-def add(name, text, fn):
+def add(name, fn):
     table_of[name] = fn
-    help_of[name] = text
 
 # ------------------------------------------------------------ вспомогательное
 
@@ -90,12 +91,12 @@ def b_cd(sh, args):
     sh.dir = full
     sh.vars.PWD = "/" .. full
     return 0
-add("cd", "cd [папка]  сменить папку", b_cd)
+add("cd", b_cd)
 
 def b_pwd(sh, args):
     sh:println("/" .. sh.dir)
     return 0
-add("pwd", "pwd  показать текущую папку", b_pwd)
+add("pwd", b_pwd)
 
 def color_for(sh, full, name):
     fsys = sh.env.fs
@@ -145,7 +146,10 @@ def b_ls(sh, args):
             d = fsys.isDir(p)
             kind = d and "d" or "-"
             mode = fsys.isReadOnly(p) and "r-" or "rw"
-            size = d and "-" or tostring(fsys.getSize(p))
+            size = "-"
+            if not d:
+                bytes = fsys.getSize(p)
+                size = flags.h and string.format("%.1fK", bytes / 1024) or tostring(bytes)
             line = kind .. mode .. " " .. string.rep(" ", 8 - string.len(size)) .. size .. " "
             sh:write_color("8", line)
             sh:write_color(color_for(sh, p, nm), nm .. (d and "/" or ""))
@@ -173,7 +177,7 @@ def b_ls(sh, args):
                     sh:write_color("0", string.rep(" ", colw - chars.length(label)))
         sh:println("")
     return 0
-add("ls", "ls [-lah1] [путь]  список файлов: цветной, колонками; -l подробно, -a со скрытыми", b_ls)
+add("ls", b_ls)
 
 def b_cat(sh, args):
     lines = input_lines(sh, "cat", args)
@@ -182,7 +186,7 @@ def b_cat(sh, args):
     for l in lines:
         sh:println(l)
     return 0
-add("cat", "cat файлы...  вывести содержимое (или то, что пришло по пайпу)", b_cat)
+add("cat", b_cat)
 
 def b_head(sh, args):
     flags, n, rest = flags_of(args, true)
@@ -192,7 +196,7 @@ def b_head(sh, args):
     for i in range[1, math.min(n ?? 10, len(lines))]:
         sh:println(lines[i])
     return 0
-add("head", "head [-n N] [файл]  первые N строк (10)", b_head)
+add("head", b_head)
 
 def b_tail(sh, args):
     flags, n, rest = flags_of(args, true)
@@ -203,7 +207,7 @@ def b_tail(sh, args):
     for i in range[math.max(1, len(lines) - count + 1), len(lines)]:
         sh:println(lines[i])
     return 0
-add("tail", "tail [-n N] [файл]  последние N строк (10)", b_tail)
+add("tail", b_tail)
 
 def b_wc(sh, args):
     flags, n, rest = flags_of(args)
@@ -226,7 +230,7 @@ def b_wc(sh, args):
         parts[len(parts) + 1] = tostring(bytes)
     sh:println(table.concat(parts, " "))
     return 0
-add("wc", "wc [-lwc] [файл]  число строк, слов и байт", b_wc)
+add("wc", b_wc)
 
 def b_sort(sh, args):
     flags, n, rest = flags_of(args)
@@ -248,7 +252,7 @@ def b_sort(sh, args):
             sh:println(l)
         last = l
     return 0
-add("sort", "sort [-rnu] [файл]  отсортировать строки", b_sort)
+add("sort", b_sort)
 
 def b_uniq(sh, args):
     flags, n, rest = flags_of(args)
@@ -272,7 +276,7 @@ def b_uniq(sh, args):
             count = 1
     flush()
     return 0
-add("uniq", "uniq [-c] [файл]  убрать подряд идущие повторы; -c считает", b_uniq)
+add("uniq", b_uniq)
 
 def b_grep(sh, args):
     flags, n, rest = flags_of(args)
@@ -308,7 +312,7 @@ def b_grep(sh, args):
     if flags.c:
         sh:println(tostring(found))
     return found > 0 and 0 or 1
-add("grep", "grep [-ivnc] текст [файл]  строки, где есть текст; -i без учёта регистра, -v наоборот, -n номера, -c число", b_grep)
+add("grep", b_grep)
 
 def b_tee(sh, args):
     lines = input_lines(sh, "tee", [])
@@ -322,7 +326,7 @@ def b_tee(sh, args):
     if f != nil:
         f.close()
     return 0
-add("tee", "tee файл  вывести то, что пришло, и записать в файл", b_tee)
+add("tee", b_tee)
 
 def b_echo(sh, args):
     flags, n, rest = flags_of(args)
@@ -332,7 +336,7 @@ def b_echo(sh, args):
     else:
         sh:println(text)
     return 0
-add("echo", "echo [-n] слова...  напечатать слова", b_echo)
+add("echo", b_echo)
 
 def b_mkdir(sh, args):
     status = 0
@@ -342,7 +346,7 @@ def b_mkdir(sh, args):
             sh:eprint("mkdir: " .. a .. ": " .. tostring(err))
             status = 1
     return status
-add("mkdir", "mkdir папки...  создать папки", b_mkdir)
+add("mkdir", b_mkdir)
 
 def b_touch(sh, args):
     for a in args:
@@ -352,7 +356,7 @@ def b_touch(sh, args):
             if f != nil:
                 f.close()
     return 0
-add("touch", "touch файлы...  создать пустые файлы", b_touch)
+add("touch", b_touch)
 
 def b_rm(sh, args):
     flags, n, rest = flags_of(args)
@@ -374,7 +378,7 @@ def b_rm(sh, args):
                 sh:eprint("rm: " .. a .. ": " .. tostring(err))
                 status = 1
     return status
-add("rm", "rm [-r] пути...  удалить файлы и папки", b_rm)
+add("rm", b_rm)
 
 def b_cp(sh, args):
     if len(args) < 2:
@@ -392,7 +396,7 @@ def b_cp(sh, args):
             sh:eprint("cp: " .. args[i] .. ": " .. tostring(err))
             status = 1
     return status
-add("cp", "cp откуда куда  копировать", b_cp)
+add("cp", b_cp)
 
 def b_mv(sh, args):
     if len(args) < 2:
@@ -410,7 +414,7 @@ def b_mv(sh, args):
             sh:eprint("mv: " .. args[i] .. ": " .. tostring(err))
             status = 1
     return status
-add("mv", "mv откуда куда  переместить или переименовать", b_mv)
+add("mv", b_mv)
 
 # ------------------------------------------------------------ среда
 
@@ -418,20 +422,20 @@ def b_clear(sh, args):
     sh.env.term.clear()
     sh.env.term.setCursorPos(1, 1)
     return 0
-add("clear", "clear  очистить экран", b_clear)
+add("clear", b_clear)
 
 def b_exit(sh, args):
     sh.exit_requested = true
     return 0
-add("exit", "exit  выйти из оболочки", b_exit)
+add("exit", b_exit)
 
-add("true", "true  ничего не делает, успех", (sh, args) => 0)
-add("false", "false  ничего не делает, неудача", (sh, args) => 1)
+add("true", (sh, args) => 0)
+add("false", (sh, args) => 1)
 
 def b_sleep(sh, args):
     os.sleep(tonumber(args[1]) ?? 1)
     return 0
-add("sleep", "sleep секунды  подождать", b_sleep)
+add("sleep", b_sleep)
 
 def b_export(sh, args):
     for a in args:
@@ -439,13 +443,13 @@ def b_export(sh, args):
         if name != nil:
             sh.vars[name] = value
     return 0
-add("export", "export ИМЯ=значение  задать переменную", b_export)
+add("export", b_export)
 
 def b_unset(sh, args):
     for a in args:
         sh.vars[a] = nil
     return 0
-add("unset", "unset ИМЯ  удалить переменную", b_unset)
+add("unset", b_unset)
 
 def b_env(sh, args):
     names = []
@@ -456,7 +460,7 @@ def b_env(sh, args):
         sh:write_color("3", k)
         sh:println("=" .. tostring(sh.vars[k]))
     return 0
-add("env", "env  показать переменные", b_env)
+add("env", b_env)
 
 def b_alias(sh, args):
     if len(args) == 0:
@@ -474,13 +478,13 @@ def b_alias(sh, args):
         elif sh.aliases[a] != nil:
             sh:println("alias " .. a .. "='" .. sh.aliases[a] .. "'")
     return 0
-add("alias", "alias [имя=команда]  задать или показать псевдонимы", b_alias)
+add("alias", b_alias)
 
 def b_unalias(sh, args):
     for a in args:
         sh.aliases[a] = nil
     return 0
-add("unalias", "unalias имя  убрать псевдоним", b_unalias)
+add("unalias", b_unalias)
 
 def b_history(sh, args):
     if args[1] == "-c":
@@ -490,7 +494,7 @@ def b_history(sh, args):
         sh:write_color("7", string.rep(" ", 5 - string.len(tostring(i))) .. i .. "  ")
         sh:println(sh.hist.items[i])
     return 0
-add("history", "history [-c]  история команд; -c очистить", b_history)
+add("history", b_history)
 
 def b_type(sh, args):
     status = 0
@@ -507,10 +511,9 @@ def b_type(sh, args):
                 sh:eprint("type: " .. a .. ": not found")
                 status = 1
     return status
-add("type", "type команда  чем является команда", b_type)
+add("type", b_type)
 
 table_of.which = table_of.type
-help_of.which = "which команда  то же, что type"
 
 # копия часов с другими настройками (для date -u и date -s)
 def derived(c, over):
@@ -545,7 +548,7 @@ def b_date(sh, args):
     else:
         sh:println(c:format("%a %e %b %Y") .. " " .. c:time_text() .. " " .. c:zone().abbr)
     return 0
-add("date", "date [-u] [-s] [+формат]  дата и время (-u UTC, -s с секундами)", b_date)
+add("date", b_date)
 
 def tdc_status(sh):
     c = sh.time
@@ -611,7 +614,7 @@ def b_timedatectl(sh, args):
             sh:eprint("timedatectl: the setting is applied but not saved: " .. tostring(why))
             return 1
     return 0
-add("timedatectl", "timedatectl [команда]  время: зона, источник, секунды, формат", b_timedatectl)
+add("timedatectl", b_timedatectl)
 
 const LEVEL_COLORS = {debug: "8", info: "0", warn: "4", error: "e", crit: "e"}
 
@@ -651,9 +654,16 @@ def b_logs(sh, args):
     if not sh.env.fs.exists(path):
         sh:eprint("logs: no log for " .. source)
         return 1
+    # строки не по формату журнала (журнал ввода, заголовки) показываются как есть, если не просили уровень
     def show(line):
         rec = logd.parse_line(line)
-        if rec == nil or (logd.rank(rec.level) ?? 2) < want:
+        if rec == nil:
+            if level != nil:
+                return false
+            sh:write_color("7", line)
+            sh:println("")
+            return true
+        if (logd.rank(rec.level) ?? 2) < want:
             return false
         sh:write_color("7", rec.time .. " ")
         sh:write_color(LEVEL_COLORS[rec.level] ?? "0", string.sub(rec.level .. "     ", 1, 5) .. " ")
@@ -663,7 +673,8 @@ def b_logs(sh, args):
     lines = read_lines(sh, path)
     shown = []
     for line in lines:
-        if logd.parse_line(line) != nil and (logd.rank(logd.parse_line(line).level) ?? 2) >= want:
+        rec = logd.parse_line(line)
+        if (rec == nil and level == nil) or (rec != nil and (logd.rank(rec.level) ?? 2) >= want):
             shown[len(shown) + 1] = line
     first = math.max(1, len(shown) - n + 1)
     for k in range[first, len(shown)]:
@@ -679,7 +690,7 @@ def b_logs(sh, args):
                 show(lines[k])
             seen = len(lines)
     return 0
-add("logs", "logs [-f] [-n N] [-l уровень] [служба]  журнал системы или службы", b_logs)
+add("logs", b_logs)
 
 # shutdown / reboot: просьба службе питания через sh.power(action) -> ok, причина (сессия подставляет вызов powerd)
 def power_command(action):
@@ -694,10 +705,10 @@ def power_command(action):
         sh:println("The system is going down for " .. (action == "reboot" and "reboot" or "power off") .. ".")
         return 0
     return run
-add("shutdown", "shutdown  выключить компьютер штатно", power_command("shutdown"))
-add("poweroff", "poweroff  то же, что shutdown", power_command("shutdown"))
-add("reboot", "reboot  перезагрузить компьютер штатно", power_command("reboot"))
-add("restart", "restart  то же, что reboot", power_command("reboot"))
+add("shutdown", power_command("shutdown"))
+add("poweroff", power_command("shutdown"))
+add("reboot", power_command("reboot"))
+add("restart", power_command("reboot"))
 
 # inputlog [on|off|status]: журнал ввода (D220), каждое нажатие клавиши в /cubeos/var/log/input.log, кроме паролей
 def b_inputlog(sh, args):
@@ -725,23 +736,23 @@ def b_inputlog(sh, args):
     if st.delete:
         sh:println("The file is deleted " .. st.ttl_minutes .. " minutes after it was created.")
     return 0
-add("inputlog", "inputlog [on|off|status]  журнал ввода для отладки клавиатуры", b_inputlog)
+add("inputlog", b_inputlog)
 
 def b_whoami(sh, args):
     sh:println(sh.vars.USER)
     return 0
-add("whoami", "whoami  имя пользователя", b_whoami)
+add("whoami", b_whoami)
 
 def b_hostname(sh, args):
     sh:println(sh.vars.HOST)
     return 0
-add("hostname", "hostname  имя компьютера", b_hostname)
+add("hostname", b_hostname)
 
 def b_uptime(sh, args):
     secs = math.floor(os.clock())
     sh:println("up " .. math.floor(secs / 3600) .. "h " .. math.floor(secs / 60) % 60 .. "m " .. secs % 60 .. "s")
     return 0
-add("uptime", "uptime  сколько работает компьютер", b_uptime)
+add("uptime", b_uptime)
 
 # ------------------------------------------------------------ задачи
 
@@ -753,7 +764,7 @@ def b_jobs(sh, args):
             sh:write_color(j.stopped and "4" or "5", state .. string.rep(" ", 9 - string.len(state)))
             sh:println(j.name)
     return 0
-add("jobs", "jobs  фоновые задачи", b_jobs)
+add("jobs", b_jobs)
 
 def b_fg(sh, args):
     j = sh:find_job(args[1])
@@ -762,7 +773,7 @@ def b_fg(sh, args):
         return 1
     sh:promote(j)
     return 0
-add("fg", "fg [%N]  вернуть задачу на передний план", b_fg)
+add("fg", b_fg)
 
 def b_bg(sh, args):
     j = sh:find_job(args[1])
@@ -772,7 +783,7 @@ def b_bg(sh, args):
     j.stopped = false
     sh:println("[" .. j.id .. "] " .. j.name)
     return 0
-add("bg", "bg [%N]  продолжить остановленную задачу в фоне", b_bg)
+add("bg", b_bg)
 
 def b_kill(sh, args):
     j = sh:find_job(args[1])
@@ -781,31 +792,30 @@ def b_kill(sh, args):
         return 1
     sh:kill_job(j)
     return 0
-add("kill", "kill %N  завершить задачу", b_kill)
+add("kill", b_kill)
 
+# help [команда | слово]: справка из реестра (cush.help)
 def b_help(sh, args):
-    names = []
-    for k, v in help_of:
-        names[len(names) + 1] = k
-    for k, v in sh.extra:
-        if help_of[k] == nil:
-            names[len(names) + 1] = k
-    table.sort(names)
-    sh:write_color("4", "CubeOS cush")
-    sh:println("  оболочка с пайпами, фоновыми задачами и подсветкой")
-    sh:println("")
-    sh:write_color("3", "Команды")
-    sh:println(" (остальное это программы CraftOS из /rom/programs и ваши):")
-    for k in names:
-        text = help_of[k] ?? sh.extra_help[k] ?? ""
-        sh:write_color("5", k .. string.rep(" ", 9 - string.len(k)))
-        sh:println(text)
-    sh:println("")
-    sh:write_color("3", "Строка")
-    sh:println(": | пайп, > >> < файлы, & фон, ; && || цепочки, $ПЕРЕМЕННАЯ, ~ дом, 'кавычки'")
-    sh:write_color("3", "Клавиши")
-    sh:println(": Tab дополнить, Ctrl+R поиск в истории, Shift+стрелки выделение,")
-    sh:println("  Shift+PgUp/PgDn и колесо мыши прокрутка, Ctrl+C прервать, Ctrl+Z остановить задачу,")
-    sh:println("  Ctrl+Shift или Alt+Shift раскладка, правая кнопка мыши вставить выделенное")
-    return 0
-add("help", "help  что умеет оболочка", b_help)
+    return help_mod.run(sh, args)
+add("help", b_help)
+
+# locale [set LANG | list]: язык оболочки и справки (cush.conf: lang); без CC:Graphics текст остаётся английским
+def b_locale(sh, args):
+    sub = args[1]
+    if sub == nil:
+        sh:println("Language: " .. sh.lang .. (sh.lang_wanted != nil and sh.lang_wanted != sh.lang and (" (" .. sh.lang_wanted .. " needs the pixel terminal)") or ""))
+        return 0
+    if sub == "list":
+        for l in sh:languages():
+            sh:println(l)
+        return 0
+    if sub == "set" and args[2] != nil:
+        ok, why = sh:save_lang(args[2])
+        if not ok:
+            sh:eprint("locale: " .. tostring(why))
+            return 1
+        sh:println("Language: " .. sh.lang .. (sh.lang_wanted != sh.lang and (" (" .. sh.lang_wanted .. " needs the pixel terminal)") or ""))
+        return 0
+    sh:eprint("usage: locale [set LANG | list]")
+    return 2
+add("locale", b_locale)

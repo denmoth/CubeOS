@@ -149,7 +149,7 @@ export class Editor:
             sel_lo = math.min(self.anchor, self.pos)
             sel_hi = math.max(self.anchor, self.pos)
         if self.search != nil:
-            label = "(поиск) `" .. self.search.query .. "': "
+            label = "(search) `" .. self.search.query .. "': "
             term.setCursorPos(1, self.sy)
             term.setTextColor(_color("9"))
             term.write(label)

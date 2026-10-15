@@ -1,0 +1,74 @@
+# i18n: переводы текста системы (D228, docs/18). Английский текст в коде это база и ключ; переводы лежат в файлах .lang,
+# по одному на язык: <каталог>/<язык>.lang (сейчас /repo/assets/lang, позже в пакетах).
+#
+# Формат .lang (как PO у gettext, без лишнего):
+#   # комментарий
+#   msgid "List files in a folder"
+#   msgstr "Список файлов в папке"
+# Строки в кавычках, внутри \" и \n; пустой msgstr значит «перевода нет» (покажется английский).
+#
+#   cat = i18n.catalog("ru", "/repo/assets/lang")   каталог языка (без файла пустой: всё по-английски)
+#   cat:t("List files in a folder")                 перевод или сам текст
+#   cat:f("{n} files in {dir}", {n: 3, dir: "/"})   перевод и подстановка {имя}
+#   i18n.parse(text)                                {msgid: msgstr}
+#   i18n.LANGS                                      языки, у которых есть переводы системы
+
+export const LANGS = ["en", "ru", "uk"]
+
+def _unquote(s):
+    body = string.match(s, '^"(.*)"%s*$')
+    if body == nil:
+        return nil
+    out = string.gsub(body, '\\(.)', (c) => c == "n" and "\n" or c)
+    return out
+
+export def parse(text):
+    out = {}
+    id = nil
+    for line in string.gmatch((text ?? "") .. "\n", "([^\n]*)\n"):
+        key, rest = string.match(line, "^%s*(msg%a+)%s+(.*)$")
+        if key == "msgid":
+            id = _unquote(rest)
+        elif key == "msgstr" and id != nil:
+            s = _unquote(rest)
+            if s != nil and s != "":
+                out[id] = s
+            id = nil
+    return out
+
+export class Catalog:
+    def init(self, lang, table_=nil):
+        self.lang = lang
+        self.table = table_ ?? {}
+
+    def t(self, text):
+        return self.table[text] ?? text
+
+    # перевод и подстановка {имя} из vars
+    def f(self, text, vars=nil):
+        s = self:t(text)
+        if vars == nil:
+            return s
+        out = string.gsub(s, "{(%w+)}", (k) => vars[k] != nil and tostring(vars[k]) or ("{" .. k .. "}"))
+        return out
+
+    def has(self, text):
+        return self.table[text] != nil
+
+# каталог языка lang из dir (fs: CraftOS-подобный fs, по умолчанию настоящий); английский и неизвестный язык дают пустой каталог
+export def catalog(lang, dir, fsys=nil):
+    f = fsys ?? fs
+    if lang == nil or lang == "en" or dir == nil:
+        return Catalog("en")
+    path = dir .. "/" .. lang .. ".lang"
+    if not f.exists(path):
+        return Catalog(lang)
+    h = f.open(path, "r")
+    if h == nil:
+        return Catalog(lang)
+    text = h.readAll()
+    h.close()
+    return Catalog(lang, parse(text))
+
+export def english():
+    return Catalog("en")

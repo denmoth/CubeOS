@@ -1,0 +1,206 @@
+# cush.help: справка оболочки из реестра команд (cush.commands, D228) с переводом (sh.i18n, lib/i18n.cub).
+#
+#   help.run(sh, args)          команда help: без аргументов обзор по группам; help <команда>; help <слово> ищет по именам и описаниям
+#   help.command(sh, name)      полная справка одной команды (её же показывает <команда> --help); false, если такой нет
+#   help.known(name)            есть ли запись в реестре
+# Длинный вывод листается (page): Пробел следующий экран, Enter строка, q выход; в пайпе выводится целиком.
+# Программы CraftOS из /rom/programs тоже в справке: описание берётся из /rom/help/<имя>.txt во время работы (код ROM не копируется).
+
+import cush.commands as reg
+import textwrap
+import unicode
+
+# строка из кусков [[цвет, текст], ...]
+def _line(parts):
+    return parts
+
+def tr(sh, text):
+    return sh.i18n != nil and sh.i18n:t(text) or text
+
+def _width(sh):
+    w, h = sh.env.term.getSize()
+    return w, h
+
+# вывод строк с листанием
+export def page(sh, lines):
+    w, h = _width(sh)
+    room = h - 1
+    shown = 0
+    i = 1
+    while i <= len(lines):
+        if not sh.piped and shown >= room:
+            sh:write_color("8", tr(sh, "-- more: Space next page, Enter next line, q quit --"))
+            key = nil
+            while key == nil:
+                ev, code = os.pullEvent("key")
+                if code == keys.space or code == keys.enter or code == keys.q or code == keys.numPadEnter:
+                    key = code
+            x, y = sh.env.term.getCursorPos()
+            sh.env.term.setCursorPos(1, y)
+            sh.env.term.clearLine()
+            if key == keys.q:
+                return
+            room = key == keys.space and (h - 1) or 1
+            shown = 0
+        for part in lines[i]:
+            sh:write_color(part[1], part[2])
+        sh:println("")
+        shown += 1
+        i += 1
+
+def _pad(text, n):
+    return text .. string.rep(" ", math.max(1, n - unicode.length(text)))
+
+# перенос текста с отступом
+def _wrapped(text, width, indent, color="0"):
+    out = []
+    for l in textwrap.wrap(text, math.max(10, width - indent)):
+        out[len(out) + 1] = [[color, string.rep(" ", indent) .. l]]
+    return out
+
+def _append(dst, src):
+    for l in src:
+        dst[len(dst) + 1] = l
+
+export def known(name):
+    return reg.COMMANDS[name] != nil
+
+# программы CraftOS (не встроенные): имя -> первое предложение из /rom/help/<имя>.txt
+def _rom_summary(name):
+    path = "/rom/help/" .. name .. ".txt"
+    if not fs.exists(path):
+        return nil
+    f = fs.open(path, "r")
+    if f == nil:
+        return nil
+    text = f.readAll() ?? ""
+    f.close()
+    first = string.match(text, "^%s*([^\n]+)") ?? ""
+    sentence = string.match(first, "^(.-[%.!?])%s") ?? first
+    if unicode.length(sentence) > 70:
+        sentence = unicode.sub(sentence, 1, 67) .. "..."
+    return sentence
+
+def _programs(sh):
+    out = []
+    for name in sh:program_names():
+        if reg.COMMANDS[name] == nil:
+            out[len(out) + 1] = name
+    table.sort(out)
+    return out
+
+# обзор: группы с командами, строка, клавиши
+export def overview(sh):
+    w, h = _width(sh)
+    lines = []
+    lines[1] = [["4", "CubeOS cush"], ["0", "  " .. tr(sh, "commands by group; 'help NAME' tells all about one, 'help WORD' finds commands")]]
+    for cat in reg.CATEGORIES:
+        names = []
+        for name, c in reg.COMMANDS:
+            if c.cat == cat[1]:
+                names[len(names) + 1] = name
+        table.sort(names)
+        head = tr(sh, cat[2]) .. ": "
+        text = table.concat(names, " ")
+        wrapped = textwrap.wrap(text, math.max(10, w - unicode.length(head)))
+        for i, l in wrapped:
+            if i == 1:
+                lines[len(lines) + 1] = [["3", head], ["5", l]]
+            else:
+                lines[len(lines) + 1] = [["5", string.rep(" ", unicode.length(head)) .. l]]
+    progs = _programs(sh)
+    if len(progs) > 0:
+        head = tr(sh, "CraftOS programs") .. ": "
+        for i, l in textwrap.wrap(table.concat(progs, " "), math.max(10, w - unicode.length(head))):
+            lines[len(lines) + 1] = i == 1 and [["3", head], ["0", l]] or [["0", string.rep(" ", unicode.length(head)) .. l]]
+    lines[len(lines) + 1] = []
+    lines[len(lines) + 1] = [["3", tr(sh, "Command line")]]
+    for item in reg.LINE_HELP:
+        lines[len(lines) + 1] = [["5", "  " .. _pad(item[1], 9)], ["0", tr(sh, item[2])]]
+    lines[len(lines) + 1] = [["3", tr(sh, "Keys")]]
+    for item in reg.KEY_HELP:
+        _append(lines, _keyline(sh, item, w))
+    page(sh, lines)
+    return 0
+
+def _keyline(sh, item, w):
+    head = "  " .. _pad(item[1], 18)
+    out = []
+    for i, l in textwrap.wrap(tr(sh, item[2]), math.max(10, w - 20)):
+        out[len(out) + 1] = i == 1 and [["5", head], ["0", l]] or [["0", string.rep(" ", 20) .. l]]
+    return out
+
+# полная справка команды
+export def command(sh, name):
+    c = reg.COMMANDS[name]
+    w, h = _width(sh)
+    lines = []
+    if c == nil:
+        summary = _rom_summary(name)
+        if summary == nil and sh:resolve_program(name) == nil:
+            return false
+        lines[1] = [["5", name], ["0", "  " .. tr(sh, "CraftOS program")]]
+        if summary != nil:
+            _append(lines, _wrapped(summary, w, 2))
+        lines[len(lines) + 1] = [["8", "  " .. tr(sh, "More: the program's own help, if it has one (try: NAME -h)")]]
+        page(sh, lines)
+        return true
+    lines[1] = [["5", name], ["0", "  " .. tr(sh, c.summary)]]
+    lines[len(lines) + 1] = []
+    lines[len(lines) + 1] = [["3", tr(sh, "Usage") .. ": "], ["0", c.usage]]
+    if c.about != nil:
+        _append(lines, _wrapped(tr(sh, c.about), w, 2))
+    if len(c.flags) > 0:
+        lines[len(lines) + 1] = [["3", tr(sh, "Options")]]
+        widest = 0
+        for f in c.flags:
+            widest = math.max(widest, unicode.length(f[1]))
+        col = math.min(widest + 4, math.floor(w / 2))
+        for f in c.flags:
+            text = textwrap.wrap(tr(sh, f[2]), math.max(10, w - col))
+            for i, l in text:
+                if i == 1:
+                    lines[len(lines) + 1] = [["9", "  " .. _pad(f[1], col - 2)], ["0", l]]
+                else:
+                    lines[len(lines) + 1] = [["0", string.rep(" ", col) .. l]]
+    if len(c.examples) > 0:
+        lines[len(lines) + 1] = [["3", tr(sh, "Examples")]]
+        for e in c.examples:
+            lines[len(lines) + 1] = [["5", "  " .. e[1]]]
+            _append(lines, _wrapped(tr(sh, e[2]), w, 4, "8"))
+    if len(c.see) > 0:
+        lines[len(lines) + 1] = [["3", tr(sh, "See also") .. ": "], ["5", table.concat(c.see, ", ")]]
+    page(sh, lines)
+    return true
+
+# поиск по имени и описанию (английскому и переведённому); quiet: не ругаться, если ничего нет
+export def search(sh, word, quiet=false):
+    needle = string.lower(word)
+    found = []
+    for name, c in reg.COMMANDS:
+        hay = string.lower(name .. " " .. c.summary .. " " .. tr(sh, c.summary) .. " " .. (c.about ?? "") .. " " .. tr(sh, c.about ?? ""))
+        if string.find(hay, needle, 1, true) != nil:
+            found[len(found) + 1] = name
+    table.sort(found)
+    lines = []
+    if len(found) == 0:
+        if quiet:
+            return 0
+        sh:eprint("help: " .. tr(sh, "nothing about") .. " '" .. word .. "'; " .. tr(sh, "try: help"))
+        return 1
+    lines[1] = [["3", tr(sh, "Commands about") .. " '" .. word .. "':"]]
+    for name in found:
+        lines[len(lines) + 1] = [["5", "  " .. _pad(name, 12)], ["0", tr(sh, reg.COMMANDS[name].summary)]]
+    page(sh, lines)
+    return 0
+
+export def run(sh, args):
+    if len(args) == 0:
+        return overview(sh)
+    name = args[1]
+    if known(name):
+        command(sh, name)
+        return 0
+    # не встроенная: программа CraftOS (если есть) и команды, где встречается это слово
+    shown = command(sh, name)
+    return search(sh, name, shown)

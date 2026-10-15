@@ -1,0 +1,634 @@
+# CubeOS: перевод оболочки и справки (uk). Создано tools/gen_lang.py из tools/lang_data.py; править там.
+
+msgid "List the files in a folder"
+msgstr "Список файлів у теці"
+
+msgid "Shows the folder you are in, or the one you name. Folders come first and end with a slash; programs are green."
+msgstr "Показує поточну теку або ту, що вказали. Спочатку йдуть теки (зі слешем у кінці); програми зелені."
+
+msgid "Go to another folder"
+msgstr "Перейти до іншої теки"
+
+msgid "Without a folder it takes you home (~). 'cd -' goes back to the folder you were in before; '..' is the folder above."
+msgstr "Без теки переходить додому (~). 'cd -' повертає до попередньої теки; '..' це тека вище."
+
+msgid "Show the folder you are in"
+msgstr "Показати поточну теку"
+
+msgid "Prints the full path of the current folder."
+msgstr "Друкує повний шлях поточної теки."
+
+msgid "Print files"
+msgstr "Вивести файли"
+
+msgid "Prints the files one after another. Without files it prints what comes through a pipe."
+msgstr "Друкує файли один за одним. Без файлів друкує те, що прийшло через пайп."
+
+msgid "Create folders"
+msgstr "Створити теки"
+
+msgid "Creates the folders, together with any missing folders above them."
+msgstr "Створює теки разом з відсутніми теками вище."
+
+msgid "Create empty files"
+msgstr "Створити порожні файли"
+
+msgid "Creates empty files; existing files are left as they are."
+msgstr "Створює порожні файли; наявні не чіпає."
+
+msgid "Delete files and folders"
+msgstr "Видалити файли й теки"
+
+msgid "Deletes for good, there is no undo here. A folder needs -r. The root and /rom cannot be removed."
+msgstr "Видаляє назавжди, скасувати не можна. Для теки потрібен -r. Корінь і /rom видалити не можна."
+
+msgid "Copy files"
+msgstr "Копіювати файли"
+
+msgid "Copies files or folders. If the destination is a folder, the copies go inside it under their own names."
+msgstr "Копіює файли або теки. Якщо ціль це тека, копії кладуться в неї під своїми іменами."
+
+msgid "Move or rename"
+msgstr "Перемістити або перейменувати"
+
+msgid "Moves files or folders. With one file and a new name it renames it."
+msgstr "Переміщує файли або теки. Один файл і нове ім'я: перейменування."
+
+msgid "Print words"
+msgstr "Надрукувати слова"
+
+msgid "Prints its words separated by spaces. Variables like $HOME are replaced by their values."
+msgstr "Друкує слова через пробіл. Змінні на кшталт $HOME замінюються значеннями."
+
+msgid "First lines of a file"
+msgstr "Перші рядки файлу"
+
+msgid "Prints the first 10 lines, or as many as you ask. Without a file it reads a pipe."
+msgstr "Друкує перші 10 рядків або скільки попросите. Без файлу читає пайп."
+
+msgid "Last lines of a file"
+msgstr "Останні рядки файлу"
+
+msgid "Prints the last 10 lines, or as many as you ask. Without a file it reads a pipe."
+msgstr "Друкує останні 10 рядків або скільки попросите. Без файлу читає пайп."
+
+msgid "Find lines that contain a text"
+msgstr "Знайти рядки з текстом"
+
+msgid "Prints the lines that contain the text; the found part is highlighted. Without a file it reads a pipe."
+msgstr "Друкує рядки, де є текст; знайдене підсвічено. Без файлу читає пайп."
+
+msgid "Count lines, words and bytes"
+msgstr "Порахувати рядки, слова й байти"
+
+msgid "Without flags prints all three numbers."
+msgstr "Без прапорців друкує всі три числа."
+
+msgid "Sort lines"
+msgstr "Відсортувати рядки"
+
+msgid "Sorts lines alphabetically."
+msgstr "Сортує рядки за абеткою."
+
+msgid "Drop repeated lines that follow each other"
+msgstr "Прибрати повтори поспіль"
+
+msgid "Keeps one line of every run of equal lines. Sort first to drop all repeats."
+msgstr "З однакових рядків поспіль лишає один. Щоб прибрати всі повтори, спершу відсортуйте."
+
+msgid "Print what comes in and save it to a file"
+msgstr "Вивести вхідне й зберегти у файл"
+
+msgid "Passes a pipe through to the screen and writes the same text to a file."
+msgstr "Пропускає пайп на екран і пише той самий текст у файл."
+
+msgid "System information with the logo"
+msgstr "Відомості про систему з логотипом"
+
+msgid "Shows the system version, user, computer, disk, graphics, peripherals, network and time."
+msgstr "Показує версію системи, користувача, комп'ютер, диск, графіку, периферію, мережу й час."
+
+msgid "Read the system log"
+msgstr "Читати журнал системи"
+
+msgid "Shows the end of the system log, or of one service's log (kernel, boot, timed, shell...). Errors are red, warnings yellow."
+msgstr "Показує кінець журналу системи або однієї служби (kernel, boot, timed, shell...). Помилки червоні, попередження жовті."
+
+msgid "Record every key you press, for debugging"
+msgstr "Записувати кожну клавішу (для налагодження)"
+
+msgid "Writes every key, character, paste and click with the time in milliseconds to /cubeos/var/log/input.log. Passwords and other hidden fields are never written: only one line saying that a secret was entered. It turns itself off after 90 minutes or at reboot, and the file is deleted 90 minutes after it was made. Administrators only. To see the login screen too, choose 'CubeOS (input log)' in the boot menu (Delete while starting)."
+msgstr "Пише кожну клавішу, символ, вставку й клік із часом до мілісекунд у /cubeos/var/log/input.log. Паролі та інші приховані поля не пишуться ніколи: лише один рядок про те, що секрет введено. Вимикається сам через 90 хвилин або під час перезавантаження, файл видаляється через 90 хвилин після створення. Лише для адміністраторів. Щоб записати й екран входу, виберіть 'CubeOS (input log)' у меню завантаження (Delete під час старту)."
+
+msgid "Your user name"
+msgstr "Ваше ім'я користувача"
+
+msgid "Prints the name you are signed in with."
+msgstr "Друкує ім'я, під яким ви увійшли."
+
+msgid "The computer's name"
+msgstr "Ім'я комп'ютера"
+
+msgid "Prints the computer label, or cubeos when it has none."
+msgstr "Друкує мітку комп'ютера або cubeos, якщо її немає."
+
+msgid "How long the computer has been on"
+msgstr "Скільки працює комп'ютер"
+
+msgid "Hours, minutes and seconds since the start."
+msgstr "Години, хвилини й секунди від запуску."
+
+msgid "Turn the computer off properly"
+msgstr "Вимкнути комп'ютер правильно"
+
+msgid "Closes programs and services, saves what they need to save, then turns the computer off."
+msgstr "Закриває програми й служби, зберігає потрібне й вимикає комп'ютер."
+
+msgid "Same as shutdown"
+msgstr "Те саме, що shutdown"
+
+msgid "Turns the computer off properly."
+msgstr "Правильно вимикає комп'ютер."
+
+msgid "Restart the computer properly"
+msgstr "Перезавантажити комп'ютер правильно"
+
+msgid "Closes programs and services, then starts the computer again."
+msgstr "Закриває програми й служби та запускає комп'ютер знову."
+
+msgid "Same as reboot"
+msgstr "Те саме, що reboot"
+
+msgid "Restarts the computer properly."
+msgstr "Правильно перезавантажує комп'ютер."
+
+msgid "Language of the shell and its help"
+msgstr "Мова оболонки й довідки"
+
+msgid "Shows or changes your language: en (English), ru (Russian), uk (Ukrainian). Translations need the pixel terminal; in text mode the text stays English because plain CC cannot draw Cyrillic."
+msgstr "Показує або змінює мову: en (англійська), ru (російська), uk (українська). Переклади видно в піксельному терміналі; у текстовому режимі текст лишається англійським, бо звичайний CC не малює кирилицю."
+
+msgid "Date and time"
+msgstr "Дата й час"
+
+msgid "Prints the date and time in your time zone (see timedatectl). A +FORMAT uses % codes: %Y year, %m month, %d day, %H hour, %M minute, %S second, %A weekday, %B month name."
+msgstr "Друкує дату й час у вашому поясі (див. timedatectl). +ФОРМАТ використовує коди %: %Y рік, %m місяць, %d день, %H година, %M хвилина, %S секунда, %A день тижня, %B назва місяця."
+
+msgid "Time zone and clock settings"
+msgstr "Часовий пояс і налаштування годинника"
+
+msgid "Without a command shows the time zone, summer time, the clock source and the in-game time. All world time zones are known; find yours by country or city."
+msgstr "Без команди показує пояс, літній час, джерело годинника та ігровий час. Відомі всі пояси світу; шукайте свій за країною або містом."
+
+msgid "Programs running in the background"
+msgstr "Програми у фоні"
+
+msgid "Lists the jobs of this shell with their numbers (%1, %2...) and state."
+msgstr "Список задач оболонки з номерами (%1, %2...) і станом."
+
+msgid "Bring a job to the front"
+msgstr "Повернути задачу на передній план"
+
+msgid "Continues a stopped or background job in the front."
+msgstr "Продовжує зупинену або фонову задачу на передньому плані."
+
+msgid "Continue a stopped job in the background"
+msgstr "Продовжити задачу у фоні"
+
+msgid "A job stopped with Ctrl+Z goes on running in the background."
+msgstr "Задача, зупинена Ctrl+Z, продовжує працювати у фоні."
+
+msgid "Stop a job"
+msgstr "Завершити задачу"
+
+msgid "Asks the job to finish (like Ctrl+T for the front program)."
+msgstr "Просить задачу завершитися (як Ctrl+T для програми на екрані)."
+
+msgid "Wait some seconds"
+msgstr "Зачекати кілька секунд"
+
+msgid "Does nothing for the given time (fractions work: 0.5)."
+msgstr "Нічого не робить заданий час (можна дроби: 0.5)."
+
+msgid "What a command is"
+msgstr "Що це за команда"
+
+msgid "Says whether a name is a built-in command, an alias or a program file."
+msgstr "Каже, чи це вбудована команда, псевдонім чи файл програми."
+
+msgid "Same as type"
+msgstr "Те саме, що type"
+
+msgid "Says what a command name runs."
+msgstr "Каже, що запускає ім'я команди."
+
+msgid "Help on commands"
+msgstr "Довідка з команд"
+
+msgid "Without anything lists the commands by group. With a command name shows its full help; with any other word finds commands about it. Every command also understands --help."
+msgstr "Без аргументів показує команди за групами. З іменем команди показує повну довідку; з іншим словом шукає команди про нього. Будь-яка команда розуміє й --help."
+
+msgid "Clear the screen"
+msgstr "Очистити екран"
+
+msgid "Empties the screen (Ctrl+L does the same)."
+msgstr "Очищає екран (те саме робить Ctrl+L)."
+
+msgid "Leave the shell"
+msgstr "Вийти з оболонки"
+
+msgid "Closes the shell and returns to the login screen."
+msgstr "Закриває оболонку й повертає на екран входу."
+
+msgid "Commands you typed before"
+msgstr "Команди, які ви вводили"
+
+msgid "Numbered list of earlier commands. Up and Down arrows walk through them, Ctrl+R searches."
+msgstr "Нумерований список попередніх команд. Стрілки вгору й униз гортають їх, Ctrl+R шукає."
+
+msgid "Short names for commands"
+msgstr "Короткі імена для команд"
+
+msgid "Without arguments lists the aliases. An alias lasts until you leave the shell; to keep it, add it to aliases in your cush.conf (/cubeos/users/NAME/cfg/cush.conf)."
+msgstr "Без аргументів показує псевдоніми. Псевдонім живе до виходу з оболонки; щоб зберегти, додайте його в aliases у вашому cush.conf (/cubeos/users/ІМ'Я/cfg/cush.conf)."
+
+msgid "Remove an alias"
+msgstr "Прибрати псевдонім"
+
+msgid "Forgets a short name made with alias."
+msgstr "Забуває коротке ім'я, задане alias."
+
+msgid "Set a variable"
+msgstr "Задати змінну"
+
+msgid "Sets a shell variable; use it as $NAME."
+msgstr "Задає змінну оболонки; використовуйте як $ІМ'Я."
+
+msgid "Remove a variable"
+msgstr "Видалити змінну"
+
+msgid "Forgets a variable."
+msgstr "Забуває змінну."
+
+msgid "List the variables"
+msgstr "Показати змінні"
+
+msgid "Prints all shell variables with their values."
+msgstr "Друкує всі змінні оболонки зі значеннями."
+
+msgid "Do nothing, successfully"
+msgstr "Нічого не робити, успішно"
+
+msgid "Exit code 0; useful in scripts."
+msgstr "Код повернення 0; корисно у скриптах."
+
+msgid "Do nothing, unsuccessfully"
+msgstr "Нічого не робити, з помилкою"
+
+msgid "Exit code 1; useful in scripts."
+msgstr "Код повернення 1; корисно у скриптах."
+
+msgid "Files and folders"
+msgstr "Файли й теки"
+
+msgid "Text and filters"
+msgstr "Текст і фільтри"
+
+msgid "System"
+msgstr "Система"
+
+msgid "Programs and jobs"
+msgstr "Програми й задачі"
+
+msgid "Shell"
+msgstr "Оболонка"
+
+msgid "Long list: type, rights and size of every entry"
+msgstr "Докладно: тип, права й розмір кожного елемента"
+
+msgid "Also show hidden files (names that start with a dot)"
+msgstr "Показати й приховані файли (імена з крапки)"
+
+msgid "One name per line (handy in pipes)"
+msgstr "По одному імені в рядку (зручно в пайпах)"
+
+msgid "With -l: sizes in KB instead of bytes"
+msgstr "З -l: розміри в КБ замість байтів"
+
+msgid "What is in the current folder"
+msgstr "Що в поточній теці"
+
+msgid "Everything in your home, hidden files too, with sizes"
+msgstr "Усе у вашій домашній теці, з прихованими й розмірами"
+
+msgid "Go to the system folder"
+msgstr "Перейти до теки системи"
+
+msgid "One folder up"
+msgstr "На теку вище"
+
+msgid "Back to the previous folder"
+msgstr "Назад до попередньої теки"
+
+msgid "Show a file"
+msgstr "Показати файл"
+
+msgid "Join two files into a new one"
+msgstr "Склеїти два файли в новий"
+
+msgid "Create games and games/saves at once"
+msgstr "Створити games і games/saves одразу"
+
+msgid "An empty file to fill later"
+msgstr "Порожній файл, щоб заповнити потім"
+
+msgid "Delete folders together with everything inside"
+msgstr "Видаляти теки разом з усім усередині"
+
+msgid "Delete a file"
+msgstr "Видалити файл"
+
+msgid "Delete a folder with its contents"
+msgstr "Видалити теку з вмістом"
+
+msgid "Make a backup copy"
+msgstr "Зробити резервну копію"
+
+msgid "Copy two files into docs"
+msgstr "Скопіювати два файли в docs"
+
+msgid "Rename a file"
+msgstr "Перейменувати файл"
+
+msgid "Move into a folder"
+msgstr "Перемістити в теку"
+
+msgid "Do not end with a new line"
+msgstr "Не переводити рядок у кінці"
+
+msgid "Greet yourself"
+msgstr "Привітатися із собою"
+
+msgid "Write a word into a file"
+msgstr "Записати слово у файл"
+
+msgid "How many lines (also written as -N, for example -5)"
+msgstr "Скільки рядків (можна й -N, наприклад -5)"
+
+msgid "The first three lines"
+msgstr "Перші три рядки"
+
+msgid "The end of a long log"
+msgstr "Кінець довгого журналу"
+
+msgid "Ignore the difference between capital and small letters"
+msgstr "Не розрізняти великі й малі літери"
+
+msgid "The opposite: lines that do NOT contain it"
+msgstr "Навпаки: рядки, де його НЕМАЄ"
+
+msgid "Show line numbers"
+msgstr "Показувати номери рядків"
+
+msgid "Only count the lines"
+msgstr "Лише порахувати рядки"
+
+msgid "Lines with 'error'"
+msgstr "Рядки зі словом 'error'"
+
+msgid "Only names with 'lua'"
+msgstr "Лише імена з 'lua'"
+
+msgid "Lines"
+msgstr "Рядки"
+
+msgid "Words"
+msgstr "Слова"
+
+msgid "Bytes"
+msgstr "Байти"
+
+msgid "How many lines"
+msgstr "Скільки рядків"
+
+msgid "How many files"
+msgstr "Скільки файлів"
+
+msgid "Reverse order"
+msgstr "У зворотному порядку"
+
+msgid "Compare as numbers (2 before 10)"
+msgstr "Порівнювати як числа (2 раніше за 10)"
+
+msgid "Drop repeated lines"
+msgstr "Прибрати повтори"
+
+msgid "A to Z"
+msgstr "Від А до Я"
+
+msgid "Biggest numbers first"
+msgstr "Спершу великі числа"
+
+msgid "Show how many times each line was repeated"
+msgstr "Показати, скільки разів повторився рядок"
+
+msgid "How often each word appears"
+msgstr "Як часто трапляється кожне слово"
+
+msgid "See the list and keep a copy"
+msgstr "Побачити список і зберегти копію"
+
+msgid "Keep watching and print new lines as they come (Ctrl+C stops)"
+msgstr "Стежити й друкувати нові рядки, щойно з'являються (Ctrl+C стоп)"
+
+msgid "How many lines (20)"
+msgstr "Скільки рядків (20)"
+
+msgid "Only this level and worse: debug, info, warn, error, crit"
+msgstr "Лише цей рівень і гірше: debug, info, warn, error, crit"
+
+msgid "Only problems"
+msgstr "Лише проблеми"
+
+msgid "Errors of shell commands"
+msgstr "Помилки команд оболонки"
+
+msgid "Watch the log live"
+msgstr "Стежити за журналом наживо"
+
+msgid "Start recording now"
+msgstr "Почати запис зараз"
+
+msgid "Stop recording"
+msgstr "Зупинити запис"
+
+msgid "Is it on and how many minutes are left"
+msgstr "Чи ввімкнено й скільки хвилин лишилося"
+
+msgid "Start, then repeat the problem"
+msgstr "Увімкнути, потім повторити проблему"
+
+msgid "Read what was recorded"
+msgstr "Прочитати записане"
+
+msgid "Use this language from now on (saved in your settings)"
+msgstr "Використовувати цю мову далі (зберігається в налаштуваннях)"
+
+msgid "Languages that have translations"
+msgstr "Мови, для яких є переклад"
+
+msgid "Switch to Russian"
+msgstr "Перемкнутися на російську"
+
+msgid "In UTC instead of your zone"
+msgstr "В UTC замість вашого поясу"
+
+msgid "With seconds"
+msgstr "Із секундами"
+
+msgid "Your own format, for example +%H:%M"
+msgstr "Свій формат, наприклад +%H:%M"
+
+msgid "Now"
+msgstr "Зараз"
+
+msgid "Only the date, like 15.10.2026"
+msgstr "Лише дата, на кшталт 15.10.2026"
+
+msgid "Show the settings (the same as no command)"
+msgstr "Показати налаштування (як без команди)"
+
+msgid "Zone name (Europe/Kyiv), offset (+03:00) or a country with one zone (japan)"
+msgstr "Ім'я поясу (Europe/Kyiv), зсув (+03:00) або країна з одним поясом (japan)"
+
+msgid "Zones with their country and offset; WORD filters by name, country or code (ua)"
+msgstr "Пояси з країною та зсувом; СЛОВО фільтрує за назвою, країною або кодом (ua)"
+
+msgid "Real time, or the Minecraft day and time"
+msgstr "Реальний час або день і час Minecraft"
+
+msgid "Show seconds in clocks"
+msgstr "Показувати секунди в годиннику"
+
+msgid "12 or 24 hour clock"
+msgstr "12- або 24-годинний формат"
+
+msgid "Zones of Germany"
+msgstr "Пояси Німеччини"
+
+msgid "Moscow time"
+msgstr "Московський час"
+
+msgid "Job 1 to the front"
+msgstr "Задачу 1 на передній план"
+
+msgid "Continue job 1"
+msgstr "Продовжити задачу 1"
+
+msgid "Stop job 2"
+msgstr "Завершити задачу 2"
+
+msgid "Print after five seconds"
+msgstr "Надрукувати через п'ять секунд"
+
+msgid "ls is built in"
+msgstr "ls вбудована в оболонку"
+
+msgid "All about ls"
+msgstr "Усе про ls"
+
+msgid "Commands about time"
+msgstr "Команди про час"
+
+msgid "The same as help grep"
+msgstr "Те саме, що help grep"
+
+msgid "Forget the whole history"
+msgstr "Забути всю історію"
+
+msgid "Earlier cd commands"
+msgstr "Попередні команди cd"
+
+msgid "ll prints a long list"
+msgstr "ll виводить докладний список"
+
+msgid "Then: echo $GREETING"
+msgstr "Потім: echo $GREETING"
+
+msgid "pass the output to the next command"
+msgstr "передати вивід наступній команді"
+
+msgid "write or add the output to a file"
+msgstr "записати або дописати вивід у файл"
+
+msgid "run in the background"
+msgstr "запустити у фоні"
+
+msgid "then / if it worked / if it failed"
+msgstr "потім / якщо вдалося / якщо не вдалося"
+
+msgid "complete a name"
+msgstr "доповнити ім'я"
+
+msgid "earlier commands; Ctrl+R searches them"
+msgstr "попередні команди; Ctrl+R шукає в них"
+
+msgid "copy the selection, or stop the program / reset the line"
+msgstr "копіювати виділене, інакше зупинити програму / скинути рядок"
+
+msgid "copy / paste"
+msgstr "копіювати / вставити"
+
+msgid "stop the program; hold it to kill a stuck program or restart the shell"
+msgstr "зупинити програму; утримання вбиває завислу програму або перезапускає оболонку"
+
+msgid "pause the program (fg / bg continue it)"
+msgstr "призупинити програму (fg / bg продовжують)"
+
+msgid "switch the keyboard layout (press and release)"
+msgstr "змінити розкладку (натиснути й відпустити)"
+
+msgid "scroll the screen"
+msgstr "прокручування екрана"
+
+msgid "-- more: Space next page, Enter next line, q quit --"
+msgstr "-- далі: Пробіл сторінка, Enter рядок, q вихід --"
+
+msgid "commands by group; 'help NAME' tells all about one, 'help WORD' finds commands"
+msgstr "команди за групами; 'help ІМ'Я' все про одну, 'help СЛОВО' шукає команди"
+
+msgid "CraftOS programs"
+msgstr "Програми CraftOS"
+
+msgid "Command line"
+msgstr "Командний рядок"
+
+msgid "Keys"
+msgstr "Клавіші"
+
+msgid "CraftOS program"
+msgstr "програма CraftOS"
+
+msgid "More: the program's own help, if it has one (try: NAME -h)"
+msgstr "Докладніше: власна довідка програми, якщо є (спробуйте: ІМ'Я -h)"
+
+msgid "Usage"
+msgstr "Використання"
+
+msgid "Options"
+msgstr "Параметри"
+
+msgid "Examples"
+msgstr "Приклади"
+
+msgid "See also"
+msgstr "Див. також"
+
+msgid "nothing about"
+msgstr "нічого про"
+
+msgid "try: help"
+msgstr "спробуйте: help"
+
+msgid "Commands about"
+msgstr "Команди про"

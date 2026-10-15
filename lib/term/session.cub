@@ -83,6 +83,7 @@ export def program(session, opts=nil):
         cfg = view:expand("$cfg")
         env.cush_opts = {history_path: cfg .. "/cush_history", config_path: cfg .. "/cush.conf", user: session.user, host: o.host,
             home: session.env.home, time: t.time, time_save: time_save, power: power, inputlog: inputlog, log: shell_log, notes: notes,
+            lang_dir: (o.assets ?? "/repo/assets") .. "/lang", unicode: out.kind == "pixel",
             info: {display: out.kind == "pixel" and "pixel mode" or "text mode", font: out.kind == "pixel" and "Monocraft 6x9" or nil}}
 
         died = {err: nil}

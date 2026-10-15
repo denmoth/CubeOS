@@ -19,6 +19,8 @@ import cush.hist as hist_mod
 import cush.editor as editor_mod
 import cush.builtins as builtins
 import cush.fetch as fetch
+import cush.help as help_mod
+import i18n
 import clock
 import json5
 import version
@@ -121,13 +123,14 @@ export class Shell:
         self.mods = {ctrl: false, shift: false, alt: false}
         self.console = env.term.current()
         self.extra = {}
-        self.extra_help = {}
         self.extra.fetch = (sh, args) => fetch.run(sh)
-        self.extra_help.fetch = "fetch  логотип и сведения о системе (fastfetch, neofetch)"
         self.programs_cache = nil
         self.config = {}
         if o.config_path != nil:
             self:_load_config(o.config_path)
+        # язык (D228): свой lang в cush.conf, иначе системный /cubeos/sys/cfg/locale.conf, иначе английский; переводы в lang_dir
+        self.lang_dir = o.lang_dir ?? "/repo/assets/lang"
+        self:set_lang(self.config.lang ?? self:_system_lang())
         self.maker = bios.do_file(env, "rom/modules/main/cc/require.lua")
         self.hist = hist_mod.new(env.fs, o.history_path ?? "/.cush_history", o.history_limit ?? 1000)
         let me = self
@@ -185,6 +188,55 @@ export class Shell:
         for k, v in (conf.aliases ?? {}):
             if type(v) == "string":
                 self.aliases[k] = v
+
+    def _system_lang(self):
+        f = self.env.fs.open("/cubeos/sys/cfg/locale.conf", "r")
+        if f == nil:
+            return "en"
+        text = f.readAll()
+        f.close()
+        ok, conf = pcall(() => json5.parse(text))
+        return ok and type(conf) == "table" and conf.lang or "en"
+
+    # opts.unicode == false (текстовый терминал без CC:Graphics не рисует кириллицу): показывается английский, выбор запоминается
+    def set_lang(self, lang):
+        self.lang_wanted = lang ?? "en"
+        self.lang = self.lang_wanted
+        if self.opts.unicode == false:
+            self.lang = "en"
+        self.i18n = i18n.catalog(self.lang, self.lang_dir)
+
+    def languages(self):
+        return i18n.LANGS
+
+    def save_lang(self, lang):
+        known = false
+        for l in i18n.LANGS:
+            if l == lang:
+                known = true
+        if not known:
+            return false, "unknown language " .. tostring(lang) .. " (" .. table.concat(i18n.LANGS, ", ") .. ")"
+        self:set_lang(lang)
+        self.config.lang = lang
+        path = self.opts.config_path
+        if path == nil:
+            return true
+        text = "{}\n"
+        f = self.env.fs.open(path, "r")
+        if f != nil:
+            text = f.readAll() ?? text
+            f.close()
+        ok, err = pcall(() => self:_write_file(path, json5.patch(text, ["lang"], lang)))
+        if not ok:
+            return false, "the language is on, but not saved: " .. tostring(err)
+        return true
+
+    def _write_file(self, path, text):
+        f = self.env.fs.open(path, "w")
+        if f == nil:
+            error("cannot write " .. path, 0)
+        f.write(text)
+        f.close()
 
     def prompt_segments(self):
         segs = []
@@ -559,6 +611,12 @@ export class Shell:
         for i in range[2, len(argv)]:
             args[len(args) + 1] = argv[i]
         fn = builtins.table_of[name] ?? self.extra[name]
+        # <команда> --help у любой встроенной команды: справка из реестра
+        if fn != nil and help_mod.known(name):
+            for a in args:
+                if a == "--help":
+                    help_mod.command(self, name)
+                    return 0
         if fn != nil:
             ok, res = pcall(fn, self, args)
             if not ok:

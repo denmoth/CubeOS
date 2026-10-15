@@ -1,0 +1,634 @@
+# CubeOS: перевод оболочки и справки (ru). Создано tools/gen_lang.py из tools/lang_data.py; править там.
+
+msgid "List the files in a folder"
+msgstr "Список файлов в папке"
+
+msgid "Shows the folder you are in, or the one you name. Folders come first and end with a slash; programs are green."
+msgstr "Показывает текущую папку или ту, что указали. Сначала идут папки (со слешем в конце); программы зелёные."
+
+msgid "Go to another folder"
+msgstr "Перейти в другую папку"
+
+msgid "Without a folder it takes you home (~). 'cd -' goes back to the folder you were in before; '..' is the folder above."
+msgstr "Без папки переходит домой (~). 'cd -' возвращает в прошлую папку; '..' это папка выше."
+
+msgid "Show the folder you are in"
+msgstr "Показать текущую папку"
+
+msgid "Prints the full path of the current folder."
+msgstr "Печатает полный путь текущей папки."
+
+msgid "Print files"
+msgstr "Вывести файлы"
+
+msgid "Prints the files one after another. Without files it prints what comes through a pipe."
+msgstr "Печатает файлы один за другим. Без файлов печатает то, что пришло по пайпу."
+
+msgid "Create folders"
+msgstr "Создать папки"
+
+msgid "Creates the folders, together with any missing folders above them."
+msgstr "Создаёт папки вместе с недостающими папками выше."
+
+msgid "Create empty files"
+msgstr "Создать пустые файлы"
+
+msgid "Creates empty files; existing files are left as they are."
+msgstr "Создаёт пустые файлы; существующие не трогает."
+
+msgid "Delete files and folders"
+msgstr "Удалить файлы и папки"
+
+msgid "Deletes for good, there is no undo here. A folder needs -r. The root and /rom cannot be removed."
+msgstr "Удаляет насовсем, отменить нельзя. Для папки нужен -r. Корень и /rom удалить нельзя."
+
+msgid "Copy files"
+msgstr "Копировать файлы"
+
+msgid "Copies files or folders. If the destination is a folder, the copies go inside it under their own names."
+msgstr "Копирует файлы или папки. Если цель это папка, копии кладутся в неё под своими именами."
+
+msgid "Move or rename"
+msgstr "Переместить или переименовать"
+
+msgid "Moves files or folders. With one file and a new name it renames it."
+msgstr "Перемещает файлы или папки. Один файл и новое имя: переименование."
+
+msgid "Print words"
+msgstr "Напечатать слова"
+
+msgid "Prints its words separated by spaces. Variables like $HOME are replaced by their values."
+msgstr "Печатает слова через пробел. Переменные вроде $HOME заменяются значениями."
+
+msgid "First lines of a file"
+msgstr "Первые строки файла"
+
+msgid "Prints the first 10 lines, or as many as you ask. Without a file it reads a pipe."
+msgstr "Печатает первые 10 строк или сколько попросите. Без файла читает пайп."
+
+msgid "Last lines of a file"
+msgstr "Последние строки файла"
+
+msgid "Prints the last 10 lines, or as many as you ask. Without a file it reads a pipe."
+msgstr "Печатает последние 10 строк или сколько попросите. Без файла читает пайп."
+
+msgid "Find lines that contain a text"
+msgstr "Найти строки с текстом"
+
+msgid "Prints the lines that contain the text; the found part is highlighted. Without a file it reads a pipe."
+msgstr "Печатает строки, где есть текст; найденное подсвечено. Без файла читает пайп."
+
+msgid "Count lines, words and bytes"
+msgstr "Посчитать строки, слова и байты"
+
+msgid "Without flags prints all three numbers."
+msgstr "Без флагов печатает все три числа."
+
+msgid "Sort lines"
+msgstr "Отсортировать строки"
+
+msgid "Sorts lines alphabetically."
+msgstr "Сортирует строки по алфавиту."
+
+msgid "Drop repeated lines that follow each other"
+msgstr "Убрать повторы подряд"
+
+msgid "Keeps one line of every run of equal lines. Sort first to drop all repeats."
+msgstr "Из одинаковых строк подряд оставляет одну. Чтобы убрать все повторы, сначала отсортируйте."
+
+msgid "Print what comes in and save it to a file"
+msgstr "Вывести входящее и сохранить в файл"
+
+msgid "Passes a pipe through to the screen and writes the same text to a file."
+msgstr "Пропускает пайп на экран и пишет тот же текст в файл."
+
+msgid "System information with the logo"
+msgstr "Сведения о системе с логотипом"
+
+msgid "Shows the system version, user, computer, disk, graphics, peripherals, network and time."
+msgstr "Показывает версию системы, пользователя, компьютер, диск, графику, периферию, сеть и время."
+
+msgid "Read the system log"
+msgstr "Читать журнал системы"
+
+msgid "Shows the end of the system log, or of one service's log (kernel, boot, timed, shell...). Errors are red, warnings yellow."
+msgstr "Показывает конец журнала системы или одной службы (kernel, boot, timed, shell...). Ошибки красные, предупреждения жёлтые."
+
+msgid "Record every key you press, for debugging"
+msgstr "Записывать каждую клавишу (для отладки)"
+
+msgid "Writes every key, character, paste and click with the time in milliseconds to /cubeos/var/log/input.log. Passwords and other hidden fields are never written: only one line saying that a secret was entered. It turns itself off after 90 minutes or at reboot, and the file is deleted 90 minutes after it was made. Administrators only. To see the login screen too, choose 'CubeOS (input log)' in the boot menu (Delete while starting)."
+msgstr "Пишет каждую клавишу, символ, вставку и клик со временем до миллисекунд в /cubeos/var/log/input.log. Пароли и другие скрытые поля не пишутся никогда: только одна строка о том, что секрет введён. Выключается сам через 90 минут или при перезагрузке, файл удаляется через 90 минут после создания. Только для администраторов. Чтобы записать и экран входа, выберите 'CubeOS (input log)' в меню загрузки (Delete при старте)."
+
+msgid "Your user name"
+msgstr "Ваше имя пользователя"
+
+msgid "Prints the name you are signed in with."
+msgstr "Печатает имя, под которым вы вошли."
+
+msgid "The computer's name"
+msgstr "Имя компьютера"
+
+msgid "Prints the computer label, or cubeos when it has none."
+msgstr "Печатает метку компьютера или cubeos, если её нет."
+
+msgid "How long the computer has been on"
+msgstr "Сколько работает компьютер"
+
+msgid "Hours, minutes and seconds since the start."
+msgstr "Часы, минуты и секунды с запуска."
+
+msgid "Turn the computer off properly"
+msgstr "Выключить компьютер правильно"
+
+msgid "Closes programs and services, saves what they need to save, then turns the computer off."
+msgstr "Закрывает программы и службы, сохраняет нужное и выключает компьютер."
+
+msgid "Same as shutdown"
+msgstr "То же, что shutdown"
+
+msgid "Turns the computer off properly."
+msgstr "Правильно выключает компьютер."
+
+msgid "Restart the computer properly"
+msgstr "Перезагрузить компьютер правильно"
+
+msgid "Closes programs and services, then starts the computer again."
+msgstr "Закрывает программы и службы и запускает компьютер заново."
+
+msgid "Same as reboot"
+msgstr "То же, что reboot"
+
+msgid "Restarts the computer properly."
+msgstr "Правильно перезагружает компьютер."
+
+msgid "Language of the shell and its help"
+msgstr "Язык оболочки и справки"
+
+msgid "Shows or changes your language: en (English), ru (Russian), uk (Ukrainian). Translations need the pixel terminal; in text mode the text stays English because plain CC cannot draw Cyrillic."
+msgstr "Показывает или меняет язык: en (английский), ru (русский), uk (украинский). Переводы видны в пиксельном терминале; в текстовом режиме текст остаётся английским, потому что обычный CC не рисует кириллицу."
+
+msgid "Date and time"
+msgstr "Дата и время"
+
+msgid "Prints the date and time in your time zone (see timedatectl). A +FORMAT uses % codes: %Y year, %m month, %d day, %H hour, %M minute, %S second, %A weekday, %B month name."
+msgstr "Печатает дату и время в вашем поясе (см. timedatectl). +ФОРМАТ использует коды %: %Y год, %m месяц, %d день, %H час, %M минута, %S секунда, %A день недели, %B название месяца."
+
+msgid "Time zone and clock settings"
+msgstr "Часовой пояс и настройки часов"
+
+msgid "Without a command shows the time zone, summer time, the clock source and the in-game time. All world time zones are known; find yours by country or city."
+msgstr "Без команды показывает пояс, летнее время, источник часов и игровое время. Известны все пояса мира; ищите свой по стране или городу."
+
+msgid "Programs running in the background"
+msgstr "Программы в фоне"
+
+msgid "Lists the jobs of this shell with their numbers (%1, %2...) and state."
+msgstr "Список задач оболочки с номерами (%1, %2...) и состоянием."
+
+msgid "Bring a job to the front"
+msgstr "Вернуть задачу на передний план"
+
+msgid "Continues a stopped or background job in the front."
+msgstr "Продолжает остановленную или фоновую задачу на переднем плане."
+
+msgid "Continue a stopped job in the background"
+msgstr "Продолжить задачу в фоне"
+
+msgid "A job stopped with Ctrl+Z goes on running in the background."
+msgstr "Задача, остановленная Ctrl+Z, продолжает работать в фоне."
+
+msgid "Stop a job"
+msgstr "Завершить задачу"
+
+msgid "Asks the job to finish (like Ctrl+T for the front program)."
+msgstr "Просит задачу завершиться (как Ctrl+T для программы на экране)."
+
+msgid "Wait some seconds"
+msgstr "Подождать несколько секунд"
+
+msgid "Does nothing for the given time (fractions work: 0.5)."
+msgstr "Ничего не делает заданное время (можно дроби: 0.5)."
+
+msgid "What a command is"
+msgstr "Что это за команда"
+
+msgid "Says whether a name is a built-in command, an alias or a program file."
+msgstr "Говорит, встроенная это команда, псевдоним или файл программы."
+
+msgid "Same as type"
+msgstr "То же, что type"
+
+msgid "Says what a command name runs."
+msgstr "Говорит, что запускает имя команды."
+
+msgid "Help on commands"
+msgstr "Справка по командам"
+
+msgid "Without anything lists the commands by group. With a command name shows its full help; with any other word finds commands about it. Every command also understands --help."
+msgstr "Без аргументов показывает команды по группам. С именем команды показывает полную справку; с другим словом ищет команды о нём. Любая команда понимает и --help."
+
+msgid "Clear the screen"
+msgstr "Очистить экран"
+
+msgid "Empties the screen (Ctrl+L does the same)."
+msgstr "Очищает экран (то же делает Ctrl+L)."
+
+msgid "Leave the shell"
+msgstr "Выйти из оболочки"
+
+msgid "Closes the shell and returns to the login screen."
+msgstr "Закрывает оболочку и возвращает на экран входа."
+
+msgid "Commands you typed before"
+msgstr "Команды, которые вы вводили"
+
+msgid "Numbered list of earlier commands. Up and Down arrows walk through them, Ctrl+R searches."
+msgstr "Нумерованный список прошлых команд. Стрелки вверх и вниз листают их, Ctrl+R ищет."
+
+msgid "Short names for commands"
+msgstr "Короткие имена для команд"
+
+msgid "Without arguments lists the aliases. An alias lasts until you leave the shell; to keep it, add it to aliases in your cush.conf (/cubeos/users/NAME/cfg/cush.conf)."
+msgstr "Без аргументов показывает псевдонимы. Псевдоним живёт до выхода из оболочки; чтобы сохранить, добавьте его в aliases в вашем cush.conf (/cubeos/users/ИМЯ/cfg/cush.conf)."
+
+msgid "Remove an alias"
+msgstr "Убрать псевдоним"
+
+msgid "Forgets a short name made with alias."
+msgstr "Забывает короткое имя, заданное alias."
+
+msgid "Set a variable"
+msgstr "Задать переменную"
+
+msgid "Sets a shell variable; use it as $NAME."
+msgstr "Задаёт переменную оболочки; используйте как $ИМЯ."
+
+msgid "Remove a variable"
+msgstr "Удалить переменную"
+
+msgid "Forgets a variable."
+msgstr "Забывает переменную."
+
+msgid "List the variables"
+msgstr "Показать переменные"
+
+msgid "Prints all shell variables with their values."
+msgstr "Печатает все переменные оболочки со значениями."
+
+msgid "Do nothing, successfully"
+msgstr "Ничего не делать, успешно"
+
+msgid "Exit code 0; useful in scripts."
+msgstr "Код возврата 0; полезно в скриптах."
+
+msgid "Do nothing, unsuccessfully"
+msgstr "Ничего не делать, с ошибкой"
+
+msgid "Exit code 1; useful in scripts."
+msgstr "Код возврата 1; полезно в скриптах."
+
+msgid "Files and folders"
+msgstr "Файлы и папки"
+
+msgid "Text and filters"
+msgstr "Текст и фильтры"
+
+msgid "System"
+msgstr "Система"
+
+msgid "Programs and jobs"
+msgstr "Программы и задачи"
+
+msgid "Shell"
+msgstr "Оболочка"
+
+msgid "Long list: type, rights and size of every entry"
+msgstr "Подробно: тип, права и размер каждого элемента"
+
+msgid "Also show hidden files (names that start with a dot)"
+msgstr "Показать и скрытые файлы (имена с точки)"
+
+msgid "One name per line (handy in pipes)"
+msgstr "По одному имени в строке (удобно в пайпах)"
+
+msgid "With -l: sizes in KB instead of bytes"
+msgstr "С -l: размеры в КБ вместо байт"
+
+msgid "What is in the current folder"
+msgstr "Что в текущей папке"
+
+msgid "Everything in your home, hidden files too, with sizes"
+msgstr "Всё в вашей домашней папке, со скрытыми и размерами"
+
+msgid "Go to the system folder"
+msgstr "Перейти в папку системы"
+
+msgid "One folder up"
+msgstr "На папку выше"
+
+msgid "Back to the previous folder"
+msgstr "Назад в прошлую папку"
+
+msgid "Show a file"
+msgstr "Показать файл"
+
+msgid "Join two files into a new one"
+msgstr "Склеить два файла в новый"
+
+msgid "Create games and games/saves at once"
+msgstr "Создать games и games/saves сразу"
+
+msgid "An empty file to fill later"
+msgstr "Пустой файл, чтобы заполнить потом"
+
+msgid "Delete folders together with everything inside"
+msgstr "Удалять папки вместе со всем внутри"
+
+msgid "Delete a file"
+msgstr "Удалить файл"
+
+msgid "Delete a folder with its contents"
+msgstr "Удалить папку с содержимым"
+
+msgid "Make a backup copy"
+msgstr "Сделать резервную копию"
+
+msgid "Copy two files into docs"
+msgstr "Скопировать два файла в docs"
+
+msgid "Rename a file"
+msgstr "Переименовать файл"
+
+msgid "Move into a folder"
+msgstr "Переместить в папку"
+
+msgid "Do not end with a new line"
+msgstr "Не переводить строку в конце"
+
+msgid "Greet yourself"
+msgstr "Поздороваться с собой"
+
+msgid "Write a word into a file"
+msgstr "Записать слово в файл"
+
+msgid "How many lines (also written as -N, for example -5)"
+msgstr "Сколько строк (можно и -N, например -5)"
+
+msgid "The first three lines"
+msgstr "Первые три строки"
+
+msgid "The end of a long log"
+msgstr "Конец длинного журнала"
+
+msgid "Ignore the difference between capital and small letters"
+msgstr "Не различать заглавные и строчные"
+
+msgid "The opposite: lines that do NOT contain it"
+msgstr "Наоборот: строки, где его НЕТ"
+
+msgid "Show line numbers"
+msgstr "Показывать номера строк"
+
+msgid "Only count the lines"
+msgstr "Только посчитать строки"
+
+msgid "Lines with 'error'"
+msgstr "Строки со словом 'error'"
+
+msgid "Only names with 'lua'"
+msgstr "Только имена с 'lua'"
+
+msgid "Lines"
+msgstr "Строки"
+
+msgid "Words"
+msgstr "Слова"
+
+msgid "Bytes"
+msgstr "Байты"
+
+msgid "How many lines"
+msgstr "Сколько строк"
+
+msgid "How many files"
+msgstr "Сколько файлов"
+
+msgid "Reverse order"
+msgstr "В обратном порядке"
+
+msgid "Compare as numbers (2 before 10)"
+msgstr "Сравнивать как числа (2 раньше 10)"
+
+msgid "Drop repeated lines"
+msgstr "Убрать повторы"
+
+msgid "A to Z"
+msgstr "От А до Я"
+
+msgid "Biggest numbers first"
+msgstr "Сначала большие числа"
+
+msgid "Show how many times each line was repeated"
+msgstr "Показать, сколько раз повторилась строка"
+
+msgid "How often each word appears"
+msgstr "Как часто встречается каждое слово"
+
+msgid "See the list and keep a copy"
+msgstr "Увидеть список и сохранить копию"
+
+msgid "Keep watching and print new lines as they come (Ctrl+C stops)"
+msgstr "Следить и печатать новые строки по мере появления (Ctrl+C стоп)"
+
+msgid "How many lines (20)"
+msgstr "Сколько строк (20)"
+
+msgid "Only this level and worse: debug, info, warn, error, crit"
+msgstr "Только этот уровень и хуже: debug, info, warn, error, crit"
+
+msgid "Only problems"
+msgstr "Только проблемы"
+
+msgid "Errors of shell commands"
+msgstr "Ошибки команд оболочки"
+
+msgid "Watch the log live"
+msgstr "Следить за журналом вживую"
+
+msgid "Start recording now"
+msgstr "Начать запись сейчас"
+
+msgid "Stop recording"
+msgstr "Остановить запись"
+
+msgid "Is it on and how many minutes are left"
+msgstr "Включён ли и сколько минут осталось"
+
+msgid "Start, then repeat the problem"
+msgstr "Включить, потом повторить проблему"
+
+msgid "Read what was recorded"
+msgstr "Прочитать записанное"
+
+msgid "Use this language from now on (saved in your settings)"
+msgstr "Использовать этот язык дальше (сохраняется в настройках)"
+
+msgid "Languages that have translations"
+msgstr "Языки, для которых есть перевод"
+
+msgid "Switch to Russian"
+msgstr "Переключиться на русский"
+
+msgid "In UTC instead of your zone"
+msgstr "В UTC вместо вашего пояса"
+
+msgid "With seconds"
+msgstr "С секундами"
+
+msgid "Your own format, for example +%H:%M"
+msgstr "Свой формат, например +%H:%M"
+
+msgid "Now"
+msgstr "Сейчас"
+
+msgid "Only the date, like 15.10.2026"
+msgstr "Только дата, вроде 15.10.2026"
+
+msgid "Show the settings (the same as no command)"
+msgstr "Показать настройки (как без команды)"
+
+msgid "Zone name (Europe/Kyiv), offset (+03:00) or a country with one zone (japan)"
+msgstr "Имя пояса (Europe/Kyiv), смещение (+03:00) или страна с одним поясом (japan)"
+
+msgid "Zones with their country and offset; WORD filters by name, country or code (ua)"
+msgstr "Пояса со страной и смещением; СЛОВО фильтрует по имени, стране или коду (ua)"
+
+msgid "Real time, or the Minecraft day and time"
+msgstr "Реальное время или день и время Minecraft"
+
+msgid "Show seconds in clocks"
+msgstr "Показывать секунды в часах"
+
+msgid "12 or 24 hour clock"
+msgstr "12- или 24-часовой формат"
+
+msgid "Zones of Germany"
+msgstr "Пояса Германии"
+
+msgid "Moscow time"
+msgstr "Московское время"
+
+msgid "Job 1 to the front"
+msgstr "Задачу 1 на передний план"
+
+msgid "Continue job 1"
+msgstr "Продолжить задачу 1"
+
+msgid "Stop job 2"
+msgstr "Завершить задачу 2"
+
+msgid "Print after five seconds"
+msgstr "Напечатать через пять секунд"
+
+msgid "ls is built in"
+msgstr "ls встроена в оболочку"
+
+msgid "All about ls"
+msgstr "Всё про ls"
+
+msgid "Commands about time"
+msgstr "Команды про время"
+
+msgid "The same as help grep"
+msgstr "То же, что help grep"
+
+msgid "Forget the whole history"
+msgstr "Забыть всю историю"
+
+msgid "Earlier cd commands"
+msgstr "Прошлые команды cd"
+
+msgid "ll prints a long list"
+msgstr "ll выводит подробный список"
+
+msgid "Then: echo $GREETING"
+msgstr "Потом: echo $GREETING"
+
+msgid "pass the output to the next command"
+msgstr "передать вывод следующей команде"
+
+msgid "write or add the output to a file"
+msgstr "записать или дописать вывод в файл"
+
+msgid "run in the background"
+msgstr "запустить в фоне"
+
+msgid "then / if it worked / if it failed"
+msgstr "потом / если получилось / если не получилось"
+
+msgid "complete a name"
+msgstr "дополнить имя"
+
+msgid "earlier commands; Ctrl+R searches them"
+msgstr "прошлые команды; Ctrl+R ищет по ним"
+
+msgid "copy the selection, or stop the program / reset the line"
+msgstr "копировать выделенное, иначе остановить программу / сбросить строку"
+
+msgid "copy / paste"
+msgstr "копировать / вставить"
+
+msgid "stop the program; hold it to kill a stuck program or restart the shell"
+msgstr "остановить программу; удержание убивает зависшую программу или перезапускает оболочку"
+
+msgid "pause the program (fg / bg continue it)"
+msgstr "приостановить программу (fg / bg продолжают)"
+
+msgid "switch the keyboard layout (press and release)"
+msgstr "сменить раскладку (нажать и отпустить)"
+
+msgid "scroll the screen"
+msgstr "прокрутка экрана"
+
+msgid "-- more: Space next page, Enter next line, q quit --"
+msgstr "-- дальше: Пробел страница, Enter строка, q выход --"
+
+msgid "commands by group; 'help NAME' tells all about one, 'help WORD' finds commands"
+msgstr "команды по группам; 'help ИМЯ' всё про одну, 'help СЛОВО' ищет команды"
+
+msgid "CraftOS programs"
+msgstr "Программы CraftOS"
+
+msgid "Command line"
+msgstr "Командная строка"
+
+msgid "Keys"
+msgstr "Клавиши"
+
+msgid "CraftOS program"
+msgstr "программа CraftOS"
+
+msgid "More: the program's own help, if it has one (try: NAME -h)"
+msgstr "Подробнее: своя справка программы, если есть (попробуйте: ИМЯ -h)"
+
+msgid "Usage"
+msgstr "Использование"
+
+msgid "Options"
+msgstr "Параметры"
+
+msgid "Examples"
+msgstr "Примеры"
+
+msgid "See also"
+msgstr "См. также"
+
+msgid "nothing about"
+msgstr "ничего про"
+
+msgid "try: help"
+msgstr "попробуйте: help"
+
+msgid "Commands about"
+msgstr "Команды про"

@@ -1,0 +1,163 @@
+import t
+import term.vterm as vterm
+import compat.env as compat_env
+import compat.proc as compat_proc
+import cush.shell as cush
+import cush.builtins as builtins
+import cush.commands as reg
+import i18n
+eq = t.eq
+
+# Справка из реестра команд (D228): у каждой встроенной команды есть описание и у каждого флага пояснение; переводы полные;
+# help, help <команда>, <команда> --help, help <слово>, листание, язык.
+
+HIST = "/repo/build/cush_help_history"
+CONF = "/repo/build/cush_help.conf"
+for p in [HIST, CONF]:
+    if fs.exists(p):
+        fs.delete(p)
+
+# ------------------------------------------------------------ реестр полный и честный
+missing = []
+for name, fn in builtins.table_of:
+    if reg.COMMANDS[name] == nil:
+        missing[len(missing) + 1] = name
+table.sort(missing)
+eq(missing, [], "every built-in command has a registry entry")
+unknown = []
+cats = {}
+for c in reg.CATEGORIES:
+    cats[c[1]] = true
+problems = []
+for name, c in reg.COMMANDS:
+    if builtins.table_of[name] == nil and name != "fetch":
+        unknown[len(unknown) + 1] = name
+    if cats[c.cat] == nil:
+        problems[len(problems) + 1] = name .. ": unknown category " .. tostring(c.cat)
+    if c.summary == nil or c.summary == "" or c.usage == nil or c.about == nil or c.about == "":
+        problems[len(problems) + 1] = name .. ": summary, usage and about are required"
+    if string.sub(c.usage, 1, len(name)) != name:
+        problems[len(problems) + 1] = name .. ": usage starts with the name"
+    for f in c.flags:
+        if f[2] == nil or len(f[2]) < 3:
+            problems[len(problems) + 1] = name .. ": flag " .. tostring(f[1]) .. " has no explanation"
+    for e in c.examples:
+        if e[2] == nil or e[2] == "":
+            problems[len(problems) + 1] = name .. ": example " .. tostring(e[1]) .. " has no explanation"
+    for s in c.see:
+        if reg.COMMANDS[s] == nil:
+            problems[len(problems) + 1] = name .. ": see " .. s .. " is not a command"
+table.sort(unknown)
+eq(unknown, [], "every registry entry is a real command")
+eq(problems, [], "summaries, usage, flag and example explanations, categories and links are complete")
+
+# ------------------------------------------------------------ переводы полные
+texts = []
+def want(s):
+    if s != nil and s != "":
+        texts[len(texts) + 1] = s
+for name, c in reg.COMMANDS:
+    want(c.summary)
+    want(c.about)
+    for f in c.flags:
+        want(f[2])
+    for e in c.examples:
+        want(e[2])
+for c in reg.CATEGORIES:
+    want(c[2])
+for h in reg.LINE_HELP:
+    want(h[2])
+for h in reg.KEY_HELP:
+    want(h[2])
+for lang in ["ru", "uk"]:
+    cat = i18n.catalog(lang, "/repo/assets/lang")
+    lost = []
+    for s in texts:
+        if not cat:has(s):
+            lost[len(lost) + 1] = s
+    eq(lost, [], "the " .. lang .. " translation has every help text")
+eq(i18n.catalog("ru", "/repo/assets/lang"):t("List the files in a folder"), "Список файлов в папке", "a translated summary")
+eq(i18n.catalog("en", "/repo/assets/lang"):t("List the files in a folder"), "List the files in a folder", "English is the text itself")
+eq(i18n.parse("msgid \"a \\\"b\\\"\"\nmsgstr \"x\\ny\"\n")["a \"b\""], "x\ny", "escapes in .lang files")
+
+# ------------------------------------------------------------ в оболочке
+def make(unicode_ok, lang=nil):
+    vt = vterm.new(60, 19, {history: 400})
+    env = compat_env.new({vterm: vt})
+    if lang != nil:
+        f = fs.open(CONF, "w")
+        f.write("{lang: \"" .. lang .. "\"}\n")
+        f.close()
+    env.cush_opts = {history_path: HIST, greeting: false, user: "tester", host: "cube", lang_dir: "/repo/assets/lang",
+        unicode: unicode_ok, config_path: lang != nil and CONF or nil}
+    proc = compat_proc.new(env, "cush", [], {name: "cush", main: cush.main})
+    proc:start()
+    return vt, proc
+
+def run(proc, text):
+    for i in range[1, string.len(text)]:
+        proc:feed("char", string.sub(text, i, i))
+    proc:feed("key", keys.enter, false)
+    proc:feed("key_up", keys.enter)
+
+def key(proc, code):
+    proc:feed("key", code, false)
+    proc:feed("key_up", code)
+
+# весь текст терминала в UTF-8 (line_text отдаёт только Latin-1, кириллица там «?»)
+def screen(vt):
+    return table.concat(vt:all_lines(), "\n")
+
+def has(vt, text):
+    return string.find(screen(vt), text, 1, true) != nil
+
+vt, proc = make(true)
+run(proc, "help ls")
+eq(has(vt, "ls  List the files in a folder"), true, "help NAME: the summary")
+eq(has(vt, "Usage: ls [-la1h] [path]"), true, "the usage")
+eq(has(vt, "-a"), true, "the flags")
+eq(has(vt, "Also show hidden files"), true, "with their explanation")
+eq(has(vt, "ls -la ~"), true, "and examples")
+run(proc, "clear")
+run(proc, "grep --help")
+eq(has(vt, "Find lines that contain a text"), true, "COMMAND --help shows the same help")
+eq(has(vt, "Ignore the difference between capital"), true, "with the flag explanations")
+run(proc, "clear")
+run(proc, "help time")
+eq(has(vt, "timedatectl"), true, "help WORD finds commands about it")
+eq(has(vt, "date"), true, "all of them")
+run(proc, "clear")
+# обзор длиннее экрана: листается, q выходит
+run(proc, "help")
+eq(has(vt, "-- more: Space next page"), true, "a long overview stops at the end of the screen")
+eq(has(vt, "Files and folders:"), true, "it starts with the groups")
+key(proc, keys.space)
+eq(has(vt, "Keys"), true, "Space shows the next page")
+key(proc, keys.q)
+run(proc, "echo after the pager")
+eq(has(vt, "after the pager"), true, "q leaves the pager and the shell goes on")
+run(proc, "help | grep Shell")
+eq(has(vt, "-- more"), false, "in a pipe there is no pager")
+
+# язык: русский в пиксельном терминале, английский в текстовом
+vt, proc = make(true, "ru")
+run(proc, "help ls")
+eq(has(vt, "Список файлов в папке"), true, "help in Russian")
+eq(has(vt, "Использование: ls [-la1h] [path]"), true, "headings too")
+run(proc, "locale set uk")
+run(proc, "clear")
+run(proc, "help cd")
+eq(has(vt, "Перейти до іншої теки"), true, "locale set uk switches to Ukrainian")
+h = fs.open(CONF, "r")
+saved_conf = h.readAll()
+h.close()
+eq(string.find(saved_conf, "uk", 1, true) != nil, true, "and saves it in cush.conf")
+vt, proc = make(false, "ru")
+run(proc, "help ls")
+eq(has(vt, "List the files in a folder"), true, "a text terminal (no Cyrillic) stays English")
+run(proc, "locale")
+eq(has(vt, "ru needs the pixel terminal"), true, "and says why")
+for p in [HIST, CONF]:
+    if fs.exists(p):
+        fs.delete(p)
+print("done")
