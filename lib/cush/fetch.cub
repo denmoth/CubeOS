@@ -56,7 +56,10 @@ export def facts(sh):
     if gfx.pixels != nil:
         text = text .. ", " .. gfx.pixels.w .. "x" .. gfx.pixels.h .. " px"
     out[len(out) + 1] = ["Graphics", text]
-    out[len(out) + 1] = ["Memory", math.floor(collectgarbage("count")) .. " KB in use (Lua)"]
+    # в настоящем CC объём памяти узнать нельзя (нет collectgarbage), тогда строки нет
+    mem = hal.memory_kb()
+    if mem != nil:
+        out[len(out) + 1] = ["Memory", mem .. " KB in use (Lua)"]
     devices = {}
     if env.peripheral != nil:
         devices = hal.scan(env.peripheral)

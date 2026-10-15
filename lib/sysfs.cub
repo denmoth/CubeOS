@@ -9,6 +9,7 @@
 # hardware: peripherals/<имя>/{type,methods}, displays, speakers, modems, drives (имена по типам). Подробности docs/spec/services.md
 
 import version
+import hal
 
 def _pad(text, width):
     s = tostring(text)
@@ -31,7 +32,8 @@ export def proc_tree(k, opts=nil):
     boot_ms = o.boot_ms ?? k.clock()
     tree.uptime = string.format("%.2f\n", (k.clock() - boot_ms) / 1000)
     tree.version = version.full() .. "\n"
-    tree.meminfo = "MemUsedKB: " .. math.floor(collectgarbage("count")) .. "\n"
+    # в настоящем CC нет collectgarbage (hal.memory_kb даёт nil)
+    tree.meminfo = "MemUsedKB: " .. tostring(hal.memory_kb() ?? "unknown") .. "\n"
     return tree
 
 export def run_tree(system):

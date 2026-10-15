@@ -4,9 +4,18 @@
 #   hal.audio_caps(devices)       {speakers, notes, sounds, pcm}
 #   hal.periph_has(devices, what) true, если есть устройство такого типа или с таким методом ("speaker", "chatBox", "playNote")
 #   hal.scan(peripheral)          {имя: {type, methods}} по настоящей периферии (тот же вид отдаёт служба devd: запрос list)
+#   hal.memory_kb()               память Lua в КБ или nil: в настоящем CC:Tweaked (Cobalt) нет collectgarbage, есть только в эмуляторе
 #
 # Устройства (devices) берутся у devd (rpc.call(sys, "devd", "list")) или из hal.scan. Всё без побочных действий, подставные term и peripheral
 # позволяют проверять на ПК.
+
+export def memory_kb():
+    if type(collectgarbage) != "function":
+        return nil
+    ok, kb = pcall(() => collectgarbage("count"))
+    if ok and type(kb) == "number":
+        return math.floor(kb)
+    return nil
 
 export def gfx_caps(t=nil):
     t = t ?? term

@@ -80,6 +80,14 @@ run(proc, "timedatectl frobnicate")
 eq(has(vt, "usage: timedatectl"), true, "unknown subcommands print the usage")
 run(proc, "fetch")
 eq(has(vt, "Time"), true, "fetch has a time line")
+# в настоящем CC:Tweaked (Cobalt) нет collectgarbage: fetch из-за неё падал в игре
+saved_gc = rawget(_G, "collectgarbage")
+rawset(_G, "collectgarbage", nil)
+run(proc, "clear")
+run(proc, "fetch")
+rawset(_G, "collectgarbage", saved_gc)
+eq(has(vt, "Time"), true, "fetch works without collectgarbage, as in real CC")
+eq(has(vt, "cush:"), false, "and prints no error")
 
 # питание: команды просят службу, без службы сообщают
 powered = []
