@@ -1,0 +1,90 @@
+import t
+import kernel
+import cfs
+import cfs.rules as rules
+import svc.audiod as audiod
+import svc.rpc as rpc
+eq = t.eq
+
+# Звук (шаг 7, частично): ноты, звуки, музыка DFPWM через подставной динамик, остановка, громкость в audio.conf.
+
+calls = []
+full = {left: 1}
+speaker = {}
+def play_note(inst, vol, pitch):
+    calls[len(calls) + 1] = "note " .. inst .. " " .. vol .. " " .. pitch
+    return true
+def play_sound(name, vol, pitch):
+    calls[len(calls) + 1] = "sound " .. name .. " " .. vol
+    return true
+def play_audio(buffer, vol):
+    # первый раз динамик «занят»: проигрыватель должен подождать speaker_audio_empty
+    if full.left > 0:
+        full.left -= 1
+        return false
+    calls[len(calls) + 1] = "audio " .. len(buffer)
+    return true
+speaker.playNote = play_note
+speaker.playSound = play_sound
+speaker.playAudio = play_audio
+speaker.stop = () => nil
+per = {}
+per.getNames = () => ["left", "top"]
+per.getType = (n) => n == "left" and "speaker" or "monitor"
+per.wrap = (n) => n == "left" and speaker or nil
+
+fsys = cfs.new({})
+fsys:mount("/", cfs.memory())
+fsys:mkdir(nil, "/cubeos/sys/cfg", {parents: true})
+fsys:write_file(nil, "/cubeos/sys/cfg/audio.conf", "{volume: 50}")
+sub = rules.subject("system", ["system"])
+view = cfs.view(fsys, sub, {})
+# подставной декодер: каждый байт даёт один отсчёт
+def make_decoder():
+    return (chunk) => [1, 2, 3, string.len(chunk)]
+k = kernel.new({clock: () => 0})
+k:spawn(audiod.main, {peripheral: per, view: view, decoder: make_decoder}, {name: "audiod", subject: sub})
+for i in range[1, 5]:
+    k:run_ready()
+
+answers = {}
+def ask(sys, args):
+    res, err = rpc.call(sys, "audiod", args.op, args.q)
+    answers[args.tag] = [res, err]
+def call(op, q, tag):
+    k:spawn(ask, {op: op, q: q, tag: tag}, {name: "ask"})
+    for i in range[1, 15]:
+        k:run_ready()
+    return answers[tag]
+
+eq(call("speakers", nil, "s")[1], ["left"], "only speakers are listed")
+call("note", {instrument: "bell", pitch: 12, volume: 2}, "n")
+eq(calls[1], "note bell 1 12", "a note, with the volume halved by audio.conf (50%)")
+r = call("note", {instrument: "kazoo"}, "bad")
+eq(string.find(tostring(r[2]), "unknown instrument", 1, true) != nil, true, "an unknown instrument is refused")
+call("sound", {name: "minecraft:entity.cat.ambient"}, "snd")
+eq(calls[2], "sound minecraft:entity.cat.ambient 0.5", "a Minecraft sound")
+r = call("play", {data: string.rep("x", 20000), title: "song"}, "p")
+eq(r[1], true, "music starts in the background")
+eq(call("status", nil, "st")[1].playing, true, "status says it is playing")
+# динамик занят: проигрыватель ждёт speaker_audio_empty
+k:feed("speaker_audio_empty", "left")
+for i in range[1, 20]:
+    k:run_ready()
+k:feed("speaker_audio_empty", "left")
+for i in range[1, 20]:
+    k:run_ready()
+audio_calls = 0
+for c in calls:
+    if string.sub(c, 1, 5) == "audio":
+        audio_calls += 1
+eq(audio_calls, 2, "20000 bytes go out in two chunks, after the speaker frees up")
+eq(call("status", nil, "st2")[1].playing, false, "and then it stops by itself")
+call("volume", {value: 80}, "v")
+eq(string.find(fsys:read_file(nil, "/cubeos/sys/cfg/audio.conf"), "80", 1, true) != nil, true, "the volume is saved")
+r = call("volume", {value: 300}, "v2")
+eq(string.find(tostring(r[2]), "0 to 100", 1, true) != nil, true, "the volume is 0 to 100")
+per.getNames = () => []
+r = call("note", {instrument: "harp"}, "none")
+eq(string.find(tostring(r[2]), "no speaker", 1, true) != nil, true, "no speaker: a clear error")
+print("done")

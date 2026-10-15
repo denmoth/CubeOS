@@ -1,0 +1,153 @@
+# svc.audiod: служба звука (шаг 7, частично). Динамики (speaker), ноты, звуки Minecraft, музыка DFPWM, общая громкость.
+#
+# Запросы (svc.rpc):
+#   speakers -> [имена]                    note {instrument, pitch (0..24), volume (0..3)}
+#   sound {name, volume, pitch}             play {data (DFPWM), title} -> true (играет в фоне), stop, status -> {playing, title, volume, speakers}
+#   volume {value (0..100)} -> громкость    (без value: текущая)
+# Громкость в /cubeos/sys/cfg/audio.conf ({volume: 100, muted: false}) умножается на громкость каждого звука.
+# DFPWM декодируется декодером ROM CC (rom/modules/main/cc/audio/dfpwm.lua, читается во время работы).
+# main(sys, args): args.peripheral (для тестов), args.view, args.decoder (для тестов: функция make_decoder).
+
+import json5
+import svc.rpc as rpc
+
+export const CONF_PATH = "/cubeos/sys/cfg/audio.conf"
+export const INSTRUMENTS = ["harp", "bass", "basedrum", "snare", "hat", "bell", "flute", "chime", "guitar", "xylophone",
+    "iron_xylophone", "cow_bell", "didgeridoo", "bit", "banjo", "pling"]
+const CHUNK = 16 * 1024
+
+def _dfpwm_maker():
+    f = loadfile("/rom/modules/main/cc/audio/dfpwm.lua")
+    if f == nil:
+        return nil
+    ok, mod = pcall(f)
+    return ok and mod.make_decoder or nil
+
+export def main(sys, args):
+    a = args ?? {}
+    per = a.peripheral ?? peripheral
+    view = a.view ?? sys.view()
+    state = {volume: 100, muted: false, playing: false, title: nil, worker: nil, stop: false}
+    if view != nil and view:exists(CONF_PATH):
+        ok, data = pcall(() => json5.parse(view:read(CONF_PATH)))
+        if ok and type(data) == "table":
+            state.volume = data.volume ?? 100
+            state.muted = data.muted == true
+
+    def speakers():
+        out = []
+        for name in per.getNames():
+            if per.getType(name) == "speaker":
+                out[len(out) + 1] = name
+        table.sort(out)
+        return out
+
+    def gain(v):
+        if state.muted:
+            return 0
+        return (v ?? 1) * state.volume / 100
+
+    def each_speaker(fn):
+        n = 0
+        for name in speakers():
+            sp = per.wrap(name)
+            if sp != nil:
+                fn(sp)
+                n += 1
+        if n == 0:
+            raise Error("no speaker attached")
+        return n
+
+    handlers = {}
+    handlers.speakers = (q, sender) => speakers()
+
+    def note(q, sender):
+        o = q ?? {}
+        inst = o.instrument ?? "harp"
+        known = false
+        for i in INSTRUMENTS:
+            if i == inst:
+                known = true
+        if not known:
+            raise Error("unknown instrument " .. tostring(inst) .. " (" .. table.concat(INSTRUMENTS, ", ") .. ")")
+        pitch = math.max(0, math.min(24, o.pitch ?? 12))
+        each_speaker((sp) => sp.playNote(inst, math.min(3, gain(o.volume)), pitch))
+        return true
+    handlers.note = note
+
+    def sound(q, sender):
+        o = q ?? {}
+        if o.name == nil:
+            raise Error("which sound? for example minecraft:entity.cat.ambient")
+        each_speaker((sp) => sp.playSound(o.name, math.min(3, gain(o.volume)), o.pitch ?? 1))
+        return true
+    handlers.sound = sound
+
+    # проигрыватель: свой процесс, чтобы служба отвечала, пока играет музыка
+    def player(psys, pargs):
+        make = a.decoder ?? _dfpwm_maker()
+        if make == nil:
+            psys.log("error", "audio: no DFPWM decoder in this ROM")
+            state.playing = false
+            return
+        decoder = make()
+        data = pargs.data
+        pos = 1
+        while pos <= len(data) and not state.stop:
+            chunk = string.sub(data, pos, pos + CHUNK - 1)
+            pos += CHUNK
+            buffer = decoder(chunk)
+            for name in speakers():
+                sp = per.wrap(name)
+                if sp != nil:
+                    while not state.stop and not sp.playAudio(buffer, math.min(3, gain(1))):
+                        psys.wait_event(["speaker_audio_empty"])
+        state.playing = false
+        state.title = nil
+
+    def stop_(q, sender):
+        state.stop = true
+        if state.worker != nil:
+            sys.kill(state.worker, "kill")
+            state.worker = nil
+        state.playing = false
+        state.title = nil
+        for name in speakers():
+            sp = per.wrap(name)
+            if sp != nil and sp.stop != nil:
+                pcall(() => sp.stop())
+        return true
+    handlers.stop = stop_
+
+    def play(q, sender):
+        o = q ?? {}
+        if type(o.data) != "string" or o.data == "":
+            raise Error("nothing to play")
+        if len(speakers()) == 0:
+            raise Error("no speaker attached")
+        stop_()
+        state.stop = false
+        state.playing = true
+        state.title = o.title ?? "audio"
+        state.worker = sys.spawn(player, {data: o.data}, {name: "audio-player"})
+        return true
+    handlers.play = play
+
+    handlers.status = (q, sender) => {playing: state.playing, title: state.title, volume: state.volume, muted: state.muted, speakers: speakers()}
+
+    def volume(q, sender):
+        o = q ?? {}
+        if o.value != nil:
+            v = tonumber(o.value)
+            if v == nil or v < 0 or v > 100:
+                raise Error("the volume is 0 to 100")
+            state.volume = math.floor(v)
+            state.muted = false
+            text = view:exists(CONF_PATH) and view:read(CONF_PATH) or "{}\n"
+            text = json5.patch(json5.patch(text, ["volume"], state.volume), ["muted"], false)
+            pcall(() => view:write_atomic(CONF_PATH, text))
+        return state.volume
+    handlers.volume = volume
+
+    sys.register("audiod")
+    rpc.serve(sys, handlers)

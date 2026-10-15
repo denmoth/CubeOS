@@ -387,3 +387,59 @@ def b_curl(sh, args):
             sh:println(l)
     return code < 400 and 0 or 1
 add("curl", b_curl)
+
+# ------------------------------------------------------------ звук (служба audiod)
+
+def audio_or_fail(sh, name):
+    if sh.audio == nil:
+        sh:eprint(name .. ": " .. sh:t("sound is not available here"))
+        return false
+    return true
+
+def audio_call(sh, name, op, args=nil):
+    res, why = sh.audio(op, args)
+    if res == nil:
+        sh:eprint(name .. ": " .. sh:t(tostring(why)))
+    return res
+
+# play FILE.dfpwm | play note INSTRUMENT [PITCH] [VOLUME] | play sound NAME [VOLUME] [PITCH] | play stop | play status
+def b_play(sh, args):
+    if not audio_or_fail(sh, "play"):
+        return 1
+    sub = args[1]
+    if sub == nil:
+        sh:eprint("usage: play FILE.dfpwm | note INSTRUMENT [PITCH] [VOLUME] | sound NAME [VOLUME] [PITCH] | stop | status")
+        return 2
+    if sub == "stop":
+        return audio_call(sh, "play", "stop") != nil and 0 or 1
+    if sub == "status":
+        st = audio_call(sh, "play", "status")
+        if st == nil:
+            return 1
+        sh:println(st.playing and sh:t("Playing: {title}", {title: tostring(st.title)}) or sh:t("Nothing is playing."))
+        sh:println(sh:t("Volume: {v}%", {v: st.volume}) .. (st.muted and ("  " .. sh:t("(muted)")) or ""))
+        sh:println(sh:t("Speakers: {list}", {list: len(st.speakers) > 0 and table.concat(st.speakers, ", ") or sh:t("none")}))
+        return 0
+    if sub == "note":
+        return audio_call(sh, "play", "note", {instrument: args[2], pitch: tonumber(args[3]), volume: tonumber(args[4])}) != nil and 0 or 1
+    if sub == "sound":
+        return audio_call(sh, "play", "sound", {name: args[2], volume: tonumber(args[3]), pitch: tonumber(args[4])}) != nil and 0 or 1
+    data = read_all(sh, "play", sub)
+    if data == nil:
+        return 1
+    if audio_call(sh, "play", "play", {data: data, title: sub}) == nil:
+        return 1
+    sh:println(sh:t("Playing {title} (play stop stops it)", {title: sub}))
+    return 0
+add("play", b_play)
+
+# volume [0..100]
+def b_volume(sh, args):
+    if not audio_or_fail(sh, "volume"):
+        return 1
+    v = audio_call(sh, "volume", "volume", args[1] != nil and {value: args[1]} or {})
+    if v == nil:
+        return 1
+    sh:println(sh:t("Volume: {v}%", {v: v}))
+    return 0
+add("volume", b_volume)

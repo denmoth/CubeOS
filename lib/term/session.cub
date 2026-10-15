@@ -112,9 +112,12 @@ export def program(session, opts=nil):
         # клавиатура системы (служба inputd): get или set {keyboard, mode}
         def keyboard(op, args=nil):
             return host_call("keyboard", {op: op, args: args})
+        # звук (служба audiod): op и args как у её запросов
+        def audio(op, args=nil):
+            return host_call("audio", {op: op, args: args})
         cfg = view:expand("$cfg")
         env.cush_opts = {history_path: cfg .. "/cush_history", config_path: cfg .. "/cush.conf", user: session.user, host: o.host,
-            home: session.env.home, time: t.time, time_save: time_save, power: power, inputlog: inputlog, log: shell_log, notes: notes, sudo: sudo, account: account, keyboard: keyboard,
+            home: session.env.home, time: t.time, time_save: time_save, power: power, inputlog: inputlog, log: shell_log, notes: notes, sudo: sudo, account: account, keyboard: keyboard, audio: audio,
             lang_dir: [(o.assets ?? "/repo/assets") .. "/lang", "/cubeos/share/lang"], unicode: out.kind == "pixel",
             info: {display: out.kind == "pixel" and "pixel mode" or "text mode", font: out.kind == "pixel" and (font_name ?? "cube-mono-6x9") or nil}}
 
@@ -194,6 +197,10 @@ export def program(session, opts=nil):
                     why = err
                 elif req.name == "log":
                     sys.log(req.payload.level, req.payload.text)
+                elif req.name == "audio":
+                    res, err = rpc.call(sys, "audiod", req.payload.op, req.payload.args)
+                    ok = res
+                    why = err
                 elif req.name == "keyboard":
                     res, err = rpc.call(sys, "inputd", req.payload.op, req.payload.args)
                     ok = res

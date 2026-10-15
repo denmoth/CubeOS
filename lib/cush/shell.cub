@@ -100,6 +100,7 @@ export class Shell:
         self.sudo = o.sudo
         self.account = o.account
         self.keyboard = o.keyboard
+        self.audio = o.audio
         # log(level, text): запись в журнал системы без ожидания (ошибки команд и самой оболочки), nil вне сессии
         self.log = o.log
         # хозяин терминала смотрит, есть ли программа на переднем плане (удержание Ctrl+T)

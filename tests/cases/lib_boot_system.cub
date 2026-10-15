@@ -14,6 +14,7 @@ import svc.clipboard as clipboard
 import svc.stub as stub
 import svc.fontd as fontd
 import svc.inputd as inputd
+import svc.audiod as audiod
 eq = t.eq
 
 # Загрузка с настоящими манифестами из sys/services и настоящими службами: всё поднимается, питание, журнал, сбои, виртуальные каталоги.
@@ -23,7 +24,7 @@ def now():
     return clock.now
 
 modules = {"svc.logd": logd, "svc.timed": timed, "svc.devd": devd, "svc.powerd": powerd, "svc.crashd": crashd, "svc.permd": permd,
-    "svc.notifyd": notifyd, "svc.clipboard": clipboard, "svc.stub": stub, "svc.fontd": fontd, "svc.inputd": inputd}
+    "svc.notifyd": notifyd, "svc.clipboard": clipboard, "svc.stub": stub, "svc.fontd": fontd, "svc.inputd": inputd, "svc.audiod": audiod}
 def importer(path):
     return modules[path]
 
