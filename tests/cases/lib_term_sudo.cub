@@ -1,0 +1,153 @@
+import t
+import cfs
+import boot
+import boot.console as console_mod
+import term.session as session_mod
+import svc.rpc as rpc
+import svc.timed as timed
+import svc.powerd as powerd
+import svc.clipboard as clipboard
+import term.view as view_mod
+eq = t.eq
+
+# Загрузка, вход, терминал cush внутри процесса ядра: ввод через ядро, fs поверх CFS, время и питание от служб, буфер обмена, выход.
+
+clock = {now: 1000}
+def now():
+    return clock.now
+
+def breathe():
+    os.queueEvent("test_breathe")
+    os.pullEvent("test_breathe")
+
+def build_fs():
+    let fsys = cfs.new({clock: now})
+    fsys:mount("/", cfs.memory({now: now}))
+    fsys:mount("/rom", cfs.host("/rom", {readonly: true}))
+    fsys:mount("/cubeos/tmp", cfs.tmp(65536, now))
+    cfs.install_defaults(fsys)
+    for dir in ["/cubeos/sys/services", "/cubeos/sys/cfg", "/cubeos/var", "/cubeos/shared"]:
+        fsys:mkdir(nil, dir, {parents: true})
+    fsys:write_file(nil, "/cubeos/sys/services/timed.conf", "{name: 'timed', module: 'svc.timed'}")
+    fsys:write_file(nil, "/cubeos/sys/services/powerd.conf", "{name: 'powerd', module: 'svc.powerd'}")
+    fsys:write_file(nil, "/cubeos/sys/services/clipboard.conf", "{name: 'clipboard', module: 'svc.clipboard'}")
+    fsys:write_file(nil, "/cubeos/sys/cfg/boot.conf", "{rounds: 2}")
+    fsys:write_file(nil, "/cubeos/sys/cfg/time.conf", "{tz: 'Europe/Kyiv', seconds: true}")
+    return fsys
+
+modules = {"svc.timed": timed, "svc.powerd": powerd, "svc.clipboard": clipboard}
+def importer(path):
+    return modules[path]
+
+def fake_term():
+    api = {}
+    def get_size(px):
+        if px:
+            return 51 * 6, 19 * 9
+        return 51, 19
+    api.getSize = get_size
+    for name in ["setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "setGraphicsMode", "drawPixels", "setFrozen"]:
+        api[name] = () => nil
+    return api
+
+power = {calls: []}
+def power_off():
+    power.calls[len(power.calls) + 1] = "shutdown"
+def power_restart():
+    power.calls[len(power.calls) + 1] = "reboot"
+
+captured = {}
+def ready(c):
+    captured.ctx = c
+def shell_for(session):
+    return session_mod.program(session, {term: fake_term(), backend: "pixel", assets: "/repo/assets", host: "cubebox", ready: ready})
+
+def settle(system, steps):
+    for i in range[1, steps]:
+        if i % 4 == 0:
+            breathe()
+        system.kernel:run_ready()
+        clock.now = clock.now + 100
+        system.kernel:tick()
+        if system.power_action != nil:
+            break
+    system.kernel:run_ready()
+
+def screen():
+    vt = captured.ctx.vterm
+    lines = []
+    for y in range[1, vt.h]:
+        lines[y] = vt:line_text(y)
+    return table.concat(lines, "\n")
+
+def has(text):
+    return captured.ctx != nil and string.find(screen(), text, 1, true) != nil
+
+# крутит ядро, пока условие не выполнится (не больше rounds кругов); возвращает результат условия
+def wait(system, cond, rounds=150):
+    for i in range[1, rounds]:
+        if cond():
+            return true
+        if i % 4 == 0:
+            breathe()
+        system.kernel:run_ready()
+        clock.now = clock.now + 100
+        system.kernel:tick()
+    return cond()
+
+def wait_text(system, text, rounds=150):
+    return wait(system, () => has(text), rounds)
+
+def type_text(system, text):
+    for i in range[1, string.len(text)]:
+        system.kernel:feed("char", string.sub(text, i, i))
+    system.kernel:feed("key", keys.enter, false)
+    system.kernel:feed("key_up", keys.enter)
+
+fsys = build_fs()
+import boot.auth as auth_mod
+import json5
+users = auth_mod.Auth(fsys, {rounds: 2})
+users:load()
+users:create_user({name: "alice"}, "admin-pass", true)
+users:set_pin("alice", "4321")
+# вход по PIN: значит sudo спросит пароль
+con = console_mod.ScriptedConsole(["alice", "4321", "s"])
+b = boot.new({fsys: fsys, console: con, clock: now, import: importer, shell: shell_for, power: {shutdown: power_off, reboot: power_restart},
+    kernel: {clock: now}})
+system = b:start()
+eq(wait(system, () => captured.ctx != nil), true, "alice signs in with her PIN and gets a terminal")
+eq(wait_text(system, "alice@cubebox:~$"), true, "the prompt")
+
+def all_text():
+    return table.concat(captured.ctx.vterm:all_lines(), "\n")
+
+type_text(system, "ls /cubeos/var")
+settle(system, 20)
+eq(string.find(all_text(), "login.state", 1, true), nil, "without sudo an administrator cannot read /cubeos/var")
+type_text(system, "sudo ls /cubeos/var")
+eq(wait_text(system, "[sudo] password for alice:"), true, "sudo asks for the password after a PIN login")
+type_text(system, "admin-pass")
+eq(wait(system, () => string.find(all_text(), "login.state", 1, true) != nil), true, "with the right password the command runs as administrator")
+eq(string.find(all_text(), "admin-pass", 1, true), nil, "the password is not shown on the screen")
+type_text(system, "sudo autologin alice")
+eq(wait_text(system, "alice will be signed in automatically"), true, "within 5 minutes sudo does not ask again")
+eq(json5.parse(fsys:read_file(nil, "/cubeos/sys/cfg/boot.conf")).autologin, "alice", "a system setting changed through sudo")
+type_text(system, "autologin off")
+eq(wait_text(system, "needs administrator rights: use sudo"), true, "without sudo the system setting is refused")
+type_text(system, "sudo -k")
+settle(system, 10)
+type_text(system, "clear")
+settle(system, 10)
+type_text(system, "sudo ls /cubeos/var")
+eq(wait_text(system, "[sudo] password for alice:"), true, "after sudo -k it asks again")
+type_text(system, "wrong")
+eq(wait_text(system, "sudo: wrong password"), true, "a wrong password is refused")
+type_text(system, "x")
+type_text(system, "y")
+settle(system, 20)
+type_text(system, "echo still here")
+eq(wait_text(system, "still here"), true, "after three wrong passwords the shell goes on")
+type_text(system, "exit")
+eq(wait(system, () => len(power.calls) > 0), true, "exit, then shutdown from the login screen")
+print("done")

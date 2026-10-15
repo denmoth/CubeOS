@@ -19,13 +19,37 @@ export class TextGreeter:
         # busy(текст или nil): долгая проверка пароля (PBKDF2), ядро не пишет «не отвечает»
         self.busy = o.busy
 
-    def _open(self, name, password):
+    def _open(self, name, password, pin=false):
         if self.busy != nil:
-            self.busy("checking the password")
-        s, why, wait = self.sessions:open(name, password)
+            self.busy(pin and "checking the PIN" or "checking the password")
+        s = nil
+        why = nil
+        wait = nil
+        if pin:
+            s, why, wait = self.sessions:open_pin(name, password)
+        else:
+            s, why, wait = self.sessions:open(name, password)
         if self.busy != nil:
             self.busy(nil)
         return s, why, wait
+
+    # PIN (D226): «p» вместо PIN переходит к паролю; после 5 неверных PIN только пароль. nil, если надо спросить пароль
+    def _pin_login(self, rec):
+        c = self.console
+        for attempt in range[1, self.retries]:
+            pin = c:read_line("PIN for " .. rec.display .. " (p: use the password): ", true)
+            if pin == nil:
+                return nil, true
+            if string.lower(pin) == "p":
+                return nil
+            s, why, left = self:_open(rec.name, pin, true)
+            if s != nil:
+                return s
+            if why == "pin locked":
+                c:write_line("Too many wrong PINs. Sign in with your password.")
+                return nil
+            c:write_line("Wrong PIN." .. (left != nil and (" Tries left: " .. left) or ""))
+        return nil, true
 
     def _header(self):
         self.console:clear()
@@ -86,6 +110,15 @@ export class TextGreeter:
             c:write_line("No such user.")
             return nil
         rec = self.auth:user(name)
+        # «не спрашивать X минут после входа» (D227)
+        if self.sessions.remembered != nil and self.sessions:remembered(rec.name):
+            s = self.sessions:open(rec.name, nil, true, "remember")
+            if s != nil:
+                return s
+        if self.auth.has_pin != nil and self.auth:has_pin(rec.name) and not self.auth:pin_locked(rec.name):
+            s, stop = self:_pin_login(rec)
+            if s != nil or stop:
+                return s
         # без пароля: входим сразу
         if self.auth.shadow[rec.name] == nil:
             s, why = self.sessions:open(name, "")

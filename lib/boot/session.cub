@@ -10,9 +10,16 @@
 #   sm:elevate(s.id, "secret")                    повышение прав на время (по умолчанию 5 минут), только администраторам
 #   sm:lock(s.id); sm:unlock(s.id, "secret")
 #   sm:close(s.id)                                завершает процессы сессии и закрывает её
+#   sm:open_pin("ivan", "1234")                   вход по PIN (D226), s.login_method = "pin"
+#   sm:remembered("ivan")                         true, если «не спрашивать X минут после входа» ещё действует (D227)
+#   sm:account(s.id, op, args)                    смена пароля, PIN, «запомнить», автовход, доверенные дискеты (для терминала)
+#
+# Способ входа (s.login_method): "password", "pin", "remember", "trusted" (автовход, без пароля). После входа по паролю sudo
+# не спрашивает пароль снова (trust_login, по умолчанию true: один пароль на всё); после PIN или без пароля спрашивает.
 
 import cfs
 import cfs.rules as rules_mod
+import json5
 
 const PROFILE_DIRS = ["home/documents", "home/pictures", "home/videos", "home/projects", "apps", "cache", "cfg", "data",
     "desktop", "trash"]
@@ -56,6 +63,8 @@ export class SessionManager:
         self.active_id = nil
         self.on_open = o.on_open
         self.on_close = o.on_close
+        self.trust_login = o.trust_login != false
+        self.state_path = o.state_path ?? "/cubeos/var/login.state"
         self.on_event = nil
         if self.kernel != nil:
             self:attach(self.kernel)
@@ -92,7 +101,7 @@ export class SessionManager:
 
     # проверяет пароль (trusted=true пропускает проверку: автовход, служебные случаи) и открывает сессию
     # возвращает сессию или nil, причина, секунд до повторной попытки
-    def open(self, name, password=nil, trusted=false):
+    def open(self, name, password=nil, trusted=false, method=nil):
         rec = self.auth:user(name)
         if rec == nil:
             return nil, "unknown"
@@ -112,6 +121,9 @@ export class SessionManager:
         view = cfs.view(self.fsys, subject, {aliases: cfs.default_aliases(profile)})
         s = Session(id, rec, profile, subject, view, {now: self.clock(), lang: self.lang, de: self.de})
         s.admin_capable = self.auth:is_admin(rec.name)
+        s.login_method = method ?? (trusted and "trusted" or "password")
+        s.manager = self
+        self:_note_login(rec)
         self.sessions[id] = s
         if self.kernel != nil:
             self.kernel:log("session " .. id .. " opened for " .. rec.name .. (rec.temp and " (guest)" or ""), "info")
@@ -120,6 +132,35 @@ export class SessionManager:
         if self.on_open != nil:
             self.on_open(s)
         return s
+
+    # вход по PIN: nil и причина ("pin locked": нужен пароль), как open
+    def open_pin(self, name, pin):
+        ok, why, left = self.auth:verify_pin(name, pin)
+        if not ok:
+            return nil, why, left
+        return self:open(name, nil, true, "pin")
+
+    # ------------------------------------------------------------ «не спрашивать X минут после входа» (D227)
+
+    def _login_state(self):
+        if not self.fsys:exists(nil, self.state_path):
+            return {}
+        ok, data = pcall(() => json5.parse(self.fsys:read_file(nil, self.state_path)))
+        return ok and type(data) == "table" and data or {}
+
+    def _note_login(self, rec):
+        if rec.temp:
+            return
+        st = self:_login_state()
+        st[rec.name] = self.clock()
+        pcall(() => self.fsys:write_file(nil, self.state_path, json5.stringify(st, {json5: true}) .. "\n"))
+
+    def remembered(self, name):
+        rec = self.auth:user(name)
+        if rec == nil or (rec.remember_minutes ?? 0) <= 0:
+            return false
+        last = self:_login_state()[rec.name]
+        return last != nil and self.clock() - last <= rec.remember_minutes * 60000
 
     def get(self, id):
         return self.sessions[id]
@@ -203,6 +244,83 @@ export class SessionManager:
             return false, why, wait
         s.elevated_until = self.clock() + self.elevate_ms
         return true
+
+    # повышение без пароля: вход был по паролю, а trust_login разрешает (один пароль на всё, D226)
+    def elevate_trusted(self, id):
+        s = self.sessions[id]
+        if s == nil or not self.auth:is_admin(s.user) or not self:trusted(id):
+            return false, "password needed"
+        s.elevated_until = self.clock() + self.elevate_ms
+        return true
+
+    def trusted(self, id):
+        s = self.sessions[id]
+        return s != nil and self.trust_login and s.login_method == "password"
+
+    # операции с учётной записью из терминала. Для своей записи нужен текущий пароль; autologin и trust_disk только при повышенных
+    # правах (sudo). Возвращает true или false и причину.
+    def account(self, id, op, a=nil):
+        s = self.sessions[id]
+        if s == nil:
+            return false, "no session"
+        args = a ?? {}
+        def own_password():
+            if self.auth.shadow[s.user] == nil:
+                return true
+            ok, why = self.auth:verify(s.user, args.password)
+            return ok, why == "locked" and "too many attempts, wait" or "wrong password"
+        if op == "passwd":
+            ok, why = own_password()
+            if not ok:
+                return false, why
+            return pcall(() => self.auth:set_password(s.user, args.new))
+        if op == "pin":
+            ok, why = own_password()
+            if not ok:
+                return false, why
+            return pcall(() => self.auth:set_pin(s.user, args.pin))
+        if op == "remember":
+            ok, why = own_password()
+            if not ok:
+                return false, why
+            return pcall(() => self.auth:set_field(s.user, "remember_minutes", args.minutes))
+        if op == "status":
+            rec = self.auth:user(s.user)
+            return {pin: self.auth:has_pin(s.user), remember: rec.remember_minutes ?? 0, admin: s.admin_capable,
+                elevated: self:is_elevated(id), trusted: self:trusted(id), method: s.login_method, password: self.auth.shadow[s.user] != nil}
+        # только команда, запущенная через sudo (args.sudo), и только пока права повышены: как в Linux, повышение не делает
+        # привилегированными остальные команды
+        if not self:is_elevated(id) or not args.sudo:
+            return false, "needs administrator rights: use sudo"
+        if op == "autologin":
+            if args.name != nil and self.auth:user(args.name) == nil:
+                return false, "no such user: " .. tostring(args.name)
+            return pcall(() => self:_patch_conf("/cubeos/sys/cfg/boot.conf", "autologin", args.name))
+        if op == "trust_disk":
+            return pcall(() => self:_trust_disk(args))
+        if op == "disk_boot":
+            mode = args.mode
+            if mode != "off" and mode != "trusted" and mode != "password" and mode != "all":
+                return false, "disk boot is off, trusted, password or all"
+            return pcall(() => self:_patch_conf("/cubeos/sys/cfg/boot.conf", "disk_boot", mode))
+        return false, "unknown operation " .. tostring(op)
+
+    def _patch_conf(self, path, key, value):
+        text = self.fsys:exists(nil, path) and self.fsys:read_file(nil, path) or "{}\n"
+        self.fsys:write_file(nil, path, json5.patch(text, [key], value))
+
+    # trusted_disks.conf: строки «номер sha256 метка»; args {id, hash, label} добавить или заменить, {id, remove: true} убрать
+    def _trust_disk(self, args):
+        path = "/cubeos/sys/cfg/trusted_disks.conf"
+        lines = []
+        if self.fsys:exists(nil, path):
+            for line in string.gmatch(self.fsys:read_file(nil, path), "[^%c]+"):
+                id = string.match(line, "^%s*(%d+)")
+                if id == nil or tonumber(id) != tonumber(args.id):
+                    lines[len(lines) + 1] = line
+        if not args.remove:
+            lines[len(lines) + 1] = tostring(args.id) .. " " .. tostring(args.hash) .. " " .. string.gsub(tostring(args.label ?? ""), "%s+", "_")
+        self.fsys:write_file(nil, path, table.concat(lines, "\n") .. (len(lines) > 0 and "\n" or ""))
 
     def drop_elevation(self, id):
         s = self.sessions[id]

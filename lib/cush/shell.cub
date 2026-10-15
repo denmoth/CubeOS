@@ -95,6 +95,9 @@ export class Shell:
         # sh.power(action) -> ok, причина: просьба службе питания (shutdown, reboot); без неё команды сообщают, что службы нет
         self.power = o.power
         self.inputlog = o.inputlog
+        # sudo(op, password) и account(op, args): права администратора и учётная запись через хозяина терминала (D226)
+        self.sudo = o.sudo
+        self.account = o.account
         # log(level, text): запись в журнал системы без ожидания (ошибки команд и самой оболочки), nil вне сессии
         self.log = o.log
         # хозяин терминала смотрит, есть ли программа на переднем плане (удержание Ctrl+T)

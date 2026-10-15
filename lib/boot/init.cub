@@ -135,7 +135,8 @@ export class Boot:
         if recovered.restored + recovered.cleaned + recovered.replayed + recovered.dropped > 0:
             k:log("file recovery: " .. recovered.restored .. " restored, " .. recovered.cleaned .. " cleaned, " .. recovered.replayed .. " transactions replayed, " .. recovered.dropped .. " dropped", "warn")
         self:_mount_virtual(system)
-        sessions = session_mod.new(fsys, auth, {kernel: k, clock: o.clock, elevate_ms: conf.elevate_ms, lang: conf.lang, de: conf.de})
+        sessions = session_mod.new(fsys, auth, {kernel: k, clock: o.clock, elevate_ms: conf.elevate_ms, lang: conf.lang, de: conf.de,
+            trust_login: conf.sudo_trust_login})
         system.sessions = sessions
         system_subject = rules_mod.subject("system", ["system"])
         system.subject = system_subject

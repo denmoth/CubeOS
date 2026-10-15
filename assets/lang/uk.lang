@@ -288,6 +288,42 @@ msgstr "Нічого не робити, з помилкою"
 msgid "Exit code 1; useful in scripts."
 msgstr "Код повернення 1; корисно у скриптах."
 
+msgid "Run a command as administrator"
+msgstr "Виконати команду від адміністратора"
+
+msgid "Runs one command with administrator rights. It asks for your password unless you signed in with your password (then you already proved who you are) or used sudo in the last 5 minutes. Only administrators can use it."
+msgstr "Виконує одну команду з правами адміністратора. Питає пароль, якщо ви увійшли не за паролем (за паролем ви вже підтвердили, хто ви) і не використовували sudo в останні 5 хвилин. Лише для адміністраторів."
+
+msgid "Change your password"
+msgstr "Змінити свій пароль"
+
+msgid "Asks for the current password and the new one twice. The password is what sudo, recovery and CraftOS ask for; with a PIN you sign in with the PIN."
+msgstr "Питає поточний пароль і двічі новий. Пароль питають sudo, відновлення й CraftOS; з PIN вхід за PIN."
+
+msgid "A short PIN for signing in"
+msgstr "Короткий PIN для входу"
+
+msgid "With a PIN you sign in and unlock with it instead of your long password; the password stays for sudo, recovery and CraftOS. After 5 wrong PINs the login asks for the password, which unlocks the PIN again."
+msgstr "З PIN ви входите й розблоковуєте за ним замість довгого пароля; пароль лишається для sudo, відновлення й CraftOS. Після 5 неправильних PIN вхід питає пароль, і він знову дозволяє PIN."
+
+msgid "Do not ask for the password again for a while"
+msgstr "Якийсь час не питати пароль знову"
+
+msgid "After you sign in, the login does not ask again for this many minutes (choose your name and you are in). Off by default. Anyone near the computer can use this time, so keep it short if your data matters."
+msgstr "Після входу екран входу стільки хвилин не питає знову (вибрали ім'я й увійшли). Типово вимкнено. Цим часом може скористатися будь-хто поруч із комп'ютером, тож тримайте його коротким, якщо дані важливі."
+
+msgid "Sign one user in automatically at start"
+msgstr "Входити користувачем автоматично під час увімкнення"
+
+msgid "The computer signs this user in by itself when it starts, without the login screen. Needs administrator rights (sudo). Anyone who starts the computer gets this account."
+msgstr "Комп'ютер сам входить цим користувачем під час увімкнення, без екрана входу. Потрібні права адміністратора (sudo). Цей акаунт отримає будь-хто, хто ввімкне комп'ютер."
+
+msgid "Floppy disks and booting from them"
+msgstr "Дискети й завантаження з них"
+
+msgid "Lists disks in the drives. A trusted disk with a startup program may start instead of CubeOS. Booting from disks: off (default), trusted (only trusted disks), password (others need the administrator password), all (any disk). Changing trust and the mode needs sudo."
+msgstr "Показує дискети в дисководах. Довірена дискета з програмою startup може запуститися замість CubeOS. Завантаження з дискет: off (типово), trusted (лише довірені), password (інші за паролем адміністратора), all (будь-яка). Змінювати довіру й режим можна через sudo."
+
 msgid "Files and folders"
 msgstr "Файли й теки"
 
@@ -302,6 +338,9 @@ msgstr "Програми й задачі"
 
 msgid "Shell"
 msgstr "Оболонка"
+
+msgid "Users and security"
+msgstr "Користувачі й захист"
 
 msgid "Long list: type, rights and size of every entry"
 msgstr "Докладно: тип, права й розмір кожного елемента"
@@ -554,6 +593,60 @@ msgstr "ll виводить докладний список"
 
 msgid "Then: echo $GREETING"
 msgstr "Потім: echo $GREETING"
+
+msgid "Forget the rights now, so the next sudo asks again"
+msgstr "Забути права зараз, наступний sudo спитає знову"
+
+msgid "Look into a folder only administrators may read"
+msgstr "Зазирнути в теку, яку читають лише адміністратори"
+
+msgid "Change a system setting"
+msgstr "Змінити системне налаштування"
+
+msgid "Choose a PIN (4 or more characters)"
+msgstr "Задати PIN (4 символи й більше)"
+
+msgid "Sign in with the password again"
+msgstr "Знову входити за паролем"
+
+msgid "Choose your PIN"
+msgstr "Задати свій PIN"
+
+msgid "How long, for example 30"
+msgstr "Скільки, наприклад 30"
+
+msgid "Always ask"
+msgstr "Питати завжди"
+
+msgid "Half an hour without the password"
+msgstr "Пів години без пароля"
+
+msgid "The user to sign in"
+msgstr "Ким входити"
+
+msgid "Show the login screen again"
+msgstr "Знову показувати екран входу"
+
+msgid "Steve is signed in at start"
+msgstr "Steve входить сам під час увімкнення"
+
+msgid "Disks in the drives, with their number and label"
+msgstr "Дискети в дисководах, з номером і міткою"
+
+msgid "Trust this disk (by number and the contents of its startup)"
+msgstr "Довіряти цій дискеті (за номером і вмістом startup)"
+
+msgid "Stop trusting disk number ID"
+msgstr "Більше не довіряти дискеті номер ID"
+
+msgid "off, trusted, password or all"
+msgstr "off, trusted, password або all"
+
+msgid "Trust the inserted disk"
+msgstr "Довіряти вставленій дискеті"
+
+msgid "Only trusted disks may boot"
+msgstr "Завантажуватися можна лише з довірених"
 
 msgid "pass the output to the next command"
 msgstr "передати вивід наступній команді"

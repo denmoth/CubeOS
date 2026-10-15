@@ -4,7 +4,9 @@
 #   /cubeos/sys/cfg/users.conf       список пользователей: имя, подпись, роли, группы, цвет плитки, флаги (JSON5)
 #   /cubeos/sys/sec/shadow.lock      хэши паролей: имя -> "pbkdf2-sha256$раунды$соль$хэш"
 #   /cubeos/sys/sec/sudoers.lock     администраторы: {admins: [имена]}
+#   /cubeos/sys/sec/pins.lock        PIN для входа (D226): имя -> {hash, fails}; после PIN_TRIES неверных PIN вход только по паролю
 #
+# PIN нужен только для входа и разблокировки; пароль остаётся для sudo, восстановления и CraftOS. Без PIN вход по паролю.
 # Пользователь без записи в shadow.lock это пользователь без пароля (например, гость).
 # Пароль проверяется через PBKDF2-HMAC-SHA256; после трёх неудач вход замедляется (пауза растёт вдвое, не больше минуты).
 #
@@ -25,6 +27,9 @@ import cfs.journal as journal
 export const USERS_PATH = "/cubeos/sys/cfg/users.conf"
 export const SHADOW_PATH = "/cubeos/sys/sec/shadow.lock"
 export const SUDOERS_PATH = "/cubeos/sys/sec/sudoers.lock"
+export const PINS_PATH = "/cubeos/sys/sec/pins.lock"
+export const PIN_TRIES = 5
+export const PIN_MIN = 4
 export const JOURNAL_DIR = "/cubeos/var/journal"
 
 def _default_clock():
@@ -70,6 +75,8 @@ export class Auth:
         self.users_path = (o.paths ?? {}).users ?? USERS_PATH
         self.shadow_path = (o.paths ?? {}).shadow ?? SHADOW_PATH
         self.sudoers_path = (o.paths ?? {}).sudoers ?? SUDOERS_PATH
+        self.pins_path = (o.paths ?? {}).pins ?? PINS_PATH
+        self.pins = {}
         self.records = []
         self.shadow = {}
         self.admins = {}
@@ -92,6 +99,8 @@ export class Auth:
                 self.records[len(self.records) + 1] = rec
         text = self:_read(self.shadow_path)
         self.shadow = text != nil and json5.parse(text) or {}
+        text = self:_read(self.pins_path)
+        self.pins = text != nil and json5.parse(text) or {}
         text = self:_read(self.sudoers_path)
         self.admins = {}
         if text != nil:
@@ -106,7 +115,8 @@ export class Auth:
         table.sort(names)
         store = atomic.fsys_io(self.fsys, nil)
         txn = journal.new(store, JOURNAL_DIR):begin("accounts")
-        for pair in [[self.users_path, {users: self.records}], [self.shadow_path, self.shadow], [self.sudoers_path, {admins: names}]]:
+        for pair in [[self.users_path, {users: self.records}], [self.shadow_path, self.shadow], [self.sudoers_path, {admins: names}],
+                [self.pins_path, self.pins]]:
             store.mkdir(paths.parent(pair[1]))
             txn:write(pair[1], json5.stringify(pair[2], {json5: true, indent: 2}) .. "\n")
         txn:commit()
@@ -187,8 +197,62 @@ export class Auth:
                 break
         self.shadow[rec.name] = nil
         self.admins[rec.name] = nil
+        self.pins[rec.name] = nil
         self:save()
         return true
+
+    # ------------------------------------------------------------ PIN (D226)
+
+    def has_pin(self, name):
+        rec = self:user(name)
+        return rec != nil and self.pins[rec.name] != nil
+
+    def pin_locked(self, name):
+        rec = self:user(name)
+        p = rec != nil and self.pins[rec.name] or nil
+        return p != nil and (p.fails ?? 0) >= PIN_TRIES
+
+    # pin nil или "": убрать PIN (вход снова по паролю)
+    def set_pin(self, name, pin):
+        rec = self:user(name)
+        if rec == nil:
+            raise Error("no such user: " .. name)
+        if pin == nil or pin == "":
+            self.pins[rec.name] = nil
+        else:
+            if unicode.length(pin) < PIN_MIN:
+                raise Error("the PIN is too short (at least " .. PIN_MIN .. ")")
+            self.pins[rec.name] = {hash: make_hash(pin, self:_salt(), self.rounds), fails: 0}
+        self:save()
+
+    # true или false и причина: "no pin", "pin locked" (нужен пароль), "bad pin" (третье значение: сколько попыток осталось)
+    def verify_pin(self, name, pin):
+        rec = self:user(name)
+        if rec == nil:
+            return false, "unknown"
+        p = self.pins[rec.name]
+        if p == nil:
+            return false, "no pin"
+        if (p.fails ?? 0) >= PIN_TRIES:
+            return false, "pin locked"
+        if pin != nil and pin != "" and check_hash(pin, p.hash):
+            if (p.fails ?? 0) > 0:
+                p.fails = 0
+                self:save()
+            return true
+        p.fails = (p.fails ?? 0) + 1
+        self:save()
+        if p.fails >= PIN_TRIES:
+            return false, "pin locked"
+        return false, "bad pin", PIN_TRIES - p.fails
+
+    # поле учётной записи (например remember_minutes), без хэшей
+    def set_field(self, name, key, value):
+        rec = self:user(name)
+        if rec == nil:
+            raise Error("no such user: " .. name)
+        rec[key] = value
+        self:save()
 
     # ------------------------------------------------------------ проверка
 
@@ -209,6 +273,11 @@ export class Auth:
             ok = password != nil and check_hash(password, stored)
         if ok:
             self.fails[rec.name] = nil
+            # верный пароль снимает блокировку PIN
+            p = self.pins[rec.name]
+            if p != nil and (p.fails ?? 0) > 0:
+                p.fails = 0
+                self:save()
             return true
         count = (fail != nil and fail.count or 0) + 1
         wait = 0

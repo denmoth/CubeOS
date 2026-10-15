@@ -1,0 +1,99 @@
+import t
+import cfs
+import boot.auth as auth_mod
+import boot.session as session_mod
+import boot.greeter as greeter_mod
+import boot.console as console_mod
+eq = t.eq
+
+# PIN и пароль администратора (D226), «не спрашивать X минут» (D227): настоящие Auth, SessionManager и экран входа.
+
+clock = {now: 1000000}
+def now():
+    return clock.now
+
+fsys = cfs.new({clock: now})
+fsys:mount("/", cfs.memory({now: now}))
+cfs.install_defaults(fsys)
+fsys:mkdir(nil, "/cubeos/var", {parents: true})
+auth = auth_mod.Auth(fsys, {rounds: 2, clock: now})
+auth:load()
+auth:create_user({name: "alice"}, "long-password", true)
+auth:create_user({name: "bob"}, "bobpass", false)
+
+# ------------------------------------------------------------ PIN в Auth
+eq(auth:has_pin("alice"), false, "no PIN at first")
+ok, err = pcall(() => auth:set_pin("alice", "12"))
+eq(ok, false, "a PIN shorter than 4 is refused")
+auth:set_pin("alice", "4321")
+eq(auth:has_pin("alice"), true, "PIN set")
+again = auth_mod.Auth(fsys, {rounds: 2, clock: now})
+again:load()
+eq(again:has_pin("alice"), true, "the PIN is saved (pins.lock)")
+eq(string.find(fsys:read_file(nil, "/cubeos/sys/sec/pins.lock"), "4321", 1, true), nil, "only its hash is stored")
+eq(auth:verify_pin("alice", "4321"), true, "the right PIN")
+ok, why, left = auth:verify_pin("alice", "0000")
+eq([ok, why, left], [false, "bad pin", 4], "a wrong PIN says how many tries are left")
+eq(auth:verify("alice", "4321"), false, "the PIN is not the password (sudo and recovery need the password)")
+
+# ------------------------------------------------------------ вход по PIN на экране входа
+sessions = session_mod.new(fsys, auth, {clock: now})
+con = console_mod.ScriptedConsole(["alice", "4321"])
+s = greeter_mod.new(con, auth, sessions, {}):login()
+eq(s != nil and s.user, "alice", "the login screen asks for the PIN and signs in")
+eq(s.login_method, "pin", "the session knows it was a PIN login")
+eq(string.find(table.concat(con.prompts, "|"), "PIN for alice", 1, true) != nil, true, "the prompt says PIN")
+eq(sessions:trusted(s.id), false, "after a PIN login sudo asks for the password")
+sessions:close(s.id)
+
+con = console_mod.ScriptedConsole(["alice", "p", "long-password"])
+s = greeter_mod.new(con, auth, sessions, {}):login()
+eq(s != nil and s.login_method, "password", "p switches to the password")
+eq(sessions:trusted(s.id), true, "after a password login sudo does not ask again")
+eq(sessions:elevate_trusted(s.id), true, "and can raise the rights without a password")
+sessions:close(s.id)
+
+# 5 неверных PIN: только пароль, верный пароль снимает блокировку
+for i in range[1, 5]:
+    auth:verify_pin("alice", "9999")
+eq(auth:pin_locked("alice"), true, "five wrong PINs lock the PIN")
+con = console_mod.ScriptedConsole(["alice", "long-password"])
+s = greeter_mod.new(con, auth, sessions, {}):login()
+eq(s != nil and s.login_method, "password", "a locked PIN means the password is asked instead")
+eq(auth:pin_locked("alice"), false, "the right password unlocks the PIN again")
+sessions:close(s.id)
+
+# ------------------------------------------------------------ «не спрашивать X минут после входа»
+eq(sessions:account(1, "status") , false, "a closed session has no account operations")
+s = sessions:open("bob", "bobpass")
+ok, why = sessions:account(s.id, "remember", {password: "wrong", minutes: 10})
+eq(ok, false, "changing it needs your password")
+eq(sessions:account(s.id, "remember", {password: "bobpass", minutes: 10}), true, "remember 10 minutes")
+sessions:close(s.id)
+clock.now = clock.now + 5 * 60000
+con = console_mod.ScriptedConsole(["bob"])
+s = greeter_mod.new(con, auth, sessions, {}):login()
+eq(s != nil and s.login_method, "remember", "5 minutes later the login does not ask")
+sessions:close(s.id)
+clock.now = clock.now + 11 * 60000
+con = console_mod.ScriptedConsole(["bob", "bobpass"])
+s = greeter_mod.new(con, auth, sessions, {}):login()
+eq(s != nil and s.login_method, "password", "after 10 minutes it asks again")
+
+# ------------------------------------------------------------ системные настройки только с правами
+ok, why = sessions:account(s.id, "autologin", {name: "bob"})
+eq([ok, why], [false, "needs administrator rights: use sudo"], "autologin needs sudo")
+sessions:close(s.id)
+s = sessions:open("alice", "long-password")
+eq(sessions:elevate(s.id, "long-password"), true, "alice raises her rights")
+eq(sessions:account(s.id, "autologin", {name: "bob"}), false, "raised rights alone are not enough: the command must come through sudo")
+eq(sessions:account(s.id, "autologin", {name: "bob", sudo: true}), true, "then autologin works")
+import json5
+eq(json5.parse(fsys:read_file(nil, "/cubeos/sys/cfg/boot.conf")).autologin, "bob", "it is written to boot.conf")
+eq(sessions:account(s.id, "disk_boot", {mode: "trusted", sudo: true}), true, "disk boot mode")
+eq(sessions:account(s.id, "disk_boot", {mode: "maybe", sudo: true}), false, "only known modes")
+eq(sessions:account(s.id, "trust_disk", {id: 7, hash: "abc", label: "my tools", sudo: true}), true, "trust a disk")
+eq(fsys:read_file(nil, "/cubeos/sys/cfg/trusted_disks.conf"), "7 abc my_tools\n", "the trusted disks file")
+eq(sessions:account(s.id, "trust_disk", {id: 7, remove: true, sudo: true}), true, "untrust it")
+eq(fsys:read_file(nil, "/cubeos/sys/cfg/trusted_disks.conf"), "", "the line is gone")
+print("done")

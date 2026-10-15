@@ -12,6 +12,7 @@ export const CATEGORIES = [
     ["time", "Date and time"],
     ["jobs", "Programs and jobs"],
     ["shell", "Shell"],
+    ["users", "Users and security"],
 ]
 
 export const COMMANDS = {
@@ -164,6 +165,34 @@ export const COMMANDS = {
         see: ["export"]},
     "true": {cat: "shell", summary: "Do nothing, successfully", usage: "true", about: "Exit code 0; useful in scripts.", flags: [], examples: [], see: ["false"]},
     "false": {cat: "shell", summary: "Do nothing, unsuccessfully", usage: "false", about: "Exit code 1; useful in scripts.", flags: [], examples: [], see: ["true"]},
+
+    # ------------------------------------------------------------ пользователи и защита
+    sudo: {cat: "users", summary: "Run a command as administrator", usage: "sudo [-k] command [args...]",
+        about: "Runs one command with administrator rights. It asks for your password unless you signed in with your password (then you already proved who you are) or used sudo in the last 5 minutes. Only administrators can use it.",
+        flags: [["-k", "Forget the rights now, so the next sudo asks again"]],
+        examples: [["sudo ls /cubeos/var/log", "Look into a folder only administrators may read"], ["sudo autologin off", "Change a system setting"]],
+        see: ["passwd", "autologin"]},
+    passwd: {cat: "users", summary: "Change your password", usage: "passwd",
+        about: "Asks for the current password and the new one twice. The password is what sudo, recovery and CraftOS ask for; with a PIN you sign in with the PIN.",
+        flags: [], examples: [], see: ["pin", "remember"]},
+    pin: {cat: "users", summary: "A short PIN for signing in", usage: "pin [set | remove]",
+        about: "With a PIN you sign in and unlock with it instead of your long password; the password stays for sudo, recovery and CraftOS. After 5 wrong PINs the login asks for the password, which unlocks the PIN again.",
+        flags: [["set", "Choose a PIN (4 or more characters)"], ["remove", "Sign in with the password again"]],
+        examples: [["pin set", "Choose your PIN"]], see: ["passwd", "remember"]},
+    remember: {cat: "users", summary: "Do not ask for the password again for a while", usage: "remember [MINUTES | off]",
+        about: "After you sign in, the login does not ask again for this many minutes (choose your name and you are in). Off by default. Anyone near the computer can use this time, so keep it short if your data matters.",
+        flags: [["MINUTES", "How long, for example 30"], ["off", "Always ask"]], examples: [["remember 30", "Half an hour without the password"]],
+        see: ["pin", "autologin"]},
+    autologin: {cat: "users", summary: "Sign one user in automatically at start", usage: "autologin NAME | off  (with sudo)",
+        about: "The computer signs this user in by itself when it starts, without the login screen. Needs administrator rights (sudo). Anyone who starts the computer gets this account.",
+        flags: [["NAME", "The user to sign in"], ["off", "Show the login screen again"]], examples: [["sudo autologin steve", "Steve is signed in at start"]],
+        see: ["remember", "sudo"]},
+    disk: {cat: "users", summary: "Floppy disks and booting from them", usage: "disk [list | trust [SIDE] | untrust ID | boot MODE]",
+        about: "Lists disks in the drives. A trusted disk with a startup program may start instead of CubeOS. Booting from disks: off (default), trusted (only trusted disks), password (others need the administrator password), all (any disk). Changing trust and the mode needs sudo.",
+        flags: [["list", "Disks in the drives, with their number and label"], ["trust [SIDE]", "Trust this disk (by number and the contents of its startup)"],
+            ["untrust ID", "Stop trusting disk number ID"], ["boot MODE", "off, trusted, password or all"]],
+        examples: [["sudo disk trust", "Trust the inserted disk"], ["sudo disk boot trusted", "Only trusted disks may boot"]],
+        see: ["sudo"]},
 }
 
 # подсказки к строке и клавишам для help без аргументов (тоже переводятся)

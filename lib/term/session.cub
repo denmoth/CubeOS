@@ -80,9 +80,15 @@ export def program(session, opts=nil):
         # журнал ввода (logd input): on true/false включает и выключает, nil спрашивает состояние
         def inputlog(on):
             return host_call("inputlog", on)
+        # sudo (D226): status, elevate (пароль или nil: без пароля после входа по паролю), fs (файлы с правами администратора), forget
+        def sudo(op, password=nil):
+            return host_call("sudo", {op: op, password: password})
+        # учётная запись: passwd, pin, remember, status; autologin и trust_disk только после sudo
+        def account(op, args=nil):
+            return host_call("account", {op: op, args: args})
         cfg = view:expand("$cfg")
         env.cush_opts = {history_path: cfg .. "/cush_history", config_path: cfg .. "/cush.conf", user: session.user, host: o.host,
-            home: session.env.home, time: t.time, time_save: time_save, power: power, inputlog: inputlog, log: shell_log, notes: notes,
+            home: session.env.home, time: t.time, time_save: time_save, power: power, inputlog: inputlog, log: shell_log, notes: notes, sudo: sudo, account: account,
             lang_dir: (o.assets ?? "/repo/assets") .. "/lang", unicode: out.kind == "pixel",
             info: {display: out.kind == "pixel" and "pixel mode" or "text mode", font: out.kind == "pixel" and "Monocraft 6x9" or nil}}
 
@@ -119,6 +125,36 @@ export def program(session, opts=nil):
             clip.text = current
             last = current
 
+        def serve_account(req):
+            m = session.manager
+            if m == nil:
+                return false, "accounts are not available here"
+            q = req.payload
+            if req.name == "account":
+                sys.busy("checking the password")
+                ok, why = m:account(session.id, q.op, q.args)
+                sys.busy(nil)
+                return ok, why
+            if q.op == "status":
+                return m:account(session.id, "status"), nil
+            if q.op == "elevate":
+                if q.password == nil:
+                    return m:elevate_trusted(session.id)
+                sys.busy("checking the password")
+                ok, why, wait = m:elevate(session.id, q.password)
+                sys.busy(nil)
+                if not ok and why == "locked":
+                    why = "too many attempts, wait " .. tostring(wait) .. " s"
+                elif not ok and why == "bad password":
+                    why = "wrong password"
+                return ok, why
+            if q.op == "fs":
+                return cfs.legacy_fs(m:view(session.id)), nil
+            if q.op == "forget":
+                m:drop_elevation(session.id)
+                return true, nil
+            return false, "unknown sudo operation"
+
         def serve_pending():
             while len(pending) > 0:
                 req = table.remove(pending, 1)
@@ -132,6 +168,8 @@ export def program(session, opts=nil):
                     why = err
                 elif req.name == "log":
                     sys.log(req.payload.level, req.payload.text)
+                elif req.name == "sudo" or req.name == "account":
+                    ok, why = serve_account(req)
                 elif req.name == "inputlog":
                     res, err = rpc.call(sys, "logd", "input", req.payload != nil and {on: req.payload} or {})
                     ok = res

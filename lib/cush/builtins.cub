@@ -8,6 +8,7 @@ import clock
 import svc.logd as logd
 import cush.help as help_mod
 import json5
+import sha256
 
 # имя -> функция; описания, флаги и примеры в реестре cush.commands (справка: cush.help)
 export const table_of = {}
@@ -819,3 +820,224 @@ def b_locale(sh, args):
     sh:eprint("usage: locale [set LANG | list]")
     return 2
 add("locale", b_locale)
+
+# ------------------------------------------------------------ учётная запись и права (D226, D227, D224)
+
+# скрытый ввод (пароль, PIN): в журнал ввода не попадает
+def ask_secret(sh, prompt):
+    sh:write_color("0", prompt)
+    return sh.env.read("*")
+
+def account_or_fail(sh, name):
+    if sh.account == nil:
+        sh:eprint(name .. ": accounts are not available here")
+        return false
+    return true
+
+# sudo [-k] команда...: команда с правами администратора; пароль спрашивается, если вход был не по паролю (PIN, автовход)
+# или права уже не повышены (5 минут)
+def b_sudo(sh, args):
+    if sh.sudo == nil:
+        sh:eprint("sudo: not available here")
+        return 1
+    if args[1] == "-k":
+        sh.sudo("forget")
+        return 0
+    if len(args) == 0:
+        sh:eprint("usage: sudo command [args...]")
+        return 2
+    st = sh.sudo("status")
+    if type(st) != "table" or not st.admin:
+        sh:eprint("sudo: " .. sh.vars.USER .. " is not an administrator")
+        return 1
+    if not st.elevated:
+        ok = false
+        why = nil
+        if st.trusted:
+            ok, why = sh.sudo("elevate")
+        if not ok:
+            for attempt in range[1, 3]:
+                pw = ask_secret(sh, "[sudo] password for " .. sh.vars.USER .. ": ")
+                if pw == nil:
+                    return 1
+                ok, why = sh.sudo("elevate", pw)
+                if ok or string.find(tostring(why), "wait", 1, true) != nil:
+                    break
+                sh:eprint("sudo: " .. tostring(why))
+        if not ok:
+            sh:eprint("sudo: " .. tostring(why))
+            return 1
+    fs_admin = sh.sudo("fs")
+    old = sh.env.fs
+    if type(fs_admin) == "table":
+        sh.env.fs = fs_admin
+    sh.sudo_active = true
+    ok2, res = pcall(() => sh:run_command(args))
+    sh.sudo_active = false
+    sh.env.fs = old
+    if not ok2:
+        error(res, 0)
+    return res
+
+# passwd: сменить свой пароль
+def b_passwd(sh, args):
+    if not account_or_fail(sh, "passwd"):
+        return 1
+    st = sh.account("status")
+    old = nil
+    if type(st) == "table" and st.password:
+        old = ask_secret(sh, "Current password: ")
+    new = ask_secret(sh, "New password (empty: no password): ")
+    again = ask_secret(sh, "Repeat the new password: ")
+    if new != again:
+        sh:eprint("passwd: the passwords do not match")
+        return 1
+    ok, why = sh.account("passwd", {password: old, new: new})
+    if not ok:
+        sh:eprint("passwd: " .. tostring(why))
+        return 1
+    sh:println("Password changed.")
+    return 0
+
+# pin [set|remove]: PIN для входа (пароль остаётся для sudo, восстановления и CraftOS)
+def b_pin(sh, args):
+    if not account_or_fail(sh, "pin"):
+        return 1
+    sub = args[1] ?? "status"
+    st = sh.account("status")
+    if sub == "status":
+        sh:println(type(st) == "table" and st.pin and "A PIN is set: you sign in with it." or "No PIN: you sign in with your password.")
+        return 0
+    if sub != "set" and sub != "remove":
+        sh:eprint("usage: pin [set | remove]")
+        return 2
+    pw = nil
+    if type(st) == "table" and st.password:
+        pw = ask_secret(sh, "Your password: ")
+    pin = nil
+    if sub == "set":
+        pin = ask_secret(sh, "New PIN (4 or more characters): ")
+        again = ask_secret(sh, "Repeat the PIN: ")
+        if pin != again:
+            sh:eprint("pin: the PINs do not match")
+            return 1
+    ok, why = sh.account("pin", {password: pw, pin: pin})
+    if not ok:
+        sh:eprint("pin: " .. tostring(why))
+        return 1
+    sh:println(sub == "set" and "PIN set. Next time you sign in with it." or "PIN removed.")
+    return 0
+
+# remember [MINUTES|off]: не спрашивать пароль столько минут после последнего входа
+def b_remember(sh, args):
+    if not account_or_fail(sh, "remember"):
+        return 1
+    st = sh.account("status")
+    if args[1] == nil:
+        m = type(st) == "table" and st.remember or 0
+        sh:println(m > 0 and ("The login does not ask again for " .. m .. " minutes after you signed in.") or "Every login asks for the password or PIN.")
+        return 0
+    minutes = args[1] == "off" and 0 or tonumber(args[1])
+    if minutes == nil or minutes < 0:
+        sh:eprint("usage: remember [MINUTES | off]")
+        return 2
+    pw = nil
+    if type(st) == "table" and st.password:
+        pw = ask_secret(sh, "Your password: ")
+    ok, why = sh.account("remember", {password: pw, minutes: math.floor(minutes)})
+    if not ok:
+        sh:eprint("remember: " .. tostring(why))
+        return 1
+    sh:println(minutes > 0 and ("Saved: no password for " .. math.floor(minutes) .. " minutes after a login.") or "Saved: every login asks.")
+    return 0
+
+# autologin [NAME|off]: кто входит сам при включении (только с sudo)
+def b_autologin(sh, args):
+    if not account_or_fail(sh, "autologin"):
+        return 1
+    if args[1] == nil:
+        sh:eprint("usage: sudo autologin NAME | off")
+        return 2
+    name = args[1] != "off" and args[1] or nil
+    ok, why = sh.account("autologin", {name: name, sudo: sh.sudo_active == true})
+    if not ok:
+        sh:eprint("autologin: " .. tostring(why))
+        return 1
+    sh:println(name != nil and (name .. " will be signed in automatically at start.") or "Automatic login is off.")
+    return 0
+
+# disk [list | trust [SIDE] | untrust ID | boot MODE]: дискеты и загрузка с них (D224)
+def _disk_startup(mount):
+    for n in ["startup.lua", "startup"]:
+        p = "/" .. fs.combine(mount, n)
+        if fs.exists(p) and not fs.isDir(p):
+            return p
+    return nil
+
+def b_disk(sh, args):
+    per = sh.env.peripheral
+    d = sh.env.disk
+    if per == nil or d == nil:
+        sh:eprint("disk: no disk API here")
+        return 1
+    sub = args[1] ?? "list"
+    drives = []
+    for side in per.getNames():
+        if d.isPresent(side):
+            drives[len(drives) + 1] = side
+    if sub == "list":
+        if len(drives) == 0:
+            sh:println("No disks in the drives.")
+        for side in drives:
+            mount = d.hasData(side) and d.getMountPath(side) or nil
+            start = mount != nil and _disk_startup(mount) or nil
+            sh:write_color("5", side)
+            sh:println("  #" .. tostring(d.getID(side)) .. "  " .. tostring(d.getLabel(side) ?? "-") .. (start != nil and "  (has a startup program)" or ""))
+        return 0
+    if not account_or_fail(sh, "disk"):
+        return 1
+    if sub == "boot":
+        ok, why = sh.account("disk_boot", {mode: args[2], sudo: sh.sudo_active == true})
+        if not ok:
+            sh:eprint("disk: " .. tostring(why))
+            return 1
+        sh:println("Disk boot: " .. tostring(args[2]))
+        return 0
+    if sub == "untrust":
+        ok, why = sh.account("trust_disk", {id: tonumber(args[2]), remove: true, sudo: sh.sudo_active == true})
+        if not ok:
+            sh:eprint("disk: " .. tostring(why))
+            return 1
+        sh:println("Disk #" .. tostring(args[2]) .. " is not trusted any more.")
+        return 0
+    if sub == "trust":
+        side = args[2]
+        start = nil
+        for s_ in drives:
+            if side == nil or s_ == side:
+                m = d.hasData(s_) and d.getMountPath(s_) or nil
+                start = m != nil and _disk_startup(m) or nil
+                if start != nil:
+                    side = s_
+                    break
+        if start == nil:
+            sh:eprint("disk: no disk with a startup program" .. (args[2] != nil and (" in " .. args[2]) or ""))
+            return 1
+        f = fs.open(start, "r")
+        text = f.readAll() ?? ""
+        f.close()
+        ok, why = sh.account("trust_disk", {id: d.getID(side), hash: sha256.hex(text), label: d.getLabel(side) ?? "", sudo: sh.sudo_active == true})
+        if not ok:
+            sh:eprint("disk: " .. tostring(why))
+            return 1
+        sh:println("Disk #" .. tostring(d.getID(side)) .. " is trusted. If its startup program changes, trust it again.")
+        return 0
+    sh:eprint("usage: disk [list | trust [SIDE] | untrust ID | boot off|trusted|password|all]")
+    return 2
+
+add("sudo", b_sudo)
+add("passwd", b_passwd)
+add("pin", b_pin)
+add("remember", b_remember)
+add("autologin", b_autologin)
+add("disk", b_disk)
