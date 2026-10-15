@@ -7,6 +7,10 @@
 # ScriptedConsole: для тестов (ввод из списка, вывод копится).
 # TermConsole: настоящий терминал CC (term, read).
 
+import unicode
+import json5
+import input.layout as layout_mod
+
 export class ScriptedConsole:
     def init(self, inputs=nil):
         self.inputs = inputs ?? []
@@ -40,12 +44,28 @@ export class ScriptedConsole:
 
 # Если задан sys (процесс ядра), ввод идёт через sys.wait_event: read из CC в процессе ядра работать не может
 # (он ждёт события напрямую у CC, а не у планировщика). bind(sys) возвращает такую консоль для процесса.
+# Клавиатура как в терминале (D235): второй язык из /cubeos/sys/cfg/locale.conf; клавиша без символа (Windows печатает не латиницу)
+# даёт букву второго языка. opts.layout: готовая раскладка (для тестов), opts.layout_dirs: где файлы раскладок.
 export class TermConsole:
-    def init(self, sys=nil):
+    def init(self, sys=nil, opts=nil):
         self.sys = sys
+        self.opts = opts ?? {}
+        self.layout = self.opts.layout
 
     def bind(self, sys):
-        return TermConsole(sys)
+        return TermConsole(sys, self.opts)
+
+    def _layout(self):
+        if self.layout == nil:
+            conf = {}
+            if fs.exists("/cubeos/sys/cfg/locale.conf"):
+                f = fs.open("/cubeos/sys/cfg/locale.conf", "r")
+                ok, data = pcall(() => json5.parse(f.readAll()))
+                f.close()
+                if ok and type(data) == "table":
+                    conf = data
+            self.layout = layout_mod.new(nil, nil, {mode: "auto", keyboard: conf.keyboard ?? "ru", dirs: self.opts.layout_dirs})
+        return self.layout
 
     def _newline(self):
         x, y = term.getCursorPos()
@@ -63,21 +83,54 @@ export class TermConsole:
         # ввод отсюда в журналы не пишется; скрытое поле (пароль) прячется и от журнала ввода (D196, D220)
         if hidden and sys.secret_input != nil:
             sys.secret_input(true)
+        lay = self:_layout()
+        shift = {on: false}
+        pending = []
+        def put(text):
+            buf = buf .. text
+            # кириллицу обычный терминал CC не рисует: видна как «?», в скрытом поле звёздочки по числу букв
+            shown = hidden and string.rep("*", unicode.length(text)) or string.gsub(text, "[\128-\255][\128-\191]*", "?")
+            term.write(shown)
         while true:
-            ev, a = sys.wait_event(["char", "key", "paste"])
-            if (ev == "char" or ev == "paste") and type(a) == "string":
-                buf = buf .. a
-                term.write(hidden and string.rep("*", string.len(a)) or a)
+            ev = nil
+            a = nil
+            if len(pending) > 0:
+                nxt = table.remove(pending, 1)
+                ev = nxt[1]
+                a = nxt[2]
+            else:
+                ev, a = sys.wait_event(["char", "key", "key_up", "paste"])
+            if ev == "char" and type(a) == "string":
+                put(lay:translate(a))
+            elif ev == "paste" and type(a) == "string":
+                put(string.match(a, "^[^\r\n]*"))
+            elif ev == "key_up":
+                if a == keys.leftShift or a == keys.rightShift:
+                    shift.on = false
             elif ev == "key":
-                if a == keys.enter or a == keys["numPadEnter"]:
+                if a == keys.leftShift or a == keys.rightShift:
+                    shift.on = true
+                elif a == keys.enter or a == keys["numPadEnter"]:
                     break
-                if a == keys.backspace and string.len(buf) > 0:
-                    buf = string.sub(buf, 1, string.len(buf) - 1)
-                    x, y = term.getCursorPos()
-                    if x > 1:
-                        term.setCursorPos(x - 1, y)
-                        term.write(" ")
-                        term.setCursorPos(x - 1, y)
+                elif a == keys.backspace:
+                    if string.len(buf) > 0:
+                        buf = unicode.sub(buf, 1, unicode.length(buf) - 1)
+                        x, y = term.getCursorPos()
+                        if x > 1:
+                            term.setCursorPos(x - 1, y)
+                            term.write(" ")
+                            term.setCursorPos(x - 1, y)
+                elif lay:base_char(a, shift.on) != nil:
+                    # символ этой клавиши должен прийти следом; не пришёл за 0.1 с: буква второго языка по месту клавиши
+                    ev2, b2 = sys.wait_event(["char", "key", "key_up", "paste"], 0.1)
+                    if ev2 == "char":
+                        pending[len(pending) + 1] = [ev2, b2]
+                    else:
+                        miss = lay:missing(a, shift.on)
+                        if miss != nil:
+                            put(miss)
+                        if ev2 != nil:
+                            pending[len(pending) + 1] = [ev2, b2]
         if hidden and sys.secret_input != nil:
             sys.secret_input(false)
         self:_newline()

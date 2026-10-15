@@ -11,6 +11,9 @@ def make_sys(events):
         e = events[api.pos]
         if e == nil:
             error("the test ran out of events")
+        # "timeout": ожидание с таймаутом ничего не дождалось
+        if e[1] == "timeout":
+            return nil
         return e[1], e[2]
     api.wait_event = wait_event
     api.log = () => nil
@@ -23,11 +26,19 @@ fake = make_sys([["char", "a"], ["char", "b"], ["key", keys.backspace], ["char",
 bound = base:bind(fake)
 eq(bound.sys == fake, true, "bind returns a console for the process")
 eq(bound:read_line("Name: "), "ac", "typing with backspace")
-eq(fake.asked[1], ["char", "key", "paste"], "only input events are awaited")
+eq(fake.asked[1], ["char", "key", "key_up", "paste"], "only input events are awaited")
 
 fake = make_sys([["paste", "secret"], ["key", keys.enter]])
 eq(console_mod.TermConsole(fake):read_line("Password: ", true), "secret", "paste works and hidden input is returned as typed")
 
 fake = make_sys([["key", keys.backspace], ["key", keys.enter]])
 eq(console_mod.TermConsole(fake):read_line("> "), "", "backspace on an empty line does nothing")
+# раскладка (D235): клавиша без символа (Windows печатает кириллицу) даёт букву второго языка; пришедший символ берётся как есть
+import input.layout as layout_mod
+lay = layout_mod.new(nil, nil, {mode: "auto", keyboard: "ru"})
+fake = make_sys([["key", keys.g], ["timeout"], ["key", keys.h], ["timeout"], ["key", keys.leftShift], ["key", keys.b], ["timeout"],
+    ["key_up", keys.leftShift], ["key", keys.d], ["char", "d"], ["key", keys.enter]])
+eq(console_mod.TermConsole(fake, {layout: lay}):read_line("Name: "), "прИd", "missing characters come from the second language, Shift too")
+fake = make_sys([["key", keys.q], ["timeout"], ["key", keys.backspace], ["key", keys.w], ["char", "w"], ["key", keys.enter]])
+eq(console_mod.TermConsole(fake, {layout: lay}):read_line("Password: ", true), "w", "Backspace removes a whole Cyrillic letter")
 print("done")

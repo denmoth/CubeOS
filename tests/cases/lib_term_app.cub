@@ -109,9 +109,9 @@ eq(app3.closed, true, "when the program ends its tab closes")
 eq(len(sh3.apps), 0, "no apps left")
 fs.delete("/repo/build/term_app_quick.lua")
 
-# русский ввод: Ctrl+Shift переключает раскладку, текст попадает в терминал кириллицей
+# русский ввод в ручном режиме (keyboard_mode: manual): Ctrl+Shift переключает раскладку, текст попадает в терминал кириллицей
 sh4 = shell_mod.new(StubOut(40, 10), {clock: () => "14:32", animations: false})
-sh4:register(term_app.spec())
+sh4:register(term_app.spec({layout_mode: "manual"}))
 app4 = sh4:launch("terminal")
 sh4:tick(0.05)
 sh4:handle("key", keys.leftCtrl, false)

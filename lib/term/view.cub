@@ -23,10 +23,13 @@ export const clipboard = {text: ""}
 const SCROLL_STEP = 3
 
 export class TermView(widget.Widget):
-    # props.layouts: раскладки по кругу (по умолчанию en, ru, uk), Ctrl+Shift или Alt+Shift переключает
+    # props: keyboard (второй язык клавиатуры, "ru"), layout_mode ("auto" по умолчанию или "manual"), layouts (раскладки для manual),
+    # layout_dirs (где файлы раскладок), switch (manual: "both", "ctrl+shift", "alt+shift", "off")
     def init(self, vt, props=nil):
         super.init(self, props)
-        self.kbd = layout_mod.new((props ?? {}).layouts ?? ["en", "ru", "uk"])
+        p = props ?? {}
+        self.kbd = layout_mod.new(p.layouts, nil, {mode: p.layout_mode ?? "auto", keyboard: p.keyboard ?? "ru", dirs: p.layout_dirs,
+            switch: p.switch})
         self.flash = false
         self.vt = vt
         self.focusable = true
@@ -195,15 +198,13 @@ export class TermView(widget.Widget):
             if self.mods.ctrl and self.mods.shift and not self.mods.alt and a == keys.v:
                 self:paste()
                 return true
-            # Windows с русской раскладкой: CC присылает клавишу, но не символ (кириллицу он отбрасывает). Если символ не пришёл
-            # за 0.1 с, он достраивается по месту клавиши, а раскладка переключается на русскую (lay:native)
-            if not self.mods.ctrl and not self.mods.alt and self.ui != nil:
-                base = self.kbd:base_char(a, self.mods.shift)
-                if base != nil:
-                    let me = self
-                    tok = {base: base}
-                    self.pending_char = tok
-                    self.ui:after(0.1, () => me:_no_char(tok))
+            # Windows печатает не латиницу (русская раскладка): CC присылает клавишу, но не символ. Если символ не пришёл за 0.1 с,
+            # буква второго языка берётся по месту клавиши (lay:missing, D235)
+            if not self.mods.ctrl and not self.mods.alt and self.ui != nil and self.kbd:base_char(a, self.mods.shift) != nil:
+                let me = self
+                tok = {code: a, shift: self.mods.shift}
+                self.pending_char = tok
+                self.ui:after(0.1, () => me:_no_char(tok))
             if self.mods.shift and not self.mods.ctrl:
                 if a == keys.up:
                     self:scroll_by(1)
@@ -255,18 +256,29 @@ export class TermView(widget.Widget):
         if self.pending_char != tok:
             return
         self.pending_char = nil
-        if self.kbd:native():
+        was = self.kbd:label()
+        ch = self.kbd:missing(tok.code, tok.shift)
+        if ch == nil:
+            return
+        if self.kbd:label() != was:
             self:_show_layout()
-        self:char(tok.base)
+        self:_put_char(ch)
 
     def char(self, ch):
         self.pending_char = nil
+        was = self.kbd:label()
+        out = self.kbd:translate(ch)
+        if self.kbd:label() != was:
+            self:_show_layout()
+        self:_put_char(out)
+        return true
+
+    def _put_char(self, ch):
         if self.offset > 0:
             self.offset = 0
             self:invalidate()
         self:clear_selection()
-        self:emit("event", "char", self.kbd:translate(ch))
-        return true
+        self:emit("event", "char", ch)
 
     def mouse(self, kind, mx, my, button):
         x = mx - self.x + 1

@@ -13,6 +13,7 @@
 
 import ui
 import cfs
+import json5
 import term.vterm as vterm
 import term.view as view_mod
 import term.palette as palette
@@ -40,7 +41,14 @@ export def program(session, opts=nil):
         u = ui.runtime.new(out, {theme: ui.theme.get("cubeos")})
         cols, rows = out:size()
         vt = vterm.new(cols, rows, {palette: palette.get("cubeos"), history: o.history ?? 2000})
-        tv = view_mod.new(vt, {width: "fill", height: "fill"})
+        # клавиатура (D235): второй язык и режим из /cubeos/sys/cfg/locale.conf (keyboard, keyboard_mode), раскладки в assets/layouts
+        lc = {}
+        if view:exists("/cubeos/sys/cfg/locale.conf"):
+            okc, data = pcall(() => json5.parse(view:read("/cubeos/sys/cfg/locale.conf")))
+            if okc and type(data) == "table":
+                lc = data
+        tv = view_mod.new(vt, {width: "fill", height: "fill", keyboard: lc.keyboard ?? "ru", layout_mode: lc.keyboard_mode ?? "auto",
+            layout_dirs: [(o.assets ?? "/repo/assets") .. "/layouts", "/cubeos/share/layouts"]})
         env = env_mod.new({vterm: vt, fs: cfs.legacy_fs(view)})
 
         # ROM-библиотеки, которые не загрузились (иначе программы потом падают с пустым colors и подобным), в журнал

@@ -1,87 +1,161 @@
-# input.layout: раскладки клавиатуры для текста. CC присылает события char только в английской раскладке (коды 32..255), поэтому
-# русский и украинский текст получается заменой клавиш по их месту на клавиатуре (ЙЦУКЕН).
+# input.layout: раскладки клавиатуры для текста (D233, D235). CC присылает событие char только для печатных символов Latin-1
+# (32..126 и 160..255), кириллицу и другие буквы он отбрасывает. Поэтому буквы таких языков получаются по месту клавиши.
 #
-#   lay = layout.new(["en", "ru", "uk"])
-#   lay:translate("q")           -> "й" (пока включена русская раскладка)
-#   lay:key(keys.leftShift) / lay:key_up(code)       следят за Ctrl, Alt и Shift; key возвращает true, когда раскладка переключилась
-#   lay:label()                   -> "RU" (для индикатора)
+# Раскладки лежат в файлах <каталог>/<язык>.json5 (assets/layouts, позже языковые пакеты): base и shifted по клавишам английской
+# раскладки, extra (цифровой ряд с Shift), translit (латиница для имён), label, title. Английский встроен.
 #
-# Переключение (D223): Ctrl+Shift или Alt+Shift, срабатывает при отпускании, если между нажатием и отпусканием не было других клавиш
-# (как в Windows; иначе Ctrl+Shift+C и Ctrl+Shift+стрелки меняли бы раскладку). opts.switch: "both" (по умолчанию), "ctrl+shift",
-# "alt+shift", "off". Заглавные буквы и Caps Lock работают сами: смотрим на регистр символа.
-#   lay:base_char(code, shift)    символ клавиши по её месту в английской раскладке ("q", "Q", ";") или nil
-#   lay:native()                  если включена английская, переключиться на первую другую (Windows печатает не латиницу)
+# Режимы (opts.mode):
+#   "auto" (по умолчанию): языков два, английский и второй (opts.keyboard, например "ru"). Символ, который прислала Windows, берётся
+#       как есть; клавиша без символа (Windows печатает не латиницу) даёт букву второго языка по месту клавиши. Раскладка в CubeOS
+#       всегда как в Windows, переключать её не нужно. Три раскладки в Windows различить нельзя: берётся второй язык системы.
+#   "manual": раскладка CubeOS переключается сама (Ctrl+Shift или Alt+Shift при отпускании, opts.switch: "both", "ctrl+shift",
+#       "alt+shift", "off"), пришедшие символы переводятся по её таблице (Windows при этом держат на английской).
+#
+#   lay = layout.new(["en", "ru"], nil, {mode: "auto", keyboard: "ru"})
+#   lay:translate("q")            символ для вставки (manual: по текущей раскладке; auto: как есть)
+#   lay:missing(code, shift)      буква второго языка для клавиши, которая пришла без символа, или nil
+#   lay:base_char(code, shift)    символ клавиши по её месту в английской раскладке ("q", "Q", ";", "#") или nil
+#   lay:key(code) / lay:key_up(code)  модификаторы; key_up возвращает true, когда раскладка переключилась (manual)
+#   lay:label()                   "RU" / "EN" для индикатора
+#   layout.transliterate("Денис", ["ru"])   -> "Denis" (латиница для имени учётной записи)
+#   layout.load_layout("ru", dirs)   данные раскладки из файла или nil
 
 import unicode
+import json5
 
 # место на клавиатуре (английская раскладка), без Shift и с Shift
-const BASE = "qwertyuiop[]asdfghjkl;'zxcvbnm,./`"
-const SHIFTED = "QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>?~"
+const BASE = "qwertyuiop[]asdfghjkl;'zxcvbnm,./`1234567890"
+const SHIFTED = "QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>?~!@#$%^&*()"
+export const DIRS = ["/repo/assets/layouts", "/cubeos/share/layouts"]
 
-const RU_BASE = "йцукенгшщзхъфывапролджэячсмитьбю.ё"
-const RU_SHIFTED = "ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ,Ё"
-# цифровой ряд с Shift отличается
-const RU_EXTRA = {"@": "\"", "#": "№", "$": ";", "^": ":", "&": "?"}
+# клавиши-знаки и цифры по имени в keys (буквы берутся из имени как есть)
+const PUNCT = {semicolon: ";", semiColon: ";", apostrophe: "'", leftBracket: "[", rightBracket: "]", comma: ",", period: ".", slash: "/",
+    grave: "`", one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9", zero: "0"}
 
-const UK_BASE = "йцукенгшщзхїфівапролджєячсмитьбю.ґ"
-const UK_SHIFTED = "ЙЦУКЕНГШЩЗХЇФІВАПРОЛДЖЄЯЧСМИТЬБЮ,Ґ"
-const UK_EXTRA = {"@": "\"", "#": "№", "$": ";", "^": ":", "&": "?"}
+cache = {}
 
-const NAMES = {en: "EN", ru: "RU", uk: "UK"}
+def _read(path, fsys):
+    f = (fsys ?? fs).open(path, "r")
+    if f == nil:
+        return nil
+    text = f.readAll()
+    f.close()
+    return text
 
-def _make(eng, native, extra):
+# данные раскладки из первого каталога, где есть файл; nil, если нет
+export def load_layout(name, dirs=nil, fsys=nil):
+    if name == nil or name == "en":
+        return nil
+    key = name .. "|" .. table.concat(dirs ?? DIRS, ";")
+    if cache[key] != nil:
+        return cache[key] != false and cache[key] or nil
+    for d in (dirs ?? DIRS):
+        path = d .. "/" .. name .. ".json5"
+        if (fsys ?? fs).exists(path):
+            ok, data = pcall(() => json5.parse(_read(path, fsys)))
+            if ok and type(data) == "table":
+                cache[key] = data
+                return data
+    cache[key] = false
+    return nil
+
+# языки, для которых есть файлы раскладок
+export def available(dirs=nil, fsys=nil):
+    out = ["en"]
+    seen = {en: true}
+    f = fsys ?? fs
+    for d in (dirs ?? DIRS):
+        if f.isDir(d):
+            for n in f.list(d):
+                lang = string.match(n, "^(.+)%.json5$")
+                if lang != nil and seen[lang] == nil:
+                    seen[lang] = true
+                    out[len(out) + 1] = lang
+    return out
+
+def _table(data):
     out = {}
-    e = unicode.chars(eng)
-    n = unicode.chars(native)
-    for i in range[1, len(e)]:
-        out[e[i]] = n[i]
-    for k, v in extra:
+    if data == nil:
+        return nil
+    e = unicode.chars(BASE)
+    s = unicode.chars(SHIFTED)
+    b = unicode.chars(data.base ?? "")
+    sh = unicode.chars(data.shifted ?? "")
+    for i in range[1, len(b)]:
+        out[e[i]] = b[i]
+    for i in range[1, len(sh)]:
+        out[s[i]] = sh[i]
+    for k, v in (data.extra ?? {}):
         out[k] = v
     return out
 
-def _table(name):
-    if name == "ru":
-        m = _make(BASE, RU_BASE, RU_EXTRA)
-        s = _make(SHIFTED, RU_SHIFTED, {})
-        for k, v in s:
-            m[k] = v
-        return m
-    if name == "uk":
-        m = _make(BASE, UK_BASE, UK_EXTRA)
-        s = _make(SHIFTED, UK_SHIFTED, {})
-        for k, v in s:
-            m[k] = v
-        return m
-    return nil
-
-# клавиши-знаки по имени в keys (буквы берутся из имени как есть)
-const PUNCT = {semicolon: ";", semiColon: ";", apostrophe: "'", leftBracket: "[", rightBracket: "]", comma: ",", period: ".", slash: "/",
-    grave: "`"}
+# латиница для имени учётной записи: по таблицам translit языков (по умолчанию все доступные), регистр первой буквы сохраняется
+export def transliterate(text, langs=nil, dirs=nil, fsys=nil):
+    maps = []
+    for lang in (langs ?? available(dirs, fsys)):
+        d = load_layout(lang, dirs, fsys)
+        if d != nil and d.translit != nil:
+            maps[len(maps) + 1] = d.translit
+    out = []
+    for ch in unicode.chars(text):
+        low = unicode.lower(ch)
+        rep = nil
+        for m in maps:
+            if rep == nil and m[low] != nil:
+                rep = m[low]
+        if rep == nil:
+            out[len(out) + 1] = ch
+        elif low != ch and rep != "":
+            out[len(out) + 1] = string.upper(string.sub(rep, 1, 1)) .. string.sub(rep, 2)
+        else:
+            out[len(out) + 1] = rep
+    return table.concat(out)
 
 def _is_mod(code):
     return code == keys.leftShift or code == keys.rightShift or code == keys.leftCtrl or code == keys.rightCtrl or code == keys.leftAlt or code == keys.rightAlt
 
 export class Layout:
-    # order: список раскладок по кругу (по умолчанию en, ru); start: с какой начать
+    # order: раскладки (manual: по кругу); start: с какой начать; opts: mode, keyboard, switch, dirs
     def init(self, order=nil, start=nil, opts=nil):
-        self.order = order ?? ["en", "ru"]
-        self.switch = (opts ?? {}).switch ?? "both"
+        o = opts ?? {}
+        self.mode = o.mode ?? "auto"
+        self.dirs = o.dirs
+        self.keyboard = o.keyboard
+        self.order = order ?? (self.keyboard != nil and ["en", self.keyboard] or ["en", "ru"])
+        if self.keyboard == nil:
+            for n in self.order:
+                if self.keyboard == nil and n != "en":
+                    self.keyboard = n
+        self.switch = self.mode == "auto" and "off" or (o.switch ?? "both")
         self.armed = false
         self.index = 1
+        self.native_now = false
         if start != nil:
             for i in range[1, len(self.order)]:
                 if self.order[i] == start:
                     self.index = i
         self.tables = {}
+        self.labels = {en: "EN"}
         for name in self.order:
-            self.tables[name] = _table(name)
+            data = load_layout(name, self.dirs)
+            self.tables[name] = _table(data)
+            if data != nil:
+                self.labels[name] = data.label ?? string.upper(name)
+        if self.keyboard != nil and self.tables[self.keyboard] == nil:
+            data = load_layout(self.keyboard, self.dirs)
+            self.tables[self.keyboard] = _table(data)
+            if data != nil:
+                self.labels[self.keyboard] = data.label ?? string.upper(self.keyboard)
         self.mods = {ctrl: false, alt: false, shift: false}
 
     def name(self):
+        if self.mode == "auto":
+            return self.native_now and self.keyboard or "en"
         return self.order[self.index]
 
     def label(self):
-        return NAMES[self:name()] ?? string.upper(self:name())
+        n = self:name()
+        return self.labels[n] ?? string.upper(tostring(n))
 
     def next(self):
         self.index = self.index % len(self.order) + 1
@@ -91,12 +165,31 @@ export class Layout:
             if self.order[i] == name:
                 self.index = i
 
-    # символ как его печатает текущая раскладка (чужие символы остаются как есть)
+    # символ для вставки: в auto как прислала Windows (латинская буква значит, что в Windows английская), в manual по раскладке
     def translate(self, ch):
+        if self.mode == "auto":
+            if string.match(ch, "^%a$") != nil:
+                self.native_now = false
+            return ch
         t = self.tables[self:name()]
         if t == nil:
             return ch
         return t[ch] ?? ch
+
+    # клавиша пришла без символа: буква второго языка по её месту (auto) или nil
+    def missing(self, code, shift=false):
+        base = self:base_char(code, shift)
+        if base == nil:
+            return nil
+        if self.mode == "auto":
+            t = self.tables[self.keyboard ?? ""]
+            if t == nil or t[base] == nil:
+                return nil
+            self.native_now = true
+            return t[base]
+        # manual: раскладка CubeOS английская, а Windows печатает не латиницу: переходим на родную
+        self:native()
+        return self:translate(base)
 
     def _track(self, code, down):
         if code == keys.leftShift or code == keys.rightShift:
@@ -122,7 +215,7 @@ export class Layout:
             self.armed = false
         return false
 
-    # отпускание; true, если раскладка переключилась
+    # отпускание; true, если раскладка переключилась (только manual)
     def key_up(self, code):
         fire = self.armed and _is_mod(code)
         self:_track(code, false)
@@ -150,7 +243,10 @@ export class Layout:
                 return string.sub(SHIFTED, i, i)
         return ch
 
+    # manual: если включена английская, переключиться на первую другую (Windows печатает не латиницу)
     def native(self):
+        if self.mode == "auto":
+            return false
         if self:name() == "en":
             for i in range[1, len(self.order)]:
                 if self.order[i] != "en":
