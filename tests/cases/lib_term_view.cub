@@ -2,6 +2,7 @@ import t
 import ui.shell as shell_mod
 import term.app as term_app
 import term.view as view_mod
+import term.vterm as vterm_mod
 eq = t.eq
 
 class StubOut:
@@ -88,4 +89,27 @@ sh:render()
 eq(string.find(table.concat(out.last, "\n"), "copy this", 2, true) != nil, true, "a right click pastes it into the command line")
 
 fs.delete(HIST)
+
+# Windows с русской раскладкой: CC присылает клавишу без символа; терминал достраивает букву по месту клавиши и включает русскую
+later = []
+fake_ui = {}
+def after(ui, seconds, fn):
+    later[len(later) + 1] = fn
+fake_ui.after = after
+fake_ui.invalidate = (ui, w) => nil
+tv = view_mod.new(vterm_mod.new(20, 4, {}), {})
+tv.ui = fake_ui
+got = []
+tv:on("event", (w, name, a, b, c) => table.insert(got, name .. ":" .. tostring(a)))
+tv:raw_event("key", keys.q)
+eq(len(later), 1, "a letter key waits for its character")
+later[1]()
+eq(got[len(got)], "char:й", "no character came: the key becomes й")
+eq(tv.kbd:label(), "RU", "and the layout switches to Russian")
+later = []
+tv:raw_event("key", keys.w)
+tv:char("w")
+later[1]()
+eq(got[len(got)], "char:ц", "when the character comes, it is used once (no double)")
+eq(got[len(got) - 1], "key:" .. keys.w, "after the key itself")
 print("done")

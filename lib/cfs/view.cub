@@ -165,9 +165,16 @@ export class View:
         e = self:stat(path)
         return e != nil and e.type == "file"
 
+    # путь, который нельзя видеть, для вопроса «это папка?» то же, что несуществующий (как exists): иначе подсветка и
+    # дополнение в оболочке падали на каждой клавише при наборе такого пути
     def is_dir(self, path):
-        e = self:stat(path)
-        return e != nil and e.type == "dir"
+        try:
+            e = self:stat(path)
+            return e != nil and e.type == "dir"
+        except Error as err:
+            if isinstance(err, errors.CfsError) and err.code == "EACCES":
+                return false
+            raise err
 
     def readlink(self, path):
         def go():

@@ -127,6 +127,14 @@ export class TermView(widget.Widget):
             lines[len(lines) + 1] = chars.encode(chars.slice(cells, 1, k))
         return table.concat(lines, "\n")
 
+    # есть ли настоящее выделение (одиночный клик без протяжки выделением не считается)
+    def has_selection(self):
+        if self.sel_a == nil or self.sel_b == nil:
+            return false
+        if self.sel_a.row == self.sel_b.row and self.sel_a.col == self.sel_b.col:
+            return false
+        return self:selection_text() != ""
+
     def copy_selection(self):
         text = self:selection_text()
         if text != "":
@@ -173,9 +181,29 @@ export class TermView(widget.Widget):
 
     def raw_event(self, name, a, b):
         if name == "key":
-            if self.kbd:key(a):
-                self:_show_layout()
+            self.kbd:key(a)
             self:_track(a, true)
+            # буфер обмена (D222): Ctrl+Shift+C копирует, Ctrl+Shift+V вставляет; Ctrl+C при выделении копирует, а не прерывает.
+            # Без выделения в выводе Ctrl+Shift+C просит оболочку скопировать выделение в строке ввода (событие cubeos_copy).
+            if self.mods.ctrl and not self.mods.alt and a == keys.c and (self.mods.shift or self:has_selection()):
+                if self:has_selection():
+                    self:copy_selection()
+                    self:clear_selection()
+                else:
+                    self:emit("event", "cubeos_copy")
+                return true
+            if self.mods.ctrl and self.mods.shift and not self.mods.alt and a == keys.v:
+                self:paste()
+                return true
+            # Windows с русской раскладкой: CC присылает клавишу, но не символ (кириллицу он отбрасывает). Если символ не пришёл
+            # за 0.1 с, он достраивается по месту клавиши, а раскладка переключается на русскую (lay:native)
+            if not self.mods.ctrl and not self.mods.alt and self.ui != nil:
+                base = self.kbd:base_char(a, self.mods.shift)
+                if base != nil:
+                    let me = self
+                    tok = {base: base}
+                    self.pending_char = tok
+                    self.ui:after(0.1, () => me:_no_char(tok))
             if self.mods.shift and not self.mods.ctrl:
                 if a == keys.up:
                     self:scroll_by(1)
@@ -212,12 +240,23 @@ export class TermView(widget.Widget):
                     self:invalidate()
                 self:clear_selection()
         elif name == "key_up":
-            self.kbd:key_up(a)
+            if self.kbd:key_up(a):
+                self:_show_layout()
             self:_track(a, false)
         self:emit("event", name, a, b)
         return true
 
+    # символ клавиши так и не пришёл: Windows печатает не латиницу
+    def _no_char(self, tok):
+        if self.pending_char != tok:
+            return
+        self.pending_char = nil
+        if self.kbd:native():
+            self:_show_layout()
+        self:char(tok.base)
+
     def char(self, ch):
+        self.pending_char = nil
         if self.offset > 0:
             self.offset = 0
             self:invalidate()

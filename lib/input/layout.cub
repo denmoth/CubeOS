@@ -6,7 +6,11 @@
 #   lay:key(keys.leftShift) / lay:key_up(code)       следят за Ctrl, Alt и Shift; key возвращает true, когда раскладка переключилась
 #   lay:label()                   -> "RU" (для индикатора)
 #
-# Переключение: Ctrl+Shift или Alt+Shift (любым порядком). Заглавные буквы и Caps Lock работают сами: смотрим на регистр символа.
+# Переключение (D223): Ctrl+Shift или Alt+Shift, срабатывает при отпускании, если между нажатием и отпусканием не было других клавиш
+# (как в Windows; иначе Ctrl+Shift+C и Ctrl+Shift+стрелки меняли бы раскладку). opts.switch: "both" (по умолчанию), "ctrl+shift",
+# "alt+shift", "off". Заглавные буквы и Caps Lock работают сами: смотрим на регистр символа.
+#   lay:base_char(code, shift)    символ клавиши по её месту в английской раскладке ("q", "Q", ";") или nil
+#   lay:native()                  если включена английская, переключиться на первую другую (Windows печатает не латиницу)
 
 import unicode
 
@@ -50,10 +54,19 @@ def _table(name):
         return m
     return nil
 
+# клавиши-знаки по имени в keys (буквы берутся из имени как есть)
+const PUNCT = {semicolon: ";", semiColon: ";", apostrophe: "'", leftBracket: "[", rightBracket: "]", comma: ",", period: ".", slash: "/",
+    grave: "`"}
+
+def _is_mod(code):
+    return code == keys.leftShift or code == keys.rightShift or code == keys.leftCtrl or code == keys.rightCtrl or code == keys.leftAlt or code == keys.rightAlt
+
 export class Layout:
     # order: список раскладок по кругу (по умолчанию en, ru); start: с какой начать
-    def init(self, order=nil, start=nil):
+    def init(self, order=nil, start=nil, opts=nil):
         self.order = order ?? ["en", "ru"]
+        self.switch = (opts ?? {}).switch ?? "both"
+        self.armed = false
         self.index = 1
         if start != nil:
             for i in range[1, len(self.order)]:
@@ -93,19 +106,57 @@ export class Layout:
         elif code == keys.leftAlt or code == keys.rightAlt:
             self.mods.alt = down
 
-    # нажатие клавиши; true, если раскладка переключилась (Ctrl+Shift или Alt+Shift)
+    def _combo(self):
+        if not self.mods.shift:
+            return false
+        sw = self.switch
+        return (self.mods.ctrl and (sw == "both" or sw == "ctrl+shift")) or (self.mods.alt and (sw == "both" or sw == "alt+shift"))
+
+    # нажатие клавиши: сочетание взводится, любая другая клавиша его сбрасывает. Всегда false (переключение при отпускании)
     def key(self, code):
-        was = self.mods.shift and (self.mods.ctrl or self.mods.alt)
         self:_track(code, true)
-        now = self.mods.shift and (self.mods.ctrl or self.mods.alt)
-        is_mod = code == keys.leftShift or code == keys.rightShift or code == keys.leftCtrl or code == keys.rightCtrl or code == keys.leftAlt or code == keys.rightAlt
-        if now and not was and is_mod and len(self.order) > 1:
-            self:next()
-            return true
+        if _is_mod(code):
+            if self:_combo():
+                self.armed = true
+        else:
+            self.armed = false
         return false
 
+    # отпускание; true, если раскладка переключилась
     def key_up(self, code):
+        fire = self.armed and _is_mod(code)
         self:_track(code, false)
+        if fire:
+            self.armed = false
+            if len(self.order) > 1:
+                self:next()
+                return true
+        return false
 
-export def new(order=nil, start=nil):
-    return Layout(order, start)
+    def base_char(self, code, shift=false):
+        if type(code) != "number":
+            return nil
+        name = keys.getName(code)
+        if name == nil:
+            return nil
+        ch = PUNCT[name]
+        if ch == nil:
+            if string.match(name, "^%a$") == nil:
+                return nil
+            ch = name
+        if shift:
+            i = string.find(BASE, ch, 1, true)
+            if i != nil:
+                return string.sub(SHIFTED, i, i)
+        return ch
+
+    def native(self):
+        if self:name() == "en":
+            for i in range[1, len(self.order)]:
+                if self.order[i] != "en":
+                    self.index = i
+                    return true
+        return false
+
+export def new(order=nil, start=nil, opts=nil):
+    return Layout(order, start, opts)

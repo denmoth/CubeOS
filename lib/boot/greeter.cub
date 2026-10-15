@@ -16,6 +16,16 @@ export class TextGreeter:
         self.title = o.title ?? "CubeOS"
         self.retries = o.retries ?? 3
         self.notice = o.notice
+        # busy(текст или nil): долгая проверка пароля (PBKDF2), ядро не пишет «не отвечает»
+        self.busy = o.busy
+
+    def _open(self, name, password):
+        if self.busy != nil:
+            self.busy("checking the password")
+        s, why, wait = self.sessions:open(name, password)
+        if self.busy != nil:
+            self.busy(nil)
+        return s, why, wait
 
     def _header(self):
         self.console:clear()
@@ -87,7 +97,7 @@ export class TextGreeter:
             password = c:read_line("Password for " .. rec.display .. ": ", true)
             if password == nil:
                 return nil
-            s, why, wait = self.sessions:open(name, password)
+            s, why, wait = self:_open(name, password)
             if s != nil:
                 return s
             if why == "locked":

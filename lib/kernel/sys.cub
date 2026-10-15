@@ -72,6 +72,10 @@ export def getpid():
 export def secret_input(on):
     _call({op: "secret_input", on: on == true})
 
+# долгая работа без ввода (проверка пароля и т.п.): ядро не помечает процесс как «не отвечает». busy("checking the password"), потом busy(nil)
+export def busy(reason):
+    _call({op: "busy", reason: reason})
+
 export def info():
     return _check(_call({op: "info"}))
 

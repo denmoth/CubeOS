@@ -468,6 +468,9 @@ export class Kernel:
             # (например, мышь, пока вход ждёт клавиши)
             if p.state == "waiting" and p.wait != nil and p.wait.kind == "event":
                 first = nil
+            # процесс сам сказал, что занят долгой работой (sys.busy: проверка пароля и т.п.), он не завис
+            if p.busy != nil:
+                first = nil
             if first != nil and now - first.at >= self.hung_ms and now >= p.snooze_until and not p.hung:
                 p.hung = true
                 self:log("not responding: " .. pid .. " " .. p.name, "warn")
@@ -674,6 +677,14 @@ export class Kernel:
             proc.secret = on
             return "value", {ok: true}
         h.secret_input = secret_input
+
+        # долгая работа без ввода (reason: текст или nil, чтобы снять): «не отвечает» не ставится, в журнал уровень debug
+        def busy(proc, req):
+            proc.busy = req.reason
+            if req.reason != nil:
+                k:log("busy: " .. proc.pid .. " " .. proc.name .. ": " .. tostring(req.reason))
+            return "value", {ok: true}
+        h.busy = busy
 
         def klog(proc, req):
             k:log(tostring(req.text), req.level ?? "info")

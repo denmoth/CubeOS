@@ -166,6 +166,55 @@ eq(string.find(all_traced, "secret input entered in", 1, true) != nil, true, "on
 eq(string.find(all_traced, "char \"p\"", 1, true) != nil, true, "the command line before it is logged as usual")
 system.kernel.input_fn = nil
 
+# набор пути без прав по буквам (как «dir /s» в игре): ни одного сообщения об ошибке на экране, пока строка не запущена
+def chars_only(text):
+    for i in range[1, string.len(text)]:
+        system.kernel:feed("char", string.sub(text, i, i))
+        settle(system, 1)
+def combo(mods, code):
+    for m in mods:
+        system.kernel:feed("key", m, false)
+    system.kernel:feed("key", code, false)
+    system.kernel:feed("key_up", code)
+    for m in mods:
+        system.kernel:feed("key_up", m)
+    settle(system, 3)
+type_text(system, "clear")
+settle(system, 10)
+chars_only("ls /sduawhd/x")
+settle(system, 5)
+eq(has("cush:"), false, "typing a forbidden path letter by letter prints no errors")
+eq(has("ccess denied"), false, "not even access denied")
+combo([keys.leftCtrl], keys.c)
+type_text(system, "echo line was reset")
+eq(wait_text(system, "line was reset"), true, "Ctrl+C with no selection resets the line")
+eq(has("x echo"), false, "and the old text is gone")
+
+# Ctrl+Shift+C копирует выделение в строке, Ctrl+Shift+V вставляет
+type_text(system, "clear")
+settle(system, 10)
+chars_only("echo pasted-word")
+for i in range[1, 11]:
+    combo([keys.leftShift], keys.left)
+combo([keys.leftCtrl, keys.leftShift], keys.c)
+eq(view_mod.clipboard.text, "pasted-word", "Ctrl+Shift+C copies the selected part of the line")
+combo([keys.leftCtrl], keys.c)
+combo([keys.leftCtrl], keys.c)
+eq(view_mod.clipboard.text, "pasted-word", "Ctrl+C on a selection copies instead of resetting")
+combo([], keys["end"])
+combo([keys.leftCtrl], keys.c)
+chars_only("echo ")
+combo([keys.leftCtrl, keys.leftShift], keys.v)
+system.kernel:feed("key", keys.enter, false)
+system.kernel:feed("key_up", keys.enter)
+eq(wait(system, () => string.find(screen(), "\npasted%-word", 1) != nil), true, "Ctrl+Shift+V pastes")
+
+# удержание Ctrl+T без программы перезапускает оболочку; с программой убивает её без вопросов
+system.kernel:feed("terminate")
+eq(wait_text(system, "The shell was restarted"), true, "Ctrl+T held with no program restarts the shell")
+type_text(system, "echo alive again")
+eq(wait_text(system, "alive again"), true, "the new shell works")
+
 # выход из оболочки возвращает на вход, оттуда выключение
 type_text(system, "exit")
 eq(wait(system, () => len(con.prompts) >= 3), true, "after exit the login screen is back")

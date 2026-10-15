@@ -44,8 +44,13 @@ export def program(session, opts=nil):
         env = env_mod.new({vterm: vt, fs: cfs.legacy_fs(view)})
 
         # ROM-библиотеки, которые не загрузились (иначе программы потом падают с пустым colors и подобным), в журнал
+        failed = []
         for e in (env.api_errors ?? []):
             sys.log("error", "terminal: ROM library failed to load: " .. e)
+            failed[len(failed) + 1] = string.match(e, "^([^:]+)") ?? e
+        notes = []
+        if len(failed) > 0:
+            notes[1] = "ROM libraries not loaded: " .. table.concat(failed, ", ") .. " (see: logs)"
         sys.log("info", "terminal started for " .. tostring(session.user))
 
         t = timeclient.new(sys)
@@ -67,26 +72,43 @@ export def program(session, opts=nil):
             return host_call("time_save", changes)
         def power(action):
             return host_call("power", action)
+        # запрос без ожидания ответа (запись в журнал): сопрограмма не останавливается
+        def post(name, payload):
+            pending[len(pending) + 1] = {id: nil, name: name, payload: payload}
+        def shell_log(level, text):
+            post("log", {level: level, text: text})
         # журнал ввода (logd input): on true/false включает и выключает, nil спрашивает состояние
         def inputlog(on):
             return host_call("inputlog", on)
         cfg = view:expand("$cfg")
         env.cush_opts = {history_path: cfg .. "/cush_history", config_path: cfg .. "/cush.conf", user: session.user, host: o.host,
-            home: session.env.home, time: t.time, time_save: time_save, power: power, inputlog: inputlog,
+            home: session.env.home, time: t.time, time_save: time_save, power: power, inputlog: inputlog, log: shell_log, notes: notes,
             info: {display: out.kind == "pixel" and "pixel mode" or "text mode", font: out.kind == "pixel" and "Monocraft 6x9" or nil}}
 
         died = {err: nil}
+        # cur.proc: оболочка сейчас (удержание Ctrl+T без программы запускает новую, старая забывается)
+        cur = {proc: nil}
         def on_exit(p, ok, err):
+            if p != cur.proc:
+                return
             if not ok:
                 died.err = err
             u.quit = true
         def on_shutdown(p, reboot):
             u.quit = true
-        proc = proc_mod.new(env, "cush", [], {name: "terminal", main: cush.main, on_exit: on_exit, on_shutdown: on_shutdown})
-        tv:on("event", (w, name, a, b, c) => proc:feed(name, a, b, c))
+        def start_shell():
+            p = proc_mod.new(env, "cush", [], {name: "terminal", main: cush.main, on_exit: on_exit, on_shutdown: on_shutdown})
+            cur.proc = p
+            p:start()
+        def restart_shell():
+            sys.log("warn", "terminal: the shell was restarted (Ctrl+T held with no program running)")
+            env.secret_input = 0
+            env.cush_opts.notes = ["The shell was restarted (Ctrl+T held)."]
+            start_shell()
+        tv:on("event", (w, name, a, b, c) => cur.proc:feed(name, a, b, c))
         u:set_root(tv)
         u:focus_widget(tv)
-        proc:start()
+        start_shell()
 
         # общий буфер обмена: берём текущий, копируем в службу всё, что скопировано в терминале
         clip = view_mod.clipboard
@@ -107,11 +129,14 @@ export def program(session, opts=nil):
                     res, err = rpc.call(sys, "powerd", req.payload)
                     ok = res != nil
                     why = err
+                elif req.name == "log":
+                    sys.log(req.payload.level, req.payload.text)
                 elif req.name == "inputlog":
                     res, err = rpc.call(sys, "logd", "input", req.payload != nil and {on: req.payload} or {})
                     ok = res
                     why = err
-                proc:feed("cubeos_reply", req.id, ok, why)
+                if req.id != nil:
+                    cur.proc:feed("cubeos_reply", req.id, ok, why)
 
         # скрытый ввод в программе (read("*")): ядро не пишет его в журнал ввода (D220)
         secret = {on: false}
@@ -125,9 +150,16 @@ export def program(session, opts=nil):
             serve_pending()
             sync_secret()
             ev, a, b, c, d, e = sys.wait_event()
+            # удержание Ctrl+T (через секунду CC сам шлёт terminate; короткое нажатие терминал обрабатывает сам): программу убить без
+            # вопросов, а если программы нет, перезапустить оболочку (D222)
             if ev == "terminate":
-                proc:feed("terminate")
+                shell = env.cush_shell
+                if shell != nil and shell.fg != nil:
+                    cur.proc:feed("cubeos_kill")
+                else:
+                    restart_shell()
                 return "none"
+            proc = cur.proc
             if INPUT[ev] != true:
                 if ev == "timer":
                     if proc:owns_timer(a):
@@ -143,7 +175,7 @@ export def program(session, opts=nil):
             return ev, a, b, c
 
         if o.ready != nil:
-            o.ready({vterm: vt, env: env, ui: u, proc: proc, out: out, clipboard: clip})
+            o.ready({vterm: vt, env: env, ui: u, proc: cur.proc, out: out, clipboard: clip, current: cur})
         ui.runtime.run(u, {pull: pull})
         pcall(() => out:close())
         if out.screen != nil and out.screen.close != nil:

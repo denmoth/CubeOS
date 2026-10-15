@@ -185,7 +185,8 @@ export class Boot:
             self.console = self.console:bind(sys)
         greeter = o.greeter
         if greeter == nil and self.console != nil:
-            greeter = greeter_mod.new(self.console, system.auth, system.sessions, {title: system.conf.title, notice: system.unclean and "The system was not shut down properly last time." or nil})
+            greeter = greeter_mod.new(self.console, system.auth, system.sessions, {title: system.conf.title, notice: system.unclean and "The system was not shut down properly last time." or nil,
+                busy: (reason) => sys.busy(reason)})
         while not system.stopping:
             session = nil
             action = nil

@@ -93,6 +93,10 @@ export class Shell:
         # sh.power(action) -> ok, причина: просьба службе питания (shutdown, reboot); без неё команды сообщают, что службы нет
         self.power = o.power
         self.inputlog = o.inputlog
+        # log(level, text): запись в журнал системы без ожидания (ошибки команд и самой оболочки), nil вне сессии
+        self.log = o.log
+        # хозяин терминала смотрит, есть ли программа на переднем плане (удержание Ctrl+T)
+        env.cush_shell = self
         # имя компьютера в приглашении это его метка (имена с пробелами через дефис), без метки cubeos
         label = env.os.getComputerLabel()
         host = o.host
@@ -127,8 +131,9 @@ export class Shell:
         self.maker = bios.do_file(env, "rom/modules/main/cc/require.lua")
         self.hist = hist_mod.new(env.fs, o.history_path ?? "/.cush_history", o.history_limit ?? 1000)
         let me = self
-        self.editor = editor_mod.new(env, {hist: self.hist, prompt: () => me:prompt_segments(), highlight: (line) => me:highlight(line),
-            complete: (line, pos) => me:complete(line, pos)})
+        # подсветка и дополнение работают на каждой клавише: их ошибка не должна мешать набору (строка просто без цвета и подсказок)
+        self.editor = editor_mod.new(env, {hist: self.hist, prompt: () => me:prompt_segments(), highlight: (line) => me:safe_highlight(line),
+            complete: (line, pos) => me:safe_complete(line, pos)})
         self:_default_path()
 
     def _default_path(self):
@@ -151,7 +156,11 @@ export class Shell:
         bios.print_text(self.env, va.pack(text), 1)
 
     # ошибки идут на настоящий экран, даже если вывод в пайпе
+    # сообщение об ошибке: красным на экран и в журнал системы (уровень warn, источник shell), чтобы ошибки команд было видно
+    # без скриншота (docs/17, раздел 4)
     def eprint(self, text):
+        if self.log != nil:
+            pcall(() => self.log("warn", tostring(text)))
         term = self.env.term
         prev = term.redirect(self.console)
         old = term.getTextColor()
@@ -282,6 +291,29 @@ export class Shell:
     # ------------------------------------------------------------ подсветка и дополнение
 
     # цвета по байтам строки (буквы палитры CC)
+    def safe_highlight(self, line):
+        ok, res = pcall(() => self:highlight(line))
+        if ok:
+            return res
+        self:report("highlight", res)
+        return nil
+
+    def safe_complete(self, line, pos):
+        ok, res, wlen = pcall(() => self:complete(line, pos))
+        if ok:
+            return res, wlen
+        self:report("completion", res)
+        return [], 0
+
+    # внутренняя ошибка оболочки: в журнал (opts.log, без ожидания ответа), на экран одна и та же ошибка не чаще одного раза подряд
+    def report(self, where, err, show=false):
+        text = where .. ": " .. tostring(err)
+        if show and text != self.last_report:
+            self:eprint("cush: " .. text)
+        elif self.log != nil:
+            pcall(() => self.log("warn", "cush " .. text))
+        self.last_report = text
+
     def highlight(self, line):
         toks = lex.tokens(line)
         n = string.len(line)
@@ -684,6 +716,18 @@ export class Shell:
                 self:_set_mouse(false)
                 self.editor:begin()
 
+    def force_kill_fg(self):
+        j = self.fg
+        self:_remove(j)
+        self.fg = nil
+        self.env.secret_input = 0
+        self:_set_mouse(false)
+        self.env.term.setCursorBlink(false)
+        self:println("")
+        self:notify("e", "[" .. j.id .. "]  Killed  " .. j.name)
+        self.vars["?"] = 137
+        self.editor:begin()
+
     def stop_fg(self):
         j = self.fg
         if j == nil:
@@ -787,6 +831,13 @@ export class Shell:
         elif name == "terminate":
             if self.fg != nil:
                 self:interrupt_fg()
+        elif name == "cubeos_kill":
+            # удержание Ctrl+T: программа не спрашивается (D222)
+            if self.fg != nil:
+                self:force_kill_fg()
+        elif name == "cubeos_copy":
+            if self.fg == nil:
+                self.editor:copy_selection()
         else:
             for j in self:_live_jobs():
                 if not j.stopped:
@@ -810,6 +861,10 @@ export class Shell:
         self:println("")
         if type(self.config.motd) == "string":
             self:println(self.config.motd)
+        # заметки хозяина терминала (opts.notes): например, какие ROM-библиотеки не загрузились; подробности в журнале
+        for note in (o.notes ?? []):
+            self:write_color("8", note)
+            self:println("")
 
     def shutdown(self):
         for j in self:_live_jobs():
@@ -826,7 +881,7 @@ export class Shell:
             if not ok:
                 if err == "Terminated":
                     error("Terminated", 0)
-                self:eprint("cush: " .. tostring(err))
+                self:report("internal error", err, true)
         self:shutdown()
 
 # команда -c: выполнить строку и выйти (без редактора)

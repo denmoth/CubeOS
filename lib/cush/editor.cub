@@ -10,6 +10,7 @@
 
 import unicode
 import term.chars as chars
+import term.view as view_mod
 
 const HEX = "0123456789abcdef"
 
@@ -216,6 +217,17 @@ export class Editor:
             return nil, nil
         return math.min(self.anchor, self.pos), math.max(self.anchor, self.pos)
 
+    # копирует выделение строки в общий буфер терминала; true, если было что копировать
+    def copy_selection(self):
+        lo, hi = self:_selection()
+        if lo == nil:
+            return false
+        part = []
+        for i in range[lo + 1, hi]:
+            part[len(part) + 1] = self.line[i]
+        view_mod.clipboard.text = table.concat(part)
+        return true
+
     def _delete_range(self, lo, hi):
         out = []
         for i in range[1, len(self.line)]:
@@ -386,6 +398,9 @@ export class Editor:
         if name == "term_resize":
             self:redraw()
             return nil
+        if name == "cubeos_copy":
+            self:copy_selection()
+            return nil
         if name == "paste":
             first = string.match(a, "^[^\n]*")
             self:_insert(first)
@@ -430,8 +445,11 @@ export class Editor:
         if code == keys.enter or code == keys.numPadEnter:
             return self:_finish()
         if ctrl and code == keys.c:
+            # при выделении Ctrl+C копирует (D222), иначе сбрасывает строку; перерисовка не должна помешать сбросу
+            if self:copy_selection():
+                return nil
             self.active = false
-            self:redraw_final()
+            pcall(() => self:redraw_final())
             return "interrupt"
         if ctrl and code == keys.d:
             if len(self.line) == 0:
