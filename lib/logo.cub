@@ -1,0 +1,78 @@
+# logo: логотип CubeOS (куб из трёх граней) блоками телетекста; общий для fetch и текстового экрана загрузки
+#
+#   logo.logo_rows()    список строк клеток {text, fg, bg}: символы CC 128..159 и цвета (буквы палитры CC), размер 16x11 клеток
+#
+# Рисунок 32x33 «подпикселя», который переводится в символы CC 128..159 (блоки 2x3) с двумя цветами на клетку, поэтому он выглядит
+# одинаково на настоящем CC, в пиксельном терминале и на мониторе.
+
+export const LOGO_W = 32
+export const LOGO_H = 33
+# цвета граней (буквы палитры CC): верх, левая, правая, фон
+const TOP = "3"
+const LEFT = "9"
+const RIGHT = "b"
+const BACK = "f"
+
+# точка внутри выпуклого многоугольника (вершины по кругу)
+def inside(poly, x, y):
+    sign = 0
+    n = len(poly)
+    for i in range[1, n]:
+        a = poly[i]
+        b = poly[i % n + 1]
+        cross = (b[1] - a[1]) * (y - a[2]) - (b[2] - a[2]) * (x - a[1])
+        if cross != 0:
+            s = cross > 0 and 1 or -1
+            if sign == 0:
+                sign = s
+            elif sign != s:
+                return false
+    return true
+
+def pixel_color(x, y):
+    if inside([[16, 0], [32, 8], [16, 16], [0, 8]], x, y):
+        return TOP
+    if inside([[0, 8], [16, 16], [16, 32], [0, 24]], x, y):
+        return LEFT
+    if inside([[16, 16], [32, 8], [32, 24], [16, 32]], x, y):
+        return RIGHT
+    return BACK
+
+# рисунок как строки символов CC: список {text, fg, bg} по строкам клеток
+export def logo_rows():
+    rows = []
+    cw = LOGO_W / 2
+    ch = math.ceil(LOGO_H / 3)
+    for cy in range[0, ch - 1]:
+        text = []
+        fg = []
+        bg = []
+        for cx in range[0, cw - 1]:
+            px = []
+            for sy in range[0, 2]:
+                for sx in range[0, 1]:
+                    # центр подпикселя
+                    px[len(px) + 1] = pixel_color(cx * 2 + sx + 0.5, cy * 3 + sy + 0.5)
+            # px[1..6]: левый верх, правый верх, левый середина, правый середина, левый низ, правый низ
+            back = px[6]
+            counts = {}
+            best = nil
+            for i in range[1, 5]:
+                if px[i] != back:
+                    counts[px[i]] = (counts[px[i]] ?? 0) + 1
+                    if best == nil or counts[px[i]] > counts[best]:
+                        best = px[i]
+            if best == nil:
+                text[len(text) + 1] = " "
+                fg[len(fg) + 1] = back
+                bg[len(bg) + 1] = back
+            else:
+                bits = 0
+                for i in range[1, 5]:
+                    if px[i] != back:
+                        bits += 2 ** (i - 1)
+                text[len(text) + 1] = string.char(128 + bits)
+                fg[len(fg) + 1] = best
+                bg[len(bg) + 1] = back
+        rows[len(rows) + 1] = {text: table.concat(text), fg: table.concat(fg), bg: table.concat(bg)}
+    return rows

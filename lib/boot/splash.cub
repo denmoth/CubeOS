@@ -1,0 +1,416 @@
+# boot.splash: временный экран загрузки (D204, контракт boot_screen из docs/16-kernel-integration.md); потом его подменяет экран DE
+#
+#   splash = splash.new({caps: {pixel: true}, term: term, assets: "/repo/assets", clock: ..., title: "CubeOS 0.3.0"})
+#   splash:open()
+#   splash:progress(0.35, "Loading the kernel")    доля 0..1 и подпись
+#   splash:message("Service timed is ready")       необязательная строка пояснения под подписью
+#   splash:tick()                                  кадр анимации (вызывать между шагами загрузки, часто); true, если кадр нарисован
+#   splash:done()                                  полоса до конца и плавный переход к входу
+#   splash:error(text)                             экран ошибки загрузки
+#   splash:close()                                 вернуть терминал в обычный режим
+#
+# Пиксельный вариант (CC: Graphics): куб собирается из блоков, полоса с бегущим бликом, подпись плавно проявляется.
+# Текстовый вариант (обычный терминал): логотип блоками телетекста, полоса цветными клетками. Экран не должен ломать загрузку:
+# new() возвращает обёртку, которая при любом исключении отключает экран (пиксельный при сбое пробует текстовый) и молчит дальше.
+
+import cgl
+import cgl.color as color_mod
+import cgl.surface as surface_mod
+import font as font_lib
+import logo
+import version
+
+# цвета (RGB) на номерах палитры 200..211 экрана; 212..235 фон (градиент), 236..243 проявление подписи
+const C_BG1 = 200
+const C_BG2 = 201
+const C_TEXT = 202
+const C_DIM = 203
+const C_ACCENT = 204
+const C_TRACK = 205
+const C_GLOSS = 206
+const C_ERR = 207
+const C_TOP = 208
+const C_LEFT = 209
+const C_RIGHT = 210
+const COLORS = [[C_BG1, 10, 12, 24], [C_BG2, 27, 29, 48], [C_TEXT, 192, 202, 245], [C_DIM, 86, 95, 137], [C_ACCENT, 122, 162, 247],
+    [C_TRACK, 36, 40, 59], [C_GLOSS, 205, 220, 255], [C_ERR, 247, 118, 142], [C_TOP, 125, 207, 255], [C_LEFT, 122, 162, 247],
+    [C_RIGHT, 61, 89, 161]]
+
+# три грани куба в «единицах логотипа» 32x33: начало и два ребра (как в lib/logo.cub)
+const FACES = [{o: [0, 8], u: [16, 8], v: [0, 16], color: C_LEFT}, {o: [16, 16], u: [16, -8], v: [0, 16], color: C_RIGHT},
+    {o: [0, 8], u: [16, -8], v: [16, 8], color: C_TOP}]
+const TILES = 4
+const FRAME_STEP = 0.05
+
+# ступени от цвета (по RGB номеров a и b палитры) в номерах first..first+n-1; возвращает список номеров
+def _ramp(palette, first, a, b, n):
+    r0, g0, b0 = palette:get(a)
+    r1, g1, b1 = palette:get(b)
+    list = []
+    for i in range[1, n]:
+        k = (i - 1) / (n - 1)
+        palette:set(first + i - 1, _round(r0 + (r1 - r0) * k), _round(g0 + (g1 - g0) * k), _round(b0 + (b1 - b0) * k))
+        list[i] = first + i - 1
+    return list
+
+def _now():
+    return os.epoch("utc") / 1000
+
+def _clamp(v, lo, hi):
+    return math.max(lo, math.min(hi, v))
+
+def _round(v):
+    return math.floor(v + 0.5)
+
+# ------------------------------------------------------------ пиксельный экран
+
+export class PixelSplash:
+    def init(self, opts):
+        self.opts = opts
+        self.term = opts.term ?? term
+        self.clock = opts.clock ?? _now
+        self.title = opts.title ?? version.full()
+        self.target = 0
+        self.shown = 0
+        self.label = ""
+        self.old_label = ""
+        self.fade = 1
+        self.note = ""
+        self.last = nil
+        self.failed = nil
+        self.screen = nil
+
+    def open(self):
+        o = self.opts
+        self.font = o.font ?? font_lib.default(o.assets ?? "/repo/assets")
+        palette = color_mod.default_palette()
+        for c in COLORS:
+            palette:set(c[1], c[2], c[3], c[4])
+        self.screen = cgl.open({term: self.term, backend: "graphics", palette: palette})
+        self.palette = palette
+        self.w = self.screen.w
+        self.h = self.screen.h
+        self:_layout()
+        self.bg = surface_mod.new(self.w, self.h, C_BG1)
+        self.bg:fill_gradient(0, 0, self.w, self.h, _ramp(palette, 212, C_BG1, C_BG2, 24), "v")
+        self.plain = self.bg:copy()
+        f = self.font
+        tw = surface_mod.measure(f, self.title, 0, self.title_scale)
+        self.bg:text(f, math.floor((self.w - tw) / 2), self.title_y, self.title, C_TEXT, {scale: self.title_scale})
+        self.fade_ramp = _ramp(palette, 236, C_BG2, C_TEXT, 8)
+        self.last = self.clock()
+        self.screen.surface:restore(self.bg, 0, 0, self.w, self.h)
+        self:_frame(0)
+
+    # размеры по высоте экрана
+    def _layout(self):
+        w = self.w
+        h = self.h
+        self.unit = h * 0.40 / logo.LOGO_H
+        self.cube_w = math.floor(logo.LOGO_W * self.unit)
+        self.cube_h = math.floor(logo.LOGO_H * self.unit)
+        self.cube_x = math.floor((w - self.cube_w) / 2)
+        self.cube_y = math.floor(h * 0.10)
+        self.title_scale = math.max(1, math.floor(h / 70))
+        self.title_y = self.cube_y + self.cube_h + math.floor(h * 0.04)
+        self.text_scale = math.max(1, math.floor(h / 130))
+        self.bar_w = math.floor(w * 0.5)
+        self.bar_h = math.max(4, math.floor(h * 0.022))
+        self.bar_x = math.floor((w - self.bar_w) / 2)
+        self.bar_y = math.floor(h * 0.78)
+        self.label_y = self.bar_y + self.bar_h + math.floor(h * 0.025)
+        self.note_y = self.label_y + self.font.height * self.text_scale + math.floor(h * 0.012)
+        # плитки куба: порядок снизу вверх, чтобы он «вырастал»
+        tiles = []
+        u = self.unit
+        for face in FACES:
+            for i in range[0, TILES - 1]:
+                for j in range[0, TILES - 1]:
+                    pts = []
+                    cx = 0
+                    cy = 0
+                    for d in [[0, 0], [1, 0], [1, 1], [0, 1]]:
+                        a = (i + d[1]) / TILES
+                        b = (j + d[2]) / TILES
+                        x = self.cube_x + (face.o[1] + face.u[1] * a + face.v[1] * b) * u
+                        y = self.cube_y + (face.o[2] + face.u[2] * a + face.v[2] * b) * u
+                        pts[len(pts) + 1] = [x, y]
+                        cx += x / 4
+                        cy += y / 4
+                    tiles[len(tiles) + 1] = {pts: pts, cx: cx, cy: cy, color: face.color}
+        table.sort(tiles, (a, b) => a.cy > b.cy or (a.cy == b.cy and a.cx < b.cx))
+        self.tiles = tiles
+
+    def progress(self, frac, text):
+        self.target = _clamp(frac, 0, 1)
+        if text != nil and text != self.label:
+            self.old_label = self.label
+            self.label = text
+            self.fade = 0
+        self:tick()
+
+    def message(self, text):
+        self.note = text
+        self:tick()
+
+    # кадр, если с прошлого прошло достаточно времени
+    def tick(self):
+        t = self.clock()
+        dt = t - self.last
+        if dt < FRAME_STEP:
+            return false
+        self.last = t
+        if self.screen == nil or self.failed != nil:
+            return false
+        self:_frame(math.min(dt, 0.25))
+        return true
+
+    def _frame(self, dt):
+        s = self.screen.surface
+        bg = self.bg
+        if self.mode == "error":
+            return
+        self.shown += (self.target - self.shown) * math.min(1, dt * 5)
+        if self.target - self.shown < 0.002:
+            self.shown = self.target
+        self.fade = math.min(1, self.fade + dt * 4)
+        s:restore(bg, self.cube_x - 2, self.cube_y - 2, self.cube_w + 4, self.cube_h + 4)
+        s:restore(bg, 0, self.bar_y - 3, self.w, self.note_y + self.font.height * self.text_scale - self.bar_y + 6)
+        self:_draw_cube(s)
+        self:_draw_bar(s)
+        self:_draw_text(s)
+        self.screen:present()
+
+    def _draw_cube(self, s):
+        n = len(self.tiles)
+        for i in range[1, n]:
+            tile = self.tiles[i]
+            start = (i - 1) / n * 0.8
+            k = _clamp((self.shown - start) / 0.12, 0, 1)
+            if k > 0.02:
+                e = k * (2 - k)
+                scale = 0.94 * e
+                pts = []
+                for p in tile.pts:
+                    pts[len(pts) + 1] = [tile.cx + (p[1] - tile.cx) * scale, tile.cy + (p[2] - tile.cy) * scale]
+                s:polygon(pts, tile.color, true)
+
+    def _draw_bar(self, s):
+        bx = self.bar_x
+        by = self.bar_y
+        s:round_rect(bx, by, self.bar_w, self.bar_h, math.floor(self.bar_h / 2), C_TRACK, true)
+        fw = math.floor(self.shown * self.bar_w)
+        if fw > 1:
+            s:push_clip(bx, by, fw, self.bar_h)
+            s:round_rect(bx, by, math.max(fw, self.bar_h), self.bar_h, math.floor(self.bar_h / 2), C_ACCENT, true)
+            gw = math.max(3, math.floor(self.bar_w * 0.1))
+            gx = bx + math.floor(((self.clock() * 0.6) % 1.4 - 0.2) * self.bar_w)
+            s:fill_rect(gx, by, gw, self.bar_h, C_GLOSS)
+            s:pop_clip()
+
+    def _draw_text(self, s):
+        f = self.font
+        sc = self.text_scale
+        if self.label != "":
+            idx = math.max(1, math.min(8, math.floor(self.fade * 7) + 1))
+            tw = surface_mod.measure(f, self.label, 0, sc)
+            s:text(f, math.floor((self.w - tw) / 2), self.label_y, self.label, self.fade_ramp[idx], {scale: sc})
+        if self.note != "":
+            note = surface_mod.ellipsize(f, self.note, self.w - 8, "...", 0, sc)
+            tw = surface_mod.measure(f, note, 0, sc)
+            s:text(f, math.floor((self.w - tw) / 2), self.note_y, note, C_DIM, {scale: sc})
+
+    # полоса до конца, несколько кадров без ожидания событий
+    def done(self):
+        self.target = 1
+        self.old_label = self.label
+        for i in range[1, 8]:
+            self.last = self.clock() - FRAME_STEP
+            self:tick()
+            self:_sleep(FRAME_STEP)
+
+    def _sleep(self, secs):
+        timer = os.startTimer(secs)
+        while true:
+            ev, a = os.pullEventRaw()
+            if ev == "timer" and a == timer:
+                return
+
+    def error(self, text):
+        self.mode = "error"
+        s = self.screen.surface
+        s:restore(self.plain, 0, 0, self.w, self.h)
+        f = self.font
+        sc = self.text_scale
+        s:text(f, 8 * sc, 6 * sc, "Boot failed", C_ERR, {scale: math.max(sc, self.title_scale - 1)})
+        y = 6 * sc + (f.height + 4) * math.max(sc, self.title_scale - 1)
+        for line in surface_mod.wrap(f, text, self.w - 16 * sc, 0, sc):
+            s:text(f, 8 * sc, y, line, C_TEXT, {scale: sc})
+            y += (f.height + 2) * sc
+        self.screen:present()
+
+    def close(self):
+        if self.screen != nil:
+            self.screen:close()
+            self.screen = nil
+
+# ------------------------------------------------------------ текстовый экран
+
+export class TextSplash:
+    def init(self, opts):
+        self.opts = opts
+        self.term = opts.term ?? term
+        self.clock = opts.clock ?? _now
+        self.title = opts.title ?? version.full()
+        self.label = ""
+        self.note = ""
+        self.frac = 0
+
+    def open(self):
+        t = self.term
+        w, h = t.getSize()
+        self.w = w
+        self.h = h
+        self.color = t.isColor == nil or t.isColor()
+        rows = logo.logo_rows()
+        total = len(rows) + 5
+        top = math.max(1, math.floor((h - total) / 2) + 1)
+        lw = string.len(rows[1].text)
+        left = math.max(1, math.floor((w - lw) / 2) + 1)
+        if self.color:
+            t.setBackgroundColor(colors.black)
+            t.setTextColor(colors.white)
+        t.clear()
+        for i in range[1, len(rows)]:
+            t.setCursorPos(left, top + i - 1)
+            if self.color:
+                t.blit(rows[i].text, rows[i].fg, rows[i].bg)
+            else:
+                t.write(string.rep("#", lw))
+        self.title_row = top + len(rows) + 1
+        self.bar_row = self.title_row + 2
+        self.label_row = self.bar_row + 1
+        self.note_row = self.label_row + 1
+        self.bar_w = math.min(w - 4, 32)
+        self.bar_x = math.floor((w - self.bar_w) / 2) + 1
+        self:_center(self.title_row, self.title)
+        self:_bar()
+
+    def _center(self, row, text):
+        t = self.term
+        t.setCursorPos(1, row)
+        t.write(string.rep(" ", self.w))
+        t.setCursorPos(math.max(1, math.floor((self.w - string.len(text)) / 2) + 1), row)
+        t.write(string.sub(text, 1, self.w))
+
+    def _bar(self):
+        t = self.term
+        n = math.floor(self.frac * self.bar_w + 0.5)
+        t.setCursorPos(self.bar_x, self.bar_row)
+        if self.color:
+            t.blit(string.rep(" ", self.bar_w), string.rep("0", self.bar_w), string.rep("b", n) .. string.rep("7", self.bar_w - n))
+        else:
+            t.write("[" .. string.rep("#", n) .. string.rep("-", self.bar_w - n) .. "]")
+
+    def progress(self, frac, text):
+        self.frac = _clamp(frac, 0, 1)
+        self:_bar()
+        if text != nil and text != self.label:
+            self.label = text
+            self:_center(self.label_row, text)
+
+    def message(self, text):
+        self.note = text
+        self:_center(self.note_row, text)
+
+    def tick(self):
+        return false
+
+    def done(self):
+        self:progress(1, nil)
+
+    def error(self, text):
+        t = self.term
+        if self.color:
+            t.setBackgroundColor(colors.black)
+            t.setTextColor(colors.red)
+        t.clear()
+        t.setCursorPos(1, 1)
+        t.write("Boot failed")
+        if self.color:
+            t.setTextColor(colors.white)
+        row = 3
+        for line in string.gmatch(text .. "\n", "([^\n]*)\n"):
+            while string.len(line) > self.w:
+                t.setCursorPos(1, row)
+                t.write(string.sub(line, 1, self.w))
+                line = string.sub(line, self.w + 1)
+                row += 1
+            t.setCursorPos(1, row)
+            t.write(line)
+            row += 1
+
+    def close(self):
+        pass
+
+# ------------------------------------------------------------ обёртка: экран не ломает загрузку
+
+export class Guard:
+    def init(self, inner, fallback=nil):
+        self.inner = inner
+        self.fallback = fallback
+        self.dead = false
+        self.problem = nil
+
+    def _fail(self, err):
+        let me = self
+        self.problem = tostring(err)
+        pcall(() => me.inner:close())
+        self.inner = nil
+        if self.fallback != nil:
+            self.inner = self.fallback
+            self.fallback = nil
+            ok = pcall(() => me.inner:open())
+            if ok:
+                return
+            self.inner = nil
+        self.dead = true
+
+    def _call(self, name, a, b):
+        if self.dead:
+            return nil
+        let me = self
+        ok, res = pcall(() => me.inner[name](me.inner, a, b))
+        if not ok:
+            self:_fail(res)
+            return nil
+        return res
+
+    def open(self):
+        return self:_call("open")
+
+    def progress(self, frac, text):
+        return self:_call("progress", frac, text)
+
+    def message(self, text):
+        return self:_call("message", text)
+
+    def tick(self):
+        return self:_call("tick")
+
+    def done(self):
+        return self:_call("done")
+
+    def error(self, text):
+        return self:_call("error", text)
+
+    def close(self):
+        return self:_call("close")
+
+# opts: caps ({pixel: bool}), term, assets, font, clock, title, text (true: принудительно текстовый вариант)
+export def new(opts=nil):
+    o = opts ?? {}
+    caps = o.caps ?? {}
+    if caps.pixel == true and o.text != true:
+        return Guard(PixelSplash(o), TextSplash(o))
+    return Guard(TextSplash(o))

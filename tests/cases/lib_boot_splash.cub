@@ -1,0 +1,137 @@
+import t
+import boot.splash as splash
+import version
+eq = t.eq
+
+# ---------------------------------------------------------------- подставные терминалы
+def fake(opts):
+    api = {}
+    log = []
+    api.log = log
+    def size(px):
+        if px:
+            return 51 * 6, 19 * 9
+        return 51, 19
+    api.getSize = size
+    def mono():
+        return opts.color ?? true
+    api.isColor = mono
+    for name in ["setBackgroundColor", "setTextColor", "clear", "setCursorPos", "setPaletteColor", "setGraphicsMode", "setFrozen"]:
+        api[name] = () => nil
+    def write(s):
+        log[len(log) + 1] = s
+    api.write = write
+    def blit(a, b, c):
+        log[len(log) + 1] = a .. "|" .. b .. "|" .. c
+    api.blit = blit
+    if opts.pixel:
+        def draw(list):
+            if opts.draw_fails:
+                error("no pixels today")
+        api.drawPixels = draw
+    return api
+
+clock = {now: 100}
+def tick_clock():
+    clock.now = clock.now + 0.1
+    return clock.now
+
+def new_pixel(extra):
+    o = {caps: {pixel: true}, term: fake({pixel: true}), clock: tick_clock, assets: "/repo/assets"}
+    if extra != nil:
+        for k, v in extra:
+            o[k] = v
+    return splash.new(o)
+
+# ---------------------------------------------------------------- пиксельный экран
+s = new_pixel(nil)
+s:open()
+eq(s.dead, false, "pixel splash opens")
+px = s.inner
+surf = px.screen.surface
+u = px.unit
+cx = px.cube_x + math.floor(6 * u)
+cy = px.cube_y + math.floor(20 * u)
+before = surf:get(cx, cy)
+eq(before == 209, false, "the cube is not built yet")
+s:progress(0.5, "Loading the kernel")
+for i in range[1, 40]:
+    s:tick()
+eq(px.shown > 0.4, true, "bar follows the target")
+mid = surf:checksum()
+s:progress(1, "Starting services")
+s:message("timed is ready")
+for i in range[1, 60]:
+    s:tick()
+eq(px.shown, 1, "bar reaches the end")
+eq(surf:get(cx, cy), 209, "the left face is built at 100 percent")
+eq(surf:checksum() != mid, true, "the picture changes with progress")
+s:done()
+eq(s.dead, false, "done does not break the screen")
+s:error("Cannot start the kernel:\nboom")
+count = 0
+for y in range[0, px.h - 1]:
+    for x in range[0, px.w - 1]:
+        if surf:get(x, y) == 207:
+            count += 1
+eq(count > 20, true, "error text is drawn in the error color")
+s:close()
+eq(px.screen, nil, "close releases the screen")
+
+# кадры не чаще шага по времени
+still = splash.new({caps: {pixel: true}, term: fake({pixel: true}), clock: () => 7, assets: "/repo/assets"})
+still:open()
+eq(still:tick(), false, "no frame before the step time has passed")
+still:close()
+
+# ---------------------------------------------------------------- сбой рисования: падение на текстовый вариант, потом молчание
+bad = fake({pixel: true, draw_fails: true})
+g = splash.new({caps: {pixel: true}, term: bad, clock: tick_clock, assets: "/repo/assets"})
+g:open()
+eq(g.dead, false, "a pixel failure falls back to the text screen")
+eq(g.problem != nil, true, "the failure is remembered")
+eq(g.inner.bar_row != nil, true, "the text screen took over")
+g:progress(0.3, "still booting")
+eq(g.dead, false, "the fallback keeps working")
+
+broken = {}
+g2 = splash.new({caps: {pixel: true}, term: broken, clock: tick_clock})
+g2:open()
+eq(g2.dead, true, "with nothing to draw on the screen turns itself off")
+g2:progress(0.5, "x")
+g2:message("x")
+g2:tick()
+g2:done()
+g2:error("x")
+g2:close()
+eq(g2.dead, true, "a dead screen ignores calls")
+
+# ---------------------------------------------------------------- текстовый экран
+tt = fake({})
+x = splash.new({caps: {pixel: false}, term: tt, clock: tick_clock})
+x:open()
+x:progress(0.5, "Loading")
+x:message("note")
+found_title = false
+found_bar = false
+for line in tt.log:
+    if line == version.full():
+        found_title = true
+    if line == string.rep("b", 16) .. string.rep("7", 16) or string.find(line, string.rep("0", 32) .. "|" .. string.rep("b", 16) .. string.rep("7", 16) .. "$") != nil:
+        found_bar = true
+eq(found_title, true, "the title is written")
+eq(found_bar, true, "half of the bar is filled")
+x:done()
+eq(x.inner.frac, 1, "done fills the bar")
+
+mono = fake({color: false})
+m = splash.new({caps: {pixel: false}, term: mono, clock: tick_clock})
+m:open()
+m:progress(0.25, "Loading")
+last_bar = ""
+for line in mono.log:
+    if string.sub(line, 1, 1) == "[":
+        last_bar = line
+eq(last_bar, "[" .. string.rep("#", 8) .. string.rep("-", 24) .. "]", "monochrome bar uses characters")
+m:error("something failed")
+print("done")

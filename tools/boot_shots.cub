@@ -1,0 +1,57 @@
+# Снимки экрана загрузки без игры: рисует splash в подставном пиксельном терминале и сохраняет кадры как PPM (build/ui_boot_*.ppm).
+# Запуск: tools/boot_shots.sh (он же превращает кадры в PNG).
+
+import boot.splash as splash
+
+COLS = 51
+ROWS = 19
+
+def make_term(cols, rows):
+    api = {}
+    def get_size(px):
+        if px:
+            return cols * 6, rows * 9
+        return cols, rows
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "setGraphicsMode", "drawPixels", "setFrozen"]:
+        api[name] = nothing
+    return api
+
+def dump(inner, name):
+    s = inner.screen.surface
+    pal = inner.screen.palette
+    f = fs.open("/repo/build/" .. name .. ".ppm", "wb")
+    f.write("P6\n" .. s.w .. " " .. s.h .. "\n255\n")
+    for y in range[0, s.h - 1]:
+        parts = []
+        for x in range[0, s.w - 1]:
+            v = s.px[y * s.w + x + 1]
+            r, g, b = pal:get(v < 0 and 0 or v)
+            parts[x + 1] = string.char(r, g, b)
+        f.write(table.concat(parts))
+    f.close()
+
+def shoot(cols, rows, tag):
+    clock = {now: 100}
+    def tick_clock():
+        clock.now = clock.now + 0.1
+        return clock.now
+    s = splash.new({caps: {pixel: true}, term: make_term(cols, rows), clock: tick_clock, assets: "/repo/assets", title: "CubeOS 0.3.0"})
+    s:open()
+    steps = [[0.05, "Starting"], [0.35, "Loading the kernel"], [0.7, "Starting services"], [1, "Ready"]]
+    n = 0
+    for st in steps:
+        s:progress(st[1], st[2])
+        if st[1] == 0.7:
+            s:message("timed: service ready")
+        for i in range[1, 45]:
+            s:tick()
+        n += 1
+        dump(s.inner, "ui_boot_" .. tag .. "_" .. n)
+    s:error("Cannot start the kernel:\nmodule 'kernel' failed to load\nstack: init.cub:123")
+    dump(s.inner, "ui_boot_" .. tag .. "_err")
+
+shoot(COLS, ROWS, "small")
+shoot(164, 81, "monitor")
