@@ -1,0 +1,32 @@
+import t
+import boot.console as console_mod
+eq = t.eq
+
+# консоль, привязанная к процессу ядра, читает ввод через sys.wait_event
+def make_sys(events):
+    api = {pos: 0, asked: []}
+    def wait_event(filter, timeout):
+        api.asked[len(api.asked) + 1] = filter
+        api.pos = api.pos + 1
+        e = events[api.pos]
+        if e == nil:
+            error("the test ran out of events")
+        return e[1], e[2]
+    api.wait_event = wait_event
+    return api
+
+base = console_mod.TermConsole()
+eq(base.sys, nil, "a plain console has no process")
+
+fake = make_sys([["char", "a"], ["char", "b"], ["key", keys.backspace], ["char", "c"], ["key", keys.enter]])
+bound = base:bind(fake)
+eq(bound.sys == fake, true, "bind returns a console for the process")
+eq(bound:read_line("Name: "), "ac", "typing with backspace")
+eq(fake.asked[1], ["char", "key", "paste"], "only input events are awaited")
+
+fake = make_sys([["paste", "secret"], ["key", keys.enter]])
+eq(console_mod.TermConsole(fake):read_line("Password: ", true), "secret", "paste works and hidden input is returned as typed")
+
+fake = make_sys([["key", keys.backspace], ["key", keys.enter]])
+eq(console_mod.TermConsole(fake):read_line("> "), "", "backspace on an empty line does nothing")
+print("done")

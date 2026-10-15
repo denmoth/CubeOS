@@ -60,7 +60,8 @@ export def recovery_login(console, auth, attempts=3):
     return false
 
 export class Boot:
-    # opts: fsys (обязательно), console, kernel (параметры ядра), import, shell, power, ctrl, auth (параметры Auth), clock
+    # opts: fsys (обязательно), console, kernel (параметры ядра), import, shell, power, ctrl, auth (параметры Auth), clock,
+    # mode ("safe": безопасный режим по выбору в меню), on_ready(system) (вызывается, когда службы запущены, перед экраном входа)
     def init(self, opts):
         self.opts = opts
         self.fsys = opts.fsys
@@ -79,6 +80,9 @@ export class Boot:
         fsys = self.fsys
         sys_state = state_mod.new(fsys, {clock: o.clock})
         mode, reason = sys_state:begin(o.ctrl ?? false)
+        if o.mode == "safe" and mode == "normal":
+            mode = "safe"
+            reason = "chosen in the boot menu"
         conf = {}
         for k, v in DEFAULTS:
             conf[k] = v
@@ -137,6 +141,10 @@ export class Boot:
         o = self.opts
         sys.wait(system.init_pid)
         system.state:mark_ok()
+        if o.on_ready != nil:
+            o.on_ready(system)
+        if self.console != nil and self.console.bind != nil:
+            self.console = self.console:bind(sys)
         greeter = o.greeter
         if greeter == nil and self.console != nil:
             greeter = greeter_mod.new(self.console, system.auth, system.sessions, {title: system.conf.title})

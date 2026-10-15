@@ -5,7 +5,7 @@
 #   splash:progress(0.35, "Loading the kernel")    доля 0..1 и подпись
 #   splash:message("Service timed is ready")       необязательная строка пояснения под подписью
 #   splash:tick()                                  кадр анимации (вызывать между шагами загрузки, часто); true, если кадр нарисован
-#   splash:done()                                  полоса до конца и плавный переход к входу
+#   splash:done(pause)                             полоса до конца и плавный переход к входу (pause: sys.sleep, если вызов из процесса ядра)
 #   splash:error(text)                             экран ошибки загрузки
 #   splash:close()                                 вернуть терминал в обычный режим
 #
@@ -221,13 +221,17 @@ export class PixelSplash:
             s:text(f, math.floor((self.w - tw) / 2), self.note_y, note, C_DIM, {scale: sc})
 
     # полоса до конца, несколько кадров без ожидания событий
-    def done(self):
+    # sleep(секунды): пауза между кадрами; из процесса ядра нужно передать sys.sleep (по умолчанию ждёт события CC напрямую)
+    def done(self, pause=nil):
         self.target = 1
         self.old_label = self.label
         for i in range[1, 8]:
             self.last = self.clock() - FRAME_STEP
             self:tick()
-            self:_sleep(FRAME_STEP)
+            if pause != nil:
+                pause(FRAME_STEP)
+            else:
+                self:_sleep(FRAME_STEP)
 
     def _sleep(self, secs):
         timer = os.startTimer(secs)
@@ -326,7 +330,7 @@ export class TextSplash:
     def tick(self):
         return false
 
-    def done(self):
+    def done(self, pause=nil):
         self:progress(1, nil)
 
     def error(self, text):
@@ -398,8 +402,8 @@ export class Guard:
     def tick(self):
         return self:_call("tick")
 
-    def done(self):
-        return self:_call("done")
+    def done(self, pause=nil):
+        return self:_call("done", pause)
 
     def error(self, text):
         return self:_call("error", text)

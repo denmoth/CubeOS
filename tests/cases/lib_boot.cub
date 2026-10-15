@@ -136,6 +136,16 @@ eq(log[len(log)], "shell ivan", "autologin opened a session without asking")
 eq(string.find(con:text(), "Password", 1, true), nil, "no password prompt with autologin")
 fsys:write_file(nil, "/cubeos/sys/cfg/boot.conf", "{rounds: 2}")
 
+# ---------------------------------------------------------------- on_ready вызывается один раз перед экраном входа
+ready = {n: 0}
+def on_ready(sysm):
+    ready.n = ready.n + 1
+con = console_mod.ScriptedConsole(["s"])
+b = mk_boot(fsys, con, {on_ready: on_ready})
+system = b:start()
+settle(system)
+eq(ready.n, 1, "on_ready is called once when the services are up")
+
 # ---------------------------------------------------------------- блокировка после неудач
 log = []
 auth_check = auth_mod.new(fsys, {rounds: 2, clock: now})
@@ -173,6 +183,14 @@ eq(s4.kernel, nil, "recovery does not start the kernel")
 fsys4 = build_fs()
 s5 = mk_boot(fsys4, nil, {ctrl: true}):start()
 eq([s5.mode, s5.reason], ["recovery", "Ctrl was held at startup"], "Ctrl forces recovery")
+
+# режим из меню загрузки
+fsys5 = build_fs()
+s6 = mk_boot(fsys5, nil, {mode: "safe"}):start()
+eq([s6.mode, s6.reason], ["safe", "chosen in the boot menu"], "the boot menu can choose the safe mode")
+fsys6 = build_fs()
+s7 = mk_boot(fsys6, nil, {mode: "safe", ctrl: true}):start()
+eq(s7.mode, "recovery", "recovery wins over the menu safe mode")
 
 # вход в режим восстановления: пароль администратора
 a_rec = auth_mod.new(fsys, {rounds: 2, clock: now})
