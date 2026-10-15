@@ -1,0 +1,62 @@
+# svc.fontd: служба шрифтов (D239, lib/fonts.cub). Находит шрифты в каталогах системы, языковых пакетов и пользователя, отвечает,
+# какие есть, что они покрывают и чем рисовать терминал.
+# Запросы (svc.rpc): list -> [{name, path, width, height, glyphs, scripts}], info {name}, terminal {user_conf} -> {name, path,
+#   fallbacks}, missing {text, user_conf} -> [символы без глифов], rescan -> число шрифтов.
+# main(sys, args): args.dirs (каталоги для тестов), args.read(path) (чтение настроек; по умолчанию настоящий fs).
+
+import fonts
+import svc.rpc as rpc
+
+def _plain(info):
+    return {name: info.name, path: info.path, width: info.width, height: info.height, glyphs: info.glyphs, scripts: info.scripts}
+
+export def main(sys, args):
+    a = args ?? {}
+    state = {list: []}
+    def read(path):
+        if a.read != nil:
+            return a.read(path)
+        if not fs.exists(path):
+            return nil
+        h = fs.open(path, "r")
+        text = h.readAll()
+        h.close()
+        return text
+    def rescan():
+        state.list = fonts.scan(a.dirs)
+        sys.log("info", "fonts: " .. len(state.list) .. " found")
+        return len(state.list)
+    rescan()
+
+    handlers = {}
+    def list_(q, sender):
+        out = []
+        for info in state.list:
+            out[len(out) + 1] = _plain(info)
+        return out
+    handlers.list = list_
+    def info_(q, sender):
+        i = fonts.find((q ?? {}).name, state.list)
+        return i != nil and _plain(i) or nil
+    handlers.info = info_
+    def terminal_(q, sender):
+        conf = fonts.read_conf(read, (q ?? {}).user_conf)
+        f, name = fonts.terminal_font(conf, state.list)
+        if f == nil:
+            return nil
+        names = []
+        for info in state.list:
+            for fb in f.fallbacks:
+                if fb == info.font:
+                    names[len(names) + 1] = info.name
+        return {name: name, path: fonts.find(name, state.list).path, fallbacks: names}
+    handlers.terminal = terminal_
+    def missing_(q, sender):
+        conf = fonts.read_conf(read, (q ?? {}).user_conf)
+        f, name = fonts.terminal_font(conf, state.list)
+        return fonts.missing((q ?? {}).text ?? "", f)
+    handlers.missing = missing_
+    handlers.rescan = (q, sender) => rescan()
+
+    sys.register("fontd")
+    rpc.serve(sys, handlers)

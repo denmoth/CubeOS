@@ -1,0 +1,87 @@
+import t
+import fonts
+import font as font_lib
+import kernel
+import svc.fontd as fontd
+import svc.rpc as rpc
+import term.vterm as vterm
+import compat.env as compat_env
+import compat.proc as compat_proc
+import cush.shell as cush
+eq = t.eq
+
+# Шрифты (D239): реестр, письменности, запасные шрифты, служба fontd, команда fonts.
+
+DIRS = ["/repo/assets/fonts"]
+list_ = fonts.scan(DIRS)
+eq(len(list_) >= 3, true, "the system fonts are found")
+mono = fonts.find("cube-mono-6x9", list_)
+eq(mono != nil and mono.width == 6 and mono.height == 9, true, "the terminal font, 6x9")
+has_latin = false
+for s in mono.scripts:
+    if s == "latin":
+        has_latin = true
+eq(has_latin, true, "it covers Latin")
+
+# запасной шрифт закрывает недостающее только при том же размере клетки
+f, name = fonts.terminal_font({terminal: "cube-mono-6x9", fallback: []}, list_)
+eq(name, "cube-mono-6x9", "the configured terminal font")
+for fb in f.fallbacks:
+    eq(fb.width == 6 and fb.height == 9, true, "fallbacks have the same cell size")
+eq(fonts.missing("Hello", f), [], "plain Latin is covered")
+eq(fonts.missing("A☃A☃", f), ["☃"], "missing characters are listed once")
+small = fonts.find("cube-5x7", list_)
+if small != nil:
+    eq(f:add_fallback(small.font), false, "a font of another size is not used as a fallback")
+f2, n2 = fonts.terminal_font({terminal: "no-such-font"}, list_)
+eq(n2, "cube-mono-6x9", "an unknown font falls back to the default")
+
+# служба fontd через ядро
+k = kernel.new({clock: () => 0})
+k:spawn(fontd.main, {dirs: DIRS, read: (p) => nil}, {name: "fontd"})
+answers = {}
+def ask(sys, args):
+    answers.list = rpc.call(sys, "fontd", "list")
+    answers.term = rpc.call(sys, "fontd", "terminal", {})
+    answers.missing = rpc.call(sys, "fontd", "missing", {text: "ab☃"})
+k:spawn(ask, [], {name: "asker"})
+for i in range[1, 20]:
+    k:run_ready()
+eq(answers.list != nil and len(answers.list) == len(list_), true, "fontd lists the fonts")
+eq(answers.term.name, "cube-mono-6x9", "fontd says which font the terminal uses")
+eq(answers.missing, ["☃"], "and which letters are missing")
+
+# команда fonts
+HIST = "/repo/build/fonts_history"
+CONF = "/repo/build/fonts_cfg/cush.conf"
+if fs.exists("/repo/build/fonts_cfg"):
+    fs.delete("/repo/build/fonts_cfg")
+fs.makeDir("/repo/build/fonts_cfg")
+vt = vterm.new(70, 19, {history: 400})
+env = compat_env.new({vterm: vt})
+env.cush_opts = {history_path: HIST, greeting: false, user: "tester", host: "cube", config_path: CONF}
+proc = compat_proc.new(env, "cush", [], {name: "cush", main: cush.main})
+proc:start()
+def run(text):
+    for i in range[1, string.len(text)]:
+        proc:feed("char", string.sub(text, i, i))
+    proc:feed("key", keys.enter, false)
+    proc:feed("key_up", keys.enter)
+def has(text):
+    return string.find(table.concat(vt:all_lines(), "\n"), text, 1, true) != nil
+run("fonts")
+eq(has("* cube-mono-6x9"), true, "fonts lists the fonts and marks the terminal font")
+proc:feed("paste", "fonts check Hello中")
+proc:feed("key", keys.enter, false)
+proc:feed("key_up", keys.enter)
+eq(has("No glyph for: 中"), true, "fonts check names the missing letters")
+run("fonts set cube-6x9")
+f3 = fs.open("/repo/build/fonts_cfg/fonts.conf", "r")
+eq(string.find(f3.readAll(), "cube-6x9", 1, true) != nil, true, "fonts set saves the choice in the user's fonts.conf")
+f3.close()
+run("fonts set nothing")
+eq(has("no font named nothing"), true, "an unknown font is refused")
+fs.delete("/repo/build/fonts_cfg")
+if fs.exists(HIST):
+    fs.delete(HIST)
+print("done")

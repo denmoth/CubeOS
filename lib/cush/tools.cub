@@ -10,6 +10,8 @@ import hal
 import unicode
 import std.time as stime
 import version
+import fonts as fonts_mod
+import json5
 import cush.textedit as textedit
 
 flags_of = builtins.flags_of
@@ -592,3 +594,80 @@ def run_editor(sh, args, vim):
 
 add("cubed", (sh, args) => run_editor(sh, args, nil))
 add("cedit", (sh, args) => run_editor(sh, args, nil))
+
+# ------------------------------------------------------------ шрифты (D239)
+
+# пути настроек пользователя: $cfg/fonts.conf и папка своих шрифтов $data/fonts (рядом с cush.conf)
+def _user_paths(sh):
+    cfg = sh.opts.config_path != nil and string.match(sh.opts.config_path, "^(.*)/[^/]*$") or nil
+    if cfg == nil:
+        return nil, nil
+    base = string.match(cfg, "^(.*)/[^/]*$") ?? cfg
+    return cfg .. "/fonts.conf", base .. "/data/fonts"
+
+def _read_env(sh, path):
+    if path == nil or not sh.env.fs.exists(path):
+        return nil
+    h = sh.env.fs.open(path, "r")
+    text = h.readAll()
+    h.close()
+    return text
+
+# fonts [list | check TEXT | set NAME | info NAME]
+def b_fonts(sh, args):
+    sub = args[1] ?? "list"
+    conf_path, user_dir = _user_paths(sh)
+    list_ = fonts_mod.scan(fonts_mod.dirs(user_dir))
+    conf = fonts_mod.read_conf((p) => _read_env(sh, p), conf_path)
+    f, current = fonts_mod.terminal_font(conf, list_)
+    if sub == "list":
+        if len(list_) == 0:
+            sh:println("No fonts found.")
+            return 0
+        for info in list_:
+            sh:write_color(info.name == current and "5" or "0", (info.name == current and "* " or "  ") .. info.name)
+            sh:write_color("8", "  " .. info.width .. "x" .. info.height .. ", " .. info.glyphs .. " glyphs, " .. table.concat(info.scripts, " "))
+            sh:println("")
+        sh:write_color("8", "* the terminal font; fonts of the same cell size fill in missing letters")
+        sh:println("")
+        return 0
+    if sub == "check":
+        text = table.concat(args, " ", 2)
+        if text == "":
+            sh:eprint("usage: fonts check TEXT")
+            return 2
+        miss = fonts_mod.missing(text, f)
+        if len(miss) == 0:
+            sh:println("Every character can be drawn.")
+            return 0
+        sh:println("No glyph for: " .. table.concat(miss, " ") .. "  (install a font that has them)")
+        return 1
+    if sub == "set":
+        name = args[2]
+        if name == nil or fonts_mod.find(name, list_) == nil:
+            sh:eprint("fonts: no font named " .. tostring(name) .. " (see: fonts list)")
+            return 1
+        if conf_path == nil:
+            sh:eprint("fonts: no user settings here")
+            return 1
+        old = _read_env(sh, conf_path) ?? "{}\n"
+        h = sh.env.fs.open(conf_path, "w")
+        if h == nil:
+            sh:eprint("fonts: cannot write " .. conf_path)
+            return 1
+        h.write(json5.patch(old, ["terminal"], name))
+        h.close()
+        sh:println("The terminal font is " .. name .. " (from the next terminal you open).")
+        return 0
+    if sub == "info":
+        info = fonts_mod.find(args[2] ?? current, list_)
+        if info == nil:
+            sh:eprint("fonts: no font named " .. tostring(args[2]))
+            return 1
+        sh:println(info.name .. ": " .. info.width .. "x" .. info.height .. " pixels, " .. info.glyphs .. " glyphs")
+        sh:println("Writing systems: " .. table.concat(info.scripts, ", "))
+        sh:println("File: " .. info.path)
+        return 0
+    sh:eprint("usage: fonts [list | check TEXT | set NAME | info NAME]")
+    return 2
+add("fonts", b_fonts)

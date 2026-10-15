@@ -8,6 +8,9 @@
 #   f:width_of("Привет")                      ширина текста в пикселях
 #   f:draw(buf, x, y, "Привет", 1)            рисует текст в пиксельный буфер (pixelbuf), цвет 1
 #   buf = f:render("Привет", 1)               новый буфер по размеру текста
+#   f:add_fallback(other)                     запасной шрифт того же размера клетки: его глифы берутся, если своих нет
+#   f:covers(0x416)                           есть ли глиф у шрифта или у запасных
+#   f:scripts()                               какие письменности покрыты: ["latin", "latin1", "cyrillic", ...]
 #
 # Шрифт моноширинный. Текст это UTF-8; символ без глифа заменяется глифом U+FFFD (если он есть) или "?".
 
@@ -16,6 +19,17 @@ import pixelbuf
 import compress
 
 const BAD = 0xFFFD
+
+# письменности и проверочные буквы (если у шрифта есть все, письменность считается покрытой)
+export const SCRIPTS = [
+    ["latin", [0x41, 0x5A, 0x61, 0x7A]],
+    ["latin1", [0xC0, 0xE9, 0xF1, 0xFC, 0xDF]],
+    ["latin-ext", [0x141, 0x142, 0x105, 0x10D, 0x161]],
+    ["cyrillic", [0x410, 0x42F, 0x430, 0x44F, 0x451]],
+    ["ukrainian", [0x404, 0x406, 0x407, 0x454, 0x456, 0x457, 0x490, 0x491]],
+    ["greek", [0x391, 0x3A9, 0x3B1, 0x3C9]],
+    ["box", [0x2500, 0x2502, 0x250C, 0x2510, 0x2514, 0x2518]],
+]
 
 def _byte(data, i):
     return string.byte(data, i)
@@ -62,6 +76,34 @@ export class Font:
         self.meta = string.sub(data, pos + glyphs * self.glyph_size + 2, pos + glyphs * self.glyph_size + 1 + meta_len)
         self.cache = {}
         self.metrics_bad = nil
+        self.fallbacks = []
+
+    # запасной шрифт (только с тем же размером клетки, иначе false)
+    def add_fallback(self, other):
+        if other == nil or other == self or other.width != self.width or other.height != self.height:
+            return false
+        self.fallbacks[len(self.fallbacks) + 1] = other
+        return true
+
+    def covers(self, cp):
+        if self:has(cp):
+            return true
+        for fb in self.fallbacks:
+            if fb:has(cp):
+                return true
+        return false
+
+    # письменности, у которых есть хотя бы основные буквы (по диапазонам глифов, без запасных шрифтов)
+    def scripts(self):
+        out = []
+        for item in SCRIPTS:
+            ok = true
+            for cp in item[2]:
+                if not self:has(cp):
+                    ok = false
+            if ok:
+                out[len(out) + 1] = item[1]
+        return out
 
     # номер глифа по кодовой точке (двоичный поиск по диапазонам) или nil
     def _index(self, cp):
@@ -103,6 +145,10 @@ export class Font:
     def _glyph(self, cp):
         index = self:_index(cp)
         if index == nil:
+            for fb in self.fallbacks:
+                fi = fb:_index(cp)
+                if fi != nil:
+                    return fb:_bits(fi)
             index = self:_index(BAD)
         if index == nil:
             index = self:_index(63)
@@ -126,7 +172,7 @@ export class Font:
 
     def can_render(self, text):
         for cp in unicode.codepoints(text):
-            if cp != 10 and cp != 9 and not self:has(cp):
+            if cp != 10 and cp != 9 and not self:covers(cp):
                 return false
         return true
 

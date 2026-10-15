@@ -300,6 +300,12 @@ msgstr "Скачать страницу или файл"
 msgid "Gets the address over HTTP and prints it or saves it. HTTP must be allowed on the server."
 msgstr "Получает адрес по HTTP и печатает или сохраняет. HTTP должен быть разрешён на сервере."
 
+msgid "Fonts of the terminal"
+msgstr "Шрифты терминала"
+
+msgid "Lists the installed fonts and what they can draw. A font is a .font file in /cubeos/share/fonts, in a language package or in your data/fonts folder; letters the main font lacks come from other fonts of the same size. Fonts only matter in the pixel terminal."
+msgstr "Показывает установленные шрифты и что они умеют рисовать. Шрифт это файл .font в /cubeos/share/fonts, в языковом пакете или в вашей папке data/fonts; буквы, которых нет в основном шрифте, берутся из других шрифтов того же размера. Шрифты важны только в пиксельном терминале."
+
 msgid "Your user name"
 msgstr "Ваше имя пользователя"
 
@@ -839,6 +845,24 @@ msgstr "Только статус и заголовки"
 
 msgid "Download a file"
 msgstr "Скачать файл"
+
+msgid "Installed fonts; * marks the terminal font"
+msgstr "Установленные шрифты; * отмечает шрифт терминала"
+
+msgid "Can the terminal draw this text, which letters are missing"
+msgstr "Может ли терминал нарисовать текст, каких букв не хватает"
+
+msgid "Use this font in your terminals"
+msgstr "Использовать этот шрифт в ваших терминалах"
+
+msgid "Size, letters and file of a font"
+msgstr "Размер, буквы и файл шрифта"
+
+msgid "Is Cyrillic covered"
+msgstr "Есть ли кириллица"
+
+msgid "Another terminal font"
+msgstr "Другой шрифт терминала"
 
 msgid "Use this language from now on (saved in your settings)"
 msgstr "Использовать этот язык дальше (сохраняется в настройках)"

@@ -1,0 +1,114 @@
+# fonts: реестр шрифтов системы (D239, служба fontd, команда fonts). Шрифты это файлы .font (lib/font.cub) в каталогах:
+#   /repo/assets/fonts, /repo/assets/private (разработка), /cubeos/share/fonts (системные пакеты шрифтов),
+#   /cubeos/share/lang/<язык>/fonts (шрифты языковых пакетов), $data/fonts пользователя (opts.user_dir).
+# Шрифт ставит кто угодно: достаточно положить файл в один из каталогов. Имя шрифта это имя файла без .font.
+#
+# Настройки: /cubeos/sys/cfg/fonts.conf (система) и $cfg/fonts.conf (пользователь, важнее):
+#   {terminal: "cube-mono-6x9", fallback: ["cube-6x9"]}
+# Шрифт терминала собирается из основного и запасных того же размера клетки: сначала fallback из настроек, потом все
+# остальные найденные шрифты того же размера (так шрифт языкового пакета сам закрывает недостающие буквы).
+#
+#   list = fonts.scan()                       [{name, path, width, height, glyphs, scripts}]
+#   f = fonts.terminal_font(conf, list)       Font с запасными (или nil, если шрифтов нет)
+#   fonts.missing("Привет", f)                символы, которых нет ни в основном, ни в запасных
+#   fonts.read_conf(read)                     настройки (read(path) -> текст или nil)
+
+import font as font_lib
+import json5
+import unicode
+
+export const DIRS = ["/repo/assets/fonts", "/repo/assets/private", "/cubeos/share/fonts"]
+export const LANG_ROOT = "/cubeos/share/lang"
+export const DEFAULT = "cube-mono-6x9"
+
+def _read(path, fsys):
+    h = (fsys ?? fs).open(path, "rb")
+    if h == nil:
+        return nil
+    data = h.readAll()
+    h.close()
+    return data
+
+# все каталоги со шрифтами: основные, языковых пакетов и пользователя
+export def dirs(user_dir=nil, fsys=nil):
+    f = fsys ?? fs
+    out = []
+    for d in DIRS:
+        out[len(out) + 1] = d
+    if f.isDir(LANG_ROOT):
+        for lang in f.list(LANG_ROOT):
+            out[len(out) + 1] = LANG_ROOT .. "/" .. lang .. "/fonts"
+    if user_dir != nil:
+        out[len(out) + 1] = user_dir
+    return out
+
+# сведения о шрифтах во всех каталогах (первый найденный с данным именем важнее)
+export def scan(dir_list=nil, fsys=nil):
+    f = fsys ?? fs
+    out = []
+    seen = {}
+    for d in (dir_list ?? dirs(nil, fsys)):
+        if f.isDir(d):
+            names = f.list(d)
+            table.sort(names)
+            for n in names:
+                stem = string.match(n, "^(.+)%.font$")
+                if stem != nil and seen[stem] == nil:
+                    path = d .. "/" .. n
+                    ok, ft = pcall(() => font_lib.parse(_read(path, fsys)))
+                    if ok:
+                        seen[stem] = true
+                        out[len(out) + 1] = {name: stem, path: path, width: ft.width, height: ft.height, glyphs: ft.glyph_count,
+                            scripts: ft:scripts(), font: ft}
+    return out
+
+export def find(name, list):
+    for info in list:
+        if info.name == name:
+            return info
+    return nil
+
+# настройки: системные, поверх них пользовательские
+export def read_conf(read, user_path=nil):
+    conf = {terminal: DEFAULT, fallback: []}
+    for path in ["/cubeos/sys/cfg/fonts.conf", user_path]:
+        if path != nil:
+            text = read(path)
+            if text != nil:
+                ok, data = pcall(() => json5.parse(text))
+                if ok and type(data) == "table":
+                    for k, v in data:
+                        conf[k] = v
+    return conf
+
+# основной шрифт терминала с запасными; nil, если нет ни одного шрифта
+export def terminal_font(conf, list):
+    c = conf ?? {}
+    main = find(c.terminal ?? DEFAULT, list) ?? find(DEFAULT, list) ?? list[1]
+    if main == nil:
+        return nil
+    f = main.font
+    f.fallbacks = []
+    used = {}
+    used[main.name] = true
+    for name in (c.fallback ?? []):
+        info = find(name, list)
+        if info != nil and used[name] == nil:
+            used[name] = true
+            f:add_fallback(info.font)
+    for info in list:
+        if used[info.name] == nil:
+            used[info.name] = true
+            f:add_fallback(info.font)
+    return f, main.name
+
+# символы текста, которых нет в шрифте и его запасных (без повторов)
+export def missing(text, f):
+    out = []
+    seen = {}
+    for ch in unicode.chars(text):
+        cp = unicode.codepoints(ch)[1]
+        if cp != nil and cp > 32 and seen[ch] == nil and (f == nil or not f:covers(cp)):
+            seen[ch] = true
+            out[len(out) + 1] = ch
+    return out
