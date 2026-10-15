@@ -113,4 +113,10 @@ later[1]()
 eq(got[len(got)], "char:w", "when Windows sends the character, it is used as it is, once (no double)")
 eq(tv.kbd:label(), "EN", "a Latin letter means English again")
 eq(got[len(got) - 1], "key:" .. keys.w, "after the key itself")
+# inputd сменил второй язык: терминал переходит сразу
+tv:set_keyboard("uk", "auto")
+later = []
+tv:raw_event("key", keys.s)
+later[1]()
+eq(got[len(got)], "char:і", "after cubeos_keyboard the second language is Ukrainian at once")
 print("done")
