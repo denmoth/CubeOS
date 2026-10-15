@@ -1,0 +1,565 @@
+# cush.tools: ещё встроенные команды оболочки (файлы, текст, система, буфер). Регистрируются в cush.builtins.table_of при импорте;
+# описания, флаги и примеры в реестре cush.commands (без записи там тест lib_cush_help не пройдёт).
+#
+# tree find du df stat less ps id devices uname cal calc seq rev basename dirname paste clip
+
+import cush.builtins as builtins
+import cush.help as help_mod
+import term.view as view_mod
+import hal
+import unicode
+import std.time as stime
+import version
+
+flags_of = builtins.flags_of
+read_lines = builtins.read_lines
+input_lines = builtins.input_lines
+
+def add(name, fn):
+    builtins.table_of[name] = fn
+
+def kb(bytes):
+    if bytes < 1024:
+        return tostring(bytes) .. " B"
+    if bytes < 1048576:
+        return string.format("%.1f KB", bytes / 1024)
+    return string.format("%.2f MB", bytes / 1048576)
+
+def show_path(full):
+    return "/" .. full
+
+# ------------------------------------------------------------ файлы
+
+# tree [-a] [-L N] [путь]: дерево папок
+def b_tree(sh, args):
+    flags = {}
+    depth = nil
+    target = nil
+    i = 1
+    while i <= len(args):
+        a = args[i]
+        if a == "-L":
+            i += 1
+            depth = tonumber(args[i])
+        elif string.sub(a, 1, 1) == "-":
+            for k in range[2, string.len(a)]:
+                flags[string.sub(a, k, k)] = true
+        else:
+            target = a
+        i += 1
+    fsys = sh.env.fs
+    root = sh:resolve(target ?? "")
+    if not fsys.isDir(root):
+        sh:eprint("tree: " .. tostring(target ?? ".") .. ": not a folder")
+        return 1
+    counts = {dirs: 0, files: 0}
+    sh:write_color("3", target ?? ".")
+    sh:println("")
+    def walk(dir, prefix, level):
+        if depth != nil and level > depth:
+            return
+        ok, names = pcall(fsys.list, dir)
+        if not ok:
+            return
+        shown = []
+        for nm in names:
+            if flags.a or string.sub(nm, 1, 1) != ".":
+                shown[len(shown) + 1] = nm
+        table.sort(shown, (a, b) => string.lower(a) < string.lower(b))
+        for k, nm in shown:
+            last = k == len(shown)
+            p = fsys.combine(dir, nm)
+            isdir = fsys.isDir(p)
+            sh:write_color("8", prefix .. (last and "`-- " or "|-- "))
+            sh:write_color(builtins.color_for(sh, p, nm), nm .. (isdir and "/" or ""))
+            sh:println("")
+            if isdir:
+                counts.dirs += 1
+                walk(p, prefix .. (last and "    " or "|   "), level + 1)
+            else:
+                counts.files += 1
+    walk(root, "", 1)
+    sh:write_color("8", counts.dirs .. " folders, " .. counts.files .. " files")
+    sh:println("")
+    return 0
+add("tree", b_tree)
+
+# find [путь] [-name ШАБЛОН] [-type f|d]: поиск файлов (шаблон с * и ?, без учёта регистра)
+def glob_pattern(g):
+    p = string.gsub(g, "[%^%$%(%)%%%.%[%]%+%-]", (c) => "%" .. c)
+    p = string.gsub(p, "%*", ".*")
+    p = string.gsub(p, "%?", ".")
+    return "^" .. string.lower(p) .. "$"
+
+def b_find(sh, args):
+    start = nil
+    name = nil
+    kind = nil
+    i = 1
+    while i <= len(args):
+        a = args[i]
+        if a == "-name":
+            i += 1
+            name = args[i]
+        elif a == "-type":
+            i += 1
+            kind = args[i]
+        elif start == nil:
+            start = a
+        else:
+            sh:eprint("find: unexpected " .. a)
+            return 2
+        i += 1
+    fsys = sh.env.fs
+    root = sh:resolve(start ?? "")
+    if not fsys.exists(root):
+        sh:eprint("find: " .. tostring(start) .. ": no such file or folder")
+        return 1
+    pat = name != nil and glob_pattern(name) or nil
+    found = {n: 0}
+    def visit(p):
+        isdir = fsys.isDir(p)
+        base = fsys.getName(p)
+        ok_name = pat == nil or string.find(string.lower(base), pat) != nil
+        ok_kind = kind == nil or (kind == "d" and isdir) or (kind == "f" and not isdir)
+        if ok_name and ok_kind:
+            found.n += 1
+            sh:println(show_path(p))
+        if isdir:
+            ok, names = pcall(fsys.list, p)
+            if ok:
+                table.sort(names)
+                for nm in names:
+                    visit(fsys.combine(p, nm))
+    visit(root)
+    return found.n > 0 and 0 or 1
+add("find", b_find)
+
+# du [-s] [путь...]: сколько места занимает
+def size_of(fsys, p):
+    if not fsys.isDir(p):
+        ok, n = pcall(fsys.getSize, p)
+        return ok and n or 0
+    total = 0
+    ok, names = pcall(fsys.list, p)
+    if ok:
+        for nm in names:
+            total += size_of(fsys, fsys.combine(p, nm))
+    return total
+
+def b_du(sh, args):
+    flags, n, rest = flags_of(args)
+    fsys = sh.env.fs
+    targets = len(rest) > 0 and rest or [""]
+    status = 0
+    for t in targets:
+        p = sh:resolve(t)
+        if not fsys.exists(p):
+            sh:eprint("du: " .. t .. ": no such file or folder")
+            status = 1
+        elif fsys.isDir(p) and not flags.s:
+            ok, names = pcall(fsys.list, p)
+            items = []
+            for nm in (ok and names or []):
+                q = fsys.combine(p, nm)
+                items[len(items) + 1] = {name: nm .. (fsys.isDir(q) and "/" or ""), size: size_of(fsys, q)}
+            table.sort(items, (a, b) => a.size > b.size)
+            total = 0
+            for it in items:
+                total += it.size
+                sh:write_color("3", string.format("%10s  ", kb(it.size)))
+                sh:println(it.name)
+            sh:write_color("5", string.format("%10s  ", kb(total)))
+            sh:println(t == "" and "." or t)
+        else:
+            sh:write_color("5", string.format("%10s  ", kb(size_of(fsys, p))))
+            sh:println(t == "" and "." or t)
+    return status
+add("du", b_du)
+
+# df: место на дисках компьютера и дискетах
+def b_df(sh, args):
+    rows = [["/", "computer"]]
+    d = sh.env.disk
+    per = sh.env.peripheral
+    if d != nil and per != nil:
+        for side in per.getNames():
+            if d.isPresent(side) and d.hasData(side):
+                rows[len(rows) + 1] = ["/" .. d.getMountPath(side), "disk " .. side .. " #" .. tostring(d.getID(side))]
+    sh:write_color("3", string.format("%-14s %10s %10s %10s  %s", "Where", "Size", "Used", "Free", "What"))
+    sh:println("")
+    for r in rows:
+        okf, free = pcall(fs.getFreeSpace, r[1])
+        okc, cap = pcall(fs.getCapacity, r[1])
+        if okf and type(free) == "number":
+            size = okc and type(cap) == "number" and cap or nil
+            used = size != nil and (size - free) or nil
+            sh:println(string.format("%-14s %10s %10s %10s  %s", r[1], size != nil and kb(size) or "?", used != nil and kb(used) or "?", kb(free), r[2]))
+    return 0
+add("df", b_df)
+
+# stat путь...: сведения о файле
+def b_stat(sh, args):
+    if len(args) == 0:
+        sh:eprint("usage: stat path...")
+        return 2
+    status = 0
+    for a in args:
+        p = sh:resolve(a)
+        ok, at = pcall(sh.env.fs.attributes, p)
+        if not ok or at == nil:
+            sh:eprint("stat: " .. a .. ": no such file or folder")
+            status = 1
+        else:
+            sh:write_color("5", show_path(p))
+            sh:println("")
+            sh:println("  Type:     " .. (at.isDir and "folder" or "file"))
+            sh:println("  Size:     " .. (at.isDir and kb(size_of(sh.env.fs, p)) or kb(at.size)))
+            sh:println("  Rights:   " .. (at.isReadOnly and "read only" or "read and write"))
+            if (at.modified ?? 0) > 0:
+                sh:println("  Modified: " .. sh.time:format("%Y-%m-%d %H:%M:%S", at.modified))
+    return status
+add("stat", b_stat)
+
+# less [файл]: читать постранично (Пробел, Enter, q)
+def b_less(sh, args):
+    lines = input_lines(sh, "less", args)
+    if lines == nil:
+        return 1
+    out = []
+    for l in lines:
+        out[len(out) + 1] = [["0", l]]
+    help_mod.page(sh, out)
+    return 0
+add("less", b_less)
+builtins.table_of.more = b_less
+
+# ------------------------------------------------------------ система
+
+def b_ps(sh, args):
+    lines = read_lines(sh, "/cubeos/proc/ps")
+    if lines == nil:
+        sh:eprint("ps: the process list is not available here")
+        return 1
+    for i, l in lines:
+        if i == 1:
+            sh:write_color("3", l)
+            sh:println("")
+        else:
+            sh:println(l)
+    return 0
+add("ps", b_ps)
+
+def b_id(sh, args):
+    st = sh.account != nil and sh.account("status") or nil
+    sh:write_color("5", sh.vars.USER)
+    if type(st) == "table":
+        sh:println("  administrator: " .. (st.admin and "yes" or "no") .. (st.elevated and " (rights raised by sudo now)" or "") ..
+            ", signed in with: " .. tostring(st.method) .. (st.pin and ", has a PIN" or ""))
+    else:
+        sh:println("")
+    return 0
+add("id", b_id)
+
+def b_devices(sh, args):
+    if sh.env.peripheral == nil:
+        sh:eprint("devices: no peripheral API here")
+        return 1
+    devs = hal.scan(sh.env.peripheral)
+    names = []
+    for name, d in devs:
+        names[len(names) + 1] = name
+    table.sort(names)
+    if len(names) == 0:
+        sh:println("No devices attached.")
+        return 0
+    flags, n, rest = flags_of(args)
+    for name in names:
+        d = devs[name]
+        sh:write_color("5", name)
+        sh:write_color("3", "  " .. tostring(d.type))
+        sh:println("  " .. len(d.methods) .. " methods")
+        if flags.m:
+            sh:write_color("8", "    " .. table.concat(d.methods, " "))
+            sh:println("")
+    return 0
+add("devices", b_devices)
+
+def b_uname(sh, args):
+    flags, n, rest = flags_of(args)
+    if flags.a:
+        sh:println(version.full() .. " on " .. tostring(_HOST ?? "CraftOS") .. ", computer #" .. os.getComputerID())
+    else:
+        sh:println(version.NAME)
+    return 0
+add("uname", b_uname)
+
+# ------------------------------------------------------------ время и числа
+
+# cal [месяц [год]]: календарь месяца, сегодня выделено
+def b_cal(sh, args):
+    c = sh.time
+    t = c:parts()
+    month = tonumber(args[1]) ?? t.month
+    year = tonumber(args[2]) ?? t.year
+    if month < 1 or month > 12:
+        sh:eprint("cal: the month is 1 to 12")
+        return 2
+    first = stime.from_date(year, month, 1, 12, 0, 0)
+    title = c:format("%B %Y", first)
+    sh:write_color("3", string.rep(" ", math.max(0, math.floor((20 - unicode.length(title)) / 2))) .. title)
+    sh:println("")
+    monday = c.conf.week_start != "sunday"
+    names = monday and ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"] or ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
+    sh:write_color("8", table.concat(names, " "))
+    sh:println("")
+    wd = stime.weekday(stime.from_date(year, month, 1))
+    shift = monday and (wd + 6) % 7 or wd
+    days = 31
+    while days > 28 and stime.to_date(stime.from_date(year, month, days)).month != month:
+        days -= 1
+    col = shift
+    sh:write_color("0", string.rep("   ", shift))
+    for day in range[1, days]:
+        today = day == t.day and month == t.month and year == t.year
+        sh:write_color(today and "5" or "0", string.format("%2d", day))
+        col += 1
+        if col == 7:
+            sh:println("")
+            col = 0
+        else:
+            sh:write_color("0", " ")
+    if col != 0:
+        sh:println("")
+    return 0
+add("cal", b_cal)
+
+# calc ВЫРАЖЕНИЕ: калькулятор (+ - * / % ^, скобки, sqrt abs floor ceil round min max sin cos tan log, pi, e)
+const FUNCS = {sqrt: math.sqrt, abs: math.abs, floor: math.floor, ceil: math.ceil, sin: math.sin, cos: math.cos, tan: math.tan,
+    log: math.log, exp: math.exp}
+
+def calc(text):
+    toks = []
+    i = 1
+    n = string.len(text)
+    while i <= n:
+        ch = string.sub(text, i, i)
+        if string.match(ch, "%s") != nil:
+            i += 1
+        elif string.match(ch, "[%d%.]") != nil:
+            digits = string.match(text, "^%d*%.?%d+", i) ?? string.match(text, "^%d+%.?", i)
+            toks[len(toks) + 1] = {k: "n", v: tonumber(digits)}
+            i += string.len(digits)
+        elif string.match(ch, "%a") != nil:
+            word = string.match(text, "^%a+", i)
+            toks[len(toks) + 1] = {k: "w", v: string.lower(word)}
+            i += string.len(word)
+        elif string.find("+-*/%^(),", ch, 1, true) != nil:
+            toks[len(toks) + 1] = {k: ch}
+            i += 1
+        else:
+            error("unexpected '" .. ch .. "'", 0)
+    # у вложенных функций свои имена переменных: в Cubic присваивание во вложенной функции меняет внешнюю с тем же именем
+    pos = {i: 1}
+    def peek():
+        return toks[pos.i]
+    def take(want):
+        tk_ = toks[pos.i]
+        if tk_ == nil or (want != nil and tk_.k != want):
+            error(want != nil and ("expected '" .. want .. "'") or "unexpected end", 0)
+        pos.i += 1
+        return tk_
+    def atom():
+        at_ = take()
+        if at_.k == "n":
+            return at_.v
+        if at_.k == "-":
+            return -power()
+        if at_.k == "(":
+            inner_ = expr()
+            take(")")
+            return inner_
+        if at_.k == "w":
+            if at_.v == "pi":
+                return math.pi
+            if at_.v == "e":
+                return math.exp(1)
+            if at_.v == "min" or at_.v == "max" or at_.v == "round" or FUNCS[at_.v] != nil:
+                take("(")
+                arg1_ = expr()
+                arg2_ = nil
+                if peek() != nil and peek().k == ",":
+                    take(",")
+                    arg2_ = expr()
+                take(")")
+                if at_.v == "min":
+                    return math.min(arg1_, arg2_ ?? arg1_)
+                if at_.v == "max":
+                    return math.max(arg1_, arg2_ ?? arg1_)
+                if at_.v == "round":
+                    mul_ = 10 ** (arg2_ ?? 0)
+                    return math.floor(arg1_ * mul_ + 0.5) / mul_
+                return FUNCS[at_.v](arg1_)
+            error("unknown name '" .. at_.v .. "'", 0)
+        error("unexpected '" .. at_.k .. "'", 0)
+    def power():
+        base_ = atom()
+        if peek() != nil and peek().k == "^":
+            take("^")
+            return base_ ** power()
+        return base_
+    def term_():
+        acc_t = power()
+        while peek() != nil and (peek().k == "*" or peek().k == "/" or peek().k == "%"):
+            op_t = take().k
+            r_t = power()
+            if op_t == "*":
+                acc_t = acc_t * r_t
+            elif op_t == "/":
+                acc_t = acc_t / r_t
+            else:
+                acc_t = acc_t % r_t
+        return acc_t
+    def expr():
+        acc_e = term_()
+        while peek() != nil and (peek().k == "+" or peek().k == "-"):
+            op_e = take().k
+            r_e = term_()
+            if op_e == "+":
+                acc_e = acc_e + r_e
+            else:
+                acc_e = acc_e - r_e
+        return acc_e
+    result_ = expr()
+    if pos.i <= len(toks):
+        rest_ = toks[pos.i]
+        error("unexpected '" .. tostring(rest_.k == "n" and rest_.v or rest_.k) .. "'", 0)
+    return result_
+
+export def calc_text(text):
+    return calc(text)
+
+def b_calc(sh, args):
+    text = table.concat(args, " ")
+    if text == "":
+        sh:eprint("usage: calc EXPRESSION, for example calc (2+3)*4")
+        return 2
+    ok, v = pcall(calc, text)
+    if not ok:
+        sh:eprint("calc: " .. tostring(v))
+        return 1
+    if v == math.floor(v) and math.abs(v) < 1e15:
+        sh:println(string.format("%.0f", v))
+    else:
+        sh:println(tostring(v))
+    return 0
+add("calc", b_calc)
+
+# seq [начало] конец [шаг]
+def b_seq(sh, args):
+    nums = []
+    for a in args:
+        v = tonumber(a)
+        if v == nil:
+            sh:eprint("seq: not a number: " .. a)
+            return 2
+        nums[len(nums) + 1] = v
+    first = 1
+    last = nums[1]
+    step = 1
+    if len(nums) == 2:
+        first = nums[1]
+        last = nums[2]
+    elif len(nums) >= 3:
+        first = nums[1]
+        step = nums[2]
+        last = nums[3]
+    if last == nil or step == 0:
+        sh:eprint("usage: seq [first [step]] last")
+        return 2
+    v = first
+    count = 0
+    while (step > 0 and v <= last) or (step < 0 and v >= last):
+        sh:println(v == math.floor(v) and string.format("%.0f", v) or tostring(v))
+        v += step
+        count += 1
+        if count >= 100000:
+            break
+    return 0
+add("seq", b_seq)
+
+def b_rev(sh, args):
+    lines = input_lines(sh, "rev", args)
+    if lines == nil:
+        return 1
+    for l in lines:
+        cs = unicode.chars(l)
+        out = []
+        for i in range[len(cs), 1] step -1:
+            out[len(out) + 1] = cs[i]
+        sh:println(table.concat(out))
+    return 0
+add("rev", b_rev)
+
+def b_basename(sh, args):
+    if args[1] == nil:
+        sh:eprint("usage: basename path [suffix]")
+        return 2
+    p = string.gsub(args[1], "/+$", "")
+    name = string.match(p, "([^/]*)$") ?? p
+    if args[2] != nil and string.sub(name, -string.len(args[2])) == args[2] and name != args[2]:
+        name = string.sub(name, 1, string.len(name) - string.len(args[2]))
+    sh:println(name)
+    return 0
+add("basename", b_basename)
+
+def b_dirname(sh, args):
+    if args[1] == nil:
+        sh:eprint("usage: dirname path")
+        return 2
+    p = string.gsub(args[1], "/+$", "")
+    dir = string.match(p, "^(.*)/[^/]*$")
+    if dir == nil:
+        dir = "."
+    elif dir == "":
+        dir = "/"
+    sh:println(dir)
+    return 0
+add("dirname", b_dirname)
+
+# ------------------------------------------------------------ буфер обмена
+
+# paste [файл]: ждёт Ctrl+V и пишет вставленный текст (все строки; многострочно с модом MothPaste) в файл или на экран
+def b_paste(sh, args):
+    sh:write_color("8", "Press Ctrl+V to paste" .. (args[1] != nil and (" into " .. args[1]) or "") .. " (Ctrl+C cancels)")
+    sh:println("")
+    ev, text = os.pullEvent("paste")
+    text = string.gsub(tostring(text), "\r", "")
+    view_mod.clipboard.text = text
+    lines = 1
+    for c in string.gmatch(text, "\n"):
+        lines += 1
+    if args[1] == nil:
+        for l in string.gmatch(text .. "\n", "([^\n]*)\n"):
+            sh:println(l)
+        return 0
+    p = sh:resolve(args[1])
+    f = sh.env.fs.open(p, "w")
+    if f == nil:
+        sh:eprint("paste: cannot write " .. args[1])
+        return 1
+    f.write(text)
+    f.close()
+    sh:println("Saved " .. lines .. " line" .. (lines > 1 and "s" or "") .. " (" .. kb(string.len(text)) .. ") to " .. args[1])
+    return 0
+add("paste", b_paste)
+
+# clip [файл]: положить файл или вывод пайпа в буфер терминала (вставка Ctrl+Shift+V)
+def b_clip(sh, args):
+    lines = input_lines(sh, "clip", args)
+    if lines == nil:
+        return 1
+    view_mod.clipboard.text = table.concat(lines, "\n")
+    sh:println(len(lines) .. " line" .. (len(lines) != 1 and "s" or "") .. " copied; Ctrl+Shift+V pastes")
+    return 0
+add("clip", b_clip)

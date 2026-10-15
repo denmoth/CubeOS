@@ -1,0 +1,150 @@
+import t
+import term.vterm as vterm
+import term.view as view_mod
+import compat.env as compat_env
+import compat.proc as compat_proc
+import cush.shell as cush
+import cush.tools as tools
+eq = t.eq
+
+# Новые команды оболочки и многострочная вставка (Ctrl+V с модом MothPaste приносит весь буфер одним событием paste).
+
+HIST = "/repo/build/cush_tools_history"
+DIR = "/repo/build/tools_test"
+for p in [HIST, DIR]:
+    if fs.exists(p):
+        fs.delete(p)
+fs.makeDir(DIR .. "/a/b")
+def put(path, text):
+    f = fs.open(DIR .. "/" .. path, "w")
+    f.write(text)
+    f.close()
+put("one.txt", "hello\n")
+put("a/two.txt", "0123456789")
+put("a/b/three.lua", "print(1)\n")
+
+vt = vterm.new(60, 19, {history: 2000})
+env = compat_env.new({vterm: vt})
+env.cush_opts = {history_path: HIST, greeting: false, user: "tester", host: "cube"}
+proc = compat_proc.new(env, "cush", [], {name: "cush", main: cush.main})
+proc:start()
+
+def run(text):
+    for i in range[1, string.len(text)]:
+        proc:feed("char", string.sub(text, i, i))
+    proc:feed("key", keys.enter, false)
+    proc:feed("key_up", keys.enter)
+
+def all_text():
+    return table.concat(vt:all_lines(), "\n")
+
+def has(text):
+    return string.find(all_text(), text, 1, true) != nil
+
+def fresh():
+    run("clear")
+    vt.hist = []
+
+# ------------------------------------------------------------ файлы
+run("cd " .. DIR)
+fresh()
+run("tree")
+eq(has("|-- a/"), true, "tree draws folders")
+eq(has("|   |-- b/"), true, "with nesting")
+eq(has("2 folders, 3 files"), true, "and counts them")
+fresh()
+run("tree -L 1")
+eq(has("three.lua"), false, "-L limits the depth")
+fresh()
+run("find . -name *.lua")
+eq(has("/repo/build/tools_test/a/b/three.lua"), true, "find by a pattern")
+eq(has("one.txt"), false, "only matching names")
+fresh()
+run("find -type d")
+eq(has("tools_test/a/b"), true, "find -type d lists folders")
+fresh()
+run("du -s a")
+eq(has("19 B"), true, "du -s sums a folder (10 + 9 bytes)")
+fresh()
+run("stat one.txt")
+eq(has("Type:     file"), true, "stat shows the type")
+eq(has("Size:     6 B"), true, "and the size")
+fresh()
+run("df")
+eq(has("Where"), true, "df prints a table")
+eq(has("computer"), true, "with the computer disk")
+
+# less: длинный ввод листается, q выходит
+fresh()
+run("seq 60 | less")
+eq(has("-- more"), true, "less stops at the end of the screen")
+proc:feed("key", keys.q, false)
+run("echo after less")
+eq(has("after less"), true, "q leaves it")
+
+# ------------------------------------------------------------ текст и числа
+fresh()
+run("calc (2+3)*4")
+eq(has("20"), true, "calc")
+run("calc 2^10")
+eq(has("1024"), true, "power")
+run("calc round(pi, 2)")
+eq(has("3.14"), true, "functions and constants")
+run("calc 2 +")
+eq(has("calc: unexpected end"), true, "a broken expression says what is wrong")
+eq(tools.calc_text("-3 + 10 % 4"), -1, "unary minus and modulo")
+eq(tools.calc_text("2^3^2"), 512, "power is right-associative")
+fresh()
+run("seq 10 -5 0")
+eq(has("10\n5\n0"), true, "seq with a step")
+fresh()
+run("echo hello | rev")
+eq(has("olleh"), true, "rev")
+run("basename /cubeos/sys/boot.conf .conf")
+eq(has("\nboot\n") or has("\nboot"), true, "basename with a suffix")
+run("dirname /cubeos/sys/boot.conf")
+eq(has("/cubeos/sys"), true, "dirname")
+fresh()
+run("cal 2 2026")
+eq(has("February 2026"), true, "cal shows the month")
+eq(has("28"), true, "February 2026 has 28 days")
+eq(string.find(all_text(), "29", 1, true), nil, "and no 29th")
+fresh()
+run("cal 2 2028")
+eq(has("29"), true, "a leap year has the 29th")
+fresh()
+run("uname -a")
+eq(has("CubeOS"), true, "uname -a")
+
+# ------------------------------------------------------------ буфер
+fresh()
+run("echo copy me | clip")
+eq(view_mod.clipboard.text, "copy me", "clip puts a pipe into the terminal clipboard")
+run("paste " .. DIR .. "/pasted.lua")
+proc:feed("paste", "local a = 1\nlocal b = 2\nprint(a + b)\n")
+eq(has("Saved 4 lines"), true, "paste saves all lines")
+f = fs.open(DIR .. "/pasted.lua", "r")
+eq(f.readAll(), "local a = 1\nlocal b = 2\nprint(a + b)\n", "with the exact text")
+f.close()
+
+# многострочная вставка в строку ввода: подсказка, Enter выполняет все строки
+fresh()
+proc:feed("paste", "echo first\r\necho second\necho third\n")
+eq(has("[+2 pasted l"), true, "a multi-line paste shows how many lines wait")
+proc:feed("key", keys.enter, false)
+eq(has("first\nsecond\nthird") or (has("\nfirst") and has("\nsecond") and has("\nthird")), true, "Enter runs every pasted line")
+eq(view_mod.clipboard.text, "echo first\necho second\necho third\n", "the pasted text is in the terminal clipboard too")
+fresh()
+proc:feed("paste", "echo dropped\necho too")
+proc:feed("key", keys.leftCtrl, false)
+proc:feed("key", keys.c, false)
+proc:feed("key_up", keys.c)
+proc:feed("key_up", keys.leftCtrl)
+run("echo kept")
+eq(has("dropped"), true, "the first line was on the screen")
+eq(has("\ntoo"), false, "Ctrl+C drops the waiting lines")
+eq(has("kept"), true, "and the shell goes on")
+
+fs.delete(DIR)
+fs.delete(HIST)
+print("done")

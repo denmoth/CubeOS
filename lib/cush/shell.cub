@@ -20,6 +20,7 @@ import cush.editor as editor_mod
 import cush.builtins as builtins
 import cush.fetch as fetch
 import cush.help as help_mod
+import cush.tools as tools_mod
 import i18n
 import clock
 import json5
@@ -814,6 +815,14 @@ export class Shell:
     # ------------------------------------------------------------ строка и события
 
     def submit(self, line):
+        # многострочная вставка: строки выполняются по очереди, как если бы их вводили одну за другой (пустые пропускаются)
+        if string.find(line, "\n", 1, true) != nil:
+            parts = []
+            for l in string.gmatch(line .. "\n", "([^\n]*)\n"):
+                t = string.gsub(string.gsub(l, "^%s+", ""), "%s+$", "")
+                if t != "":
+                    parts[len(parts) + 1] = t .. (string.sub(t, -1) == "&" and " " or " ; ")
+            line = table.concat(parts)
         trimmed = string.gsub(line, "^%s+", "")
         trimmed = string.gsub(trimmed, "%s+$", "")
         if trimmed == "":

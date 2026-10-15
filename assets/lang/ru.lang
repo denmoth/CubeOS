@@ -54,6 +54,60 @@ msgstr "Переместить или переименовать"
 msgid "Moves files or folders. With one file and a new name it renames it."
 msgstr "Перемещает файлы или папки. Один файл и новое имя: переименование."
 
+msgid "Show folders as a tree"
+msgstr "Показать папки деревом"
+
+msgid "Draws the folder and everything inside it as a tree, then counts folders and files."
+msgstr "Рисует папку и всё внутри деревом, в конце считает папки и файлы."
+
+msgid "Find files by name"
+msgstr "Найти файлы по имени"
+
+msgid "Walks through the folder and everything inside it and prints matching paths. In the pattern * means any text and ? any one character; capital letters do not matter."
+msgstr "Обходит папку со всем содержимым и печатает подходящие пути. В шаблоне * это любой текст, ? любой один символ; регистр не важен."
+
+msgid "How much space files take"
+msgstr "Сколько места занимают файлы"
+
+msgid "For a folder lists what is inside with sizes, biggest first, and the total."
+msgstr "Для папки показывает содержимое с размерами, сначала большие, и итог."
+
+msgid "Free space on the computer and disks"
+msgstr "Свободное место на компьютере и дискетах"
+
+msgid "Size, used and free space of the computer and of every floppy disk in a drive."
+msgstr "Размер, занято и свободно у компьютера и у каждой дискеты в дисководе."
+
+msgid "Details of a file"
+msgstr "Сведения о файле"
+
+msgid "Type, size, rights and the time of the last change."
+msgstr "Тип, размер, права и время последнего изменения."
+
+msgid "Read a long file page by page"
+msgstr "Читать длинный файл постранично"
+
+msgid "Shows a screen at a time: Space for the next page, Enter for one more line, q to stop. Works with a pipe too. 'more' is the same."
+msgstr "Показывает по экрану: Пробел следующая страница, Enter ещё строка, q выход. Работает и с пайпом. 'more' то же самое."
+
+msgid "Same as less"
+msgstr "То же, что less"
+
+msgid "Reads a long file page by page."
+msgstr "Читает длинный файл постранично."
+
+msgid "Save the Windows clipboard to a file"
+msgstr "Сохранить буфер Windows в файл"
+
+msgid "Waits for Ctrl+V and writes what you pasted to the file, every line of it (or prints it without a file). Plain CC passes only the first line of the clipboard; the MothPaste mod passes all of it."
+msgstr "Ждёт Ctrl+V и пишет вставленное в файл, все строки (без файла печатает). Обычный CC передаёт только первую строку буфера; мод MothPaste передаёт весь."
+
+msgid "Put a file into the terminal clipboard"
+msgstr "Положить файл в буфер терминала"
+
+msgid "Copies the file, or what comes through a pipe, so Ctrl+Shift+V pastes it. CC cannot put text into the Windows clipboard."
+msgstr "Копирует файл или то, что пришло по пайпу, чтобы Ctrl+Shift+V вставил. Класть текст в буфер Windows CC не умеет."
+
 msgid "Print words"
 msgstr "Напечатать слова"
 
@@ -102,6 +156,36 @@ msgstr "Вывести входящее и сохранить в файл"
 msgid "Passes a pipe through to the screen and writes the same text to a file."
 msgstr "Пропускает пайп на экран и пишет тот же текст в файл."
 
+msgid "Reverse every line"
+msgstr "Развернуть каждую строку"
+
+msgid "Prints every line backwards."
+msgstr "Печатает каждую строку задом наперёд."
+
+msgid "Count numbers"
+msgstr "Числа подряд"
+
+msgid "Prints numbers from first (1) to last, with the step (1). Handy with pipes."
+msgstr "Печатает числа от начала (1) до конца с шагом (1). Удобно с пайпами."
+
+msgid "The name at the end of a path"
+msgstr "Имя в конце пути"
+
+msgid "Drops the folders, and the suffix if given."
+msgstr "Убирает папки и окончание, если указано."
+
+msgid "The folder part of a path"
+msgstr "Папка из пути"
+
+msgid "Drops the last name of the path."
+msgstr "Убирает последнее имя пути."
+
+msgid "Calculator"
+msgstr "Калькулятор"
+
+msgid "Counts an expression: + - * / % and ^ (power), brackets, sqrt abs floor ceil round min max sin cos tan log exp, pi and e."
+msgstr "Считает выражение: + - * / % и ^ (степень), скобки, sqrt abs floor ceil round min max sin cos tan log exp, pi и e."
+
 msgid "System information with the logo"
 msgstr "Сведения о системе с логотипом"
 
@@ -119,6 +203,30 @@ msgstr "Записывать каждую клавишу (для отладки)
 
 msgid "Writes every key, character, paste and click with the time in milliseconds to /cubeos/var/log/input.log. Passwords and other hidden fields are never written: only one line saying that a secret was entered. It turns itself off after 90 minutes or at reboot, and the file is deleted 90 minutes after it was made. Administrators only. To see the login screen too, choose 'CubeOS (input log)' in the boot menu (Delete while starting)."
 msgstr "Пишет каждую клавишу, символ, вставку и клик со временем до миллисекунд в /cubeos/var/log/input.log. Пароли и другие скрытые поля не пишутся никогда: только одна строка о том, что секрет введён. Выключается сам через 90 минут или при перезагрузке, файл удаляется через 90 минут после создания. Только для администраторов. Чтобы записать и экран входа, выберите 'CubeOS (input log)' в меню загрузки (Delete при старте)."
+
+msgid "Running processes"
+msgstr "Запущенные процессы"
+
+msgid "Number, state, user and name of every process of the system."
+msgstr "Номер, состояние, пользователь и имя каждого процесса системы."
+
+msgid "Who you are and your rights"
+msgstr "Кто вы и ваши права"
+
+msgid "Your name, whether you are an administrator, whether sudo is active and how you signed in."
+msgstr "Ваше имя, администратор ли вы, действует ли sudo и как вы вошли."
+
+msgid "Devices attached to the computer"
+msgstr "Устройства, подключённые к компьютеру"
+
+msgid "Monitors, drives, speakers, modems and other peripherals with their type."
+msgstr "Мониторы, дисководы, динамики, модемы и другая периферия с типом."
+
+msgid "System name and version"
+msgstr "Имя и версия системы"
+
+msgid "Prints the system name."
+msgstr "Печатает имя системы."
 
 msgid "Your user name"
 msgstr "Ваше имя пользователя"
@@ -173,6 +281,12 @@ msgstr "Дата и время"
 
 msgid "Prints the date and time in your time zone (see timedatectl). A +FORMAT uses % codes: %Y year, %m month, %d day, %H hour, %M minute, %S second, %A weekday, %B month name."
 msgstr "Печатает дату и время в вашем поясе (см. timedatectl). +ФОРМАТ использует коды %: %Y год, %m месяц, %d день, %H час, %M минута, %S секунда, %A день недели, %B название месяца."
+
+msgid "Calendar of a month"
+msgstr "Календарь месяца"
+
+msgid "This month, or the one you ask for; today is highlighted. The week starts on the day set in time.conf."
+msgstr "Этот месяц или тот, что попросили; сегодня выделено. Неделя начинается с дня из time.conf."
 
 msgid "Time zone and clock settings"
 msgstr "Часовой пояс и настройки часов"
@@ -402,6 +516,54 @@ msgstr "Переименовать файл"
 msgid "Move into a folder"
 msgstr "Переместить в папку"
 
+msgid "Also show hidden files"
+msgstr "Показывать и скрытые файлы"
+
+msgid "Go only N levels deep"
+msgstr "Только N уровней вглубь"
+
+msgid "Two levels of the system folder"
+msgstr "Два уровня папки системы"
+
+msgid "Only names that match, for example *.lua"
+msgstr "Только подходящие имена, например *.lua"
+
+msgid "Only files"
+msgstr "Только файлы"
+
+msgid "Only folders"
+msgstr "Только папки"
+
+msgid "All Lua files"
+msgstr "Все файлы Lua"
+
+msgid "All your folders"
+msgstr "Все ваши папки"
+
+msgid "Only the total"
+msgstr "Только итог"
+
+msgid "What takes space in your home"
+msgstr "Что занимает место в вашей папке"
+
+msgid "When was it changed"
+msgstr "Когда он менялся"
+
+msgid "Read the whole log"
+msgstr "Прочитать весь журнал"
+
+msgid "A long list page by page"
+msgstr "Длинный список постранично"
+
+msgid "Then press Ctrl+V: a whole program from Windows into a file"
+msgstr "Потом Ctrl+V: целая программа из Windows в файл"
+
+msgid "Copy a file"
+msgstr "Скопировать файл"
+
+msgid "Copy a list"
+msgstr "Скопировать список"
+
 msgid "Do not end with a new line"
 msgstr "Не переводить строку в конце"
 
@@ -477,6 +639,27 @@ msgstr "Как часто встречается каждое слово"
 msgid "See the list and keep a copy"
 msgstr "Увидеть список и сохранить копию"
 
+msgid "olleh"
+msgstr "olleh"
+
+msgid "1 to 5"
+msgstr "от 1 до 5"
+
+msgid "10, 8, ... 0"
+msgstr "10, 8, ... 0"
+
+msgid "boot"
+msgstr "boot"
+
+msgid "/cubeos/sys"
+msgstr "/cubeos/sys"
+
+msgid "20"
+msgstr "20"
+
+msgid "3.14"
+msgstr "3.14"
+
 msgid "Keep watching and print new lines as they come (Ctrl+C stops)"
 msgstr "Следить и печатать новые строки по мере появления (Ctrl+C стоп)"
 
@@ -510,6 +693,12 @@ msgstr "Включить, потом повторить проблему"
 msgid "Read what was recorded"
 msgstr "Прочитать записанное"
 
+msgid "Also list what each device can do (its methods)"
+msgstr "Ещё показать, что умеет каждое устройство (методы)"
+
+msgid "Everything: version, CC version and computer number"
+msgstr "Всё: версия, версия CC и номер компьютера"
+
 msgid "Use this language from now on (saved in your settings)"
 msgstr "Использовать этот язык дальше (сохраняется в настройках)"
 
@@ -533,6 +722,12 @@ msgstr "Сейчас"
 
 msgid "Only the date, like 15.10.2026"
 msgstr "Только дата, вроде 15.10.2026"
+
+msgid "This month"
+msgstr "Этот месяц"
+
+msgid "December 2026"
+msgstr "Декабрь 2026"
 
 msgid "Show the settings (the same as no command)"
 msgstr "Показать настройки (как без команды)"
@@ -668,6 +863,9 @@ msgstr "прошлые команды; Ctrl+R ищет по ним"
 
 msgid "copy the selection, or stop the program / reset the line"
 msgstr "копировать выделенное, иначе остановить программу / сбросить строку"
+
+msgid "paste from Windows (all lines with the MothPaste mod; Enter runs them)"
+msgstr "вставить из Windows (все строки с модом MothPaste; Enter выполняет их)"
 
 msgid "copy / paste"
 msgstr "копировать / вставить"

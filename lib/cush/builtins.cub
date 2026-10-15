@@ -19,7 +19,7 @@ def add(name, fn):
 # ------------------------------------------------------------ вспомогательное
 
 # разбор аргументов: короткие флаги вида -la и именованные с числом (-n 5, -5); возвращает множество флагов, число и остальные
-def flags_of(args, with_number=false):
+export def flags_of(args, with_number=false):
     flags = {}
     rest = []
     number = nil
@@ -39,7 +39,7 @@ def flags_of(args, with_number=false):
         i += 1
     return flags, number, rest
 
-def read_lines(sh, path):
+export def read_lines(sh, path):
     fsys = sh.env.fs
     full = sh:resolve(path)
     if not fsys.exists(full) or fsys.isDir(full):
@@ -57,7 +57,7 @@ def read_lines(sh, path):
     return out
 
 # строки для фильтра: файлы из списка или пайп; nil и сообщение, если нечего читать
-def input_lines(sh, name, files):
+export def input_lines(sh, name, files):
     if len(files) == 0:
         st = sh.env.stdin
         if st == nil:
@@ -99,7 +99,7 @@ def b_pwd(sh, args):
     return 0
 add("pwd", b_pwd)
 
-def color_for(sh, full, name):
+export def color_for(sh, full, name):
     fsys = sh.env.fs
     if fsys.isDir(full):
         return "3"
