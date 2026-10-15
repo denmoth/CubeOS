@@ -147,8 +147,8 @@ msgstr "Працює як Блокнот: стрілки, Shift виділяє, 
 msgid "The editor in vim mode"
 msgstr "Редактор у режимі vim"
 
-msgid "Same as edit -v."
-msgstr "Те саме, що edit -v."
+msgid "Same as cubed -v."
+msgstr "Те саме, що cubed -v."
 
 msgid "Normal mode: h j k l w b e 0 ^ $ gg G move (a number repeats: 5j), x dd D dw cw yy yw p P r J >> << change, u and Ctrl+R undo and redo, i a I A o O start typing, v selects, / n N search, :w :q :q! :wq :NUMBER, ZZ saves and quits. Esc returns to normal mode."
 msgstr "Звичайний режим: h j k l w b e 0 ^ $ gg G рухають (число повторює: 5j), x dd D dw cw yy yw p P r J >> << правлять, u і Ctrl+R скасування й повернення, i a I A o O починають введення, v виділяє, / n N пошук, :w :q :q! :wq :ЧИСЛО, ZZ зберегти й вийти. Esc повертає у звичайний режим."

@@ -566,7 +566,7 @@ add("clip", b_clip)
 
 # ------------------------------------------------------------ редактор (D238)
 
-# edit [-v] [файл]; vi и vim открывают в режиме vim. Настройки: cush.conf editor {mode: "simple"|"vim", tab: 4, numbers: true}
+# cubed [-v] [файл] (CUBe EDitor; edit остаётся программой ROM); vi и vim открывают cubed в режиме vim. Настройки: cush.conf editor {mode: "simple"|"vim", tab: 4, numbers: true}
 def run_editor(sh, args, vim):
     conf = (sh.config ?? {}).editor ?? {}
     path = nil
@@ -586,10 +586,10 @@ def run_editor(sh, args, vim):
             sh.env.term.clear()
             sh.env.term.setCursorPos(1, 1)
             error(res, 0)
-        sh:eprint("edit: " .. tostring(res))
+        sh:eprint("cubed: " .. tostring(res))
         return 1
     return 0
 
-add("edit", (sh, args) => run_editor(sh, args, nil))
+add("cubed", (sh, args) => run_editor(sh, args, nil))
 add("vi", (sh, args) => run_editor(sh, args, true))
 add("vim", (sh, args) => run_editor(sh, args, true))

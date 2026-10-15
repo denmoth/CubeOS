@@ -54,7 +54,9 @@ def screen():
 run("cd " .. DIR)
 
 # ------------------------------------------------------------ обычный режим
-run("edit hello.lua")
+run("type edit")
+eq(string.find(screen(), "rom/programs/edit", 1, true) != nil, true, "edit is the CraftOS program again")
+run("cubed hello.lua")
 eq(string.find(screen(), "hello.lua", 1, true) != nil and string.find(screen(), "New file", 1, true) != nil, true, "the editor opens a new file")
 chars_("local x = 1")
 key(keys.enter)

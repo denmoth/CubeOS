@@ -416,7 +416,7 @@ T = {
 "Edit a program": ("Править программу", "Редагувати програму"),
 "The same in vim mode": ("То же в режиме vim", "Те саме в режимі vim"),
 "The editor in vim mode": ("Редактор в режиме vim", "Редактор у режимі vim"),
-"Same as edit -v.": ("То же, что edit -v.", "Те саме, що edit -v."),
+"Same as cubed -v.": ("То же, что cubed -v.", "Те саме, що cubed -v."),
 "Normal mode: h j k l w b e 0 ^ $ gg G move (a number repeats: 5j), x dd D dw cw yy yw p P r J >> << change, u and Ctrl+R undo and redo, i a I A o O start typing, v selects, / n N search, :w :q :q! :wq :NUMBER, ZZ saves and quits. Esc returns to normal mode.": ("Обычный режим: h j k l w b e 0 ^ $ gg G двигают (число повторяет: 5j), x dd D dw cw yy yw p P r J >> << правят, u и Ctrl+R отмена и возврат, i a I A o O начинают ввод, v выделяет, / n N поиск, :w :q :q! :wq :ЧИСЛО, ZZ сохранить и выйти. Esc возвращает в обычный режим.", "Звичайний режим: h j k l w b e 0 ^ $ gg G рухають (число повторює: 5j), x dd D dw cw yy yw p P r J >> << правлять, u і Ctrl+R скасування й повернення, i a I A o O починають введення, v виділяє, / n N пошук, :w :q :q! :wq :ЧИСЛО, ZZ зберегти й вийти. Esc повертає у звичайний режим."),
 "Edit with vim keys": ("Править клавишами vim", "Редагувати клавішами vim"),
 }
