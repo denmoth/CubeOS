@@ -60,9 +60,14 @@ export class TermConsole:
         sys = self.sys
         term.write(prompt)
         buf = ""
+        seen = 0
         while true:
             ev, a = sys.wait_event(["char", "key", "paste"])
-            if ev == "char" or ev == "paste":
+            # первые события ввода пишем в журнал: так видно, что именно приходит от CC (диагностика)
+            if seen < 12:
+                seen += 1
+                sys.log("info", "login input: " .. tostring(ev) .. " " .. tostring(a))
+            if (ev == "char" or ev == "paste") and type(a) == "string":
                 buf = buf .. a
                 term.write(hidden and string.rep("*", string.len(a)) or a)
             elif ev == "key":

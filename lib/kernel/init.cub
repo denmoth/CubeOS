@@ -432,6 +432,10 @@ export class Kernel:
             return
         for pid, p in self.procs:
             first = p.events[1]
+            # процесс, который ждёт события по списку имён, не завис: в очереди у него лежат только события, которые он не просил
+            # (например, мышь, пока вход ждёт клавиши)
+            if p.state == "waiting" and p.wait != nil and p.wait.kind == "event":
+                first = nil
             if first != nil and now - first.at >= self.hung_ms and now >= p.snooze_until and not p.hung:
                 p.hung = true
                 self:log("not responding: " .. pid .. " " .. p.name, "warn")

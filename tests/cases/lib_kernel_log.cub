@@ -86,4 +86,24 @@ k:spawn(talker, [], {name: "talker", subject: system})
 k:run_ready()
 eq(levels_of(k, "talker: careful now"), ["warn"], "sys.log keeps its level in the kernel log")
 eq(levels_of(k, "talker: fyi"), ["info"], "info too")
+# процесс, который ждёт клавиши, не «не отвечает» из-за мыши в его очереди
+k = kernel.new({clock: () => mono.now})
+def key_waiter(sys, args):
+    sys.wait_event(["char"])
+kp = k:spawn(key_waiter, [], {name: "login", subject: system, ui: true})
+k:run_ready()
+k:feed("mouse_click", 1, 5, 5)
+for i in range[1, 20]:
+    mono.now = mono.now + 1000
+    k:tick()
+eq(len(levels_of(k, "not responding")), 0, "a process waiting for other events is not reported as hung because of unrelated input")
+def busy(sys, args):
+    sys.sleep(1000)
+bp = k:spawn(busy, [], {name: "busy", subject: system, ui: true})
+k:run_ready()
+k:feed("char", "x")
+for i in range[1, 20]:
+    mono.now = mono.now + 1000
+    k:tick()
+eq(len(levels_of(k, "not responding: " .. bp)), 1, "but a process that is busy elsewhere and ignores input still is")
 print("done")

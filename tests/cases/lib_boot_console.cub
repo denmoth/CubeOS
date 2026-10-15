@@ -13,6 +13,7 @@ def make_sys(events):
             error("the test ran out of events")
         return e[1], e[2]
     api.wait_event = wait_event
+    api.log = () => nil
     return api
 
 base = console_mod.TermConsole()

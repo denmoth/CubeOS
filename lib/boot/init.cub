@@ -180,7 +180,7 @@ export class Boot:
         system.state:mark_ok()
         sys.log("info", "services started, the boot reached the login screen")
         if o.on_ready != nil:
-            o.on_ready(system)
+            o.on_ready(system, sys)
         if self.console != nil and self.console.bind != nil:
             self.console = self.console:bind(sys)
         greeter = o.greeter

@@ -149,11 +149,11 @@ local function main()
     bootlog = bootlog,
     -- службы подняты: экран загрузки закрывается ЗДЕСЬ, до экрана входа (вход идёт в этом же процессе после возврата), и текст чистится,
     -- иначе строки загрузки проступали бы под экраном входа
-    on_ready = function()
+    on_ready = function(_, ksys)
       ready = true
       mark("services")
       blog("info", "services are up, closing the boot screen")
-      pcall(function() report("login", 0, "Ready") splash:done(function() end) end)
+      pcall(function() report("login", 0, "Ready") splash:done(ksys and ksys.sleep or function() end) end)
       pcall(function() splash:close() end)
       reset_screen()
       mark("login")
