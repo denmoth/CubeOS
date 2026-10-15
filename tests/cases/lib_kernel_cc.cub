@@ -1,0 +1,23 @@
+import t
+import kernel.cc as cckernel
+eq = t.eq
+
+# события CC приходят в ядро со всеми аргументами (раньше список обрезался до имени, и клавиши приходили без кода)
+os.queueEvent("cubeos_test_event", 42, "x", nil, "end")
+got = nil
+for i in range[1, 20]:
+    ev = cckernel.pull(0)
+    if ev != nil and ev[1] == "cubeos_test_event":
+        got = ev
+        break
+eq(got != nil, true, "the queued event is pulled")
+eq([got[1], got[2], got[3], got[5]], ["cubeos_test_event", 42, "x", "end"], "with all its arguments")
+os.queueEvent("cubeos_test_event2", "a", 7)
+got = nil
+for i in range[1, 20]:
+    ev = cckernel.pull(200)
+    if ev != nil and ev[1] == "cubeos_test_event2":
+        got = ev
+        break
+eq(got != nil and got[2] == "a" and got[3] == 7, true, "the waiting variant keeps the arguments too")
+print("done")
