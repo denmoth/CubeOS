@@ -1,0 +1,47 @@
+import t
+import term.vterm as vterm
+import compat.env as compat_env
+import compat.proc as compat_proc
+eq = t.eq
+
+# Ограниченное окружение (D243, частичная песочница): у обычного пользователя нет debug, общие таблицы это копии,
+# метатаблицы строк и системных объектов не видны. Программы CC при этом работают.
+
+vt = vterm.new(40, 10)
+env = compat_env.new({vterm: vt, restricted: true})
+eq(env.debug.getupvalue, nil, "no debug.getupvalue for an ordinary user")
+eq(env.debug.getlocal, nil, "nor getlocal")
+eq(env.debug.sethook, nil, "nor sethook")
+eq(env.debug.getinfo(print, "S").func, nil, "getinfo gives no function references")
+eq(env.debug.getregistry()._LOADED.string, env.string, "the registry has only the program's own libraries")
+eq(env.string != string and env.string.upper == string.upper, true, "string is a copy with the same functions")
+env.string.upper = () => "pwned"
+eq(string.upper("a"), "A", "changing the copy does not touch the system")
+env.table.concat = () => "pwned"
+eq(table.concat(["a", "b"]), "ab", "nor table")
+env.peripheral.getNames = () => ["evil"]
+eq(peripheral.getNames == env.peripheral.getNames, false, "nor the peripheral API the services use")
+eq(env.getmetatable(""), nil, "the string metatable is hidden")
+eq(env.getmetatable(vt), nil, "so is the metatable of a system object")
+ok, err = pcall(() => env.setmetatable(vt, {}))
+eq(ok, false, "and it cannot be replaced")
+mine = env.setmetatable({}, {__index: {x: 1}})
+eq(mine.x, 1, "the program's own metatables work as usual")
+eq(env.getmetatable(mine) != nil, true, "and are visible")
+
+# уровень стека в getinfo считается от программы, как в CC
+fn = env.load("return debug.getinfo(1, 'l').currentline", "=t")
+eq(fn(), 1, "getinfo(1) is the calling program")
+
+# программы CC работают в таком окружении
+vt3 = vterm.new(40, 10)
+env3 = compat_env.new({vterm: vt3, restricted: true})
+p = compat_proc.new(env3, "rom/programs/shell.lua", ["list", "rom"])
+p:start()
+eq(p:alive(), false, "list from ROM runs")
+eq(string.find(table.concat(vt3:all_lines(), " "), "programs", 1, true) != nil, true, "and prints")
+
+vt2 = vterm.new(40, 10)
+env2 = compat_env.new({vterm: vt2})
+eq(env2.debug, debug, "an administrator keeps debug")
+print("done")

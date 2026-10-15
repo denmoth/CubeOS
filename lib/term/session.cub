@@ -64,7 +64,8 @@ export def program(session, opts=nil):
                 lc = data
         tv = view_mod.new(vt, {width: "fill", height: "fill", keyboard: lc.keyboard ?? "ru", layout_mode: lc.keyboard_mode ?? "auto",
             layout_dirs: [(o.assets ?? "/repo/assets") .. "/lang", "/cubeos/share/lang"]})
-        env = env_mod.new({vterm: vt, fs: cfs.legacy_fs(view)})
+        # обычный пользователь и гость получают ограниченное окружение (без debug, свои копии общих таблиц; D243)
+        env = env_mod.new({vterm: vt, fs: cfs.legacy_fs(view), restricted: session.admin_capable != true})
 
         # ROM-библиотеки, которые не загрузились (иначе программы потом падают с пустым colors и подобным), в журнал
         failed = []
