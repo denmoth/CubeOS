@@ -864,6 +864,9 @@ msgstr "Играть файл .dfpwm в фоне"
 msgid "Play the music disc or record floppy in a drive"
 msgstr "Играть пластинку или дискету-пластинку из дисковода"
 
+msgid "List the Minecraft sounds with WORD in the name (after play sound, Tab completes them)"
+msgstr "Список звуков Minecraft со СЛОВОМ в имени (после play sound их дополняет Tab)"
+
 msgid "Make the floppy in a drive a record: the file becomes record.dfpwm, the title its label"
 msgstr "Сделать дискету в дисководе пластинкой: файл станет record.dfpwm, название её меткой"
 
@@ -1547,6 +1550,12 @@ msgstr "Динамики: {list}"
 
 msgid "none"
 msgstr "нет"
+
+msgid "...and {n} more: add a word to narrow it down"
+msgstr "...и ещё {n}: добавьте слово, чтобы сузить"
+
+msgid "{n} sounds"
+msgstr "Звуков: {n}"
 
 msgid "Playing {title} (play stop stops it)"
 msgstr "Играет {title} (play stop остановит)"

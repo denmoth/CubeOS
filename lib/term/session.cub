@@ -121,7 +121,7 @@ export def program(session, opts=nil):
             return host_call("net", {op: op, args: args})
         cfg = view:expand("$cfg")
         env.cush_opts = {history_path: cfg .. "/cush_history", config_path: cfg .. "/cush.conf", user: session.user, host: o.host,
-            home: session.env.home, time: t.time, time_save: time_save, power: power, inputlog: inputlog, log: shell_log, notes: notes, sudo: sudo, account: account, keyboard: keyboard, audio: audio, net: net,
+            home: session.env.home, time: t.time, time_save: time_save, power: power, inputlog: inputlog, log: shell_log, notes: notes, sudo: sudo, account: account, keyboard: keyboard, audio: audio, net: net, assets: o.assets ?? "/repo/assets",
             lang_dir: [(o.assets ?? "/repo/assets") .. "/lang", "/cubeos/share/lang"], unicode: out.kind == "pixel",
             info: {display: out.kind == "pixel" and "pixel mode" or "text mode", font: out.kind == "pixel" and (font_name ?? "cube-mono-6x9") or nil}}
 

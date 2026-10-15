@@ -1,0 +1,58 @@
+import t
+import term.vterm as vterm
+import compat.env as compat_env
+import compat.proc as compat_proc
+import cush.shell as cush
+import cush.tools2 as tools2
+eq = t.eq
+
+# Звуки Minecraft для play: список из assets/sounds.txt, Tab дополняет имя после play sound и инструмент после play note,
+# play sounds ищет по слову.
+
+HIST = "/repo/build/cush_sounds_history"
+if fs.exists(HIST):
+    fs.delete(HIST)
+
+played = []
+def fake_audio(op, args):
+    played[len(played) + 1] = [op, args]
+    return true
+
+vt = vterm.new(70, 19, {history: 400})
+env = compat_env.new({vterm: vt})
+env.cush_opts = {history_path: HIST, greeting: false, user: "tester", host: "cube", assets: "/repo/assets", audio: fake_audio}
+proc = compat_proc.new(env, "cush", [], {name: "cush", main: cush.main})
+proc:start()
+
+def typed(text):
+    for i in range[1, string.len(text)]:
+        proc:feed("char", string.sub(text, i, i))
+def key(code):
+    proc:feed("key", code, false)
+    proc:feed("key_up", code)
+def has(text):
+    return string.find(table.concat(vt:all_lines(), "\n"), text, 1, true) != nil
+
+names = tools2.sound_names({assets: "/repo/assets"})
+eq(len(names) > 1500, true, "the sound list is read")
+found = false
+for n in names:
+    if n == "minecraft:entity.cat.ambient":
+        found = true
+eq(found, true, "with the full names, namespace included")
+
+typed("play sound entity.cat.amb")
+key(keys.tab)
+key(keys.enter)
+last = played[len(played)]
+eq(last != nil and last[2].name, "minecraft:entity.cat.ambient", "Tab completes a sound name without typing minecraft:")
+typed("play note bel")
+key(keys.tab)
+key(keys.enter)
+last = played[len(played)]
+eq(last != nil and last[2].instrument, "bell", "Tab completes an instrument")
+typed("play sounds cat.ambient")
+key(keys.enter)
+eq(has("minecraft:entity.cat.ambient"), true, "play sounds finds sounds by a word")
+eq(has("sounds"), true, "and counts them")
+print("done")

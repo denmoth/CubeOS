@@ -864,6 +864,9 @@ msgstr "Грати файл .dfpwm у фоні"
 msgid "Play the music disc or record floppy in a drive"
 msgstr "Грати платівку або дискету-платівку з дисковода"
 
+msgid "List the Minecraft sounds with WORD in the name (after play sound, Tab completes them)"
+msgstr "Список звуків Minecraft зі СЛОВОМ в імені (після play sound їх доповнює Tab)"
+
 msgid "Make the floppy in a drive a record: the file becomes record.dfpwm, the title its label"
 msgstr "Зробити дискету в дисководі платівкою: файл стане record.dfpwm, назва її міткою"
 
@@ -1547,6 +1550,12 @@ msgstr "Динаміки: {list}"
 
 msgid "none"
 msgstr "немає"
+
+msgid "...and {n} more: add a word to narrow it down"
+msgstr "...і ще {n}: додайте слово, щоб звузити"
+
+msgid "{n} sounds"
+msgstr "Звуків: {n}"
 
 msgid "Playing {title} (play stop stops it)"
 msgstr "Грає {title} (play stop зупинить)"

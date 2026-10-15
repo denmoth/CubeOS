@@ -663,4 +663,7 @@ T = {
 "only an administrator can make record floppies": ("делать дискеты-пластинки может только администратор", "робити дискети-платівки може лише адміністратор"),
 "no floppy in a drive": ("в дисководе нет дискеты", "у дисководі немає дискети"),
 "the floppy is too small for this file": ("файл не помещается на дискету", "файл не вміщується на дискету"),
+"List the Minecraft sounds with WORD in the name (after play sound, Tab completes them)": ("Список звуков Minecraft со СЛОВОМ в имени (после play sound их дополняет Tab)", "Список звуків Minecraft зі СЛОВОМ в імені (після play sound їх доповнює Tab)"),
+"...and {n} more: add a word to narrow it down": ("...и ещё {n}: добавьте слово, чтобы сузить", "...і ще {n}: додайте слово, щоб звузити"),
+"{n} sounds": ("Звуков: {n}", "Звуків: {n}"),
 }

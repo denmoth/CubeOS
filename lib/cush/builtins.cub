@@ -14,6 +14,8 @@ import fonts as fonts_mod
 
 # имя -> функция; описания, флаги и примеры в реестре cush.commands (справка: cush.help)
 export const table_of = {}
+# подсказки аргументов по Tab: completers[команда](sh, аргументы до слова, слово) -> список строк или nil (тогда файлы)
+export const completers = {}
 
 def add(name, fn):
     table_of[name] = fn

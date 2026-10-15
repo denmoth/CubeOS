@@ -6,6 +6,7 @@ import sha256
 import base64
 import json5
 import box
+import svc.audiod as audiod_mod
 
 flags_of = builtins.flags_of
 read_lines = builtins.read_lines
@@ -402,6 +403,58 @@ def audio_call(sh, name, op, args=nil):
         sh:eprint(name .. ": " .. sh:t(tostring(why)))
     return res
 
+# список звуков Minecraft (assets/sounds.txt, tools/gen_sounds.py): строка это chr(48 + n) (сколько символов взять у прошлого
+# имени) и остаток имени; читается один раз
+const sound_cache = {list: nil}
+export def sound_names(sh):
+    if sound_cache.list != nil:
+        return sound_cache.list
+    found = []
+    f = fs.open((sh.assets ?? "/repo/assets") .. "/sounds.txt", "r")
+    if f != nil:
+        prev = ""
+        line = f.readLine()
+        while line != nil:
+            if line != "" and string.sub(line, 1, 1) != "#":
+                nm = string.sub(prev, 1, string.byte(line, 1) - 48) .. string.sub(line, 2)
+                found[len(found) + 1] = nm
+                prev = nm
+            line = f.readLine()
+        f.close()
+    sound_cache.list = found
+    return found
+
+# имена, которые начинаются с word (без «пространства:» в слове сравнивается и имя без него), не больше limit
+def sounds_starting(sh, word, limit):
+    out = []
+    plain = string.find(word, ":", 1, true) == nil
+    for nm in sound_names(sh):
+        short = nm
+        if plain:
+            short = (string.gsub(nm, "^[^:]*:", ""))
+        if len(out) < limit and string.sub(short, 1, len(word)) == word:
+            out[len(out) + 1] = nm
+    return out
+
+const PLAY_SUBS = ["burn", "disc", "note", "sound", "sounds", "status", "stop"]
+def complete_play(sh, cargs, word):
+    if len(cargs) == 0:
+        out = []
+        for s in PLAY_SUBS:
+            if string.sub(s, 1, len(word)) == word:
+                out[len(out) + 1] = s
+        return out
+    if len(cargs) == 1 and cargs[1] == "sound":
+        return sounds_starting(sh, word, 100)
+    if len(cargs) == 1 and cargs[1] == "note":
+        out = []
+        for s in audiod_mod.INSTRUMENTS:
+            if string.sub(s, 1, len(word)) == word:
+                out[len(out) + 1] = s
+        return out
+    return nil
+builtins.completers.play = complete_play
+
 # play FILE.dfpwm | play note INSTRUMENT [PITCH] [VOLUME] | play sound NAME [VOLUME] [PITCH] | play stop | play status
 def b_play(sh, args):
     if not audio_or_fail(sh, "play"):
@@ -419,6 +472,20 @@ def b_play(sh, args):
         sh:println(st.playing and sh:t("Playing: {title}", {title: tostring(st.title)}) or sh:t("Nothing is playing."))
         sh:println(sh:t("Volume: {v}%", {v: st.volume}) .. (st.muted and ("  " .. sh:t("(muted)")) or ""))
         sh:println(sh:t("Speakers: {list}", {list: len(st.speakers) > 0 and table.concat(st.speakers, ", ") or sh:t("none")}))
+        return 0
+    if sub == "sounds":
+        want = string.lower(args[2] ?? "")
+        shown = 0
+        total = 0
+        for nm in sound_names(sh):
+            if want == "" or string.find(nm, want, 1, true) != nil:
+                total += 1
+                if shown < 200:
+                    shown += 1
+                    sh:println(nm)
+        if total > shown:
+            sh:println(sh:t("...and {n} more: add a word to narrow it down", {n: total - shown}))
+        sh:println(sh:t("{n} sounds", {n: total}))
         return 0
     if sub == "disc":
         r = audio_call(sh, "play", "disc", {drive: args[2]})

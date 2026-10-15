@@ -102,6 +102,7 @@ export class Shell:
         self.account = o.account
         self.keyboard = o.keyboard
         self.audio = o.audio
+        self.assets = o.assets
         self.net = o.net
         # log(level, text): запись в журнал системы без ожидания (ошибки команд и самой оболочки), nil вне сессии
         self.log = o.log
@@ -456,6 +457,25 @@ export class Shell:
                     seen[nm] = true
                     out[len(out) + 1] = {insert: nm, label: nm, color: "5"}
             return out, wlen
+        # своя подсказка команды (play sound, play note...): слова текущей команды до курсора
+        words = []
+        i = len(toks)
+        while i >= 1 and toks[i].kind != "op":
+            if toks[i].kind == "word":
+                table.insert(words, 1, toks[i].raw)
+            i -= 1
+        if word != "" and len(words) > 0:
+            table.remove(words)
+        comp = len(words) > 0 and builtins.completers[words[1]] or nil
+        if comp != nil:
+            cargs = []
+            for j in range[2, len(words)]:
+                cargs[len(cargs) + 1] = words[j]
+            list = comp(self, cargs, word)
+            if list != nil and len(list) > 0:
+                for item in list:
+                    out[len(out) + 1] = {insert: item, label: item, color: "0"}
+                return out, wlen
         dirpart = string.match(word, "^(.*/)") ?? ""
         prefix = string.sub(word, string.len(dirpart) + 1)
         base = self:resolve(dirpart == "" and "" or dirpart)
