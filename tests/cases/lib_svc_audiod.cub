@@ -28,10 +28,62 @@ speaker.playNote = play_note
 speaker.playSound = play_sound
 speaker.playAudio = play_audio
 speaker.stop = () => nil
+# дисководы: bottom с пластинкой Minecraft, back с дискетой (точка монтирования disk)
+record = {played: 0, stopped: 0}
+rec_drive = {}
+rec_drive.isDiskPresent = () => true
+rec_drive.hasAudio = () => true
+rec_drive.getAudioTitle = () => "C418 - cat"
+def rec_play():
+    record.played += 1
+rec_drive.playAudio = rec_play
+def rec_stop():
+    record.stopped += 1
+rec_drive.stopAudio = rec_stop
+floppy = {label: nil, present: true}
+fl_drive = {}
+fl_drive.isDiskPresent = () => floppy.present
+fl_drive.hasAudio = () => false
+fl_drive.getMountPath = () => "disk"
+fl_drive.getDiskLabel = () => floppy.label
+def set_label(l):
+    floppy.label = l
+fl_drive.setDiskLabel = set_label
+fl_drive.stopAudio = () => nil
+files = {}
+ffs = {}
+ffs.exists = (p) => files[p] != nil
+def list_files(dir):
+    out = []
+    for k, v in files:
+        if string.sub(k, 1, len(dir) + 1) == dir .. "/":
+            out[len(out) + 1] = string.sub(k, len(dir) + 2)
+    return out
+ffs.list = list_files
+ffs.getSize = (p) => len(files[p] ?? "")
+ffs.getFreeSpace = (p) => 30000
+def open_file(p, mode):
+    h = {}
+    if string.sub(mode, 1, 1) == "r":
+        h.readAll = () => files[p]
+    else:
+        buf = {text: ""}
+        def wr(t):
+            buf.text = buf.text .. t
+        h.write = wr
+        def cl():
+            files[p] = buf.text
+        h.close = cl
+        return h
+    h.close = () => nil
+    return h
+ffs.open = open_file
 per = {}
-per.getNames = () => ["left", "top"]
-per.getType = (n) => n == "left" and "speaker" or "monitor"
-per.wrap = (n) => n == "left" and speaker or nil
+per.getNames = () => ["left", "top", "bottom", "back"]
+TYPES = {left: "speaker", top: "monitor", bottom: "drive", back: "drive"}
+DEVS = {left: speaker, bottom: rec_drive, back: fl_drive}
+per.getType = (n) => TYPES[n]
+per.wrap = (n) => DEVS[n]
 
 fsys = cfs.new({})
 fsys:mount("/", cfs.memory())
@@ -43,7 +95,7 @@ view = cfs.view(fsys, sub, {})
 def make_decoder():
     return (chunk) => [1, 2, 3, string.len(chunk)]
 k = kernel.new({clock: () => 0})
-k:spawn(audiod.main, {peripheral: per, view: view, decoder: make_decoder}, {name: "audiod", subject: sub})
+k:spawn(audiod.main, {peripheral: per, view: view, decoder: make_decoder, fs: ffs}, {name: "audiod", subject: sub})
 for i in range[1, 5]:
     k:run_ready()
 
@@ -85,6 +137,29 @@ call("volume", {value: 80}, "v")
 eq(string.find(fsys:read_file(nil, "/cubeos/sys/cfg/audio.conf"), "80", 1, true) != nil, true, "the volume is saved")
 r = call("volume", {value: 300}, "v2")
 eq(string.find(tostring(r[2]), "0 to 100", 1, true) != nil, true, "the volume is 0 to 100")
+# пластинки
+r = call("disc", nil, "disc")
+eq(r[1] != nil and r[1].title, "C418 - cat", "play disc plays the Minecraft record in the first drive")
+eq(record.played, 1, "the drive plays it itself")
+call("stop", nil, "stop2")
+eq(record.stopped > 0, true, "play stop stops the record too")
+r = call("disc", {drive: "back"}, "nofl")
+eq(string.find(tostring(r[2]), "no music disc", 1, true) != nil, true, "an empty floppy is not a record")
+r = call("burn", {data: string.rep("y", 40000), title: "Big"}, "big")
+eq(string.find(tostring(r[2]), "too small", 1, true) != nil, true, "a file bigger than the floppy is refused")
+eq(call("burn", {data: "abc", title: "My song"}, "burn")[1], true, "burn makes a record floppy")
+eq([files["disk/record.dfpwm"], floppy.label], ["abc", "My song"], "record.dfpwm and the label")
+# динамик занят: музыка не кончится мгновенно, пока проверяем
+full.left = 3
+TYPES.bottom = nil
+k:feed("disk", "back")
+for i in range[1, 30]:
+    k:run_ready()
+eq(call("status", nil, "st3")[1].title, "My song", "inserting the record floppy plays it by itself")
+k:feed("disk_eject", "back")
+for i in range[1, 10]:
+    k:run_ready()
+eq(call("status", nil, "st4")[1].playing, false, "taking it out stops the music")
 per.getNames = () => []
 r = call("note", {instrument: "harp"}, "none")
 eq(string.find(tostring(r[2]), "no speaker", 1, true) != nil, true, "no speaker: a clear error")

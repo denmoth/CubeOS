@@ -408,7 +408,7 @@ def b_play(sh, args):
         return 1
     sub = args[1]
     if sub == nil:
-        sh:eprint("usage: play FILE.dfpwm | note INSTRUMENT [PITCH] [VOLUME] | sound NAME [VOLUME] [PITCH] | stop | status")
+        sh:eprint("usage: play FILE.dfpwm | disc | burn FILE [TITLE] | note INSTRUMENT [PITCH] [VOLUME] | sound NAME [VOLUME] [PITCH] | stop | status")
         return 2
     if sub == "stop":
         return audio_call(sh, "play", "stop") != nil and 0 or 1
@@ -419,6 +419,24 @@ def b_play(sh, args):
         sh:println(st.playing and sh:t("Playing: {title}", {title: tostring(st.title)}) or sh:t("Nothing is playing."))
         sh:println(sh:t("Volume: {v}%", {v: st.volume}) .. (st.muted and ("  " .. sh:t("(muted)")) or ""))
         sh:println(sh:t("Speakers: {list}", {list: len(st.speakers) > 0 and table.concat(st.speakers, ", ") or sh:t("none")}))
+        return 0
+    if sub == "disc":
+        r = audio_call(sh, "play", "disc", {drive: args[2]})
+        if r == nil:
+            return 1
+        sh:println(sh:t("Playing {title} (play stop stops it)", {title: tostring(r.title)}))
+        return 0
+    if sub == "burn":
+        if args[2] == nil:
+            sh:eprint("usage: play burn FILE.dfpwm [TITLE]")
+            return 2
+        data = read_all(sh, "play", args[2])
+        if data == nil:
+            return 1
+        title = args[3] ?? string.gsub(args[2], "^.*/", "")
+        if audio_call(sh, "play", "burn", {data: data, title: title}) == nil:
+            return 1
+        sh:println(sh:t("The floppy is now the record {title}: insert it into a drive and it plays.", {title: title}))
         return 0
     if sub == "note":
         return audio_call(sh, "play", "note", {instrument: args[2], pitch: tonumber(args[3]), volume: tonumber(args[4])}) != nil and 0 or 1

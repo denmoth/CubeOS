@@ -176,9 +176,10 @@ export const COMMANDS = {
         flags: [["-m", "Also list what each device can do (its methods)"]], examples: [], see: ["df", "fetch"]},
     uname: {cat: "system", summary: "System name and version", usage: "uname [-a]", about: "Prints the system name.",
         flags: [["-a", "Everything: version, CC version and computer number"]], examples: [], see: ["fetch"]},
-    play: {cat: "system", summary: "Play music, notes and sounds", usage: "play FILE | note INSTRUMENT [PITCH] [VOLUME] | sound NAME | stop | status",
+    play: {cat: "system", summary: "Play music, notes and sounds", usage: "play FILE | disc | burn FILE [TITLE] | note INSTRUMENT [PITCH] [VOLUME] | sound NAME | stop | status",
         about: "Plays through every speaker attached to the computer. Music must be DFPWM (.dfpwm files, the CC audio format); notes use the note block instruments (harp, bass, bell, flute, chime, guitar, pling...), pitch 0 to 24; sounds are Minecraft sound names.",
-        flags: [["FILE", "Play a .dfpwm file in the background"], ["note", "One note: instrument, pitch 0-24, volume 0-3"],
+        flags: [["FILE", "Play a .dfpwm file in the background"], ["disc", "Play the music disc or record floppy in a drive"],
+            ["burn FILE [TITLE]", "Make the floppy in a drive a record: the file becomes record.dfpwm, the title its label"], ["note", "One note: instrument, pitch 0-24, volume 0-3"],
             ["sound", "A Minecraft sound, for example minecraft:entity.cat.ambient"], ["stop", "Stop the music"], ["status", "What is playing, volume, speakers"]],
         examples: [["play song.dfpwm", "Music"], ["play note bell 12", "One bell note"]], see: ["volume"]},
     volume: {cat: "system", summary: "Sound volume", usage: "volume [0-100]", about: "Shows or sets the volume of everything the computer plays: 100 is the loudest a speaker can play, fractions like 37.5 work.",
@@ -350,4 +351,5 @@ export const MESSAGES = ["wrong password", "too many attempts, wait", "needs adm
     "{host} has no shared folder {share} (net shares {host} lists them)", "network folders are mounted inside /cubeos/net", "already mounted: {point}",
     "not a network folder: {point}", "this computer is not waiting for pairing (run net pair on it first)", "pairing works only over a wired modem", "no pairing in progress",
     "wrong pairing code", "this computer is not paired with you", "shared folders work only over a wired modem", "refused",
-    "nothing to play", "the volume is 0 to 100"]
+    "nothing to play", "the volume is 0 to 100", "no music disc or record floppy in a drive",
+    "only an administrator can make record floppies", "no floppy in a drive", "the floppy is too small for this file"]

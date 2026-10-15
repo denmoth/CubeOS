@@ -656,4 +656,11 @@ T = {
 "this computer is not paired with you": ("этот компьютер не сопряжён с вами", "цей комп'ютер не сполучений з вами"),
 "shared folders work only over a wired modem": ("общие папки работают только через проводной модем", "спільні теки працюють лише через дротовий модем"),
 "refused": ("отказано", "відмовлено"),
+"Play the music disc or record floppy in a drive": ("Играть пластинку или дискету-пластинку из дисковода", "Грати платівку або дискету-платівку з дисковода"),
+"Make the floppy in a drive a record: the file becomes record.dfpwm, the title its label": ("Сделать дискету в дисководе пластинкой: файл станет record.dfpwm, название её меткой", "Зробити дискету в дисководі платівкою: файл стане record.dfpwm, назва її міткою"),
+"The floppy is now the record {title}: insert it into a drive and it plays.": ("Дискета теперь пластинка {title}: вставьте её в дисковод, и она заиграет.", "Дискета тепер платівка {title}: вставте її в дисковод, і вона заграє."),
+"no music disc or record floppy in a drive": ("в дисководе нет пластинки или дискеты-пластинки", "у дисководі немає платівки чи дискети-платівки"),
+"only an administrator can make record floppies": ("делать дискеты-пластинки может только администратор", "робити дискети-платівки може лише адміністратор"),
+"no floppy in a drive": ("в дисководе нет дискеты", "у дисководі немає дискети"),
+"the floppy is too small for this file": ("файл не помещается на дискету", "файл не вміщується на дискету"),
 }

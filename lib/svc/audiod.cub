@@ -6,7 +6,12 @@
 #   volume {value (0..100)} -> громкость    (без value: текущая)
 # Громкость в /cubeos/sys/cfg/audio.conf ({volume: 100, muted: false}) умножается на громкость каждого звука.
 # DFPWM декодируется декодером ROM CC (rom/modules/main/cc/audio/dfpwm.lua, читается во время работы).
-# main(sys, args): args.peripheral (для тестов), args.view, args.decoder (для тестов: функция make_decoder).
+#   disc {drive?} -> {title, kind}          пластинка Minecraft в дисководе (её играет сам дисковод) или дискета-пластинка
+#                                           (record.dfpwm, иначе первый .dfpwm в корне дискеты; играют динамики)
+#   burn {data, title, drive?}              сделать дискету пластинкой: record.dfpwm и метка = название (только администратор)
+# Вставили пластинку или дискету с record.dfpwm: играет сама (audio.conf: autoplay, по умолчанию true); вынули: замолкает.
+# main(sys, args): args.peripheral (для тестов), args.view, args.decoder (для тестов: функция make_decoder), args.fs (для тестов),
+#   args.system (контекст загрузки: ядро и учётные записи для проверки администратора).
 
 import json5
 import svc.rpc as rpc
@@ -27,12 +32,23 @@ export def main(sys, args):
     a = args ?? {}
     per = a.peripheral ?? peripheral
     view = a.view ?? sys.view()
-    state = {volume: 100, muted: false, playing: false, title: nil, worker: nil, stop: false}
+    fsapi = a.fs ?? fs
+    kernel = a.system != nil and a.system.kernel or nil
+    state = {volume: 100, muted: false, playing: false, title: nil, worker: nil, stop: false, drive: nil, autoplay: true}
     if view != nil and view:exists(CONF_PATH):
         ok, data = pcall(() => json5.parse(view:read(CONF_PATH)))
         if ok and type(data) == "table":
             state.volume = data.volume ?? 100
             state.muted = data.muted == true
+            state.autoplay = data.autoplay != false
+
+    def drives():
+        out = []
+        for name in per.getNames():
+            if per.getType(name) == "drive":
+                out[len(out) + 1] = name
+        table.sort(out)
+        return out
 
     def speakers():
         out = []
@@ -113,10 +129,15 @@ export def main(sys, args):
             state.worker = nil
         state.playing = false
         state.title = nil
+        state.drive = nil
         for name in speakers():
             sp = per.wrap(name)
             if sp != nil and sp.stop != nil:
                 pcall(() => sp.stop())
+        for name in drives():
+            dr = per.wrap(name)
+            if dr != nil and dr.stopAudio != nil:
+                pcall(() => dr.stopAudio())
         return true
     handlers.stop = stop_
 
@@ -134,6 +155,110 @@ export def main(sys, args):
         return true
     handlers.play = play
 
+    def is_admin(sender):
+        p = kernel != nil and kernel.procs[sender] or nil
+        sub = p != nil and p.subject or nil
+        if sub == nil:
+            return true
+        for r in sub.roles ?? []:
+            if r == "admin" or r == "system":
+                return true
+        auth = a.system != nil and a.system.auth or nil
+        return auth != nil and auth:is_admin(sub.name)
+
+    # что в дисководе: пластинка Minecraft или дискета-пластинка; only_record: только дискета с record.dfpwm (для автозапуска)
+    def disc_in(name, only_record=false):
+        dr = per.wrap(name)
+        if dr == nil:
+            return nil
+        okp, present = pcall(() => dr.isDiskPresent())
+        if not okp or not present:
+            return nil
+        oka, audio = pcall(() => dr.hasAudio())
+        if oka and audio:
+            okt, title = pcall(() => dr.getAudioTitle())
+            return {kind: "record", drive: name, title: okt and title or "record"}
+        okm, path = pcall(() => dr.getMountPath())
+        if not okm or path == nil:
+            return nil
+        file = nil
+        if fsapi.exists(path .. "/record.dfpwm"):
+            file = "record.dfpwm"
+        elif not only_record:
+            names = fsapi.list(path)
+            table.sort(names)
+            for n in names:
+                if file == nil and string.sub(string.lower(n), -6) == ".dfpwm":
+                    file = n
+        if file == nil:
+            return nil
+        okl, label = pcall(() => dr.getDiskLabel())
+        return {kind: "floppy", drive: name, path: path .. "/" .. file, title: (okl and label) or file}
+
+    def start_disc(d):
+        stop_()
+        if d.kind == "record":
+            per.wrap(d.drive).playAudio()
+            state.playing = true
+            state.title = d.title
+        else:
+            f = fsapi.open(d.path, "rb")
+            data = f.readAll()
+            f.close()
+            play({data: data, title: d.title})
+        state.drive = d.drive
+
+    def disc(q, sender):
+        o = q ?? {}
+        found = nil
+        for name in drives():
+            if found == nil and (o.drive == nil or o.drive == name):
+                found = disc_in(name)
+        if found == nil:
+            raise Error("no music disc or record floppy in a drive")
+        start_disc(found)
+        return {title: found.title, kind: found.kind}
+    handlers.disc = disc
+
+    def burn(q, sender):
+        o = q ?? {}
+        if not is_admin(sender):
+            raise Error("only an administrator can make record floppies")
+        if type(o.data) != "string" or o.data == "":
+            raise Error("nothing to play")
+        target = nil
+        for name in drives():
+            dr = per.wrap(name)
+            okm, path = pcall(() => dr.getMountPath())
+            if target == nil and (o.drive == nil or o.drive == name) and okm and path != nil:
+                target = {drive: dr, path: path}
+        if target == nil:
+            raise Error("no floppy in a drive")
+        file = target.path .. "/record.dfpwm"
+        old = fsapi.exists(file) and fsapi.getSize(file) or 0
+        if fsapi.getFreeSpace(target.path) + old < len(o.data) + 512:
+            raise Error("the floppy is too small for this file")
+        f = fsapi.open(file, "wb")
+        f.write(o.data)
+        f.close()
+        if o.title != nil and o.title != "":
+            pcall(() => target.drive.setDiskLabel(string.sub(tostring(o.title), 1, 32)))
+        sys.log("info", "made a record floppy: " .. tostring(o.title ?? "record"))
+        return true
+    handlers.burn = burn
+
+    # вставили или вынули диск: пластинка и дискета-пластинка играют сами, вынули то, что играет, тишина
+    def on_disk(msg):
+        side = msg.args[1]
+        if msg.event == "disk" and state.autoplay:
+            d = disc_in(side, true)
+            if d != nil and (d.kind == "record" or len(speakers()) > 0):
+                ok, err = pcall(() => start_disc(d))
+                if not ok:
+                    sys.log("warn", "audio: cannot play the disc: " .. tostring(err))
+        elif msg.event == "disk_eject" and state.drive == side:
+            stop_()
+
     handlers.status = (q, sender) => {playing: state.playing, title: state.title, volume: state.volume, muted: state.muted, speakers: speakers()}
 
     def volume(q, sender):
@@ -150,5 +275,12 @@ export def main(sys, args):
         return state.volume
     handlers.volume = volume
 
+    me = sys.getpid()
+    def watcher(wsys, wargs):
+        while true:
+            name, side = wsys.wait_event(["disk", "disk_eject"])
+            wsys.send(me, {event: name, args: [side]})
+    sys.spawn(watcher, [], {name: "audiod-events"})
+
     sys.register("audiod")
-    rpc.serve(sys, handlers)
+    rpc.serve(sys, handlers, {on_message: on_disk})

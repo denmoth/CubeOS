@@ -861,6 +861,12 @@ msgstr "Усе: версія, версія CC і номер комп'ютера"
 msgid "Play a .dfpwm file in the background"
 msgstr "Грати файл .dfpwm у фоні"
 
+msgid "Play the music disc or record floppy in a drive"
+msgstr "Грати платівку або дискету-платівку з дисковода"
+
+msgid "Make the floppy in a drive a record: the file becomes record.dfpwm, the title its label"
+msgstr "Зробити дискету в дисководі платівкою: файл стане record.dfpwm, назва її міткою"
+
 msgid "One note: instrument, pitch 0-24, volume 0-3"
 msgstr "Одна нота: інструмент, висота 0-24, гучність 0-3"
 
@@ -1305,6 +1311,18 @@ msgstr "нічого грати"
 msgid "the volume is 0 to 100"
 msgstr "гучність від 0 до 100"
 
+msgid "no music disc or record floppy in a drive"
+msgstr "у дисководі немає платівки чи дискети-платівки"
+
+msgid "only an administrator can make record floppies"
+msgstr "робити дискети-платівки може лише адміністратор"
+
+msgid "no floppy in a drive"
+msgstr "у дисководі немає дискети"
+
+msgid "the floppy is too small for this file"
+msgstr "файл не вміщується на дискету"
+
 msgid "no language package {lang} (installed: {list})"
 msgstr "немає мовного пакета {lang} (встановлено: {list})"
 
@@ -1532,6 +1550,9 @@ msgstr "немає"
 
 msgid "Playing {title} (play stop stops it)"
 msgstr "Грає {title} (play stop зупинить)"
+
+msgid "The floppy is now the record {title}: insert it into a drive and it plays."
+msgstr "Дискета тепер платівка {title}: вставте її в дисковод, і вона заграє."
 
 msgid "New file"
 msgstr "Новий файл"
