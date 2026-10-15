@@ -1,0 +1,25 @@
+import t
+import term.vterm as vterm
+import compat.env as compat_env
+eq = t.eq
+
+# обычная загрузка ROM даёт colors и textutils, ошибок загрузки нет
+vt2 = vterm.new(30, 8, {history: 10})
+env2 = compat_env.new({vterm: vt2})
+eq(env2.api_errors, nil, "no ROM library failed to load")
+eq([env2.colors != nil, env2.textutils != nil, env2.colors.red], [true, true, 16384], "the real ROM libraries load, colors.red is 16384")
+
+# печать ошибки не падает, даже если colors ещё нет
+import compat.bios as bios
+import compat.vararg as va
+vt3 = vterm.new(30, 8, {history: 10})
+env3 = compat_env.new({vterm: vt3})
+env3.colors = nil
+ok, err = pcall(() => bios.print_error(env3, va.pack("something broke"), 1))
+eq(ok, true, "printing an error without colors does not crash")
+found = false
+for y in range[1, 8]:
+    if string.find(vt3:line_text(y), "something broke", 1, true) != nil:
+        found = true
+eq(found, true, "and the message reaches the screen")
+print("done")

@@ -77,7 +77,8 @@ export def print_error(env, args, count):
     color = term.isColor()
     if color:
         old = term.getTextColor()
-        term.setTextColor(env.colors.red)
+        # colors может быть ещё не загружен (ошибка при загрузке самой colors): 16384 это colors.red
+        term.setTextColor(env.colors != nil and env.colors.red or 16384)
     print_text(env, args, count)
     if color:
         term.setTextColor(old)
@@ -317,6 +318,13 @@ export def run_program(env, run_env, path, args):
         return false
     return true
 
+# ошибка загрузки API: в env.api_errors (по ним оболочка и сессия пишут журнал) и на экран, как это делает CC
+def _api_failed(env, name, err):
+    env.api_errors = env.api_errors ?? []
+    env.api_errors[len(env.api_errors) + 1] = name .. ": " .. tostring(err)
+    if err != nil:
+        print_error(env, va.pack(err), 1)
+
 # os.loadAPI: выполняет файл в своей среде (чтение из env), переменные файла становятся таблицей env[имя файла без .lua]
 export def load_api(env, path):
     name = env.fs.getName(path)
@@ -327,12 +335,11 @@ export def load_api(env, path):
     setmetatable(api_env, {__index: env})
     fn, err = load_file(env, path, "t", api_env)
     if fn == nil:
-        if err != nil:
-            print_error(env, va.pack(err), 1)
+        _api_failed(env, name, err)
         return false
     ok, perr = pcall(fn)
     if not ok:
-        print_error(env, va.pack(perr), 1)
+        _api_failed(env, name, perr)
         return false
     api = {}
     for k, v in api_env:

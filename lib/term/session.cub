@@ -43,6 +43,11 @@ export def program(session, opts=nil):
         tv = view_mod.new(vt, {width: "fill", height: "fill"})
         env = env_mod.new({vterm: vt, fs: cfs.legacy_fs(view)})
 
+        # ROM-библиотеки, которые не загрузились (иначе программы потом падают с пустым colors и подобным), в журнал
+        for e in (env.api_errors ?? []):
+            sys.log("error", "terminal: ROM library failed to load: " .. e)
+        sys.log("info", "terminal started for " .. tostring(session.user))
+
         t = timeclient.new(sys)
 
         # Оболочка и программы работают в сопрограмме compat.proc, а системные вызовы ядра (sys.send, receive...) можно делать только из
