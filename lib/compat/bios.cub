@@ -322,7 +322,9 @@ export def run_program(env, run_env, path, args):
 def _api_failed(env, name, err):
     env.api_errors = env.api_errors ?? []
     env.api_errors[len(env.api_errors) + 1] = name .. ": " .. tostring(err)
-    if err != nil:
+    # на экран только если об этом просят (env.show_api_errors, как делает os.loadAPI в CC); система пишет их в журнал, а API модов, которых
+    # нет на этом компьютере (aero, sublevel), не должны засорять терминал при каждом входе
+    if err != nil and env.show_api_errors == true:
         print_error(env, va.pack(err), 1)
 
 # os.loadAPI: выполняет файл в своей среде (чтение из env), переменные файла становятся таблицей env[имя файла без .lua]
