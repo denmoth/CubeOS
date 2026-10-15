@@ -226,6 +226,10 @@ export class TermView(widget.Widget):
                 if a == keys.insert:
                     self:paste()
                     return true
+            # Ctrl+стрелки вверх и вниз: прокрутка вывода на строку (D223)
+            if self.mods.ctrl and not self.mods.shift and (a == keys.up or a == keys.down):
+                self:scroll_by(a == keys.up and 1 or -1)
+                return true
             if self.mods.ctrl and a == keys.insert:
                 self:copy_selection()
                 return true

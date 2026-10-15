@@ -60,6 +60,9 @@ export class Editor:
         self.line = []
         self.pos = 0
         self.anchor = nil
+        self.undo = []
+        self.redo = []
+        self.last_edit = nil
         self.hist_index = nil
         self.search = nil
         self.drawn_rows = 1
@@ -402,6 +405,7 @@ export class Editor:
             self:copy_selection()
             return nil
         if name == "paste":
+            self:_remember(self:_snapshot(), "paste")
             first = string.match(a, "^[^\n]*")
             self:_insert(first)
             self:redraw()
@@ -413,6 +417,8 @@ export class Editor:
                 self:_search_update()
                 self:redraw()
                 return nil
+            # буквы одного слова отменяются вместе, пробел начинает новую правку
+            self:_remember(self:_snapshot(), a == " " and "space" or "char")
             self:_insert(a)
             self.hist_index = nil
             self.tab_count = 0
@@ -437,11 +443,57 @@ export class Editor:
         self:redraw_final()
         return "line", self:text()
 
+    # отмена и возврат правок строки (Ctrl+Z, Ctrl+Y; D223): снимок до правки, подряд набранные буквы одного слова это одна правка
+    def _snapshot(self):
+        copy_ = []
+        for ch in self.line:
+            copy_[len(copy_) + 1] = ch
+        return {line: copy_, pos: self.pos}
+
+    def _remember(self, before, kind):
+        if self.undo == nil:
+            self.undo = []
+            self.redo = []
+        if kind == "char" and self.last_edit == "char":
+            return
+        self.undo[len(self.undo) + 1] = before
+        if len(self.undo) > 100:
+            table.remove(self.undo, 1)
+        self.redo = []
+        self.last_edit = kind
+
+    def _restore(self, from_, to):
+        if from_ == nil or len(from_) == 0:
+            return
+        to[len(to) + 1] = self:_snapshot()
+        snap = table.remove(from_)
+        self.line = snap.line
+        self.pos = snap.pos
+        self.anchor = nil
+        self.last_edit = nil
+
+    def _changed(self, before):
+        if len(before.line) != len(self.line):
+            return true
+        for i, ch in self.line:
+            if before.line[i] != ch:
+                return true
+        return false
+
     def _key(self, code):
         shift = self.mods.shift
         ctrl = self.mods.ctrl
         if self.search != nil:
             return self:_search_key(code)
+        undoing = ctrl and (code == keys.z or code == keys.y)
+        before = self:_snapshot()
+        # Enter возвращает два значения ("line", текст): оба отдаются дальше
+        res, extra = self:_key_inner(code, shift, ctrl)
+        if not undoing and self.active and self:_changed(before):
+            self:_remember(before, "key")
+        return res, extra
+
+    def _key_inner(self, code, shift, ctrl):
         if code == keys.enter or code == keys.numPadEnter:
             return self:_finish()
         if ctrl and code == keys.c:
@@ -482,7 +534,11 @@ export class Editor:
                 self:_move(self:_word_right(self.pos), shift)
             else:
                 self:_move(self.pos + 1, shift)
-        elif code == keys.home or (ctrl and code == keys.a):
+        elif ctrl and code == keys.a:
+            # выделить всё (D223); в начало строки Home
+            self.anchor = 0
+            self.pos = len(self.line)
+        elif code == keys.home:
             self:_move(0, shift)
         elif code == keys["end"] or (ctrl and code == keys.e):
             if self.pos == len(self.line) and not shift and self:_ghost() != nil:
@@ -495,6 +551,30 @@ export class Editor:
         elif code == keys.down:
             if not shift:
                 self:_history_move(1)
+        elif ctrl and code == keys.z:
+            if self.redo == nil:
+                self.redo = []
+            self:_restore(self.undo, self.redo)
+        elif ctrl and code == keys.y:
+            if self.undo == nil:
+                self.undo = []
+            self:_restore(self.redo, self.undo)
+        elif ctrl and code == keys.x:
+            # вырезать выделение
+            if self:copy_selection():
+                self:_delete_selection()
+        elif ctrl and code == keys.backspace:
+            # слово влево (или выделение)
+            if not self:_delete_selection():
+                to = self:_word_left(self.pos)
+                if to < self.pos:
+                    self:_delete_range(to + 1, self.pos)
+                    self.pos = to
+        elif ctrl and code == keys.delete:
+            if not self:_delete_selection():
+                to = self:_word_right(self.pos)
+                if to > self.pos:
+                    self:_delete_range(self.pos + 1, to)
         elif code == keys.backspace:
             if not self:_delete_selection() and self.pos > 0:
                 self:_delete_range(self.pos, self.pos)

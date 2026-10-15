@@ -1,0 +1,97 @@
+import t
+import term.vterm as vterm
+import term.view as view_mod
+import compat.env as compat_env
+import compat.proc as compat_proc
+import cush.shell as cush
+eq = t.eq
+
+# Строка ввода по схеме Windows (D223): Ctrl+A, Ctrl+Backspace, Ctrl+Delete, Ctrl+X, Ctrl+Z/Y, Shift+Home/End, Ctrl+Shift+стрелки.
+# Проверка через вывод: строку запускаем как echo и смотрим, что напечаталось.
+
+HIST = "/repo/build/cush_keys_history"
+if fs.exists(HIST):
+    fs.delete(HIST)
+vt = vterm.new(60, 19, {history: 200})
+env = compat_env.new({vterm: vt})
+env.cush_opts = {history_path: HIST, greeting: false, user: "tester", host: "cube"}
+proc = compat_proc.new(env, "cush", [], {name: "cush", main: cush.main})
+proc:start()
+
+def chars_(text):
+    for i in range[1, string.len(text)]:
+        proc:feed("char", string.sub(text, i, i))
+
+def key(code, mods=nil):
+    for m in (mods ?? []):
+        proc:feed("key", m, false)
+    proc:feed("key", code, false)
+    proc:feed("key_up", code)
+    for m in (mods ?? []):
+        proc:feed("key_up", m)
+
+CTRL = [keys.leftCtrl]
+SHIFT = [keys.leftShift]
+def enter():
+    key(keys.enter)
+
+def last_output():
+    lines = vt:all_lines()
+    # последняя непустая строка без приглашения
+    for i in range[len(lines), 1] step -1:
+        l = lines[i]
+        if l != "" and string.find(l, "$", 1, true) == nil:
+            return l
+    return ""
+
+chars_("echo one two")
+key(keys.backspace, CTRL)
+enter()
+eq(last_output(), "one", "Ctrl+Backspace deletes the word to the left")
+
+chars_("echo one two three")
+key(keys.left, CTRL)
+key(keys.left, CTRL)
+key(keys.delete, CTRL)
+enter()
+eq(last_output(), "one three", "Ctrl+Delete deletes the word to the right")
+
+chars_("echo keep")
+key(keys.backspace, CTRL)
+key(keys.z, CTRL)
+enter()
+eq(last_output(), "keep", "Ctrl+Z undoes the last edit")
+
+chars_("echo a b")
+key(keys.backspace, CTRL)
+key(keys.z, CTRL)
+key(keys.y, CTRL)
+chars_("c")
+enter()
+eq(last_output(), "a c", "Ctrl+Y redoes it")
+
+chars_("rm everything")
+key(keys.a, CTRL)
+chars_("echo replaced")
+enter()
+eq(last_output(), "replaced", "Ctrl+A selects all, typing replaces it")
+
+chars_("echo cut me")
+key(keys.home, SHIFT)
+key(keys.x, CTRL)
+eq(view_mod.clipboard.text, "echo cut me", "Shift+Home selects to the start, Ctrl+X cuts it")
+chars_("echo empty")
+enter()
+eq(last_output(), "empty", "the cut text is gone from the line")
+
+chars_("echo one two")
+key(keys.left, [keys.leftCtrl, keys.leftShift])
+key(keys.c, [keys.leftCtrl, keys.leftShift])
+proc:feed("cubeos_copy")
+eq(view_mod.clipboard.text, "two", "Ctrl+Shift+Left selects a word")
+key(keys["end"])
+enter()
+eq(last_output(), "one two", "the line is untouched by copying")
+
+fs.delete(HIST)
+print("done")

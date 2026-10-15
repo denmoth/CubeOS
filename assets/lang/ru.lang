@@ -579,6 +579,15 @@ msgstr "копировать выделенное, иначе остановит
 msgid "copy / paste"
 msgstr "копировать / вставить"
 
+msgid "select the whole line / cut the selection"
+msgstr "выделить всю строку / вырезать выделенное"
+
+msgid "undo / redo in the line"
+msgstr "отменить / вернуть правку в строке"
+
+msgid "delete a word (Ctrl+Delete: the word to the right)"
+msgstr "удалить слово (Ctrl+Delete: слово справа)"
+
 msgid "stop the program; hold it to kill a stuck program or restart the shell"
 msgstr "остановить программу; удержание убивает зависшую программу или перезапускает оболочку"
 
