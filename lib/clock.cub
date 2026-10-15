@@ -15,40 +15,17 @@
 #   clock.patch_text(text, {tz: "UTC"})    текст time.conf с изменёнными ключами, комментарии остаются
 #   clock.zone_names(фильтр)               отсортированные имена встроенных зон
 #
-# Встроенная таблица зон: смещения и правила перехода (eu, us, au), без базы IANA. Свои зоны добавляются в conf.zones.
+#   clock.zone_info("Europe/Kyiv")         {name, cc, country, rule}; nil, если зоны нет
+#
+# Зоны: вся база IANA (lib/tzdata.cub, tools/gen_tzdata.py): для каждой зоны действующее правило POSIX TZ (смещение и летнее
+# время). Свои зоны добавляются в conf.zones: {offset: "+02:00", dst: "eu"|"us"|"au"|""} или {posix: "EET-2EEST,M3.5.0/3,M10.5.0/4"}.
 
 import std.time as stime
 import json5
+import tzdata
 
 export const DEFAULTS = {source: "utc", tz: "UTC", dst: "auto", seconds: false, format: "24h", date_format: "%Y-%m-%d",
     week_start: "monday", locale: "en", drift_ms: 2000}
-
-# [имя, стандартное смещение в минутах, правило перехода: "" нет, "eu", "us", "au"]
-const ZONE_LIST = [
-    ["UTC", 0, ""], ["GMT", 0, ""], ["Etc/UTC", 0, ""],
-    ["Europe/London", 0, "eu"], ["Europe/Dublin", 0, "eu"], ["Europe/Lisbon", 0, "eu"], ["Atlantic/Reykjavik", 0, ""],
-    ["Europe/Berlin", 60, "eu"], ["Europe/Paris", 60, "eu"], ["Europe/Madrid", 60, "eu"], ["Europe/Rome", 60, "eu"],
-    ["Europe/Warsaw", 60, "eu"], ["Europe/Prague", 60, "eu"], ["Europe/Vienna", 60, "eu"], ["Europe/Amsterdam", 60, "eu"],
-    ["Europe/Brussels", 60, "eu"], ["Europe/Zurich", 60, "eu"], ["Europe/Stockholm", 60, "eu"], ["Europe/Oslo", 60, "eu"],
-    ["Europe/Copenhagen", 60, "eu"], ["Europe/Budapest", 60, "eu"], ["Europe/Belgrade", 60, "eu"],
-    ["Europe/Kyiv", 120, "eu"], ["Europe/Kiev", 120, "eu"], ["Europe/Athens", 120, "eu"], ["Europe/Helsinki", 120, "eu"],
-    ["Europe/Bucharest", 120, "eu"], ["Europe/Sofia", 120, "eu"], ["Europe/Riga", 120, "eu"], ["Europe/Vilnius", 120, "eu"],
-    ["Europe/Tallinn", 120, "eu"], ["Europe/Chisinau", 120, "eu"], ["Europe/Kaliningrad", 120, ""],
-    ["Europe/Moscow", 180, ""], ["Europe/Minsk", 180, ""], ["Europe/Istanbul", 180, ""], ["Asia/Riyadh", 180, ""],
-    ["Europe/Samara", 240, ""], ["Asia/Dubai", 240, ""], ["Asia/Baku", 240, ""], ["Asia/Tbilisi", 240, ""],
-    ["Asia/Yekaterinburg", 300, ""], ["Asia/Tashkent", 300, ""], ["Asia/Karachi", 300, ""],
-    ["Asia/Almaty", 300, ""], ["Asia/Omsk", 360, ""], ["Asia/Dhaka", 360, ""], ["Asia/Novosibirsk", 420, ""],
-    ["Asia/Bangkok", 420, ""], ["Asia/Jakarta", 420, ""], ["Asia/Krasnoyarsk", 420, ""],
-    ["Asia/Shanghai", 480, ""], ["Asia/Singapore", 480, ""], ["Asia/Hong_Kong", 480, ""], ["Asia/Irkutsk", 480, ""],
-    ["Asia/Tokyo", 540, ""], ["Asia/Seoul", 540, ""], ["Asia/Yakutsk", 540, ""],
-    ["Australia/Sydney", 600, "au"], ["Australia/Melbourne", 600, "au"], ["Asia/Vladivostok", 600, ""],
-    ["Asia/Magadan", 660, ""], ["Asia/Kamchatka", 720, ""],
-    ["America/New_York", -300, "us"], ["America/Toronto", -300, "us"], ["America/Chicago", -360, "us"],
-    ["America/Mexico_City", -360, ""], ["America/Denver", -420, "us"], ["America/Phoenix", -420, ""],
-    ["America/Los_Angeles", -480, "us"], ["America/Vancouver", -480, "us"], ["America/Anchorage", -540, "us"],
-    ["Pacific/Honolulu", -600, ""], ["America/Sao_Paulo", -180, ""], ["America/Argentina/Buenos_Aires", -180, ""],
-    ["America/Bogota", -300, ""],
-]
 
 const MONTHS_ALL = {
     en: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
@@ -71,10 +48,6 @@ const DAYS_SHORT = {
     ru: ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"],
     uk: ["Нд", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"],
 }
-
-zone_index = {}
-for z in ZONE_LIST:
-    zone_index[string.lower(z[1])] = z
 
 # "+03:00", "-0530", "+3", "UTC+3", "GMT-02:30" -> минуты; nil, если это не смещение
 export def parse_offset(text):
@@ -139,20 +112,158 @@ export def is_dst(rule, std, utc_ms):
         return utc_ms >= start or utc_ms < stop
     return false
 
+# ------------------------------------------------------------ зоны IANA
+
+cache = {index: nil, countries: nil, names: nil}
+
+def _load():
+    if cache.index != nil:
+        return
+    index = {}
+    names = []
+    for line in string.gmatch(tzdata.ZONES, "[^\n]+"):
+        name, rule, cc = string.match(line, "^(%S+) (%d+) ?(%a*)$")
+        if name != nil:
+            index[string.lower(name)] = {name: name, rule: tzdata.RULES[tonumber(rule)], cc: cc}
+            # в списке и поиске только зоны со страной и UTC; старые имена-псевдонимы (Japan, US/Eastern) работают по точному имени
+            if cc != "" or name == "UTC":
+                names[len(names) + 1] = name
+    countries = {}
+    for line in string.gmatch(tzdata.COUNTRIES, "[^\n]+"):
+        code, title = string.match(line, "^(%a%a) (.+)$")
+        if code != nil:
+            countries[code] = title
+    for line in string.gmatch(tzdata.TRANSITIONS, "[^%c]+"):
+        name = string.match(line, "^(%S+)")
+        z = index[string.lower(name ?? "")]
+        if z != nil:
+            z.trans = []
+            for sec, off in string.gmatch(line, "(%-?%d+):(%-?%d+)"):
+                z.trans[len(z.trans) + 1] = {ms: tonumber(sec) * 1000, off: tonumber(off)}
+    cache.index = index
+    cache.countries = countries
+    cache.names = names
+
+# "2", "-1", "2:45", "25" -> минуты (знак как написан)
+def _hm(text):
+    sign, h, m = string.match(text, "^([+-]?)(%d+):?(%d*)")
+    if h == nil:
+        return nil
+    minutes = tonumber(h) * 60 + (m != "" and tonumber(m) or 0)
+    return sign == "-" and -minutes or minutes
+
+# имя зоны в правиле: «<+03>» или буквы; возвращает имя и остаток
+def _abbr(text):
+    a, rest = string.match(text, "^<([^>]*)>(.*)$")
+    if a == nil:
+        a, rest = string.match(text, "^(%a%a%a+)(.*)$")
+    return a, rest
+
+def _posix_rule(text):
+    date, at = string.match(text, "^([^/]+)/?(.*)$")
+    t = at != "" and _hm(at) or 120
+    m, w, d = string.match(date, "^M(%d+)%.(%d)%.(%d)$")
+    if m != nil:
+        return {kind: "M", m: tonumber(m), w: tonumber(w), d: tonumber(d), at: t}
+    n = string.match(date, "^J(%d+)$")
+    if n != nil:
+        return {kind: "J", n: tonumber(n), at: t}
+    n = string.match(date, "^(%d+)$")
+    if n != nil:
+        return {kind: "n", n: tonumber(n), at: t}
+    return nil
+
+# правило POSIX TZ ("EET-2EEST,M3.5.0/3,M10.5.0/4") -> {std, std_abbr, dst, dst_abbr, start, stop}: смещения в минутах к востоку
+# от UTC (в POSIX знак обратный), start/stop {kind: "M"|"J"|"n", m, w, d, n, at (минуты местного времени)}; nil, если не разобрать
+export def parse_posix(text):
+    if type(text) != "string":
+        return nil
+    abbr, rest = _abbr(text)
+    if abbr == nil:
+        return nil
+    off, rest2 = string.match(rest, "^([+-]?%d+[:%d]*)(.*)$")
+    if off == nil:
+        return nil
+    out = {std: -_hm(off), std_abbr: abbr}
+    if rest2 == "":
+        return out
+    dabbr, rest3 = _abbr(rest2)
+    if dabbr == nil:
+        return nil
+    out.dst_abbr = dabbr
+    out.dst = out.std + 60
+    doff, rest4 = string.match(rest3, "^([+-]?%d+[:%d]*)(.*)$")
+    if doff != nil:
+        out.dst = -_hm(doff)
+        rest3 = rest4
+    a, b = string.match(rest3, "^,([^,]+),([^,]+)$")
+    if a == nil:
+        return nil
+    out.start = _posix_rule(a)
+    out.stop = _posix_rule(b)
+    if out.start == nil or out.stop == nil:
+        return nil
+    return out
+
+# момент перехода (мс) в году y по местному времени со смещением off (минуты)
+def _rule_ms(r, y, off):
+    day_ms = 0
+    if r.kind == "M":
+        wd = stime.weekday(stime.from_date(y, r.m, 1))
+        day = 1 + (r.d - wd + 7) % 7 + 7 * (r.w - 1)
+        while day > _days_in_month(y, r.m):
+            day -= 7
+        day_ms = stime.from_date(y, r.m, day)
+    elif r.kind == "J":
+        n = r.n
+        if stime.is_leap_year(y) and n >= 60:
+            n += 1
+        day_ms = stime.from_date(y, 1, 1) + (n - 1) * 86400000
+    else:
+        day_ms = stime.from_date(y, 1, 1) + r.n * 86400000
+    return day_ms + r.at * 60000 - off * 60000
+
+# true, если по разобранному правилу p в момент utc_ms действует летнее время
+export def posix_dst(p, utc_ms):
+    if p == nil or p.start == nil:
+        return false
+    y = stime.to_date(utc_ms + p.std * 60000).year
+    start = _rule_ms(p.start, y, p.std)
+    stop = _rule_ms(p.stop, y, p.dst)
+    if start < stop:
+        return utc_ms >= start and utc_ms < stop
+    return utc_ms >= start or utc_ms < stop
+
+# {name, cc, country, rule} для зоны базы IANA; nil, если такой нет
+export def zone_info(name):
+    _load()
+    z = cache.index[string.lower(tostring(name))]
+    if z == nil:
+        return nil
+    return {name: z.name, cc: z.cc, country: cache.countries[z.cc], rule: z.rule, trans: z.trans}
+
 # ------------------------------------------------------------ настройки
 
-# {name, std, rule}: из conf.zones, встроенной таблицы или смещения; nil, если зоны нет
+# {name, std, rule, posix}: из conf.zones, базы IANA или смещения; nil, если зоны нет. posix: разобранное правило POSIX TZ
+# (тогда летнее время считается по нему), rule: старые правила своих зон "eu", "us", "au" или ""
 export def resolve_zone(conf):
     tz = conf.tz
     custom = (conf.zones ?? {})[tz]
     if custom != nil:
+        if custom.posix != nil:
+            p = parse_posix(custom.posix)
+            if p == nil:
+                return nil
+            return {name: tz, std: p.std, rule: "", posix: p}
         off = parse_offset(custom.offset)
         if off == nil:
             return nil
         return {name: tz, std: off, rule: custom.dst ?? ""}
-    z = zone_index[string.lower(tostring(tz))]
-    if z != nil:
-        return {name: z[1], std: z[2], rule: z[3]}
+    info = zone_info(tz)
+    if info != nil:
+        p = parse_posix(info.rule)
+        if p != nil:
+            return {name: info.name, std: p.std, rule: "", posix: p, trans: info.trans}
     off = parse_offset(tz)
     if off != nil:
         return {name: "UTC" .. format_offset(off), std: off, rule: ""}
@@ -238,24 +349,48 @@ export class Clock:
         return self.src.utc_ms()
 
     # смещение и признак летнего времени в момент ms
+    # зона по настройкам (разбор правила запоминается, пока не сменились tz и zones)
+    def _zone(self):
+        if self.zone_cache == nil or self.zone_cache.tz != self.conf.tz or self.zone_cache.zones != self.conf.zones:
+            self.zone_cache = {tz: self.conf.tz, zones: self.conf.zones, zone: resolve_zone(self.conf)}
+        return self.zone_cache.zone
+
     def _offset(self, ms):
-        z = resolve_zone(self.conf)
+        z = self:_zone()
         std = z.std
         dst = false
+        # явные переходы на будущее (Марокко и др.): до последнего из них смещение берётся из списка
+        if z.trans != nil and self.conf.dst == "auto" and ms >= z.trans[1].ms and ms < z.trans[len(z.trans)].ms:
+            off = z.trans[1].off
+            for tr in z.trans:
+                if tr.ms <= ms:
+                    off = tr.off
+            return off, off > z.std
         if self.conf.dst == "auto":
-            dst = is_dst(z.rule, std, ms)
-            if dst:
-                std += 60
+            if z.posix != nil:
+                dst = posix_dst(z.posix, ms)
+                if dst:
+                    std = z.posix.dst
+            else:
+                dst = is_dst(z.rule, std, ms)
+                if dst:
+                    std += 60
         elif self.conf.dst != "off":
             std += parse_offset(self.conf.dst)
             dst = true
         return std, dst
 
     def zone(self, ms=nil):
-        z = resolve_zone(self.conf)
+        z = self:_zone()
         off, dst = self:_offset(ms ?? self:now())
         abbr = off == 0 and "UTC" or ("UTC" .. format_offset(off))
-        return {name: z.name, offset_min: off, isdst: dst, abbr: abbr}
+        # сокращение зоны из базы («EEST», «MSK»); числовые вроде «+03» заменяются на abbr
+        short = abbr
+        if z.posix != nil:
+            a = dst and z.posix.dst_abbr or z.posix.std_abbr
+            if a != nil and string.match(a, "^%a+$") != nil:
+                short = a
+        return {name: z.name, offset_min: off, isdst: dst, abbr: abbr, short: short}
 
     def parts(self, ms=nil):
         t = ms ?? self:now()
@@ -407,10 +542,18 @@ export def patch_text(text, changes):
         out = json5.patch(out, [k], changes[k])
     return out
 
+# имена зон базы IANA по фильтру: часть имени, код страны («UA») или часть названия страны («japan», «united states»)
 export def zone_names(filter=nil):
+    _load()
     names = []
-    for z in ZONE_LIST:
-        if filter == nil or string.find(string.lower(z[1]), string.lower(filter), 1, true) != nil:
-            names[len(names) + 1] = z[1]
+    f = filter != nil and string.lower(filter) or nil
+    for name in cache.names:
+        ok = f == nil
+        if not ok:
+            z = cache.index[string.lower(name)]
+            country = string.lower(cache.countries[z.cc] ?? "")
+            ok = string.find(string.lower(name), f, 1, true) != nil or string.lower(z.cc) == f or string.find(country, f, 1, true) != nil
+        if ok:
+            names[len(names) + 1] = name
     table.sort(names)
     return names

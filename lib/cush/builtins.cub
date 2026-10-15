@@ -568,12 +568,29 @@ def b_timedatectl(sh, args):
         tdc_status(sh)
         return 0
     if sub == "list-timezones":
+        # зона, страна и смещение сейчас: «Europe/Kyiv  Ukraine  UTC+03:00»
+        now = c:now()
         for name in clock.zone_names(args[2]):
-            sh:println(name)
+            info = clock.zone_info(name)
+            sh:println(name .. "  " .. (info != nil and info.country or "") .. "  " .. clock.new({tz: name}):zone(now).abbr)
         return 0
     changes = nil
     if sub == "set-timezone" and args[2] != nil:
-        changes = {tz: args[2]}
+        tz = args[2]
+        # не имя зоны и не смещение: ищем по стране или городу («japan», «kyiv»); одна находка подходит, несколько показываем
+        if clock.zone_info(tz) == nil and clock.parse_offset(tz) == nil:
+            found = clock.zone_names(tz)
+            if len(found) == 1:
+                tz = found[1]
+            elif len(found) > 8:
+                sh:eprint("timedatectl: " .. len(found) .. " zones match '" .. args[2] .. "'; see them with: timedatectl list-timezones " .. args[2])
+                return 1
+            elif len(found) > 1:
+                sh:eprint("timedatectl: several zones match '" .. args[2] .. "', pick one:")
+                for name in found:
+                    sh:eprint("  " .. name)
+                return 1
+        changes = {tz: tz}
     elif sub == "set-source" and args[2] != nil:
         changes = {source: args[2]}
     elif sub == "set-seconds" and (args[2] == "on" or args[2] == "off"):

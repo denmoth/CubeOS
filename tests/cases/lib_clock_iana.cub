@@ -1,0 +1,54 @@
+import t
+import clock
+import tzdata
+eq = t.eq
+
+# Все зоны базы IANA (lib/tzdata.cub) против смещений, которые посчитал сам Python zoneinfo (tests/data/tz_golden.txt,
+# tools/gen_tzdata.py): 15 моментов 2026-2028 и минута до и после переходов ЕС, США и Австралии в 2026 году.
+
+def breathe():
+    os.queueEvent("test_breathe")
+    os.pullEvent("test_breathe")
+
+f = fs.open("/repo/tests/data/tz_golden.txt", "r")
+moments = []
+for word in string.gmatch(f.readLine(), "%d+"):
+    moments[len(moments) + 1] = tonumber(word)
+bad = []
+count = 0
+while true:
+    line = f.readLine()
+    if line == nil:
+        break
+    words = []
+    for w in string.gmatch(line, "%S+"):
+        words[len(words) + 1] = w
+    c = clock.new({tz: words[1]})
+    if c.conf.tz != words[1]:
+        bad[len(bad) + 1] = words[1] .. ": unknown zone"
+    else:
+        for i, ms in moments:
+            got = c:zone(ms).offset_min
+            want = tonumber(words[i + 1])
+            if got != want and len(bad) < 20:
+                bad[len(bad) + 1] = words[1] .. " at " .. ms .. ": got " .. got .. " want " .. want
+    count += 1
+    if count % 40 == 0:
+        breathe()
+f.close()
+eq(count > 590, true, "the golden file has every zone")
+eq(bad, [], "every IANA zone gives the same offset as Python zoneinfo")
+
+# поиск по стране и коду, сведения о зоне
+eq(clock.zone_info("europe/kyiv").name, "Europe/Kyiv", "zone names are case-insensitive")
+eq(clock.zone_info("Europe/Kyiv").country, "Ukraine", "the country of a zone")
+names = clock.zone_names("japan")
+eq(names, ["Asia/Tokyo"], "search by country name")
+eq(len(clock.zone_names("KZ")) >= 2, true, "search by country code")
+eq(clock.new({tz: "Europe/Moscow"}):zone(1776254400000).short, "MSK", "the zone abbreviation")
+eq(clock.new({tz: "Asia/Kolkata"}):zone(1776254400000).offset_min, 330, "half-hour offsets")
+eq(clock.new({tz: "Asia/Kathmandu"}):zone(1776254400000).offset_min, 345, "45-minute offsets")
+eq(clock.parse_posix("<+1030>-10:30<+11>-11,M10.1.0,M4.1.0").dst, 660, "an explicit summer offset")
+eq(clock.parse_posix("nonsense"), nil, "a broken rule is rejected")
+eq(tzdata.VERSION != nil, true, "the database version is known")
+print("done")

@@ -1,0 +1,876 @@
+# tzdata: часовые пояса из базы IANA 2026c (сгенерировано tools/gen_tzdata.py, руками не править)
+# RULES: правила POSIX TZ (смещение и летнее время, действующие сейчас); ZONES: строки «имя номер_правила [страна]»;
+# COUNTRIES: «код название». Разбор и расчёт в lib/clock.cub.
+
+export const VERSION = "2026c"
+export const RULES = [
+    "GMT0", "EAT-3", "CET-1", "WAT-1", "CAT-2", "EET-2EEST,M4.5.5/0,M10.5.4/24", "<+00>0", "CET-1CEST,M3.5.0,M10.5.0/3", "SAST-2",
+    "EET-2", "HST10HDT,M3.2.0,M11.1.0", "AKST9AKDT,M3.2.0,M11.1.0", "AST4", "<-03>3", "EST5", "CST6", "<-04>4", "<-05>5",
+    "MST7MDT,M3.2.0,M11.1.0", "CST6CDT,M3.2.0,M11.1.0", "MST7", "EST5EDT,M3.2.0,M11.1.0", "PST8PDT,M3.2.0,M11.1.0",
+    "AST4ADT,M3.2.0,M11.1.0", "<-02>2<-01>,M3.5.0/-1,M10.5.0/0", "CST5CDT,M3.2.0/0,M11.1.0/1", "<-03>3<-02>,M3.2.0,M11.1.0",
+    "<-02>2", "<-04>4<-03>,M9.1.6/24,M4.1.6/24", "NST3:30NDT,M3.2.0,M11.1.0", "<+08>-8", "<+07>-7", "<+10>-10",
+    "AEST-10AEDT,M10.1.0,M4.1.0/3", "<+05>-5", "NZST-12NZDT,M9.5.0,M4.1.0/3", "<+03>-3", "<+00>0<+02>-2,M3.5.0/1,M10.5.0/3",
+    "<+12>-12", "<+04>-4", "EET-2EEST,M3.5.0/0,M10.5.0/0", "<+06>-6", "IST-5:30", "<+09>-9", "CST-8", "<+0530>-5:30",
+    "EET-2EEST,M3.5.0/3,M10.5.0/4", "EET-2EEST,M3.4.4/50,M10.4.4/50", "HKT-8", "WIB-7", "WIT-9", "IST-2IDT,M3.4.4/26,M10.5.0",
+    "<+0430>-4:30", "PKT-5", "<+0545>-5:45", "<+11>-11", "WITA-8", "PST-8", "KST-9", "<+0630>-6:30", "<+0330>-3:30", "JST-9",
+    "<-01>1<+00>,M3.5.0/0,M10.5.0/1", "WET0WEST,M3.5.0/1,M10.5.0", "<-01>1", "ACST-9:30ACDT,M10.1.0,M4.1.0/3", "AEST-10",
+    "ACST-9:30", "<+0845>-8:45", "<+1030>-10:30<+11>-11,M10.1.0,M4.1.0", "AWST-8", "<-06>6<-05>,M9.1.6/22,M4.1.6/22",
+    "IST-1GMT0,M10.5.0,M3.5.0/1", "<-10>10", "<-11>11", "<-12>12", "<-06>6", "<-07>7", "<-08>8", "<-09>9", "<+01>-1", "<+13>-13",
+    "<+14>-14", "<+02>-2", "UTC0", "GMT0BST,M3.5.0/1,M10.5.0", "MSK-3", "HST10", "<+1245>-12:45<+1345>,M9.5.0/2:45,M4.1.0/3:45",
+    "ChST-10", "<-0930>9:30", "SST11", "<+11>-11<+12>,M10.1.0,M4.1.0/3",
+]
+export const ZONES = """Africa/Abidjan 1 CI
+Africa/Accra 1 GH
+Africa/Addis_Ababa 2 ET
+Africa/Algiers 3 DZ
+Africa/Asmara 2 ER
+Africa/Asmera 2
+Africa/Bamako 1 ML
+Africa/Bangui 4 CF
+Africa/Banjul 1 GM
+Africa/Bissau 1 GW
+Africa/Blantyre 5 MW
+Africa/Brazzaville 4 CG
+Africa/Bujumbura 5 BI
+Africa/Cairo 6 EG
+Africa/Casablanca 7 MA
+Africa/Ceuta 8 ES
+Africa/Conakry 1 GN
+Africa/Dakar 1 SN
+Africa/Dar_es_Salaam 2 TZ
+Africa/Djibouti 2 DJ
+Africa/Douala 4 CM
+Africa/El_Aaiun 7 EH
+Africa/Freetown 1 SL
+Africa/Gaborone 5 BW
+Africa/Harare 5 ZW
+Africa/Johannesburg 9 ZA
+Africa/Juba 5 SS
+Africa/Kampala 2 UG
+Africa/Khartoum 5 SD
+Africa/Kigali 5 RW
+Africa/Kinshasa 4 CD
+Africa/Lagos 4 NG
+Africa/Libreville 4 GA
+Africa/Lome 1 TG
+Africa/Luanda 4 AO
+Africa/Lubumbashi 5 CD
+Africa/Lusaka 5 ZM
+Africa/Malabo 4 GQ
+Africa/Maputo 5 MZ
+Africa/Maseru 9 LS
+Africa/Mbabane 9 SZ
+Africa/Mogadishu 2 SO
+Africa/Monrovia 1 LR
+Africa/Nairobi 2 KE
+Africa/Ndjamena 4 TD
+Africa/Niamey 4 NE
+Africa/Nouakchott 1 MR
+Africa/Ouagadougou 1 BF
+Africa/Porto-Novo 4 BJ
+Africa/Sao_Tome 1 ST
+Africa/Timbuktu 1
+Africa/Tripoli 10 LY
+Africa/Tunis 3 TN
+Africa/Windhoek 5 NA
+America/Adak 11 US
+America/Anchorage 12 US
+America/Anguilla 13 AI
+America/Antigua 13 AG
+America/Araguaina 14 BR
+America/Argentina/Buenos_Aires 14 AR
+America/Argentina/Catamarca 14 AR
+America/Argentina/ComodRivadavia 14
+America/Argentina/Cordoba 14 AR
+America/Argentina/Jujuy 14 AR
+America/Argentina/La_Rioja 14 AR
+America/Argentina/Mendoza 14 AR
+America/Argentina/Rio_Gallegos 14 AR
+America/Argentina/Salta 14 AR
+America/Argentina/San_Juan 14 AR
+America/Argentina/San_Luis 14 AR
+America/Argentina/Tucuman 14 AR
+America/Argentina/Ushuaia 14 AR
+America/Aruba 13 AW
+America/Asuncion 14 PY
+America/Atikokan 15 CA
+America/Atka 11
+America/Bahia 14 BR
+America/Bahia_Banderas 16 MX
+America/Barbados 13 BB
+America/Belem 14 BR
+America/Belize 16 BZ
+America/Blanc-Sablon 13 CA
+America/Boa_Vista 17 BR
+America/Bogota 18 CO
+America/Boise 19 US
+America/Buenos_Aires 14
+America/Cambridge_Bay 19 CA
+America/Campo_Grande 17 BR
+America/Cancun 15 MX
+America/Caracas 17 VE
+America/Catamarca 14
+America/Cayenne 14 GF
+America/Cayman 15 KY
+America/Chicago 20 US
+America/Chihuahua 16 MX
+America/Ciudad_Juarez 19 MX
+America/Coral_Harbour 15
+America/Cordoba 14
+America/Costa_Rica 16 CR
+America/Coyhaique 14 CL
+America/Creston 21 CA
+America/Cuiaba 17 BR
+America/Curacao 13 CW
+America/Danmarkshavn 1 GL
+America/Dawson 21 CA
+America/Dawson_Creek 21 CA
+America/Denver 19 US
+America/Detroit 22 US
+America/Dominica 13 DM
+America/Edmonton 16 CA
+America/Eirunepe 18 BR
+America/El_Salvador 16 SV
+America/Ensenada 23
+America/Fort_Nelson 21 CA
+America/Fort_Wayne 22
+America/Fortaleza 14 BR
+America/Glace_Bay 24 CA
+America/Godthab 25
+America/Goose_Bay 24 CA
+America/Grand_Turk 22 TC
+America/Grenada 13 GD
+America/Guadeloupe 13 GP
+America/Guatemala 16 GT
+America/Guayaquil 18 EC
+America/Guyana 17 GY
+America/Halifax 24 CA
+America/Havana 26 CU
+America/Hermosillo 21 MX
+America/Indiana/Indianapolis 22 US
+America/Indiana/Knox 20 US
+America/Indiana/Marengo 22 US
+America/Indiana/Petersburg 22 US
+America/Indiana/Tell_City 20 US
+America/Indiana/Vevay 22 US
+America/Indiana/Vincennes 22 US
+America/Indiana/Winamac 22 US
+America/Indianapolis 22
+America/Inuvik 19 CA
+America/Iqaluit 22 CA
+America/Jamaica 15 JM
+America/Jujuy 14
+America/Juneau 12 US
+America/Kentucky/Louisville 22 US
+America/Kentucky/Monticello 22 US
+America/Knox_IN 20
+America/Kralendijk 13 BQ
+America/La_Paz 17 BO
+America/Lima 18 PE
+America/Los_Angeles 23 US
+America/Louisville 22
+America/Lower_Princes 13 SX
+America/Maceio 14 BR
+America/Managua 16 NI
+America/Manaus 17 BR
+America/Marigot 13 MF
+America/Martinique 13 MQ
+America/Matamoros 20 MX
+America/Mazatlan 21 MX
+America/Mendoza 14
+America/Menominee 20 US
+America/Merida 16 MX
+America/Metlakatla 12 US
+America/Mexico_City 16 MX
+America/Miquelon 27 PM
+America/Moncton 24 CA
+America/Monterrey 16 MX
+America/Montevideo 14 UY
+America/Montreal 22
+America/Montserrat 13 MS
+America/Nassau 22 BS
+America/New_York 22 US
+America/Nipigon 22
+America/Nome 12 US
+America/Noronha 28 BR
+America/North_Dakota/Beulah 20 US
+America/North_Dakota/Center 20 US
+America/North_Dakota/New_Salem 20 US
+America/Nuuk 25 GL
+America/Ojinaga 20 MX
+America/Panama 15 PA
+America/Pangnirtung 22
+America/Paramaribo 14 SR
+America/Phoenix 21 US
+America/Port-au-Prince 22 HT
+America/Port_of_Spain 13 TT
+America/Porto_Acre 18
+America/Porto_Velho 17 BR
+America/Puerto_Rico 13 PR
+America/Punta_Arenas 14 CL
+America/Rainy_River 20
+America/Rankin_Inlet 20 CA
+America/Recife 14 BR
+America/Regina 16 CA
+America/Resolute 20 CA
+America/Rio_Branco 18 BR
+America/Rosario 14
+America/Santa_Isabel 23
+America/Santarem 14 BR
+America/Santiago 29 CL
+America/Santo_Domingo 13 DO
+America/Sao_Paulo 14 BR
+America/Scoresbysund 25 GL
+America/Shiprock 19
+America/Sitka 12 US
+America/St_Barthelemy 13 BL
+America/St_Johns 30 CA
+America/St_Kitts 13 KN
+America/St_Lucia 13 LC
+America/St_Thomas 13 VI
+America/St_Vincent 13 VC
+America/Swift_Current 16 CA
+America/Tegucigalpa 16 HN
+America/Thule 24 GL
+America/Thunder_Bay 22
+America/Tijuana 23 MX
+America/Toronto 22 CA
+America/Tortola 13 VG
+America/Vancouver 21 CA
+America/Virgin 13
+America/Whitehorse 21 CA
+America/Winnipeg 20 CA
+America/Yakutat 12 US
+America/Yellowknife 16
+Antarctica/Casey 31 AQ
+Antarctica/Davis 32 AQ
+Antarctica/DumontDUrville 33 AQ
+Antarctica/Macquarie 34 AU
+Antarctica/Mawson 35 AQ
+Antarctica/McMurdo 36 AQ
+Antarctica/Palmer 14 AQ
+Antarctica/Rothera 14 AQ
+Antarctica/South_Pole 36
+Antarctica/Syowa 37 AQ
+Antarctica/Troll 38 AQ
+Antarctica/Vostok 35 AQ
+Arctic/Longyearbyen 8 SJ
+Asia/Aden 37 YE
+Asia/Almaty 35 KZ
+Asia/Amman 37 JO
+Asia/Anadyr 39 RU
+Asia/Aqtau 35 KZ
+Asia/Aqtobe 35 KZ
+Asia/Ashgabat 35 TM
+Asia/Ashkhabad 35
+Asia/Atyrau 35 KZ
+Asia/Baghdad 37 IQ
+Asia/Bahrain 37 BH
+Asia/Baku 40 AZ
+Asia/Bangkok 32 TH
+Asia/Barnaul 32 RU
+Asia/Beirut 41 LB
+Asia/Bishkek 42 KG
+Asia/Brunei 31 BN
+Asia/Calcutta 43
+Asia/Chita 44 RU
+Asia/Choibalsan 31
+Asia/Chongqing 45
+Asia/Chungking 45
+Asia/Colombo 46 LK
+Asia/Dacca 42
+Asia/Damascus 37 SY
+Asia/Dhaka 42 BD
+Asia/Dili 44 TL
+Asia/Dubai 40 AE
+Asia/Dushanbe 35 TJ
+Asia/Famagusta 47 CY
+Asia/Gaza 48 PS
+Asia/Harbin 45
+Asia/Hebron 48 PS
+Asia/Ho_Chi_Minh 32 VN
+Asia/Hong_Kong 49 HK
+Asia/Hovd 32 MN
+Asia/Irkutsk 31 RU
+Asia/Istanbul 37
+Asia/Jakarta 50 ID
+Asia/Jayapura 51 ID
+Asia/Jerusalem 52 IL
+Asia/Kabul 53 AF
+Asia/Kamchatka 39 RU
+Asia/Karachi 54 PK
+Asia/Kashgar 42
+Asia/Kathmandu 55 NP
+Asia/Katmandu 55
+Asia/Khandyga 44 RU
+Asia/Kolkata 43 IN
+Asia/Krasnoyarsk 32 RU
+Asia/Kuala_Lumpur 31 MY
+Asia/Kuching 31 MY
+Asia/Kuwait 37 KW
+Asia/Macao 45
+Asia/Macau 45 MO
+Asia/Magadan 56 RU
+Asia/Makassar 57 ID
+Asia/Manila 58 PH
+Asia/Muscat 40 OM
+Asia/Nicosia 47 CY
+Asia/Novokuznetsk 32 RU
+Asia/Novosibirsk 32 RU
+Asia/Omsk 42 RU
+Asia/Oral 35 KZ
+Asia/Phnom_Penh 32 KH
+Asia/Pontianak 50 ID
+Asia/Pyongyang 59 KP
+Asia/Qatar 37 QA
+Asia/Qostanay 35 KZ
+Asia/Qyzylorda 35 KZ
+Asia/Rangoon 60
+Asia/Riyadh 37 SA
+Asia/Saigon 32
+Asia/Sakhalin 56 RU
+Asia/Samarkand 35 UZ
+Asia/Seoul 59 KR
+Asia/Shanghai 45 CN
+Asia/Singapore 31 SG
+Asia/Srednekolymsk 56 RU
+Asia/Taipei 45 TW
+Asia/Tashkent 35 UZ
+Asia/Tbilisi 40 GE
+Asia/Tehran 61 IR
+Asia/Tel_Aviv 52
+Asia/Thimbu 42
+Asia/Thimphu 42 BT
+Asia/Tokyo 62 JP
+Asia/Tomsk 32 RU
+Asia/Ujung_Pandang 57
+Asia/Ulaanbaatar 31 MN
+Asia/Ulan_Bator 31
+Asia/Urumqi 42 CN
+Asia/Ust-Nera 33 RU
+Asia/Vientiane 32 LA
+Asia/Vladivostok 33 RU
+Asia/Yakutsk 44 RU
+Asia/Yangon 60 MM
+Asia/Yekaterinburg 35 RU
+Asia/Yerevan 40 AM
+Atlantic/Azores 63 PT
+Atlantic/Bermuda 24 BM
+Atlantic/Canary 64 ES
+Atlantic/Cape_Verde 65 CV
+Atlantic/Faeroe 64
+Atlantic/Faroe 64 FO
+Atlantic/Jan_Mayen 8
+Atlantic/Madeira 64 PT
+Atlantic/Reykjavik 1 IS
+Atlantic/South_Georgia 28 GS
+Atlantic/St_Helena 1 SH
+Atlantic/Stanley 14 FK
+Australia/ACT 34
+Australia/Adelaide 66 AU
+Australia/Brisbane 67 AU
+Australia/Broken_Hill 66 AU
+Australia/Canberra 34
+Australia/Currie 34
+Australia/Darwin 68 AU
+Australia/Eucla 69 AU
+Australia/Hobart 34 AU
+Australia/LHI 70
+Australia/Lindeman 67 AU
+Australia/Lord_Howe 70 AU
+Australia/Melbourne 34 AU
+Australia/NSW 34
+Australia/North 68
+Australia/Perth 71 AU
+Australia/Queensland 67
+Australia/South 66
+Australia/Sydney 34 AU
+Australia/Tasmania 34
+Australia/Victoria 34
+Australia/West 71
+Australia/Yancowinna 66
+Brazil/Acre 18
+Brazil/DeNoronha 28
+Brazil/East 14
+Brazil/West 17
+CET 8
+CST6CDT 20
+Canada/Atlantic 24
+Canada/Central 20
+Canada/Eastern 22
+Canada/Mountain 16
+Canada/Newfoundland 30
+Canada/Pacific 21
+Canada/Saskatchewan 16
+Canada/Yukon 21
+Chile/Continental 29
+Chile/EasterIsland 72
+Cuba 26
+EET 47
+EST 15
+EST5EDT 22
+Egypt 6
+Eire 73
+Etc/GMT 1
+Etc/GMT+0 1
+Etc/GMT+1 65
+Etc/GMT+10 74
+Etc/GMT+11 75
+Etc/GMT+12 76
+Etc/GMT+2 28
+Etc/GMT+3 14
+Etc/GMT+4 17
+Etc/GMT+5 18
+Etc/GMT+6 77
+Etc/GMT+7 78
+Etc/GMT+8 79
+Etc/GMT+9 80
+Etc/GMT-0 1
+Etc/GMT-1 81
+Etc/GMT-10 33
+Etc/GMT-11 56
+Etc/GMT-12 39
+Etc/GMT-13 82
+Etc/GMT-14 83
+Etc/GMT-2 84
+Etc/GMT-3 37
+Etc/GMT-4 40
+Etc/GMT-5 35
+Etc/GMT-6 42
+Etc/GMT-7 32
+Etc/GMT-8 31
+Etc/GMT-9 44
+Etc/GMT0 1
+Etc/Greenwich 1
+Etc/UCT 85
+Etc/UTC 85
+Etc/Universal 85
+Etc/Zulu 85
+Europe/Amsterdam 8 NL
+Europe/Andorra 8 AD
+Europe/Astrakhan 40 RU
+Europe/Athens 47 GR
+Europe/Belfast 86
+Europe/Belgrade 8 RS
+Europe/Berlin 8 DE
+Europe/Bratislava 8 SK
+Europe/Brussels 8 BE
+Europe/Bucharest 47 RO
+Europe/Budapest 8 HU
+Europe/Busingen 8 DE
+Europe/Chisinau 47 MD
+Europe/Copenhagen 8 DK
+Europe/Dublin 73 IE
+Europe/Gibraltar 8 GI
+Europe/Guernsey 86 GG
+Europe/Helsinki 47 FI
+Europe/Isle_of_Man 86 IM
+Europe/Istanbul 37 TR
+Europe/Jersey 86 JE
+Europe/Kaliningrad 10 RU
+Europe/Kiev 47
+Europe/Kirov 87 RU
+Europe/Kyiv 47 UA
+Europe/Lisbon 64 PT
+Europe/Ljubljana 8 SI
+Europe/London 86 GB
+Europe/Luxembourg 8 LU
+Europe/Madrid 8 ES
+Europe/Malta 8 MT
+Europe/Mariehamn 47 AX
+Europe/Minsk 37 BY
+Europe/Monaco 8 MC
+Europe/Moscow 87 RU
+Europe/Nicosia 47
+Europe/Oslo 8 NO
+Europe/Paris 8 FR
+Europe/Podgorica 8 ME
+Europe/Prague 8 CZ
+Europe/Riga 47 LV
+Europe/Rome 8 IT
+Europe/Samara 40 RU
+Europe/San_Marino 8 SM
+Europe/Sarajevo 8 BA
+Europe/Saratov 40 RU
+Europe/Simferopol 87 UA
+Europe/Skopje 8 MK
+Europe/Sofia 47 BG
+Europe/Stockholm 8 SE
+Europe/Tallinn 47 EE
+Europe/Tirane 8 AL
+Europe/Tiraspol 47
+Europe/Ulyanovsk 40 RU
+Europe/Uzhgorod 47
+Europe/Vaduz 8 LI
+Europe/Vatican 8 VA
+Europe/Vienna 8 AT
+Europe/Vilnius 47 LT
+Europe/Volgograd 87 RU
+Europe/Warsaw 8 PL
+Europe/Zagreb 8 HR
+Europe/Zaporozhye 47
+Europe/Zurich 8 CH
+GB 86
+GB-Eire 86
+GMT 1
+GMT+0 1
+GMT-0 1
+GMT0 1
+Greenwich 1
+HST 88
+Hongkong 49
+Iceland 1
+Indian/Antananarivo 2 MG
+Indian/Chagos 42 IO
+Indian/Christmas 32 CX
+Indian/Cocos 60 CC
+Indian/Comoro 2 KM
+Indian/Kerguelen 35 TF
+Indian/Mahe 40 SC
+Indian/Maldives 35 MV
+Indian/Mauritius 40 MU
+Indian/Mayotte 2 YT
+Indian/Reunion 40 RE
+Iran 61
+Israel 52
+Jamaica 15
+Japan 62
+Kwajalein 39
+Libya 10
+MET 8
+MST 21
+MST7MDT 19
+Mexico/BajaNorte 23
+Mexico/BajaSur 21
+Mexico/General 16
+NZ 36
+NZ-CHAT 89
+Navajo 19
+PRC 45
+PST8PDT 23
+Pacific/Apia 82 WS
+Pacific/Auckland 36 NZ
+Pacific/Bougainville 56 PG
+Pacific/Chatham 89 NZ
+Pacific/Chuuk 33 FM
+Pacific/Easter 72 CL
+Pacific/Efate 56 VU
+Pacific/Enderbury 82
+Pacific/Fakaofo 82 TK
+Pacific/Fiji 39 FJ
+Pacific/Funafuti 39 TV
+Pacific/Galapagos 77 EC
+Pacific/Gambier 80 PF
+Pacific/Guadalcanal 56 SB
+Pacific/Guam 90 GU
+Pacific/Honolulu 88 US
+Pacific/Johnston 88
+Pacific/Kanton 82 KI
+Pacific/Kiritimati 83 KI
+Pacific/Kosrae 56 FM
+Pacific/Kwajalein 39 MH
+Pacific/Majuro 39 MH
+Pacific/Marquesas 91 PF
+Pacific/Midway 92 UM
+Pacific/Nauru 39 NR
+Pacific/Niue 75 NU
+Pacific/Norfolk 93 NF
+Pacific/Noumea 56 NC
+Pacific/Pago_Pago 92 AS
+Pacific/Palau 44 PW
+Pacific/Pitcairn 79 PN
+Pacific/Pohnpei 56 FM
+Pacific/Ponape 56
+Pacific/Port_Moresby 33 PG
+Pacific/Rarotonga 74 CK
+Pacific/Saipan 90 MP
+Pacific/Samoa 92
+Pacific/Tahiti 74 PF
+Pacific/Tarawa 39 KI
+Pacific/Tongatapu 82 TO
+Pacific/Truk 33
+Pacific/Wake 39 UM
+Pacific/Wallis 39 WF
+Pacific/Yap 33
+Poland 8
+Portugal 64
+ROC 45
+ROK 59
+Singapore 31
+Turkey 37
+UCT 85
+US/Alaska 12
+US/Aleutian 11
+US/Arizona 21
+US/Central 20
+US/East-Indiana 22
+US/Eastern 22
+US/Hawaii 88
+US/Indiana-Starke 20
+US/Michigan 22
+US/Mountain 19
+US/Pacific 23
+US/Samoa 92
+UTC 85
+Universal 85
+W-SU 87
+WET 64
+Zulu 85"""
+# TRANSITIONS: зоны с переходами, записанными на будущее: «имя секунды_utc:смещение ...»; до последнего перехода смещение
+# берётся отсюда, после него по правилу POSIX
+export const TRANSITIONS = """Africa/Casablanca 1682215200:60 1710036000:0 1713060000:60 1740276000:0 1743904800:60 1771120800:0 1774144800:60 1789866000:0
+Africa/El_Aaiun 1682215200:60 1710036000:0 1713060000:60 1740276000:0 1743904800:60 1771120800:0 1774144800:60 1789866000:0
+America/Edmonton 1699171200:-420 1710061200:-360 1730620800:-420 1741510800:-360 1762070400:-420 1772960400:-360 1793520000:-360
+America/Vancouver 1699174800:-480 1710064800:-420 1730624400:-480 1741514400:-420 1762074000:-480 1772964000:-420 1793523600:-420
+America/Yellowknife 1699171200:-420 1710061200:-360 1730620800:-420 1741510800:-360 1762070400:-420 1772960400:-360 1793520000:-360
+Asia/Gaza 1698447600:120 1713571200:180 1729897200:120 1744416000:180 1761346800:120 1774656000:180 1792796400:120 1806105600:180 1824850800:120 1837555200:180 1856300400:120 1869004800:180 1887750000:120 1901059200:180 1919199600:120 1932508800:180 1950649200:120 1963958400:180 1982703600:120 1995408000:180 2014153200:120 2026857600:180 2045602800:120 2058307200:180 2077052400:120 2090361600:180 2107897200:120 2121811200:180 2138742000:120 2153260800:180 2168982000:120 2184710400:180 2199826800:120 2216160000:180 2230066800:120 2234304000:180 2234905200:120 2248214400:180 2260911600:120 2264544000:180 2266354800:120 2279664000:180 2291756400:120 2295388800:180 2297804400:120 2311113600:180 2321996400:120 2326233600:180 2329254000:120 2342563200:180 2352841200:120 2356473600:180 2361308400:120 2374012800:180 2383686000:120 2387318400:180 2392758000:120 2405462400:180 2413926000:120 2418163200:180 2424207600:120 2437516800:180 2444770800:120 2448403200:180 2455657200:120 2468966400:180 2475010800:120 2479248000:180 2487106800:120 2500416000:180 2505855600:120 2509488000:180 2519161200:120 2531865600:180 2536700400:120 2540332800:180 2550610800:120 2563315200:180 2566940400:120 2571177600:180 2582060400:120 2595369600:180 2597785200:120 2601417600:180 2613510000:120 2626819200:180 2628025200:120 2632262400:180 2644959600:120 2658268800:180 2658870000:120 2663107200:180 2676409200:120 2693347200:180 2708463600:120 2724192000:180 2739913200:120 2754432000:180 2771362800:120 2785276800:180 2802812400:120 2816121600:180 2834262000:120 2847571200:180 2866316400:120 2879020800:180 2897766000:120 2910470400:180 2929215600:120 2941920000:180 2960665200:120 2973974400:180 2992114800:120 3005424000:180 3023564400:120 3036873600:180 3055618800:120 3068323200:180 3087068400:120 3099772800:180 3117913200:120 3131827200:180 3148758000:120 3163276800:180 3179602800:120 3194726400:180 3209842800:120 3226176000:180 3240687600:120 3244320000:180 3244921200:120 3257625600:180 3271532400:120 3275164800:180 3276370800:120 3289075200:180 3301772400:120 3306009600:180 3307820400:120 3321129600:180 3332617200:120 3336249600:180 3339270000:120 3352579200:180 3362857200:120 3367094400:180 3370719600:120 3384028800:180 3393702000:120 3397939200:180 3402774000:120 3415478400:180 3424546800:120 3428179200:180 3434223600:120 3446928000:180 3454786800:120 3459024000:180 3465673200:120 3478982400:180 3485631600:120 3489264000:180 3497122800:120 3510432000:180 3516476400:120 3520108800:180 3528572400:120 3541881600:180 3546716400:120 3550953600:180 3560022000:120 3573331200:180 3577561200:120 3581193600:180 3592076400:120 3604780800:180 3607801200:120 3612038400:180 3623526000:120 3636230400:180 3638646000:120 3642883200:180 3654975600:120 3668284800:180 3669490800:120 3673123200:180 3686425200:120
+Asia/Hebron 1698447600:120 1713571200:180 1729897200:120 1744416000:180 1761346800:120 1774656000:180 1792796400:120 1806105600:180 1824850800:120 1837555200:180 1856300400:120 1869004800:180 1887750000:120 1901059200:180 1919199600:120 1932508800:180 1950649200:120 1963958400:180 1982703600:120 1995408000:180 2014153200:120 2026857600:180 2045602800:120 2058307200:180 2077052400:120 2090361600:180 2107897200:120 2121811200:180 2138742000:120 2153260800:180 2168982000:120 2184710400:180 2199826800:120 2216160000:180 2230066800:120 2234304000:180 2234905200:120 2248214400:180 2260911600:120 2264544000:180 2266354800:120 2279664000:180 2291756400:120 2295388800:180 2297804400:120 2311113600:180 2321996400:120 2326233600:180 2329254000:120 2342563200:180 2352841200:120 2356473600:180 2361308400:120 2374012800:180 2383686000:120 2387318400:180 2392758000:120 2405462400:180 2413926000:120 2418163200:180 2424207600:120 2437516800:180 2444770800:120 2448403200:180 2455657200:120 2468966400:180 2475010800:120 2479248000:180 2487106800:120 2500416000:180 2505855600:120 2509488000:180 2519161200:120 2531865600:180 2536700400:120 2540332800:180 2550610800:120 2563315200:180 2566940400:120 2571177600:180 2582060400:120 2595369600:180 2597785200:120 2601417600:180 2613510000:120 2626819200:180 2628025200:120 2632262400:180 2644959600:120 2658268800:180 2658870000:120 2663107200:180 2676409200:120 2693347200:180 2708463600:120 2724192000:180 2739913200:120 2754432000:180 2771362800:120 2785276800:180 2802812400:120 2816121600:180 2834262000:120 2847571200:180 2866316400:120 2879020800:180 2897766000:120 2910470400:180 2929215600:120 2941920000:180 2960665200:120 2973974400:180 2992114800:120 3005424000:180 3023564400:120 3036873600:180 3055618800:120 3068323200:180 3087068400:120 3099772800:180 3117913200:120 3131827200:180 3148758000:120 3163276800:180 3179602800:120 3194726400:180 3209842800:120 3226176000:180 3240687600:120 3244320000:180 3244921200:120 3257625600:180 3271532400:120 3275164800:180 3276370800:120 3289075200:180 3301772400:120 3306009600:180 3307820400:120 3321129600:180 3332617200:120 3336249600:180 3339270000:120 3352579200:180 3362857200:120 3367094400:180 3370719600:120 3384028800:180 3393702000:120 3397939200:180 3402774000:120 3415478400:180 3424546800:120 3428179200:180 3434223600:120 3446928000:180 3454786800:120 3459024000:180 3465673200:120 3478982400:180 3485631600:120 3489264000:180 3497122800:120 3510432000:180 3516476400:120 3520108800:180 3528572400:120 3541881600:180 3546716400:120 3550953600:180 3560022000:120 3573331200:180 3577561200:120 3581193600:180 3592076400:120 3604780800:180 3607801200:120 3612038400:180 3623526000:120 3636230400:180 3638646000:120 3642883200:180 3654975600:120 3668284800:180 3669490800:120 3673123200:180 3686425200:120
+Canada/Mountain 1699171200:-420 1710061200:-360 1730620800:-420 1741510800:-360 1762070400:-420 1772960400:-360 1793520000:-360
+Canada/Pacific 1699174800:-480 1710064800:-420 1730624400:-480 1741514400:-420 1762074000:-480 1772964000:-420 1793523600:-420"""
+export const COUNTRIES = """AD Andorra
+AE United Arab Emirates
+AF Afghanistan
+AG Antigua & Barbuda
+AI Anguilla
+AL Albania
+AM Armenia
+AO Angola
+AQ Antarctica
+AR Argentina
+AS Samoa (American)
+AT Austria
+AU Australia
+AW Aruba
+AX Åland Islands
+AZ Azerbaijan
+BA Bosnia & Herzegovina
+BB Barbados
+BD Bangladesh
+BE Belgium
+BF Burkina Faso
+BG Bulgaria
+BH Bahrain
+BI Burundi
+BJ Benin
+BL St Barthelemy
+BM Bermuda
+BN Brunei
+BO Bolivia
+BQ Caribbean NL
+BR Brazil
+BS Bahamas
+BT Bhutan
+BW Botswana
+BY Belarus
+BZ Belize
+CA Canada
+CC Cocos (Keeling) Islands
+CD Congo (Dem. Rep.)
+CF Central African Rep.
+CG Congo (Rep.)
+CH Switzerland
+CI Côte d’Ivoire
+CK Cook Islands
+CL Chile
+CM Cameroon
+CN China
+CO Colombia
+CR Costa Rica
+CU Cuba
+CV Cape Verde
+CW Curaçao
+CX Christmas Island
+CY Cyprus
+CZ Czech Republic
+DE Germany
+DJ Djibouti
+DK Denmark
+DM Dominica
+DO Dominican Republic
+DZ Algeria
+EC Ecuador
+EE Estonia
+EG Egypt
+EH Western Sahara
+ER Eritrea
+ES Spain
+ET Ethiopia
+FI Finland
+FJ Fiji
+FK Falkland Islands
+FM Micronesia
+FO Faroe Islands
+FR France
+GA Gabon
+GB Britain (UK)
+GD Grenada
+GE Georgia
+GF French Guiana
+GG Guernsey
+GH Ghana
+GI Gibraltar
+GL Greenland
+GM Gambia
+GN Guinea
+GP Guadeloupe
+GQ Equatorial Guinea
+GR Greece
+GS South Georgia & the South Sandwich Islands
+GT Guatemala
+GU Guam
+GW Guinea-Bissau
+GY Guyana
+HK Hong Kong
+HN Honduras
+HR Croatia
+HT Haiti
+HU Hungary
+ID Indonesia
+IE Ireland
+IL Israel
+IM Isle of Man
+IN India
+IO British Indian Ocean Territory
+IQ Iraq
+IR Iran
+IS Iceland
+IT Italy
+JE Jersey
+JM Jamaica
+JO Jordan
+JP Japan
+KE Kenya
+KG Kyrgyzstan
+KH Cambodia
+KI Kiribati
+KM Comoros
+KN St Kitts & Nevis
+KP Korea (North)
+KR Korea (South)
+KW Kuwait
+KY Cayman Islands
+KZ Kazakhstan
+LA Laos
+LB Lebanon
+LC St Lucia
+LI Liechtenstein
+LK Sri Lanka
+LR Liberia
+LS Lesotho
+LT Lithuania
+LU Luxembourg
+LV Latvia
+LY Libya
+MA Morocco
+MC Monaco
+MD Moldova
+ME Montenegro
+MF St Martin (French)
+MG Madagascar
+MH Marshall Islands
+MK North Macedonia
+ML Mali
+MM Myanmar (Burma)
+MN Mongolia
+MO Macau
+MP Northern Mariana Islands
+MQ Martinique
+MR Mauritania
+MS Montserrat
+MT Malta
+MU Mauritius
+MV Maldives
+MW Malawi
+MX Mexico
+MY Malaysia
+MZ Mozambique
+NA Namibia
+NC New Caledonia
+NE Niger
+NF Norfolk Island
+NG Nigeria
+NI Nicaragua
+NL Netherlands
+NO Norway
+NP Nepal
+NR Nauru
+NU Niue
+NZ New Zealand
+OM Oman
+PA Panama
+PE Peru
+PF French Polynesia
+PG Papua New Guinea
+PH Philippines
+PK Pakistan
+PL Poland
+PM St Pierre & Miquelon
+PN Pitcairn
+PR Puerto Rico
+PS Palestine
+PT Portugal
+PW Palau
+PY Paraguay
+QA Qatar
+RE Réunion
+RO Romania
+RS Serbia
+RU Russia
+RW Rwanda
+SA Saudi Arabia
+SB Solomon Islands
+SC Seychelles
+SD Sudan
+SE Sweden
+SG Singapore
+SH St Helena
+SI Slovenia
+SJ Svalbard & Jan Mayen
+SK Slovakia
+SL Sierra Leone
+SM San Marino
+SN Senegal
+SO Somalia
+SR Suriname
+SS South Sudan
+ST Sao Tome & Principe
+SV El Salvador
+SX St Maarten (Dutch)
+SY Syria
+SZ Eswatini (Swaziland)
+TC Turks & Caicos Is
+TD Chad
+TF French S. Terr.
+TG Togo
+TH Thailand
+TJ Tajikistan
+TK Tokelau
+TL East Timor
+TM Turkmenistan
+TN Tunisia
+TO Tonga
+TR Turkey
+TT Trinidad & Tobago
+TV Tuvalu
+TW Taiwan
+TZ Tanzania
+UA Ukraine
+UG Uganda
+UM US minor outlying islands
+US United States
+UY Uruguay
+UZ Uzbekistan
+VA Vatican City
+VC St Vincent
+VE Venezuela
+VG Virgin Islands (UK)
+VI Virgin Islands (US)
+VN Vietnam
+VU Vanuatu
+WF Wallis & Futuna
+WS Samoa (western)
+YE Yemen
+YT Mayotte
+ZA South Africa
+ZM Zambia
+ZW Zimbabwe"""
