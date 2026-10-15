@@ -138,7 +138,7 @@ export const COMMANDS = {
         examples: [["inputlog on", "Start, then repeat the problem"], ["logs input", "Read what was recorded"]], see: ["logs"]},
     ps: {cat: "system", summary: "Running processes", usage: "ps", about: "Number, state, user and name of every process of the system.",
         flags: [], examples: [], see: ["jobs", "devices"]},
-    id: {cat: "system", summary: "Who you are and your rights", usage: "id",
+    groups: {cat: "system", summary: "Who you are and your rights", usage: "groups",
         about: "Your name, whether you are an administrator, whether sudo is active and how you signed in.", flags: [], examples: [], see: ["whoami", "sudo"]},
     devices: {cat: "system", summary: "Devices attached to the computer", usage: "devices [-m]",
         about: "Monitors, drives, speakers, modems and other peripherals with their type.",

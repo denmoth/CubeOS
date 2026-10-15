@@ -259,7 +259,7 @@ def b_id(sh, args):
     else:
         sh:println("")
     return 0
-add("id", b_id)
+add("groups", b_id)
 
 def b_devices(sh, args):
     if sh.env.peripheral == nil:
@@ -535,7 +535,6 @@ def b_paste(sh, args):
     sh:println("")
     ev, text = os.pullEvent("paste")
     text = string.gsub(tostring(text), "\r", "")
-    view_mod.clipboard.text = text
     lines = 1
     for c in string.gmatch(text, "\n"):
         lines += 1

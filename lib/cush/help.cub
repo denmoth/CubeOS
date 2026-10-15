@@ -65,8 +65,8 @@ def _append(dst, src):
 export def known(name):
     return reg.COMMANDS[name] != nil
 
-# программы CraftOS (не встроенные): имя -> первое предложение из /rom/help/<имя>.txt
-def _rom_summary(name):
+# справка программы CraftOS из /rom/help/<имя>.txt (читается во время работы, текст ROM не копируется)
+def _rom_text(name):
     path = "/rom/help/" .. name .. ".txt"
     if not fs.exists(path):
         return nil
@@ -75,6 +75,13 @@ def _rom_summary(name):
         return nil
     text = f.readAll() ?? ""
     f.close()
+    return text
+
+# первое предложение (для поиска)
+def _rom_summary(name):
+    text = _rom_text(name)
+    if text == nil:
+        return nil
     first = string.match(text, "^%s*([^\n]+)") ?? ""
     sentence = string.match(first, "^(.-[%.!?])%s") ?? first
     if unicode.length(sentence) > 70:
@@ -136,13 +143,19 @@ export def command(sh, name):
     w, h = _width(sh)
     lines = []
     if c == nil:
-        summary = _rom_summary(name)
-        if summary == nil and sh:resolve_program(name) == nil:
+        full = _rom_text(name)
+        if full == nil and sh:resolve_program(name) == nil:
             return false
         lines[1] = [["5", name], ["0", "  " .. tr(sh, "CraftOS program")]]
-        if summary != nil:
-            _append(lines, _wrapped(summary, w, 2))
-        lines[len(lines) + 1] = [["8", "  " .. tr(sh, "More: the program's own help, if it has one (try: NAME -h)")]]
+        # полный текст справки ROM по абзацам
+        if full != nil:
+            for para in string.gmatch(full .. "\n", "([^\n]*)\n"):
+                if para == "":
+                    lines[len(lines) + 1] = []
+                else:
+                    _append(lines, _wrapped(para, w, 2))
+        else:
+            lines[len(lines) + 1] = [["8", "  " .. tr(sh, "More: the program's own help, if it has one (try: NAME -h)")]]
         page(sh, lines)
         return true
     lines[1] = [["5", name], ["0", "  " .. tr(sh, c.summary)]]

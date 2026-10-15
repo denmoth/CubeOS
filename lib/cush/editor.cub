@@ -421,11 +421,10 @@ export class Editor:
             self:copy_selection()
             return nil
         if name == "paste":
-            # вставка из буфера Windows (Ctrl+V; многострочная с модом MothPaste): становится и буфером терминала (Ctrl+Shift+V).
+            # вставка из буфера Windows (Ctrl+V; многострочная, если её пришлёт мод). Буфер терминала (Ctrl+Shift+V) отдельный.
             # Первая строка в строку ввода, остальные ждут Enter (выполнятся по очереди) или Ctrl+C (отбросить)
             self:_remember(self:_snapshot(), "paste")
             text = string.gsub(tostring(a), "\r", "")
-            view_mod.clipboard.text = text
             nl = string.find(text, "\n", 1, true)
             if nl == nil:
                 self:_insert(text)
