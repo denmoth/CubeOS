@@ -312,6 +312,12 @@ msgstr "Завантажити сторінку або файл"
 msgid "Gets the address over HTTP and prints it or saves it. HTTP must be allowed on the server."
 msgstr "Отримує адресу через HTTP і друкує або зберігає. HTTP має бути дозволений на сервері."
 
+msgid "Lock the terminal"
+msgstr "Заблокувати термінал"
+
+msgid "Hides the terminal behind a lock screen until you enter your PIN (or your password: Tab switches). Programs keep running; Ctrl+T does nothing while locked."
+msgstr "Ховає термінал за екраном блокування, доки ви не введете PIN (або пароль: Tab перемикає). Програми працюють далі; поки заблоковано, Ctrl+T нічого не робить."
+
 msgid "Network: other computers, shared folders"
 msgstr "Мережа: інші комп'ютери, спільні теки"
 
@@ -909,6 +915,9 @@ msgstr "Лише статус і заголовки"
 msgid "Download a file"
 msgstr "Завантажити файл"
 
+msgid "Lock now"
+msgstr "Заблокувати зараз"
+
 msgid "Name, modems, shared and mounted folders (the default)"
 msgstr "Ім'я, модеми, спільні та підключені теки (типово)"
 
@@ -1301,6 +1310,30 @@ msgstr "неправильний код сполучення"
 
 msgid "this computer is not paired with you"
 msgstr "цей комп'ютер не сполучений з вами"
+
+msgid "locking is not available here"
+msgstr "блокування тут недоступне"
+
+msgid "Locked"
+msgstr "Заблоковано"
+
+msgid "Enter your PIN (Tab: the password instead)"
+msgstr "Введіть PIN (Tab: замість нього пароль)"
+
+msgid "Enter your password (Tab: the PIN instead)"
+msgstr "Введіть пароль (Tab: замість нього PIN)"
+
+msgid "Wrong password"
+msgstr "Неправильний пароль"
+
+msgid "Wrong PIN: {n} tries left"
+msgstr "Неправильний PIN: залишилось спроб {n}"
+
+msgid "Too many wrong PINs: use the password"
+msgstr "Забагато неправильних PIN: введіть пароль"
+
+msgid "Too many attempts: wait {n} s"
+msgstr "Забагато спроб: зачекайте {n} с"
 
 msgid "shared folders work only over a wired modem"
 msgstr "спільні теки працюють лише через дротовий модем"

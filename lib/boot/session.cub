@@ -222,13 +222,28 @@ export class SessionManager:
         s.elevated_until = 0
         return true
 
-    def unlock(self, id, password):
+    # чем снимать блокировку: "pin", если у пользователя есть PIN и он не заблокирован, иначе "password"
+    def unlock_method(self, id):
+        s = self.sessions[id]
+        if s != nil and self.auth.has_pin != nil and self.auth:has_pin(s.user) and not self.auth:pin_locked(s.user):
+            return "pin"
+        return "password"
+
+    # снять блокировку (D226): method "pin" или "password" (nil: как unlock_method). Возвращает true или false, причину
+    # ("bad pin", "pin locked", "bad password", "locked") и число (попыток PIN осталось или секунд ждать)
+    def unlock(self, id, secret, method=nil):
         s = self.sessions[id]
         if s == nil:
             return false, "no session"
-        ok, why, wait = self.auth:verify(s.user, password)
-        if not ok:
-            return false, why, wait
+        how = method ?? self:unlock_method(id)
+        if how == "pin":
+            okp, whyp, left = self.auth:verify_pin(s.user, secret)
+            if not okp:
+                return false, whyp, left
+        else:
+            ok, why, wait = self.auth:verify(s.user, secret)
+            if not ok:
+                return false, why, wait
         s.state = "active"
         return true
 

@@ -312,6 +312,12 @@ msgstr "Скачать страницу или файл"
 msgid "Gets the address over HTTP and prints it or saves it. HTTP must be allowed on the server."
 msgstr "Получает адрес по HTTP и печатает или сохраняет. HTTP должен быть разрешён на сервере."
 
+msgid "Lock the terminal"
+msgstr "Заблокировать терминал"
+
+msgid "Hides the terminal behind a lock screen until you enter your PIN (or your password: Tab switches). Programs keep running; Ctrl+T does nothing while locked."
+msgstr "Прячет терминал за экраном блокировки, пока вы не введёте PIN (или пароль: Tab переключает). Программы продолжают работать; пока заблокировано, Ctrl+T ничего не делает."
+
 msgid "Network: other computers, shared folders"
 msgstr "Сеть: другие компьютеры, общие папки"
 
@@ -909,6 +915,9 @@ msgstr "Только статус и заголовки"
 msgid "Download a file"
 msgstr "Скачать файл"
 
+msgid "Lock now"
+msgstr "Заблокировать сейчас"
+
 msgid "Name, modems, shared and mounted folders (the default)"
 msgstr "Имя, модемы, общие и подключённые папки (по умолчанию)"
 
@@ -1301,6 +1310,30 @@ msgstr "неверный код сопряжения"
 
 msgid "this computer is not paired with you"
 msgstr "этот компьютер не сопряжён с вами"
+
+msgid "locking is not available here"
+msgstr "блокировка здесь недоступна"
+
+msgid "Locked"
+msgstr "Заблокировано"
+
+msgid "Enter your PIN (Tab: the password instead)"
+msgstr "Введите PIN (Tab: вместо него пароль)"
+
+msgid "Enter your password (Tab: the PIN instead)"
+msgstr "Введите пароль (Tab: вместо него PIN)"
+
+msgid "Wrong password"
+msgstr "Неверный пароль"
+
+msgid "Wrong PIN: {n} tries left"
+msgstr "Неверный PIN: осталось попыток {n}"
+
+msgid "Too many wrong PINs: use the password"
+msgstr "Слишком много неверных PIN: введите пароль"
+
+msgid "Too many attempts: wait {n} s"
+msgstr "Слишком много попыток: подождите {n} с"
 
 msgid "shared folders work only over a wired modem"
 msgstr "общие папки работают только через проводной модем"

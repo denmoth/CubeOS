@@ -1090,3 +1090,15 @@ def b_keyboard(sh, args):
     sh:println(sh:t("Keyboard: English + {lang}, mode {mode}", {lang: st.keyboard, mode: st.mode}))
     return 0
 add("keyboard", b_keyboard)
+
+# lock: заблокировать терминал (снимается PIN или паролем)
+def b_lock(sh, args):
+    if sh.lock == nil:
+        sh:eprint("lock: " .. sh:t("not available here"))
+        return 1
+    ok, why = sh.lock()
+    if not ok:
+        sh:eprint("lock: " .. sh:t(tostring(why)))
+        return 1
+    return 0
+add("lock", b_lock)

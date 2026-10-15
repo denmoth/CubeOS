@@ -104,6 +104,7 @@ export class Shell:
         self.audio = o.audio
         self.assets = o.assets
         self.net = o.net
+        self.lock = o.lock
         # log(level, text): запись в журнал системы без ожидания (ошибки команд и самой оболочки), nil вне сессии
         self.log = o.log
         # хозяин терминала смотрит, есть ли программа на переднем плане (удержание Ctrl+T)
