@@ -312,6 +312,18 @@ msgstr "Скачать страницу или файл"
 msgid "Gets the address over HTTP and prints it or saves it. HTTP must be allowed on the server."
 msgstr "Получает адрес по HTTP и печатает или сохраняет. HTTP должен быть разрешён на сервере."
 
+msgid "Network: other computers, shared folders"
+msgstr "Сеть: другие компьютеры, общие папки"
+
+msgid "Talks to other CubeOS computers through modems (channel 47100). To use a folder of another computer as a disk: share it there (net share), pair the computers once with a code (net pair on the host shows it, net pair HOST CODE here), then net mount HOST SHARE; the folder appears in /cubeos/net/HOST/SHARE and stays mounted after a reboot. Shared folders and pairing work only over wired modems; requests are signed with the pairing key, but file contents are not encrypted. Changing settings needs an administrator."
+msgstr "Связь с другими компьютерами CubeOS через модемы (канал 47100). Чтобы пользоваться папкой другого компьютера как диском: откройте её там (net share), один раз сопрягите компьютеры кодом (net pair на хозяине показывает код, здесь net pair ХОСТ КОД), потом net mount ХОСТ ПАПКА; папка появится в /cubeos/net/ХОСТ/ПАПКА и останется после перезагрузки. Общие папки и сопряжение работают только через проводные модемы; запросы подписаны ключом пары, но содержимое файлов не шифруется. Менять настройки может только администратор."
+
+msgid "Check that another computer answers"
+msgstr "Проверить, отвечает ли другой компьютер"
+
+msgid "Sends a ping through the modems COUNT times (4 by default) and shows how long the answer took. HOST is a name from net scan or a computer number."
+msgstr "Посылает ping через модемы COUNT раз (по умолчанию 4) и показывает, сколько шёл ответ. ХОСТ это имя из net scan или номер компьютера."
+
 msgid "Keyboard layout of the system"
 msgstr "Раскладка клавиатуры системы"
 
@@ -888,6 +900,66 @@ msgstr "Только статус и заголовки"
 msgid "Download a file"
 msgstr "Скачать файл"
 
+msgid "Name, modems, shared and mounted folders (the default)"
+msgstr "Имя, модемы, общие и подключённые папки (по умолчанию)"
+
+msgid "Which computers answer"
+msgstr "Какие компьютеры отвечают"
+
+msgid "Is the computer reachable, how fast"
+msgstr "Доступен ли компьютер и как быстро отвечает"
+
+msgid "The name of this computer on the network"
+msgstr "Имя этого компьютера в сети"
+
+msgid "Show a one-time pairing code (on the host)"
+msgstr "Показать одноразовый код сопряжения (на хозяине)"
+
+msgid "Pair with the host using its code"
+msgstr "Сопрячься с хозяином по его коду"
+
+msgid "Remove the pairing and its folders"
+msgstr "Убрать сопряжение и его папки"
+
+msgid "Share a folder; --ro read-only"
+msgstr "Открыть папку для других; --ro только чтение"
+
+msgid "Stop sharing"
+msgstr "Закрыть общий доступ"
+
+msgid "Shared folders here or on HOST"
+msgstr "Общие папки здесь или на ХОСТЕ"
+
+msgid "Use a folder of HOST as a disk"
+msgstr "Подключить папку ХОСТА как диск"
+
+msgid "Remove a network folder"
+msgstr "Отключить сетевую папку"
+
+msgid "Mounted network folders"
+msgstr "Подключённые сетевые папки"
+
+msgid "On the host: share a folder"
+msgstr "На хозяине: открыть папку"
+
+msgid "On the host: get a code"
+msgstr "На хозяине: получить код"
+
+msgid "Here: pair with base"
+msgstr "Здесь: сопрячься с base"
+
+msgid "Here: base's folder in /cubeos/net/base/files"
+msgstr "Здесь: папка base в /cubeos/net/base/files"
+
+msgid "How many times, 1 to 20"
+msgstr "Сколько раз, от 1 до 20"
+
+msgid "Is base reachable"
+msgstr "Доступен ли base"
+
+msgid "Computer #12, once"
+msgstr "Компьютер №12, один раз"
+
 msgid "The second language: ru, uk or another installed layout"
 msgstr "Второй язык: ru, uk или другая установленная раскладка"
 
@@ -1148,6 +1220,84 @@ msgstr "служба audiod не запущена"
 
 msgid "no speaker attached"
 msgstr "динамик не подключён"
+
+msgid "service is not running: netd"
+msgstr "служба netd не запущена"
+
+msgid "no answer from netd"
+msgstr "служба netd не ответила"
+
+msgid "only an administrator can change network settings"
+msgstr "менять настройки сети может только администратор"
+
+msgid "unknown computer: {host} (net scan shows who is around)"
+msgstr "неизвестный компьютер: {host} (net scan покажет, кто рядом)"
+
+msgid "not paired with {host}: run net pair on it, then net pair {host} CODE here"
+msgstr "нет сопряжения с {host}: выполните net pair на нём, потом здесь net pair {host} КОД"
+
+msgid "no answer from {host}"
+msgstr "{host} не отвечает"
+
+msgid "no wired modem: shared folders and pairing need a wired modem"
+msgstr "нет проводного модема: общим папкам и сопряжению нужен проводной модем"
+
+msgid "unexpected answer from {host}"
+msgstr "странный ответ от {host}"
+
+msgid "not paired with {host}"
+msgstr "нет сопряжения с {host}"
+
+msgid "a computer name uses letters, digits, - _ and ."
+msgstr "имя компьютера: латинские буквы, цифры, - _ и ."
+
+msgid "a share name uses letters, digits, - and _ (up to 32)"
+msgstr "имя общей папки: латинские буквы, цифры, - и _ (до 32)"
+
+msgid "the whole disk cannot be shared"
+msgstr "весь диск открыть нельзя"
+
+msgid "system folders cannot be shared"
+msgstr "системные папки открывать нельзя"
+
+msgid "no such folder: {path}"
+msgstr "нет такой папки: {path}"
+
+msgid "no such shared folder: {share}"
+msgstr "нет такой общей папки: {share}"
+
+msgid "{host} has no shared folder {share} (net shares {host} lists them)"
+msgstr "у {host} нет общей папки {share} (список: net shares {host})"
+
+msgid "network folders are mounted inside /cubeos/net"
+msgstr "сетевые папки подключаются внутри /cubeos/net"
+
+msgid "already mounted: {point}"
+msgstr "уже подключено: {point}"
+
+msgid "not a network folder: {point}"
+msgstr "это не сетевая папка: {point}"
+
+msgid "this computer is not waiting for pairing (run net pair on it first)"
+msgstr "этот компьютер не ждёт сопряжения (сначала выполните на нём net pair)"
+
+msgid "pairing works only over a wired modem"
+msgstr "сопряжение работает только через проводной модем"
+
+msgid "no pairing in progress"
+msgstr "сопряжение не идёт"
+
+msgid "wrong pairing code"
+msgstr "неверный код сопряжения"
+
+msgid "this computer is not paired with you"
+msgstr "этот компьютер не сопряжён с вами"
+
+msgid "shared folders work only over a wired modem"
+msgstr "общие папки работают только через проводной модем"
+
+msgid "refused"
+msgstr "отказано"
 
 msgid "nothing to play"
 msgstr "нечего играть"
@@ -1493,6 +1643,99 @@ msgstr "буфер {i}/{n}, Вверх/Вниз, Enter вставить"
 
 msgid "search"
 msgstr "поиск"
+
+msgid "the network is not available here"
+msgstr "сеть здесь недоступна"
+
+msgid "Computer: {name} (#{id})"
+msgstr "Компьютер: {name} (№{id})"
+
+msgid "wired"
+msgstr "проводной"
+
+msgid "wireless"
+msgstr "беспроводной"
+
+msgid "Modems: {list}"
+msgstr "Модемы: {list}"
+
+msgid "none (attach a wired modem)"
+msgstr "нет (подключите проводной модем)"
+
+msgid "Paired computers: {n}"
+msgstr "Сопряжённых компьютеров: {n}"
+
+msgid "read-only"
+msgstr "только чтение"
+
+msgid "Shared folders: {list}"
+msgstr "Общие папки: {list}"
+
+msgid "Network folder: {point} = {host}/{share}"
+msgstr "Сетевая папка: {point} = {host}/{share}"
+
+msgid "Waiting for pairing (the code from net pair works 5 minutes)."
+msgstr "Ждёт сопряжения (код из net pair действует 5 минут)."
+
+msgid "Nobody answered. Are the computers connected with modems and is CubeOS running there?"
+msgstr "Никто не ответил. Компьютеры соединены модемами и на них запущена CubeOS?"
+
+msgid "paired"
+msgstr "сопряжён"
+
+msgid "Looking for computers (1 second)..."
+msgstr "Ищу компьютеры (1 секунда)..."
+
+msgid "Answer from {name} (#{id}): {ms} ms"
+msgstr "Ответ от {name} (№{id}): {ms} мс"
+
+msgid "This computer is now called {name} on the network."
+msgstr "Теперь этот компьютер в сети называется {name}."
+
+msgid "Pairing code: {code}"
+msgstr "Код сопряжения: {code}"
+
+msgid "On the other computer run: net pair {name} {code}"
+msgstr "На другом компьютере выполните: net pair {name} {code}"
+
+msgid "The code works once, for {n} minutes. Pair over a cable that only your computers use."
+msgstr "Код действует один раз, {n} минут. Сопрягайте через кабель, которым пользуются только ваши компьютеры."
+
+msgid "Pairing with {host}..."
+msgstr "Сопряжение с {host}..."
+
+msgid "Paired with {name} (#{id}). Now: net shares {name}"
+msgstr "Сопряжено с {name} (№{id}). Дальше: net shares {name}"
+
+msgid "Forgot {host}: it has to be paired again."
+msgstr "{host} забыт: нужно сопрячь заново."
+
+msgid "Shared {path} as {share}."
+msgstr "{path} открыта как {share}."
+
+msgid "(read-only)"
+msgstr "(только чтение)"
+
+msgid "{share} is no longer shared."
+msgstr "{share} больше не общая."
+
+msgid "No shared folders."
+msgstr "Общих папок нет."
+
+msgid "Mounted at {point}"
+msgstr "Подключено в {point}"
+
+msgid "Unmounted {point}"
+msgstr "Отключено: {point}"
+
+msgid "No network folders."
+msgstr "Сетевых папок нет."
+
+msgid "net: unknown subcommand {name} (help net)"
+msgstr "net: неизвестная подкоманда {name} (help net)"
+
+msgid "{ok} of {n} answered"
+msgstr "Ответили {ok} из {n}"
 
 msgid "-- more: Space next page, Enter next line, q quit --"
 msgstr "-- дальше: Пробел страница, Enter строка, q выход --"

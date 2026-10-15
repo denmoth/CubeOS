@@ -1,0 +1,202 @@
+# cush.nettools: команды сети net и ping (служба netd через сессию терминала, sh.net). Описания в реестре cush.commands.
+# Ошибки netd это шаблоны с {host}, {share}, {point}, {path}: здесь они переводятся и заполняются значениями из команды.
+
+import cush.builtins as builtins
+
+def add(name, fn):
+    builtins.table_of[name] = fn
+
+def net_call(sh, name, op, args=nil, vars=nil):
+    if sh.net == nil:
+        sh:eprint(name .. ": " .. sh:t("the network is not available here"))
+        return nil
+    res, why = sh.net(op, args)
+    if res == nil:
+        sh:eprint(name .. ": " .. sh:t(tostring(why), vars ?? {}))
+    return res
+
+def show_status(sh):
+    s = net_call(sh, "net", "status")
+    if s == nil:
+        return 1
+    sh:println(sh:t("Computer: {name} (#{id})", {name: s.name, id: s.id}))
+    ms = []
+    for m in s.modems:
+        ms[len(ms) + 1] = m.side .. " (" .. sh:t(m.wired and "wired" or "wireless") .. ")"
+    sh:println(sh:t("Modems: {list}", {list: len(ms) > 0 and table.concat(ms, ", ") or sh:t("none (attach a wired modem)")}))
+    sh:println(sh:t("Paired computers: {n}", {n: s.paired}))
+    sh_list = []
+    for x in s.shares:
+        sh_list[len(sh_list) + 1] = x.name .. (x.readonly and (" (" .. sh:t("read-only") .. ")") or "")
+    sh:println(sh:t("Shared folders: {list}", {list: len(sh_list) > 0 and table.concat(sh_list, ", ") or sh:t("none")}))
+    mounts = net_call(sh, "net", "mounts") ?? []
+    for mt in mounts:
+        sh:println(sh:t("Network folder: {point} = {host}/{share}", {point: mt.point, host: mt.host, share: mt.share}))
+    if s.pairing:
+        sh:println(sh:t("Waiting for pairing (the code from net pair works 5 minutes)."))
+    return 0
+
+def show_peers(sh, list):
+    if len(list) == 0:
+        sh:println(sh:t("Nobody answered. Are the computers connected with modems and is CubeOS running there?"))
+        return
+    for p in list:
+        tags = []
+        if p.wired != nil:
+            tags[len(tags) + 1] = sh:t(p.wired and "wired" or "wireless")
+        if p.paired:
+            tags[len(tags) + 1] = sh:t("paired")
+        sh:println("#" .. tostring(p.id) .. "  " .. tostring(p.name ?? "?") .. (len(tags) > 0 and ("  (" .. table.concat(tags, ", ") .. ")") or ""))
+
+def b_net(sh, args):
+    sub = args[1]
+    if sub == nil or sub == "status":
+        return show_status(sh)
+    host = args[2]
+    v = {host: tostring(host)}
+    if sub == "scan":
+        sh:println(sh:t("Looking for computers (1 second)..."))
+        list = net_call(sh, "net", "scan", {seconds: 1})
+        if list == nil:
+            return 1
+        show_peers(sh, list)
+        return 0
+    if sub == "peers":
+        list = net_call(sh, "net", "peers")
+        if list == nil:
+            return 1
+        show_peers(sh, list)
+        return 0
+    if sub == "ping":
+        if host == nil:
+            sh:eprint("usage: net ping HOST")
+            return 2
+        r = net_call(sh, "net", "ping", {host: host}, v)
+        if r == nil:
+            return 1
+        sh:println(sh:t("Answer from {name} (#{id}): {ms} ms", {name: tostring(r.name), id: r.id, ms: r.ms}))
+        return 0
+    if sub == "name":
+        if host == nil:
+            s = net_call(sh, "net", "status")
+            if s != nil:
+                sh:println(s.name)
+            return s != nil and 0 or 1
+        r = net_call(sh, "net", "name", {name: host})
+        if r == nil:
+            return 1
+        sh:println(sh:t("This computer is now called {name} on the network.", {name: r}))
+        return 0
+    if sub == "pair":
+        if host == nil:
+            r = net_call(sh, "net", "pair_code")
+            if r == nil:
+                return 1
+            s = net_call(sh, "net", "status") ?? {}
+            sh:println(sh:t("Pairing code: {code}", {code: r.code}))
+            sh:println(sh:t("On the other computer run: net pair {name} {code}", {name: tostring(s.name), code: r.code}))
+            sh:write_color("8", sh:t("The code works once, for {n} minutes. Pair over a cable that only your computers use."))
+            sh:println("")
+            return 0
+        if args[3] == nil:
+            sh:eprint("usage: net pair HOST CODE")
+            return 2
+        sh:println(sh:t("Pairing with {host}...", v))
+        r = net_call(sh, "net", "pair", {host: host, code: args[3]}, v)
+        if r == nil:
+            return 1
+        sh:println(sh:t("Paired with {name} (#{id}). Now: net shares {name}", {name: r.name, id: r.id}))
+        return 0
+    if sub == "forget":
+        if host == nil:
+            sh:eprint("usage: net forget HOST")
+            return 2
+        if net_call(sh, "net", "forget", {host: host}, v) == nil:
+            return 1
+        sh:println(sh:t("Forgot {host}: it has to be paired again.", v))
+        return 0
+    if sub == "share":
+        ro = false
+        rest = []
+        for i in range[2, len(args)]:
+            if args[i] == "--ro" or args[i] == "-r":
+                ro = true
+            else:
+                rest[len(rest) + 1] = args[i]
+        if rest[1] == nil or rest[2] == nil:
+            sh:eprint("usage: net share NAME PATH [--ro]")
+            return 2
+        path = "/" .. sh:resolve(rest[2])
+        r = net_call(sh, "net", "share", {name: rest[1], path: path, readonly: ro}, {share: rest[1], path: path})
+        if r == nil:
+            return 1
+        sh:println(sh:t("Shared {path} as {share}.", {path: r.path, share: r.name}) .. (r.readonly and (" " .. sh:t("(read-only)")) or ""))
+        return 0
+    if sub == "unshare":
+        if host == nil:
+            sh:eprint("usage: net unshare NAME")
+            return 2
+        if net_call(sh, "net", "unshare", {name: host}, {share: host}) == nil:
+            return 1
+        sh:println(sh:t("{share} is no longer shared.", {share: host}))
+        return 0
+    if sub == "shares":
+        list = nil
+        if host == nil:
+            list = net_call(sh, "net", "shares")
+        else:
+            list = net_call(sh, "net", "remote_shares", {host: host}, v)
+        if list == nil:
+            return 1
+        if len(list) == 0:
+            sh:println(sh:t("No shared folders."))
+        for x in list:
+            sh:println(x.name .. (x.path != nil and ("  " .. x.path) or "") .. (x.readonly and ("  (" .. sh:t("read-only") .. ")") or ""))
+        return 0
+    if sub == "mount":
+        if host == nil or args[3] == nil:
+            sh:eprint("usage: net mount HOST SHARE [POINT]")
+            return 2
+        r = net_call(sh, "net", "mount", {host: host, share: args[3], point: args[4]}, {host: host, share: args[3], point: tostring(args[4])})
+        if r == nil:
+            return 1
+        sh:println(sh:t("Mounted at {point}", {point: r.point}) .. (r.readonly and (" " .. sh:t("(read-only)")) or ""))
+        return 0
+    if sub == "unmount" or sub == "umount":
+        if host == nil:
+            sh:eprint("usage: net unmount POINT")
+            return 2
+        point = string.sub(host, 1, 1) == "/" and host or ("/" .. sh:resolve(host))
+        if net_call(sh, "net", "unmount", {point: point}, {point: point}) == nil:
+            return 1
+        sh:println(sh:t("Unmounted {point}", {point: point}))
+        return 0
+    if sub == "mounts":
+        list = net_call(sh, "net", "mounts")
+        if list == nil:
+            return 1
+        if len(list) == 0:
+            sh:println(sh:t("No network folders."))
+        for mt in list:
+            sh:println(mt.point .. "  " .. mt.host .. "/" .. mt.share .. (mt.readonly and ("  (" .. sh:t("read-only") .. ")") or ""))
+        return 0
+    sh:eprint(sh:t("net: unknown subcommand {name} (help net)", {name: tostring(sub)}))
+    return 2
+add("net", b_net)
+
+# ping HOST [COUNT]: как net ping, несколько раз
+def b_ping(sh, args):
+    host = args[1]
+    if host == nil:
+        sh:eprint("usage: ping HOST [COUNT]")
+        return 2
+    count = math.min(math.max(math.floor(tonumber(args[2]) ?? 4), 1), 20)
+    ok = 0
+    for i in range[1, count]:
+        r = net_call(sh, "ping", "ping", {host: host}, {host: host})
+        if r != nil:
+            ok += 1
+            sh:println(sh:t("Answer from {name} (#{id}): {ms} ms", {name: tostring(r.name), id: r.id, ms: r.ms}))
+    sh:println(sh:t("{ok} of {n} answered", {ok: ok, n: count}))
+    return ok > 0 and 0 or 1
+add("ping", b_ping)

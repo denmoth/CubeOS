@@ -22,6 +22,7 @@ import cush.fetch as fetch
 import cush.help as help_mod
 import cush.tools as tools_mod
 import cush.tools2 as tools2_mod
+import cush.nettools as nettools_mod
 import i18n
 import clock
 import json5
@@ -101,6 +102,7 @@ export class Shell:
         self.account = o.account
         self.keyboard = o.keyboard
         self.audio = o.audio
+        self.net = o.net
         # log(level, text): запись в журнал системы без ожидания (ошибки команд и самой оболочки), nil вне сессии
         self.log = o.log
         # хозяин терминала смотрит, есть ли программа на переднем плане (удержание Ctrl+T)

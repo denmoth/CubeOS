@@ -312,6 +312,18 @@ msgstr "Завантажити сторінку або файл"
 msgid "Gets the address over HTTP and prints it or saves it. HTTP must be allowed on the server."
 msgstr "Отримує адресу через HTTP і друкує або зберігає. HTTP має бути дозволений на сервері."
 
+msgid "Network: other computers, shared folders"
+msgstr "Мережа: інші комп'ютери, спільні теки"
+
+msgid "Talks to other CubeOS computers through modems (channel 47100). To use a folder of another computer as a disk: share it there (net share), pair the computers once with a code (net pair on the host shows it, net pair HOST CODE here), then net mount HOST SHARE; the folder appears in /cubeos/net/HOST/SHARE and stays mounted after a reboot. Shared folders and pairing work only over wired modems; requests are signed with the pairing key, but file contents are not encrypted. Changing settings needs an administrator."
+msgstr "Зв'язок з іншими комп'ютерами CubeOS через модеми (канал 47100). Щоб користуватися текою іншого комп'ютера як диском: відкрийте її там (net share), один раз сполучіть комп'ютери кодом (net pair на хазяїні показує код, тут net pair ХОСТ КОД), потім net mount ХОСТ ТЕКА; тека з'явиться в /cubeos/net/ХОСТ/ТЕКА і залишиться після перезавантаження. Спільні теки та сполучення працюють лише через дротові модеми; запити підписані ключем пари, але вміст файлів не шифрується. Змінювати налаштування може лише адміністратор."
+
+msgid "Check that another computer answers"
+msgstr "Перевірити, чи відповідає інший комп'ютер"
+
+msgid "Sends a ping through the modems COUNT times (4 by default) and shows how long the answer took. HOST is a name from net scan or a computer number."
+msgstr "Надсилає ping через модеми COUNT разів (типово 4) і показує, скільки йшла відповідь. ХОСТ це ім'я з net scan або номер комп'ютера."
+
 msgid "Keyboard layout of the system"
 msgstr "Розкладка клавіатури системи"
 
@@ -888,6 +900,66 @@ msgstr "Лише статус і заголовки"
 msgid "Download a file"
 msgstr "Завантажити файл"
 
+msgid "Name, modems, shared and mounted folders (the default)"
+msgstr "Ім'я, модеми, спільні та підключені теки (типово)"
+
+msgid "Which computers answer"
+msgstr "Які комп'ютери відповідають"
+
+msgid "Is the computer reachable, how fast"
+msgstr "Чи доступний комп'ютер і як швидко відповідає"
+
+msgid "The name of this computer on the network"
+msgstr "Ім'я цього комп'ютера в мережі"
+
+msgid "Show a one-time pairing code (on the host)"
+msgstr "Показати одноразовий код сполучення (на хазяїні)"
+
+msgid "Pair with the host using its code"
+msgstr "Сполучитися з хазяїном за його кодом"
+
+msgid "Remove the pairing and its folders"
+msgstr "Прибрати сполучення та його теки"
+
+msgid "Share a folder; --ro read-only"
+msgstr "Відкрити теку для інших; --ro лише читання"
+
+msgid "Stop sharing"
+msgstr "Закрити спільний доступ"
+
+msgid "Shared folders here or on HOST"
+msgstr "Спільні теки тут або на ХОСТІ"
+
+msgid "Use a folder of HOST as a disk"
+msgstr "Підключити теку ХОСТА як диск"
+
+msgid "Remove a network folder"
+msgstr "Відключити мережеву теку"
+
+msgid "Mounted network folders"
+msgstr "Підключені мережеві теки"
+
+msgid "On the host: share a folder"
+msgstr "На хазяїні: відкрити теку"
+
+msgid "On the host: get a code"
+msgstr "На хазяїні: отримати код"
+
+msgid "Here: pair with base"
+msgstr "Тут: сполучитися з base"
+
+msgid "Here: base's folder in /cubeos/net/base/files"
+msgstr "Тут: тека base у /cubeos/net/base/files"
+
+msgid "How many times, 1 to 20"
+msgstr "Скільки разів, від 1 до 20"
+
+msgid "Is base reachable"
+msgstr "Чи доступний base"
+
+msgid "Computer #12, once"
+msgstr "Комп'ютер №12, один раз"
+
 msgid "The second language: ru, uk or another installed layout"
 msgstr "Друга мова: ru, uk або інша встановлена розкладка"
 
@@ -1148,6 +1220,84 @@ msgstr "служба audiod не запущена"
 
 msgid "no speaker attached"
 msgstr "динамік не під'єднано"
+
+msgid "service is not running: netd"
+msgstr "служба netd не запущена"
+
+msgid "no answer from netd"
+msgstr "служба netd не відповіла"
+
+msgid "only an administrator can change network settings"
+msgstr "змінювати налаштування мережі може лише адміністратор"
+
+msgid "unknown computer: {host} (net scan shows who is around)"
+msgstr "невідомий комп'ютер: {host} (net scan покаже, хто поруч)"
+
+msgid "not paired with {host}: run net pair on it, then net pair {host} CODE here"
+msgstr "немає сполучення з {host}: виконайте net pair на ньому, потім тут net pair {host} КОД"
+
+msgid "no answer from {host}"
+msgstr "{host} не відповідає"
+
+msgid "no wired modem: shared folders and pairing need a wired modem"
+msgstr "немає дротового модема: спільним текам і сполученню потрібен дротовий модем"
+
+msgid "unexpected answer from {host}"
+msgstr "дивна відповідь від {host}"
+
+msgid "not paired with {host}"
+msgstr "немає сполучення з {host}"
+
+msgid "a computer name uses letters, digits, - _ and ."
+msgstr "ім'я комп'ютера: латинські літери, цифри, - _ та ."
+
+msgid "a share name uses letters, digits, - and _ (up to 32)"
+msgstr "ім'я спільної теки: латинські літери, цифри, - та _ (до 32)"
+
+msgid "the whole disk cannot be shared"
+msgstr "весь диск відкрити не можна"
+
+msgid "system folders cannot be shared"
+msgstr "системні теки відкривати не можна"
+
+msgid "no such folder: {path}"
+msgstr "немає такої теки: {path}"
+
+msgid "no such shared folder: {share}"
+msgstr "немає такої спільної теки: {share}"
+
+msgid "{host} has no shared folder {share} (net shares {host} lists them)"
+msgstr "у {host} немає спільної теки {share} (список: net shares {host})"
+
+msgid "network folders are mounted inside /cubeos/net"
+msgstr "мережеві теки підключаються всередині /cubeos/net"
+
+msgid "already mounted: {point}"
+msgstr "вже підключено: {point}"
+
+msgid "not a network folder: {point}"
+msgstr "це не мережева тека: {point}"
+
+msgid "this computer is not waiting for pairing (run net pair on it first)"
+msgstr "цей комп'ютер не чекає на сполучення (спершу виконайте на ньому net pair)"
+
+msgid "pairing works only over a wired modem"
+msgstr "сполучення працює лише через дротовий модем"
+
+msgid "no pairing in progress"
+msgstr "сполучення не триває"
+
+msgid "wrong pairing code"
+msgstr "неправильний код сполучення"
+
+msgid "this computer is not paired with you"
+msgstr "цей комп'ютер не сполучений з вами"
+
+msgid "shared folders work only over a wired modem"
+msgstr "спільні теки працюють лише через дротовий модем"
+
+msgid "refused"
+msgstr "відмовлено"
 
 msgid "nothing to play"
 msgstr "нічого грати"
@@ -1493,6 +1643,99 @@ msgstr "буфер {i}/{n}, Вгору/Вниз, Enter вставити"
 
 msgid "search"
 msgstr "пошук"
+
+msgid "the network is not available here"
+msgstr "мережа тут недоступна"
+
+msgid "Computer: {name} (#{id})"
+msgstr "Комп'ютер: {name} (№{id})"
+
+msgid "wired"
+msgstr "дротовий"
+
+msgid "wireless"
+msgstr "бездротовий"
+
+msgid "Modems: {list}"
+msgstr "Модеми: {list}"
+
+msgid "none (attach a wired modem)"
+msgstr "немає (під'єднайте дротовий модем)"
+
+msgid "Paired computers: {n}"
+msgstr "Сполучених комп'ютерів: {n}"
+
+msgid "read-only"
+msgstr "лише читання"
+
+msgid "Shared folders: {list}"
+msgstr "Спільні теки: {list}"
+
+msgid "Network folder: {point} = {host}/{share}"
+msgstr "Мережева тека: {point} = {host}/{share}"
+
+msgid "Waiting for pairing (the code from net pair works 5 minutes)."
+msgstr "Чекає на сполучення (код з net pair діє 5 хвилин)."
+
+msgid "Nobody answered. Are the computers connected with modems and is CubeOS running there?"
+msgstr "Ніхто не відповів. Комп'ютери з'єднані модемами і на них запущена CubeOS?"
+
+msgid "paired"
+msgstr "сполучений"
+
+msgid "Looking for computers (1 second)..."
+msgstr "Шукаю комп'ютери (1 секунда)..."
+
+msgid "Answer from {name} (#{id}): {ms} ms"
+msgstr "Відповідь від {name} (№{id}): {ms} мс"
+
+msgid "This computer is now called {name} on the network."
+msgstr "Тепер цей комп'ютер у мережі називається {name}."
+
+msgid "Pairing code: {code}"
+msgstr "Код сполучення: {code}"
+
+msgid "On the other computer run: net pair {name} {code}"
+msgstr "На іншому комп'ютері виконайте: net pair {name} {code}"
+
+msgid "The code works once, for {n} minutes. Pair over a cable that only your computers use."
+msgstr "Код діє один раз, {n} хвилин. Сполучайте через кабель, яким користуються лише ваші комп'ютери."
+
+msgid "Pairing with {host}..."
+msgstr "Сполучення з {host}..."
+
+msgid "Paired with {name} (#{id}). Now: net shares {name}"
+msgstr "Сполучено з {name} (№{id}). Далі: net shares {name}"
+
+msgid "Forgot {host}: it has to be paired again."
+msgstr "{host} забуто: треба сполучити знову."
+
+msgid "Shared {path} as {share}."
+msgstr "{path} відкрито як {share}."
+
+msgid "(read-only)"
+msgstr "(лише читання)"
+
+msgid "{share} is no longer shared."
+msgstr "{share} більше не спільна."
+
+msgid "No shared folders."
+msgstr "Спільних тек немає."
+
+msgid "Mounted at {point}"
+msgstr "Підключено в {point}"
+
+msgid "Unmounted {point}"
+msgstr "Відключено: {point}"
+
+msgid "No network folders."
+msgstr "Мережевих тек немає."
+
+msgid "net: unknown subcommand {name} (help net)"
+msgstr "net: невідома підкоманда {name} (help net)"
+
+msgid "{ok} of {n} answered"
+msgstr "Відповіли {ok} з {n}"
 
 msgid "-- more: Space next page, Enter next line, q quit --"
 msgstr "-- далі: Пробіл сторінка, Enter рядок, q вихід --"

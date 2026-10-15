@@ -23,6 +23,9 @@ def _event(name, a, b, c, d, e):
     ev.n = n
     return ev
 
+def _net_wait(req):
+    return type(req) == "table" and req.op == "wait_event" and req.net == true
+
 export class LegacyProc:
     # args: список аргументов программы; opts: name, main (функция main(env, args) вместо файла), on_exit(proc, ok, err), on_shutdown(proc, reboot)
     def init(self, env, path, args=nil, opts=nil):
@@ -122,6 +125,11 @@ export class LegacyProc:
             ok, result = coroutine.resume(self.co)
         else:
             ok, result = coroutine.resume(self.co, table.unpack(ev, 1, ev.n))
+        # ожидание ответа по сети (net.link.wait_modem) проходит к ядру: только этот запрос и не дольше 10 секунд
+        while ok and coroutine.status(self.co) != "dead" and _net_wait(result):
+            ms = math.min(math.max(tonumber(result.timeout_ms) ?? 0, 0), 10000)
+            passed, answer = pcall(coroutine.yield, {op: "wait_event", filter: ["modem_message"], timeout_ms: ms, keep: true})
+            ok, result = coroutine.resume(self.co, passed and answer or nil)
         if coroutine.status(self.co) == "dead":
             self.finished = true
             self.ok = ok

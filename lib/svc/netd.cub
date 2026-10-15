@@ -1,0 +1,659 @@
+# svc.netd: сеть CubeNet (шаг 8, частично; D242, docs/13-network-cluster.md). Модемы, имена компьютеров, поиск соседей, ping,
+# сопряжение по коду, общие папки и папки других компьютеров как диски.
+#
+# Канал 47100 на всех модемах. Сообщения net.proto: обнаружение (hello?) и ping открыты; всё про файлы подписано общим ключом
+# пары (HMAC-SHA256), со счётчиком и меткой времени (повтор перехваченного не пройдёт) и по умолчанию только через проводной модем.
+# Содержимое файлов не шифруется: кто подключён к тому же кабелю, может его прочитать (D242).
+#
+# Сопряжение: на хозяине `net pair` даёт код из 10 знаков (действует 5 минут, 3 неверные попытки его гасят); на другом компьютере
+# `net pair ХОСТ КОД`. Ключ выводится из кода и случайных чисел обеих сторон (PBKDF2), сам код по сети не идёт. Ключи лежат в
+# /cubeos/sys/sec/net_keys.lock (читает только система).
+#
+# Общая папка: `net share ИМЯ ПУТЬ [--ro]`; всё, что запрашивает сопряжённый компьютер, выполняется только внутри этой папки
+# (ссылки, ведущие наружу, отказ). Монтирование: `net mount ХОСТ ПАПКА` даёт /cubeos/net/<хост>/<папка> (провайдер net.remote),
+# запоминается в net.conf и монтируется снова после перезагрузки.
+#
+# Запросы (svc.rpc): status, scan {seconds}, ping {host}, peers, name {name}, pair_code, pair {host, code}, forget {host},
+# share {name, path, readonly}, unshare {name}, shares, remote_shares {host}, mount {host, share, point}, unmount {point}, mounts.
+# Менять (name, pair_code, pair, forget, share, unshare, mount, unmount) может только администратор.
+# Ошибки это шаблоны с {host}, {share}, {point}, {path} (подставляет и переводит тот, кто спрашивал: значения из его же запроса).
+# main(sys, args): args.view, args.fsys, args.periph, args.id, args.label, args.rounds (PBKDF2), args.now (часы, мс), args.system.
+
+import json5
+import sha256
+import cfs.path as paths
+import cfs.errors as errors
+import net.proto as proto
+import net.link as link_mod
+import net.remote as remote
+import svc.rpc as rpc
+
+export const CONF_PATH = "/cubeos/sys/cfg/net.conf"
+export const KEYS_PATH = "/cubeos/sys/sec/net_keys.lock"
+export const MOUNT_ROOT = "/cubeos/net"
+export const CODE_CHARS = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+export const CODE_LEN = 10
+export const CODE_TTL = 300000
+export const PAIR_TRIES = 3
+export const ROUNDS = 2000
+const FORBIDDEN = ["/cubeos/sys", "/cubeos/boot", "/cubeos/var", "/cubeos/net", "/rom"]
+const WRITE_OPS = {write: true, mkdir: true, remove: true, move: true}
+const ent = {n: 0}
+
+# код как его ввёл человек: без пробелов и дефисов, заглавными
+export def normalize_code(text):
+    return (string.gsub(string.upper(tostring(text ?? "")), "[^%w]", ""))
+
+def _random_hex(extra=""):
+    ent.n += 1
+    seed = tostring(os.epoch("utc")) .. ":" .. tostring(os.clock()) .. ":" .. tostring(math.random(0, 2147483646)) .. ":" .. tostring(math.random(0, 2147483646)) .. ":" .. tostring({}) .. ":" .. tostring(ent.n) .. ":" .. extra
+    return sha256.hex(seed)
+
+# новый код сопряжения: 10 знаков из 32 (50 бит), показывается как ABCDE-FGHJK
+export def new_code():
+    h = _random_hex("code")
+    out = []
+    for i in range[1, CODE_LEN]:
+        b = tonumber(string.sub(h, i * 2 - 1, i * 2), 16) % 32
+        out[i] = string.sub(CODE_CHARS, b + 1, b + 1)
+    s = table.concat(out)
+    return string.sub(s, 1, 5) .. "-" .. string.sub(s, 6)
+
+def _clean_name(name):
+    s = (string.gsub(tostring(name), "[^%w_%-%.]", "_"))
+    s = (string.gsub(s, "^%.+", "_"))
+    if s == "":
+        return "pc"
+    return string.sub(s, 1, 32)
+
+def _short(text, n=32):
+    if type(text) != "string":
+        return nil
+    return string.sub(text, 1, n)
+
+# путь общей папки не должен пересекаться с системными местами (ни внутри них, ни содержать их)
+export def share_problem(path):
+    p = paths.normalize(path)
+    if p == "/" or p == "/cubeos":
+        return "the whole disk cannot be shared"
+    for f in FORBIDDEN:
+        if paths.is_inside(p, f) or paths.is_inside(f, p):
+            return "system folders cannot be shared"
+    return nil
+
+export def main(sys, args):
+    a = args ?? {}
+    view = a.view ?? sys.view()
+    fsys = a.fsys ?? (a.system != nil and a.system.fsys or nil)
+    periph = a.periph ?? peripheral
+    kernel = a.system != nil and a.system.kernel or nil
+    my_id = a.id ?? os.getComputerID()
+    rounds = a.rounds ?? ROUNDS
+    clock = a.now ?? (() => os.epoch("utc"))
+    conf = {name: nil, wireless: false, shares: {}, mounts: []}
+    peer_keys = {}
+    peers = {}
+    last_seq = {}
+    mounted = {}
+    st = {pairing: nil, read: nil}
+
+    # ------------------------------------------------------------ настройки и ключи
+
+    def read_json(path):
+        if view == nil or not view:exists(path):
+            return nil
+        ok, data = pcall(() => json5.parse(view:read(path)))
+        if ok and type(data) == "table":
+            return data
+        sys.log("warn", "cannot read " .. path)
+        return nil
+
+    loaded = read_json(CONF_PATH) ?? {}
+    conf.name = _short(loaded.name)
+    conf.wireless = loaded.wireless == true
+    conf.shares = type(loaded.shares) == "table" and loaded.shares or {}
+    conf.mounts = type(loaded.mounts) == "table" and loaded.mounts or []
+    peer_keys = read_json(KEYS_PATH) ?? {}
+
+    def save_conf():
+        text = view:exists(CONF_PATH) and view:read(CONF_PATH) or "{}\n"
+        text = json5.patch(text, ["name"], conf.name ?? "")
+        text = json5.patch(text, ["shares"], conf.shares)
+        text = json5.patch(text, ["mounts"], conf.mounts)
+        view:write_atomic(CONF_PATH, text)
+
+    def save_keys():
+        view:write_atomic(KEYS_PATH, json5.stringify(peer_keys))
+
+    def my_name():
+        if conf.name != nil and conf.name != "":
+            return conf.name
+        label = a.label
+        if label == nil and os.getComputerLabel != nil:
+            label = os.getComputerLabel()
+        return _short(label) ?? ("pc-" .. tostring(my_id))
+
+    def is_admin(sender):
+        p = kernel != nil and kernel.procs[sender] or nil
+        sub = p != nil and p.subject or nil
+        if sub == nil:
+            return true
+        for r in sub.roles ?? []:
+            if r == "admin" or r == "system":
+                return true
+        auth = a.system != nil and a.system.auth or nil
+        return auth != nil and auth:is_admin(sub.name)
+
+    def need_admin(sender):
+        if not is_admin(sender):
+            raise Error("only an administrator can change network settings")
+
+    # ------------------------------------------------------------ модемы
+
+    def modem_list():
+        out = []
+        ok, names = pcall(() => periph.getNames())
+        for name in (ok and names or []):
+            okt, kind = pcall(() => periph.getType(name))
+            if okt and kind == "modem":
+                m = periph.wrap(name)
+                if m != nil:
+                    okw, wl = pcall(() => m.isWireless())
+                    let dev = m
+                    out[len(out) + 1] = {side: name, wired: not (okw and wl), transmit: (msg) => dev.transmit(proto.CHANNEL, proto.CHANNEL, msg),
+                        open: () => dev.open(proto.CHANNEL)}
+        return out
+
+    def open_all():
+        for m in modem_list():
+            pcall(m.open)
+
+    def side_wired(side):
+        for m in modem_list():
+            if m.side == side:
+                return m.wired
+        return false
+
+    link = link_mod.new({id: my_id, modems: modem_list, now: clock, wireless: conf.wireless})
+
+    def note_peer(m, side, wired, dist):
+        p = peers[m.src] ?? {}
+        p.side = side
+        p.wired = wired
+        p.distance = dist
+        p.seen = clock()
+        if type(m.body) == "table" and type(m.body.name) == "string":
+            p.name = _short(m.body.name)
+        peers[m.src] = p
+
+    def reply(m, side, kind, body, key=nil):
+        r = link:message(kind, m.src, body, proto.id_of(m))
+        if key != nil:
+            proto.sign(r, key)
+        link:send(r, {side: side})
+
+    # ------------------------------------------------------------ общие папки (сторона хозяина)
+
+    def share_path(name, rel):
+        s = conf.shares[tostring(name)]
+        if s == nil:
+            errors.fail("ENOENT", "no such shared folder: " .. tostring(name))
+        root = paths.normalize(s.path)
+        full = paths.normalize(root .. "/" .. tostring(rel ?? "/"))
+        if not paths.is_inside(full, root):
+            errors.fail("EACCES", "outside the shared folder", rel)
+        if not paths.is_inside(fsys:resolve(full), fsys:resolve(root)):
+            errors.fail("EACCES", "the path leads outside the shared folder", rel)
+        return full, s, root
+
+    def plain(e):
+        return {type: e.type, size: e.size, modified: e.modified}
+
+    def fs_op(b):
+        full, s, root = share_path(b.share, b.path)
+        op = b.op
+        if WRITE_OPS[op] and s.readonly:
+            errors.fail("EROFS", "the shared folder is read-only", b.path)
+        if op == "stat":
+            e = fsys:stat(nil, full)
+            if e != nil:
+                return {st: plain(e)}
+            oks, sym = pcall(() => fsys:stat(nil, full .. ".sym"))
+            return {st: nil, sym: oks and sym != nil}
+        if op == "list":
+            out = []
+            for e in fsys:list(nil, full, {hidden: true}):
+                item = e
+                if e.type == "link":
+                    okl, target = pcall(() => fsys:stat(nil, paths.join(full, e.name)))
+                    item = okl and target or nil
+                if item != nil:
+                    out[len(out) + 1] = {name: e.name, type: item.type, size: item.size, modified: item.modified}
+            return out
+        if op == "read":
+            rc = st.read
+            if rc == nil or rc.path != full or clock() - rc.at > 5000:
+                rc = {path: full, data: fsys:read_file(nil, full), at: clock()}
+                st.read = rc
+            off = math.max(0, math.floor(tonumber(b.offset) ?? 0))
+            size = math.min(math.max(1, math.floor(tonumber(b.size) ?? remote.CHUNK)), remote.CHUNK)
+            return {data: string.sub(rc.data, off + 1, off + size), total: len(rc.data)}
+        st.read = nil
+        if op == "write":
+            if type(b.data) != "string":
+                errors.fail("EINVAL", "no data", b.path)
+            tmp = paths.join(paths.parent(full), "." .. paths.basename(full) .. ".part")
+            if b.part == 1:
+                fsys:write_file(nil, tmp, b.data)
+            else:
+                if fsys:stat(nil, tmp) == nil:
+                    errors.fail("EIO", "the upload was interrupted, try again", b.path)
+                fsys:write_file(nil, tmp, b.data, {append: true})
+            if b.last:
+                old = fsys:stat(nil, full)
+                if old != nil and old.type == "dir":
+                    errors.fail("EISDIR", "is a directory", b.path)
+                if old != nil:
+                    fsys:remove(nil, full, {permanent: true})
+                fsys:move(nil, tmp, full)
+            return true
+        if op == "mkdir":
+            fsys:mkdir(nil, full)
+            return true
+        if op == "remove":
+            if full == root:
+                errors.fail("EBUSY", "the shared folder itself cannot be removed", b.path)
+            fsys:remove(nil, full, {recursive: true, permanent: true})
+            return true
+        if op == "move":
+            dest = share_path(b.share, b.to)
+            if full == root:
+                errors.fail("EBUSY", "the shared folder itself cannot be moved", b.path)
+            fsys:move(nil, full, dest)
+            return true
+        if op == "space":
+            sp = fsys:space(root)
+            return {free: sp.free, capacity: sp.capacity, used: sp.used}
+        errors.fail("EINVAL", "unknown operation: " .. tostring(op))
+
+    # ------------------------------------------------------------ входящие сообщения
+
+    incoming = {}
+
+    def on_hello(m, side, wired):
+        reply(m, side, "hello", {name: my_name()})
+    incoming["hello?"] = on_hello
+
+    def on_ping(m, side, wired):
+        reply(m, side, "pong", {name: my_name()})
+    incoming.ping = on_ping
+
+    def on_pair_req(m, side, wired):
+        p = st.pairing
+        if p == nil or clock() > p.expires:
+            st.pairing = nil
+            reply(m, side, "denied", {err: "this computer is not waiting for pairing (run net pair on it first)"})
+            return
+        if not wired and not conf.wireless:
+            reply(m, side, "denied", {err: "pairing works only over a wired modem"})
+            return
+        body = type(m.body) == "table" and m.body or {}
+        c = {nc: tostring(body.nonce), nh: _random_hex("host"), name: _short(body.name) ?? ("pc-" .. tostring(m.src))}
+        p.chal[m.src] = c
+        reply(m, side, "pair_chal", {salt: p.salt, nonce: c.nh, rounds: rounds})
+    incoming.pair_req = on_pair_req
+
+    def on_pair_proof(m, side, wired):
+        p = st.pairing
+        c = p != nil and p.chal[m.src] or nil
+        if c == nil or clock() > p.expires:
+            reply(m, side, "denied", {err: "no pairing in progress"})
+            return
+        if c.key == nil:
+            sys.busy("pairing")
+            c.key = sha256.to_hex(proto.pair_key(p.code, p.salt, c.nc, c.nh, rounds))
+            sys.busy(nil)
+        if proto.verify(m, c.key) and proto.fresh(m, nil, clock()):
+            peer_keys[tostring(m.src)] = {key: c.key, name: c.name, paired: clock()}
+            save_keys()
+            st.pairing = nil
+            reply(m, side, "pair_ok", {name: my_name()}, c.key)
+            sys.log("info", "paired with computer " .. tostring(m.src) .. " (" .. c.name .. ")")
+            return
+        p.tries += 1
+        sys.log("warn", "wrong pairing code from computer " .. tostring(m.src) .. " (" .. p.tries .. " of " .. PAIR_TRIES .. ")")
+        if p.tries >= PAIR_TRIES:
+            st.pairing = nil
+            sys.log("warn", "the pairing code was cancelled after " .. PAIR_TRIES .. " wrong attempts")
+        reply(m, side, "denied", {err: "wrong pairing code"})
+    incoming.pair_proof = on_pair_proof
+
+    # подписанный запрос сопряжённого компьютера: ключ, подпись, свежесть, провод; иначе nil (отказ уже отправлен или молча)
+    def trusted(m, side, wired):
+        info = peer_keys[tostring(m.src)]
+        if info == nil:
+            reply(m, side, "denied", {err: "this computer is not paired with you"})
+            return nil
+        if not proto.verify(m, info.key):
+            sys.log("warn", "bad signature from computer " .. tostring(m.src) .. ", ignored")
+            return nil
+        if not proto.fresh(m, last_seq[m.src], clock()):
+            sys.log("warn", "replayed or stale message from computer " .. tostring(m.src) .. ", ignored")
+            return nil
+        last_seq[m.src] = m.seq
+        if not wired and not conf.wireless:
+            reply(m, side, "denied", {err: "shared folders work only over a wired modem"})
+            return nil
+        return info.key
+
+    def on_fs(m, side, wired):
+        key = trusted(m, side, wired)
+        if key == nil:
+            return
+        body = type(m.body) == "table" and m.body or {}
+        ok, res = pcall(() => fs_op(body))
+        if ok:
+            reply(m, side, "fs_ok", {value: res}, key)
+        elif isinstance(res, errors.CfsError):
+            reply(m, side, "fs_ok", {err: res.detail, code: res.code}, key)
+        else:
+            reply(m, side, "fs_ok", {err: tostring(res), code: "EIO"}, key)
+    incoming.fs = on_fs
+
+    def share_list():
+        out = []
+        for name, s in conf.shares:
+            out[len(out) + 1] = {name: name, readonly: s.readonly == true}
+        table.sort(out, (x, y) => x.name < y.name)
+        return out
+
+    def on_shares(m, side, wired):
+        key = trusted(m, side, wired)
+        if key != nil:
+            reply(m, side, "shares", {list: share_list()}, key)
+    incoming["shares?"] = on_shares
+
+    def on_event(ev):
+        if ev.event == "peripheral":
+            open_all()
+            return
+        if ev.event != "modem_message":
+            return
+        side = ev.args[1]
+        m = ev.args[4]
+        if ev.args[2] != proto.CHANNEL or not proto.valid(m) or m.src == my_id:
+            return
+        if (m.dst != nil and m.dst != my_id) or m.re != nil:
+            return
+        wired = side_wired(side)
+        note_peer(m, side, wired, ev.args[5])
+        h = incoming[m.type]
+        if h != nil:
+            ok, err = pcall(h, m, side, wired)
+            if not ok:
+                sys.log("error", "network message " .. m.type .. " failed: " .. tostring(err))
+
+    # ------------------------------------------------------------ запросы (сторона клиента и настройки)
+
+    def scan(seconds=1):
+        found = []
+        def take(m, ev):
+            note_peer(m, ev[2], side_wired(ev[2]), ev[6])
+        link:collect(nil, "hello?", {name: my_name()}, seconds, take)
+        for id, p in peers:
+            found[len(found) + 1] = {id: id, name: p.name, wired: p.wired, distance: p.distance, paired: peer_keys[tostring(id)] != nil}
+        table.sort(found, (x, y) => x.id < y.id)
+        return found
+
+    def resolve(host):
+        if type(host) == "number":
+            return host
+        n = tonumber(host)
+        if n != nil:
+            return n
+        want = string.lower(tostring(host))
+        def find():
+            for id, p in peers:
+                if p.name != nil and string.lower(p.name) == want:
+                    return id
+            for id, k in peer_keys:
+                if k.name != nil and string.lower(k.name) == want:
+                    return tonumber(id)
+            return nil
+        found = find()
+        if found == nil:
+            scan(1)
+            found = find()
+        if found == nil:
+            raise Error("unknown computer: {host} (net scan shows who is around)")
+        return found
+
+    def host_name(id):
+        k = peer_keys[tostring(id)]
+        p = peers[id]
+        return (k != nil and k.name) or (p != nil and p.name) or ("pc-" .. tostring(id))
+
+    def key_of(id, host):
+        k = peer_keys[tostring(id)]
+        if k == nil:
+            raise Error("not paired with {host}: run net pair on it, then net pair {host} CODE here")
+        return k.key
+
+    # отказ хозяина передаётся его же текстом (это постоянные строки, их можно перевести)
+    def answer(m, why, host):
+        if m == nil:
+            raise Error(why == "no wired modem" and "no wired modem: shared folders and pairing need a wired modem" or "no answer from {host}")
+        if m.type == "denied":
+            raise Error(tostring(type(m.body) == "table" and m.body.err or "refused"))
+        return type(m.body) == "table" and m.body or {}
+
+    handlers = {}
+
+    def status(q, sender):
+        ms = []
+        for m in modem_list():
+            ms[len(ms) + 1] = {side: m.side, wired: m.wired}
+        paired = 0
+        for id, k in peer_keys:
+            paired += 1
+        p = st.pairing
+        return {id: my_id, name: my_name(), modems: ms, paired: paired, shares: share_list(), wireless: conf.wireless,
+            pairing: p != nil and clock() <= p.expires}
+    handlers.status = status
+
+    handlers.scan = (q, sender) => scan(math.min(math.max(tonumber(q and q.seconds) ?? 1, 0.2), 5))
+
+    def ping(q, sender):
+        id = resolve(q.host)
+        t0 = clock()
+        m, why = link:request(id, "ping", nil, {timeout: 2})
+        b = answer(m, why, q.host)
+        return {id: id, name: b.name, ms: clock() - t0}
+    handlers.ping = ping
+
+    def list_peers(q, sender):
+        out = []
+        for id, p in peers:
+            out[len(out) + 1] = {id: id, name: p.name, wired: p.wired, paired: peer_keys[tostring(id)] != nil}
+        for sid, k in peer_keys:
+            if peers[tonumber(sid)] == nil:
+                out[len(out) + 1] = {id: tonumber(sid), name: k.name, paired: true}
+        table.sort(out, (x, y) => x.id < y.id)
+        return out
+    handlers.peers = list_peers
+
+    def set_name(q, sender):
+        need_admin(sender)
+        name = tostring(q and q.name or "")
+        if name != "" and not string.match(name, "^[%w_%-%.]+$"):
+            raise Error("a computer name uses letters, digits, - _ and .")
+        conf.name = name != "" and string.sub(name, 1, 32) or nil
+        save_conf()
+        return my_name()
+    handlers.name = set_name
+
+    def pair_code(q, sender):
+        need_admin(sender)
+        code = new_code()
+        st.pairing = {code: normalize_code(code), salt: _random_hex("salt"), expires: clock() + CODE_TTL, tries: 0, chal: {}}
+        sys.log("info", "a pairing code was issued (valid 5 minutes)")
+        return {code: code, minutes: CODE_TTL / 60000}
+    handlers.pair_code = pair_code
+
+    def pair(q, sender):
+        need_admin(sender)
+        id = resolve(q.host)
+        nc = _random_hex("client")
+        m, why = link:request(id, "pair_req", {nonce: nc, name: my_name()}, {timeout: 3})
+        b = answer(m, why, q.host)
+        if m.type != "pair_chal" or b.salt == nil or b.nonce == nil:
+            raise Error("unexpected answer from {host}")
+        r = math.min(math.max(math.floor(tonumber(b.rounds) ?? ROUNDS), 1), 5000)
+        sys.busy("pairing")
+        key = sha256.to_hex(proto.pair_key(normalize_code(q.code), b.salt, nc, b.nonce, r))
+        sys.busy(nil)
+        m2, why2 = link:request(id, "pair_proof", {name: my_name()}, {key: key, timeout: 10})
+        b2 = answer(m2, why2, q.host)
+        if m2.type != "pair_ok":
+            raise Error("unexpected answer from {host}")
+        name = _short(b2.name) ?? ("pc-" .. tostring(id))
+        peer_keys[tostring(id)] = {key: key, name: name, paired: clock()}
+        save_keys()
+        sys.log("info", "paired with computer " .. tostring(id) .. " (" .. name .. ")")
+        return {id: id, name: name}
+    handlers.pair = pair
+
+    def unmount_point(point):
+        if fsys != nil:
+            fsys:umount(point)
+        mounted[point] = nil
+        keep = []
+        for mt in conf.mounts:
+            if mt.point != point:
+                keep[len(keep) + 1] = mt
+        conf.mounts = keep
+
+    def forget(q, sender):
+        need_admin(sender)
+        id = resolve(q.host)
+        if peer_keys[tostring(id)] == nil:
+            raise Error("not paired with {host}")
+        peer_keys[tostring(id)] = nil
+        save_keys()
+        for point, mt in mounted:
+            if mt.peer == id:
+                unmount_point(point)
+        save_conf()
+        sys.log("info", "forgot computer " .. tostring(id))
+        return true
+    handlers.forget = forget
+
+    def share(q, sender):
+        need_admin(sender)
+        name = tostring(q.name ?? "")
+        if not string.match(name, "^[%w_%-]+$") or len(name) > 32:
+            raise Error("a share name uses letters, digits, - and _ (up to 32)")
+        path = paths.normalize(tostring(q.path ?? ""))
+        why = share_problem(path)
+        if why != nil:
+            raise Error(why)
+        e = fsys:stat(nil, path)
+        if e == nil or e.type != "dir":
+            raise Error("no such folder: {path}")
+        conf.shares[name] = {path: path, readonly: q.readonly == true}
+        save_conf()
+        sys.log("info", "shared " .. path .. " as " .. name .. (q.readonly and " (read-only)" or ""))
+        return {name: name, path: path, readonly: q.readonly == true}
+    handlers.share = share
+
+    def unshare(q, sender):
+        need_admin(sender)
+        if conf.shares[tostring(q.name)] == nil:
+            raise Error("no such shared folder: {share}")
+        conf.shares[tostring(q.name)] = nil
+        save_conf()
+        return true
+    handlers.unshare = unshare
+
+    def shares_full(q, sender):
+        out = []
+        for s in share_list():
+            out[len(out) + 1] = {name: s.name, readonly: s.readonly, path: conf.shares[s.name].path}
+        return out
+    handlers.shares = shares_full
+
+    def remote_shares(q, sender):
+        id = resolve(q.host)
+        key = key_of(id, q.host)
+        m, why = link:request(id, "shares?", nil, {key: key, timeout: 3})
+        return answer(m, why, q.host).list ?? []
+    handlers.remote_shares = remote_shares
+
+    def do_mount(id, share_name, point, readonly):
+        k = peer_keys[tostring(id)]
+        if k == nil or fsys == nil:
+            return false
+        provider = remote.new({link: link, peer: id, key: k.key, share: share_name, host_name: host_name(id), readonly: readonly})
+        pcall(() => fsys:mkdir(nil, point, {parents: true}))
+        fsys:mount(point, provider, {name: "net:" .. host_name(id) .. "/" .. share_name, readonly: readonly})
+        mounted[point] = {peer: id, share: share_name, readonly: readonly}
+        return true
+
+    def mount(q, sender):
+        need_admin(sender)
+        id = resolve(q.host)
+        key = key_of(id, q.host)
+        m, why = link:request(id, "shares?", nil, {key: key, timeout: 3})
+        found = nil
+        for s in answer(m, why, q.host).list ?? []:
+            if s.name == q.share:
+                found = s
+        if found == nil:
+            raise Error("{host} has no shared folder {share} (net shares {host} lists them)")
+        point = paths.normalize(q.point ?? (MOUNT_ROOT .. "/" .. _clean_name(host_name(id)) .. "/" .. _clean_name(q.share)))
+        if not paths.is_inside(point, MOUNT_ROOT) or point == MOUNT_ROOT:
+            raise Error("network folders are mounted inside /cubeos/net")
+        if mounted[point] != nil:
+            raise Error("already mounted: {point}")
+        do_mount(id, q.share, point, found.readonly)
+        conf.mounts[len(conf.mounts) + 1] = {host: id, name: host_name(id), share: q.share, point: point, readonly: found.readonly}
+        save_conf()
+        sys.log("info", "mounted " .. host_name(id) .. "/" .. tostring(q.share) .. " at " .. point)
+        return {point: point, readonly: found.readonly}
+    handlers.mount = mount
+
+    def unmount(q, sender):
+        need_admin(sender)
+        point = paths.normalize(tostring(q.point ?? ""))
+        if mounted[point] == nil:
+            raise Error("not a network folder: {point}")
+        unmount_point(point)
+        save_conf()
+        return true
+    handlers.unmount = unmount
+
+    def mounts(q, sender):
+        out = []
+        for point, mt in mounted:
+            out[len(out) + 1] = {point: point, host: host_name(mt.peer), id: mt.peer, share: mt.share, readonly: mt.readonly}
+        table.sort(out, (x, y) => x.point < y.point)
+        return out
+    handlers.mounts = mounts
+
+    # ------------------------------------------------------------ запуск
+
+    open_all()
+    for mt in conf.mounts:
+        okm, errm = pcall(() => do_mount(tonumber(mt.host), tostring(mt.share), paths.normalize(tostring(mt.point)), mt.readonly == true))
+        if not okm:
+            sys.log("warn", "cannot mount " .. tostring(mt.point) .. ": " .. tostring(errm))
+
+    me = sys.getpid()
+    def watcher(wsys, wargs):
+        while true:
+            name, p1, p2, p3, p4, p5 = wsys.wait_event(["modem_message", "peripheral", "peripheral_detach"])
+            wsys.send(me, {event: name, args: [p1, p2, p3, p4, p5]})
+    sys.spawn(watcher, [], {name: "netd-events"})
+
+    sys.register("netd")
+    rpc.serve(sys, handlers, {on_message: on_event})

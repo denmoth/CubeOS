@@ -15,6 +15,7 @@ export const RULES_TEXT = """[
   {path: '/cubeos/users/$user/**', allow: {'*': 'rwxl'}},
   {path: '/cubeos/tmp/**', allow: {'*': 'rwxl'}},
   {path: '/cubeos/drives/**', allow: {'*': 'rl', admin: 'rwxl'}},
+  {path: '/cubeos/net/**', allow: {'*': 'rl', admin: 'rwxl'}},
   {path: '/cubeos/hardware/**', allow: {'*': 'rl'}},
   {path: '/cubeos/proc/**', allow: {'*': 'rl'}},
   {path: '/cubeos/run/**', allow: {'*': 'rl'}},
@@ -26,7 +27,7 @@ export def install(fsys, opts=nil):
     o = opts ?? {}
     fsys.rules:clear()
     fsys.rules:load(RULES_TEXT)
-    fsys.no_trash = ["/cubeos/tmp", "/cubeos/sys", "/cubeos/var", "/cubeos/proc", "/cubeos/run"]
+    fsys.no_trash = ["/cubeos/tmp", "/cubeos/sys", "/cubeos/var", "/cubeos/proc", "/cubeos/run", "/cubeos/net"]
     fsys:schedule_clean("/cubeos/tmp", o.tmp_interval ?? 600000, o.tmp_max_age ?? 3600000)
 
 # провайдер tmp: в памяти, с лимитом размера (по умолчанию 64 КБ)

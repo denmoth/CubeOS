@@ -1,0 +1,241 @@
+import t
+import kernel
+import cfs
+import cfs.rules as rules
+import compat.proc as compat_proc
+import net.proto as proto
+import svc.netd as netd
+import svc.rpc as rpc
+eq = t.eq
+
+# Сеть (шаг 8, частично): два компьютера, каждый со своим ядром и netd, соединены поддельным проводным модемом.
+# Поиск, ping, сопряжение по коду (верный и неверный), общая папка, монтирование и файлы через сеть (из процесса ядра
+# и из классической программы), только чтение, выход за папку, повтор перехваченного сообщения, хозяин недоступен.
+
+clock = {ms: 0}
+kclock = () => clock.ms
+wall = () => 1700000000000 + clock.ms
+
+def deep(v):
+    if type(v) != "table":
+        return v
+    out = {}
+    for k, x in v:
+        out[deep(k)] = deep(x)
+    return out
+
+world = {k: {}, sent: {}, cut: false, wired: true}
+
+def make_periph(me, other):
+    modem = {}
+    modem.isWireless = () => not world.wired
+    modem.open = (ch) => nil
+    def transmit(ch, rch, msg):
+        world.sent[me] = world.sent[me] ?? []
+        world.sent[me][len(world.sent[me]) + 1] = deep(msg)
+        if not world.cut:
+            world.k[other]:feed("modem_message", "back", ch, rch, deep(msg), 3)
+    modem.transmit = transmit
+    per = {}
+    per.getNames = () => ["back"]
+    per.getType = (n) => n == "back" and "modem" or nil
+    per.wrap = (n) => n == "back" and modem or nil
+    return per
+
+def make_pc(id, label):
+    fsys = cfs.new({})
+    fsys:mount("/", cfs.memory())
+    fsys:mkdir(nil, "/cubeos/sys/cfg", {parents: true})
+    fsys:mkdir(nil, "/cubeos/sys/sec", {parents: true})
+    sub = rules.subject("system", ["system"])
+    view = cfs.view(fsys, sub, {})
+    k = kernel.new({clock: kclock})
+    world.k[id] = k
+    pc = {id: id, k: k, fsys: fsys, view: view, sub: sub}
+    pc.per = make_periph(id, id == 1 and 2 or 1)
+    return pc
+
+desk = make_pc(1, "desk")
+base = make_pc(2, "base")
+base.fsys:mkdir(nil, "/data/docs", {parents: true})
+base.fsys:write_file(nil, "/data/docs/readme.txt", "hello from base")
+base.fsys:write_file(nil, "/secret.txt", "top secret")
+base.fsys:mkdir(nil, "/pub", {parents: true})
+base.fsys:write_file(nil, "/pub/a.txt", "public")
+
+def start(pc, label):
+    pc.k:spawn(netd.main, {view: pc.view, fsys: pc.fsys, periph: pc.per, id: pc.id, label: label, rounds: 3, now: wall},
+        {name: "netd", subject: pc.sub})
+start(desk, "desk")
+start(base, "base")
+
+def pump(n=40):
+    for i in range[1, n]:
+        desk.k:tick()
+        desk.k:run_ready()
+        base.k:tick()
+        base.k:run_ready()
+
+pump()
+
+answers = {}
+def ask(sys, args):
+    res, err = rpc.call(sys, "netd", args.op, args.q, 30)
+    answers[args.tag] = [res, err]
+def call(pc, op, q, tag):
+    pc.k:spawn(ask, {op: op, q: q, tag: tag}, {name: "ask"})
+    pump()
+    return answers[tag] ?? []
+
+def err_has(r, text):
+    return string.find(tostring(r[2]), text, 1, true) != nil
+
+# ---------------------------------------------------------------- поиск и ping
+call(desk, "scan", {seconds: 1}, "scan")
+clock.ms += 1500
+pump()
+r = answers.scan
+eq(r != nil and r[1] != nil and r[1][1] != nil and r[1][1].name, "base", "scan finds the other computer by name")
+r = call(desk, "ping", {host: "base"}, "ping")
+eq(r[1] != nil and r[1].name, "base", "ping by name gets a pong")
+eq(r[1] != nil and r[1].id, 2, "and knows its number")
+
+# ---------------------------------------------------------------- сопряжение
+r = call(desk, "pair", {host: "base", code: "AAAAA-AAAAA"}, "nopair")
+eq(err_has(r, "not waiting for pairing"), true, "pairing needs net pair on the host first")
+code = call(base, "pair_code", nil, "code")[1].code
+eq(string.match(code, "^%w%w%w%w%w%-%w%w%w%w%w$") != nil, true, "the pairing code looks like ABCDE-FGHJK")
+r = call(desk, "pair", {host: "base", code: "22222-22222"}, "wrong")
+eq(err_has(r, "wrong pairing code"), true, "a wrong code is refused")
+r = call(desk, "mount", {host: "base", share: "docs"}, "early")
+eq(err_has(r, "not paired"), true, "no mounting before pairing")
+r = call(desk, "pair", {host: "base", code: string.lower(code)}, "pair")
+eq(r[1] != nil and r[1].name, "base", "the right code pairs (case and dash do not matter)")
+eq(base.view:exists(netd.KEYS_PATH), true, "the host keeps the key in /cubeos/sys/sec")
+eq(string.find(base.view:read(netd.KEYS_PATH), code, 1, true) == nil, true, "the code itself is not stored")
+r = call(desk, "pair", {host: "base", code: code}, "again")
+eq(err_has(r, "not waiting for pairing"), true, "the code works only once")
+
+# ---------------------------------------------------------------- общие папки на хозяине
+r = call(base, "share", {name: "sys", path: "/cubeos/sys"}, "badshare")
+eq(err_has(r, "system folders cannot be shared"), true, "system folders cannot be shared")
+r = call(base, "share", {name: "all", path: "/"}, "root")
+eq(err_has(r, "whole disk"), true, "nor the whole disk")
+eq(call(base, "share", {name: "docs", path: "/data"}, "sh1")[1] != nil, true, "share /data as docs")
+eq(call(base, "share", {name: "pub", path: "/pub", readonly: true}, "sh2")[1] != nil, true, "share /pub read-only")
+r = call(desk, "remote_shares", {host: "base"}, "rs")
+eq(r[1] != nil and len(r[1]), 2, "the paired computer sees both shared folders")
+
+# ---------------------------------------------------------------- монтирование и файлы
+r = call(desk, "mount", {host: "base", share: "docs"}, "mnt")
+eq(r[1] != nil and r[1].point, "/cubeos/net/base/docs", "mounted at /cubeos/net/base/docs")
+call(desk, "mount", {host: "base", share: "pub"}, "mnt2")
+eq(string.find(desk.view:read(netd.CONF_PATH), "/cubeos/net/base/docs", 1, true) != nil, true, "the mount is remembered in net.conf")
+
+results = {}
+def fs_job(sys, args):
+    ok, res = pcall(args.fn)
+    results[args.tag] = [ok, res]
+def job(fn, tag):
+    desk.k:spawn(fs_job, {fn: fn, tag: tag}, {name: "job"})
+    pump(60)
+    return results[tag] ?? []
+
+D = "/cubeos/net/base/docs"
+r = job(() => desk.fsys:read_file(nil, D .. "/docs/readme.txt"), "read")
+eq(r[2], "hello from base", "a kernel process reads a file from the other computer")
+names = []
+r = job(() => desk.fsys:list(nil, D .. "/docs"), "list")
+eq(r[1] and r[2][1] != nil and r[2][1].name, "readme.txt", "and lists the folder")
+big = string.rep("0123456789", 4000)
+r = job(() => desk.fsys:write_file(nil, D .. "/big.bin", big), "write")
+eq(r[1], true, "writes a 40 KB file (three pieces)")
+eq(base.fsys:read_file(nil, "/data/big.bin") == big, true, "the file arrived whole on the host")
+r = job(() => desk.fsys:read_file(nil, D .. "/big.bin"), "readbig")
+eq(r[2] == big, true, "and reads back whole")
+job(() => desk.fsys:mkdir(nil, D .. "/new"), "mkdir")
+eq(base.fsys:stat(nil, "/data/new") != nil, true, "mkdir works")
+job(() => desk.fsys:move(nil, D .. "/big.bin", D .. "/new/big.bin"), "move")
+eq(base.fsys:stat(nil, "/data/new/big.bin") != nil, true, "move works")
+job(() => desk.fsys:remove(nil, D .. "/new", {recursive: true, permanent: true}), "rm")
+eq(base.fsys:stat(nil, "/data/new"), nil, "remove works")
+r = job(() => desk.fsys:write_file(nil, "/cubeos/net/base/pub/b.txt", "x"), "ro")
+eq(r[1] == false and string.find(tostring(r[2]), "EROFS", 1, true) != nil, true, "a read-only share refuses writes")
+r = job(() => desk.fsys:read_file(nil, "/cubeos/net/base/pub/a.txt"), "roread")
+eq(r[2], "public", "but reads")
+
+# классическая программа (как cush): ожидание ответа проходит к ядру через compat.proc
+def legacy_main(env, largs):
+    results.legacy = desk.fsys:read_file(nil, D .. "/docs/readme.txt")
+def legacy(sys, args):
+    p = compat_proc.new({os: {}}, "net-test", [], {main: legacy_main})
+    p:start()
+desk.k:spawn(legacy, {}, {name: "legacy"})
+pump(60)
+eq(results.legacy, "hello from base", "a classic program reads the remote file too")
+
+# ---------------------------------------------------------------- защита
+r = job(() => desk.fsys:read_file(nil, D .. "/../secret.txt"), "escape")
+eq(r[2] != "top secret", true, "no way out of the shared folder with ..")
+# провайдер просит путь за пределами папки напрямую
+m = desk.fsys.mounts
+prov = nil
+for mt in m:
+    if mt.path == D:
+        prov = mt.provider
+r = job(() => prov:read("/../secret.txt"), "escape2")
+eq(r[2] != "top secret", true, "nor with a crafted path")
+# ссылка внутри общей папки, ведущая наружу
+base.fsys:link(nil, "/secret.txt", "/data/out")
+r = job(() => desk.fsys:read_file(nil, D .. "/out"), "link")
+eq(r[2] != "top secret", true, "nor through a link that points outside")
+# повтор перехваченного запроса: хозяин не отвечает
+before = len(world.sent[2])
+last = nil
+for msg in world.sent[1]:
+    if msg.type == "fs":
+        last = msg
+base.k:feed("modem_message", "back", proto.CHANNEL, proto.CHANNEL, deep(last), 3)
+pump()
+eq(len(world.sent[2]), before, "a replayed request gets no answer")
+# поддельная подпись
+fake = deep(last)
+fake.seq += 1000
+fake.body.op = "remove"
+fake.body.path = "/docs"
+base.k:feed("modem_message", "back", proto.CHANNEL, proto.CHANNEL, fake, 3)
+pump()
+eq(base.fsys:stat(nil, "/data/docs") != nil, true, "a forged request does nothing")
+# беспроводной модем: файлы не ходят
+world.wired = false
+r = job(() => desk.fsys:read_file(nil, D .. "/docs/readme.txt"), "wl")
+eq(r[1], false, "shared folders do not work over a wireless modem")
+world.wired = true
+
+# хозяин недоступен: понятная ошибка, а не зависание
+world.cut = true
+desk.k:spawn(fs_job, {fn: () => desk.fsys:read_file(nil, D .. "/docs/other.txt"), tag: "cut"}, {name: "job"})
+pump()
+clock.ms += 4000
+pump()
+r = results.cut ?? []
+eq(r[1] == false and string.find(tostring(r[2]), "not reachable", 1, true) != nil, true, "an unreachable host gives EIO")
+world.cut = false
+
+# ---------------------------------------------------------------- ядро: пока процесс ждёт ответ по сети, другие события не теряются
+got = {}
+def keeper(sys, args):
+    coroutine.yield({op: "wait_event", filter: ["modem_message"], timeout_ms: 1000, keep: true})
+    got.ev = sys.wait_event(["cubeos_test"], 1)
+desk.k:spawn(keeper, {}, {name: "keeper"})
+pump(5)
+desk.k:feed("cubeos_test", 1)
+pump(5)
+clock.ms += 1500
+pump(5)
+eq(got.ev, "cubeos_test", "an event that came during the wait is kept for later")
+
+# ---------------------------------------------------------------- забыть
+eq(call(desk, "forget", {host: "base"}, "forget")[1], true, "forget the host")
+eq(len(call(desk, "mounts", nil, "mounts")[1]), 0, "its folders are unmounted")
+print("done")

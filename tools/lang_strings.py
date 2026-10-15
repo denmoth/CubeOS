@@ -28,7 +28,7 @@ def strings():
         for x in re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1)):
             add(x)
     # все вызовы sh:t("..."), self:t("..."), self.t("...") в оболочке и терминале (и обе ветки t(a and "x" or "y"))
-    for fn in ["shell.cub", "builtins.cub", "tools.cub", "tools2.cub", "textedit.cub", "fetch.cub", "editor.cub"]:
+    for fn in ["shell.cub", "builtins.cub", "tools.cub", "tools2.cub", "textedit.cub", "fetch.cub", "editor.cub", "nettools.cub"]:
         src = open(os.path.join(ROOT, "lib", "cush", fn), encoding="utf-8").read()
         for call in re.finditer(r'[:.]t\(((?:[^()"]|"(?:[^"\\]|\\.)*")*)', src):
             for lit in re.findall(r'"((?:[^"\\]|\\.)*)"', call.group(1)):

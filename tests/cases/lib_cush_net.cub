@@ -1,0 +1,83 @@
+import t
+import term.vterm as vterm
+import compat.env as compat_env
+import compat.proc as compat_proc
+import cush.shell as cush
+eq = t.eq
+
+# Команды net и ping в оболочке: вызовы службы netd (здесь подставные ответы), вывод и перевод ошибок-шаблонов.
+
+HIST = "/repo/build/cush_net_history"
+CONF = "/repo/build/cush_net.conf"
+for p in [HIST, CONF]:
+    if fs.exists(p):
+        fs.delete(p)
+
+calls = []
+def fake_net(op, args):
+    calls[len(calls) + 1] = [op, args]
+    if op == "status":
+        return {id: 2, name: "base", modems: [{side: "back", wired: true}], paired: 1, shares: [{name: "docs", readonly: false}], pairing: false}
+    if op == "mounts":
+        return [{point: "/cubeos/net/desk/files", host: "desk", share: "files", readonly: true}]
+    if op == "pair_code":
+        return {code: "K7M2P-QX9RT", minutes: 5}
+    if op == "ping":
+        if args.host == "ghost":
+            return nil, "unknown computer: {host} (net scan shows who is around)"
+        return {id: 2, name: "base", ms: 12}
+    if op == "mount":
+        return nil, "{host} has no shared folder {share} (net shares {host} lists them)"
+    if op == "share":
+        return {name: args.name, path: args.path, readonly: args.readonly}
+    if op == "scan":
+        return [{id: 2, name: "base", wired: true, paired: true}]
+    return nil, "unknown"
+
+def make(lang=nil):
+    vt = vterm.new(70, 19, {history: 400})
+    env = compat_env.new({vterm: vt})
+    if lang != nil:
+        f = fs.open(CONF, "w")
+        f.write("{lang: \"" .. lang .. "\"}\n")
+        f.close()
+    env.cush_opts = {history_path: HIST, greeting: false, user: "tester", host: "cube", lang_dir: "/repo/assets/lang", unicode: true,
+        config_path: lang != nil and CONF or nil, net: fake_net}
+    proc = compat_proc.new(env, "cush", [], {name: "cush", main: cush.main})
+    proc:start()
+    return vt, proc
+
+def run(proc, text):
+    for i in range[1, string.len(text)]:
+        proc:feed("char", string.sub(text, i, i))
+    proc:feed("key", keys.enter, false)
+    proc:feed("key_up", keys.enter)
+
+vt, proc = make()
+def has(text):
+    return string.find(table.concat(vt:all_lines(), "\n"), text, 1, true) != nil
+
+run(proc, "net")
+eq(has("Computer: base (#2)"), true, "net shows the name and number")
+eq(has("Modems: back (wired)"), true, "the modems")
+eq(has("Network folder: /cubeos/net/desk/files = desk/files"), true, "and the mounted folders")
+run(proc, "net pair")
+eq(has("Pairing code: K7M2P-QX9RT"), true, "net pair shows the code")
+eq(has("net pair base K7M2P-QX9RT"), true, "and what to type on the other computer")
+run(proc, "ping base 2")
+eq(has("Answer from base (#2): 12 ms"), true, "ping answers")
+eq(has("2 of 2 answered"), true, "ping counts")
+run(proc, "net ping ghost")
+eq(has("unknown computer: ghost (net scan shows who is around)"), true, "an error template gets the name filled in")
+run(proc, "net share docs /data --ro")
+last = calls[len(calls)]
+eq([last[1], last[2].path, last[2].readonly], ["share", "/data", true], "net share passes the path and --ro")
+run(proc, "net scan")
+eq(has("#2  base  (wired, paired)"), true, "net scan lists the computers")
+
+vt, proc = make("ru")
+run(proc, "net mount desk music")
+eq(has("у desk нет общей папки music (список: net shares desk)"), true, "errors are translated with the names filled in")
+run(proc, "net")
+eq(has("Компьютер: base (№2)"), true, "net speaks Russian")
+print("done")

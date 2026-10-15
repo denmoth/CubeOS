@@ -1,0 +1,98 @@
+# net.link: отправка и приём сообщений CubeNet (net.proto) через модемы. Им пользуются служба netd и удалённые диски (net.remote).
+#
+#   l = link.new({id: 7, modems: () => [{side, wired, transmit(msg)}], wireless: false})
+#   msg = l:message("ping", 12, {..})        новое сообщение: свой номер, счётчик, время
+#   l:send(msg, {wired: true, side: "top"})  разослать (только проводные / только через этот модем); возвращает число модемов
+#   m, why = l:request(12, "fs", body, {key: KEY, timeout: 3})
+#       отправить и дождаться ответа на этот запрос; с key запрос подписан, ответ принимается только с верной подписью
+#       (или неподписанный отказ type "denied"); подписанное идёт только по проводным модемам, если не разрешён wireless
+#   l:collect(nil, "hello?", nil, 1, fn)     разослать всем и собирать ответы секунду: fn(m, ev)
+#
+# Ожидание идёт системным вызовом wait_event с keep: процесс не теряет другие события, пока ждёт ответ. Из классической
+# программы (cush, программы CC) этот вызов проходит к ядру через compat.proc (и только он).
+
+import net.proto as proto
+
+const shared = {seq: 0}
+
+# счётчик сообщений общий для всех процессов этого компьютера и растёт и после перезагрузки (не меньше времени в мс)
+export def next_seq(now):
+    shared.seq = math.max(shared.seq + 1, now)
+    return shared.seq
+
+export const MAX_WAIT = 10
+
+# следующее modem_message не дольше timeout секунд: [имя, сторона, канал, канал ответа, сообщение, расстояние] или nil
+export def wait_modem(timeout):
+    ms = math.floor(math.min(math.max(timeout, 0), MAX_WAIT) * 1000)
+    ok, res = pcall(coroutine.yield, {op: "wait_event", filter: ["modem_message"], timeout_ms: ms, keep: true, net: true})
+    if ok and type(res) == "table" and res[1] == "modem_message":
+        return res
+    return nil
+
+export class Link:
+    def init(self, opts):
+        self.id = opts.id
+        self.modems = opts.modems
+        self.now = opts.now ?? (() => os.epoch("utc"))
+        self.wait = opts.wait ?? wait_modem
+        self.wireless = opts.wireless ?? false
+
+    def message(self, kind, dst, body=nil, re=nil):
+        t = self.now()
+        return {proto: proto.NAME, v: proto.VERSION, src: self.id, dst: dst, seq: next_seq(t), ts: t, type: kind, body: body, re: re}
+
+    def send(self, msg, opts=nil):
+        o = opts ?? {}
+        sent = 0
+        for m in self.modems():
+            if (o.side == nil or m.side == o.side) and (not o.wired or m.wired):
+                if pcall(m.transmit, msg):
+                    sent += 1
+        return sent
+
+    # ответ на наш запрос: от того, кого спрашивали (или от любого при рассылке), нам и с номером нашего запроса
+    def _answer(self, m, want, dst):
+        return proto.valid(m) and m.re == want and m.dst == self.id and (dst == nil or m.src == dst)
+
+    def request(self, dst, kind, body, opts=nil):
+        o = opts ?? {}
+        msg = self:message(kind, dst, body)
+        if o.key != nil:
+            proto.sign(msg, o.key)
+        want = proto.id_of(msg)
+        if self:send(msg, {wired: o.key != nil and not self.wireless}) == 0:
+            return nil, o.key != nil and not self.wireless and "no wired modem" or "no modem"
+        deadline = self.now() + (o.timeout ?? 3) * 1000
+        while true:
+            left = (deadline - self.now()) / 1000
+            if left <= 0:
+                return nil, "no answer"
+            ev = self.wait(left)
+            if ev == nil:
+                return nil, "no answer"
+            m = ev[5]
+            if self:_answer(m, want, dst):
+                if o.key == nil or proto.verify(m, o.key):
+                    return m
+                if m.type == "denied" and m.mac == nil:
+                    return m
+
+    def collect(self, dst, kind, body, seconds, fn):
+        msg = self:message(kind, dst, body)
+        want = proto.id_of(msg)
+        if self:send(msg) == 0:
+            return false
+        deadline = self.now() + seconds * 1000
+        while true:
+            left = (deadline - self.now()) / 1000
+            if left <= 0:
+                return true
+            ev = self.wait(left)
+            if ev == nil:
+                return true
+            if self:_answer(ev[5], want, dst):
+                fn(ev[5], ev)
+
+export def new(opts):
+    return Link(opts)

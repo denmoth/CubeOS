@@ -1,0 +1,90 @@
+# net.proto: сообщения сети CubeNet (docs/13-network-cluster.md, D242). Одно сообщение это таблица, которую modem.transmit передаёт
+# как есть:
+#   {proto: "cubenet", v: 1, src: номер компьютера, dst: номер или nil (всем), seq, ts (мс UTC), type, body, re (ответ на id), mac}
+# id запроса это src .. ":" .. seq. Подпись mac это HMAC-SHA256 общего ключа пары от канонической записи всех полей, кроме mac.
+# Обнаружение и ping идут без подписи (это открытые сведения); всё про файлы только с подписью, счётчиком и свежей меткой времени.
+#
+#   proto.canon(value)              однозначная запись значения (ключи по порядку): одинаковая у обеих сторон
+#   proto.sign(msg, key)            ставит mac
+#   proto.verify(msg, key)          подпись верна
+#   proto.fresh(msg, last_seq, now) не повтор: seq больше последнего и время в пределах окна
+
+import sha256
+
+export const NAME = "cubenet"
+export const VERSION = 1
+export const CHANNEL = 47100
+export const WINDOW_MS = 60000
+
+def _num(n):
+    if n == math.floor(n) and math.abs(n) < 1e15:
+        return string.format("%.0f", n)
+    return string.format("%.17g", n)
+
+export def canon(v):
+    t = type(v)
+    if v == nil:
+        return "n"
+    if t == "boolean":
+        return v and "T" or "F"
+    if t == "number":
+        return "#" .. _num(v) .. ";"
+    if t == "string":
+        return "s" .. len(v) .. ":" .. v
+    if t == "table":
+        names = []
+        for k, x in v:
+            names[len(names) + 1] = k
+        table.sort(names, (a, b) => canon(a) < canon(b))
+        parts = ["{"]
+        for k in names:
+            parts[len(parts) + 1] = canon(k)
+            parts[len(parts) + 1] = canon(v[k])
+        parts[len(parts) + 1] = "}"
+        return table.concat(parts)
+    return "?" .. t
+
+def _body(msg):
+    copy_ = {}
+    for k, x in msg:
+        if k != "mac":
+            copy_[k] = x
+    return canon(copy_)
+
+export def mac_of(msg, key):
+    return sha256.to_hex(sha256.hmac(key, _body(msg)))
+
+export def sign(msg, key):
+    msg.mac = mac_of(msg, key)
+    return msg
+
+# сравнение без досрочного выхода
+def _same(a, b):
+    if type(a) != "string" or type(b) != "string" or len(a) != len(b):
+        return false
+    diff = 0
+    for i in range[1, len(a)]:
+        if string.byte(a, i) != string.byte(b, i):
+            diff += 1
+    return diff == 0
+
+export def verify(msg, key):
+    return key != nil and _same(msg.mac, mac_of(msg, key))
+
+export def fresh(msg, last_seq, now):
+    if type(msg.seq) != "number" or type(msg.ts) != "number":
+        return false
+    if last_seq != nil and msg.seq <= last_seq:
+        return false
+    return math.abs(now - msg.ts) <= WINDOW_MS
+
+# похоже ли на сообщение CubeNet
+export def valid(msg):
+    return type(msg) == "table" and msg.proto == NAME and type(msg.src) == "number" and type(msg.type) == "string"
+
+export def id_of(msg):
+    return tostring(msg.src) .. ":" .. tostring(msg.seq)
+
+# общий ключ пары по коду сопряжения и случайным числам обеих сторон (PBKDF2, раунды задаёт хозяин)
+export def pair_key(code, salt, client_nonce, host_nonce, rounds):
+    return sha256.pbkdf2(tostring(code), tostring(salt) .. ":" .. tostring(client_nonce) .. ":" .. tostring(host_nonce), rounds)

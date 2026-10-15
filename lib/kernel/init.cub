@@ -377,7 +377,7 @@ export class Kernel:
             if p.state == "waiting" and p.wait != nil and p.wait.kind == "event" and _matches(p.wait.filter, name):
                 self:_wake(p, self:_pack(ev))
                 taken += 1
-            elif p.interest != nil and p.state != "dead" and _matches(p.interest, name):
+            elif p.state != "dead" and ((p.interest != nil and _matches(p.interest, name)) or (p.state == "waiting" and p.wait != nil and p.wait.keep)):
                 self:_enqueue(p, ev)
                 taken += 1
         # файлы, перетащенные на окно, когда их некому принять (экран входа): не теряем молча
@@ -561,14 +561,16 @@ export class Kernel:
         h.sleep = sleep
 
         def wait_event(proc, req):
-            # процесс, ждавший события по списку имён, не теряет такие события, пока занят (они копятся в его очереди)
-            proc.interest = req.filter
+            # процесс, ждавший события по списку имён, не теряет такие события, пока занят (они копятся в его очереди).
+            # keep: короткое ожидание посреди работы (ответ по сети): прочие события копятся в очереди и не теряются
+            if not req.keep:
+                proc.interest = req.filter
             for i, ev in proc.events:
                 if _matches(req.filter, ev.name):
                     table.remove(proc.events, i)
                     return "value", k:_pack(ev)
             proc.state = "waiting"
-            proc.wait = {kind: "event", filter: req.filter}
+            proc.wait = {kind: "event", filter: req.filter, keep: req.keep == true}
             if req.timeout_ms != nil:
                 proc.deadline = k.clock() + req.timeout_ms
             return "block", nil

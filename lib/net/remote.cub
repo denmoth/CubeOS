@@ -1,0 +1,138 @@
+# net.remote: папка другого компьютера (общая папка его netd) как провайдер CFS (D242). Монтирует netd в /cubeos/net/<хост>/<папка>.
+#
+#   p = remote.new({link, peer: 12, key, share: "files", host_name: "base", readonly: false, timeout: 3})
+#
+# Каждая операция это подписанный запрос "fs" к хозяину и его ответ (net.link). Файлы идут кусками по 16 КБ. Сведения о файлах и
+# списки папок помнятся 2 секунды (иначе каждый шаг пути это поездка по сети); любая запись их сбрасывает. Хозяин не отвечает:
+# ошибка EIO «… is not reachable».
+
+import cfs.errors as errors
+import cfs.path as paths
+
+export const CHUNK = 16384
+export const TTL = 2000
+
+const CODES = {ENOENT: true, EEXIST: true, ENOTDIR: true, EISDIR: true, EACCES: true, EINVAL: true, ENAME: true, ENOSPC: true,
+    ENOTEMPTY: true, EROFS: true, EBUSY: true, EIO: true}
+
+def _copy(st):
+    if st == nil:
+        return nil
+    return {type: st.type, size: st.size, modified: st.modified}
+
+export class Remote:
+    def init(self, opts):
+        self.link = opts.link
+        self.peer = opts.peer
+        self.key = opts.key
+        self.share = opts.share
+        self.host_name = opts.host_name ?? tostring(opts.peer)
+        self.readonly = opts.readonly ?? false
+        self.timeout = opts.timeout ?? 3
+        self:_forget()
+
+    def _forget(self):
+        self.stats = {}
+        self.dirs = {}
+        self.space_ = nil
+
+    def _fresh(self, entry, ttl=TTL):
+        return entry != nil and self.link.now() - entry.at < ttl
+
+    def _call(self, op, body, path):
+        body.share = self.share
+        body.op = op
+        m, why = self.link:request(self.peer, "fs", body, {key: self.key, timeout: self.timeout})
+        if m == nil:
+            errors.fail("EIO", self.host_name .. " is not reachable (" .. tostring(why) .. ")", path)
+        b = m.body ?? {}
+        if m.type == "denied":
+            errors.fail("EACCES", self.host_name .. ": " .. tostring(b.err), path)
+        if b.err != nil:
+            errors.fail(CODES[b.code] and b.code or "EIO", tostring(b.err), path)
+        return b.value
+
+    def _write_op(self, op, body, path):
+        if self.readonly:
+            errors.fail("EROFS", "the shared folder is read-only", path)
+        self:_forget()
+        return self:_call(op, body, path)
+
+    def is_readonly(self):
+        return self.readonly
+
+    def stat(self, rel):
+        c = self.stats[rel]
+        if self:_fresh(c):
+            return _copy(c.st)
+        if rel != "/":
+            d = self.dirs[paths.parent(rel)]
+            if self:_fresh(d):
+                return _copy(d.entries[paths.basename(rel)])
+        v = self:_call("stat", {path: rel}, rel) ?? {}
+        now = self.link.now()
+        self.stats[rel] = {at: now, st: v.st}
+        if v.st == nil and v.sym == false:
+            self.stats[rel .. ".sym"] = {at: now, st: nil}
+        return _copy(v.st)
+
+    def list(self, rel):
+        d = self.dirs[rel]
+        if not self:_fresh(d):
+            items = self:_call("list", {path: rel}, rel) ?? []
+            entries = {}
+            for it in items:
+                entries[it.name] = {type: it.type, size: it.size, modified: it.modified}
+            d = {at: self.link.now(), entries: entries}
+            self.dirs[rel] = d
+        names = []
+        for name, st in d.entries:
+            names[len(names) + 1] = name
+        table.sort(names)
+        return names
+
+    def read(self, rel):
+        parts = []
+        offset = 0
+        while true:
+            v = self:_call("read", {path: rel, offset: offset, size: CHUNK}, rel)
+            parts[len(parts) + 1] = v.data
+            offset += len(v.data)
+            if offset >= v.total or len(v.data) == 0:
+                break
+        return table.concat(parts)
+
+    def write(self, rel, data):
+        count = math.max(1, math.ceil(len(data) / CHUNK))
+        for i in range[1, count]:
+            self:_write_op("write", {path: rel, data: string.sub(data, (i - 1) * CHUNK + 1, i * CHUNK), part: i, last: i == count}, rel)
+
+    def mkdir(self, rel):
+        self:_write_op("mkdir", {path: rel}, rel)
+
+    def remove(self, rel):
+        self:_write_op("remove", {path: rel}, rel)
+
+    def move(self, from_rel, to_rel):
+        self:_write_op("move", {path: from_rel, to: to_rel}, from_rel)
+
+    def _space(self):
+        if not self:_fresh(self.space_, 5000):
+            ok, v = pcall(() => self:_call("space", {path: "/"}, "/"))
+            self.space_ = {at: self.link.now(), v: ok and v or {}}
+        return self.space_.v
+
+    def free_space(self):
+        return self:_space().free
+
+    def capacity(self):
+        return self:_space().capacity
+
+    def used(self):
+        return self:_space().used
+
+    def set_modified(self, rel, t):
+        pass
+
+export def new(opts):
+    return Remote(opts)
