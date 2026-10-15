@@ -1,17 +1,22 @@
-# boot.splash: временный экран загрузки (D204, контракт boot_screen из docs/16-kernel-integration.md); потом его подменяет экран DE
+# boot.splash: экран загрузки (D204, D245; контракт boot_screen из docs/16-kernel-integration.md); потом его может подменить экран DE
 #
 #   splash = splash.new({caps: {pixel: true}, term: term, assets: "/repo/assets", clock: ..., title: "CubeOS 0.3.0"})
 #   splash:open()
-#   splash:progress(0.35, "Loading the kernel")    доля 0..1 и подпись
-#   splash:message("Service timed is ready")       необязательная строка пояснения под подписью
+#   splash:progress(0.35, "Loading the kernel")    доля 0..1 и подпись этапа
+#   splash:message("Service timed is ready")       строка пояснения под подписью
 #   splash:tick()                                  кадр анимации (вызывать между шагами загрузки, часто); true, если кадр нарисован
-#   splash:done(pause)                             полоса до конца и плавный переход к входу (pause: sys.sleep, если вызов из процесса ядра)
-#   splash:error(text)                             экран ошибки загрузки
+#   splash:done(pause)                             финал: волна до конца, вспышка, затухание в чёрный (около секунды; pause: sys.sleep
+#                                                  из процесса ядра)
+#   splash:error(text)                             загрузка не удалась: логотип краснеет там, докуда дошла волна, текст ошибки
 #   splash:close()                                 вернуть терминал в обычный режим
 #
-# Пиксельный вариант (CC: Graphics): куб собирается из блоков, полоса с бегущим бликом, подпись плавно проявляется.
-# Текстовый вариант (обычный терминал): логотип блоками телетекста, полоса цветными клетками. Экран не должен ломать загрузку:
-# new() возвращает обёртку, которая при любом исключении отключает экран (пиксельный при сбое пробует текстовый) и молчит дальше.
+# Пиксельный вариант (по образцу сцены «Интро» из examples/cgl_demo.cub): куб и надпись рисуются ОДИН раз номерами палитры
+# (полоса столбцов × тон: верхняя, левая, правая грань, надпись). Дальше кадр это только смена цветов этих номеров (setPaletteColor):
+# волна света проходит слева направо вместе с загрузкой, на фронте блик, за ним по логотипу бегут переливы; звёзды мерцают тоже
+# палитрой. Пиксели перерисовываются только при смене подписи. Поэтому экран плавный и ничего не стоит, даже когда загрузка тормозит.
+# Текстовый вариант (обычный терминал): логотип блоками телетекста проявляется по столбцам, полоса с половинками клеток.
+# Экран не должен ломать загрузку: new() возвращает обёртку, которая при любом исключении отключает экран (пиксельный при сбое пробует
+# текстовый) и молчит дальше.
 
 import cgl
 import cgl.color as color_mod
@@ -20,38 +25,31 @@ import font as font_lib
 import logo
 import version
 
-# цвета (RGB) на номерах палитры 200..211 экрана; 212..235 фон (градиент), 236..243 проявление подписи
-const C_BG1 = 200
-const C_BG2 = 201
-const C_TEXT = 202
-const C_DIM = 203
-const C_ACCENT = 204
-const C_TRACK = 205
-const C_GLOSS = 206
-const C_ERR = 207
-const C_TOP = 208
-const C_LEFT = 209
-const C_RIGHT = 210
-const COLORS = [[C_BG1, 10, 12, 24], [C_BG2, 27, 29, 48], [C_TEXT, 192, 202, 245], [C_DIM, 86, 95, 137], [C_ACCENT, 122, 162, 247],
-    [C_TRACK, 36, 40, 59], [C_GLOSS, 205, 220, 255], [C_ERR, 247, 118, 142], [C_TOP, 125, 207, 255], [C_LEFT, 122, 162, 247],
-    [C_RIGHT, 61, 89, 161]]
-
-# три грани куба в «единицах логотипа» 32x33: начало и два ребра (как в lib/logo.cub)
-const FACES = [{o: [0, 8], u: [16, 8], v: [0, 16], color: C_LEFT}, {o: [16, 16], u: [16, -8], v: [0, 16], color: C_RIGHT},
-    {o: [0, 8], u: [16, -8], v: [16, 8], color: C_TOP}]
-const TILES = 4
+# номера палитры экрана: фон 100..123, звёзды 124..131, подписи 132..135, логотип 136.. (GROUPS полос × 4 тона)
+export const BG0 = 100
+const BG_N = 24
+const STAR0 = 124
+const STAR_N = 8
+export const C_LABEL = 132
+const C_NOTE = 133
+export const C_ERR = 134
+const C_ERRTEXT = 135
+export const LOGO0 = 136
+export const GROUPS = 28
+const TONES = 4
 const FRAME_STEP = 0.05
 
-# ступени от цвета (по RGB номеров a и b палитры) в номерах first..first+n-1; возвращает список номеров
-def _ramp(palette, first, a, b, n):
-    r0, g0, b0 = palette:get(a)
-    r1, g1, b1 = palette:get(b)
-    list = []
-    for i in range[1, n]:
-        k = (i - 1) / (n - 1)
-        palette:set(first + i - 1, _round(r0 + (r1 - r0) * k), _round(g0 + (g1 - g0) * k), _round(b0 + (b1 - b0) * k))
-        list[i] = first + i - 1
-    return list
+# цвета (RGB)
+const BG_TOP = [6, 8, 20]
+const BG_GLOW = [30, 36, 78]
+const TONE_RGB = [[125, 207, 255], [122, 162, 247], [61, 89, 161], [214, 222, 255]]
+const LABEL_RGB = [170, 182, 230]
+const NOTE_RGB = [86, 95, 137]
+const ERR_RGB = [247, 98, 122]
+
+# три грани куба в «единицах логотипа» 32x33 (как в lib/logo.cub): тон 1 верх, 2 левая, 3 правая
+const FACES = [{o: [0, 8], u: [16, 8], v: [16, -8], tone: 1}, {o: [0, 8], u: [16, 8], v: [0, 16], tone: 2},
+    {o: [16, 16], u: [16, -8], v: [0, 16], tone: 3}]
 
 def _now():
     return os.epoch("utc") / 1000
@@ -61,6 +59,9 @@ def _clamp(v, lo, hi):
 
 def _round(v):
     return math.floor(v + 0.5)
+
+def _mix(a, b, k):
+    return a + (b - a) * k
 
 # ------------------------------------------------------------ пиксельный экран
 
@@ -73,94 +74,156 @@ export class PixelSplash:
         self.target = 0
         self.shown = 0
         self.label = ""
-        self.old_label = ""
-        self.fade = 1
+        self.pending = nil
+        self.label_a = 0
         self.note = ""
         self.last = nil
-        self.failed = nil
-        self.fast = false
+        self.t = 0
+        self.mode = "run"
+        self.flash = 0
+        self.dark = 0
         self.screen = nil
+        self.sent = {}
 
     def open(self):
         o = self.opts
         self.font = o.font ?? font_lib.default(o.assets ?? "/repo/assets")
         palette = color_mod.default_palette()
-        for c in COLORS:
-            palette:set(c[1], c[2], c[3], c[4])
-        # все свои цвета (основные, ступени фона и подписи) готовятся ДО открытия экрана: палитра уходит в терминал при открытии,
-        # цвета, добавленные позже, в игре остались бы стандартными (радуга вместо фона)
-        bg_ramp = _ramp(palette, 212, C_BG1, C_BG2, 24)
-        self.fade_ramp = _ramp(palette, 236, C_BG2, C_TEXT, 8)
+        self.palette = palette
+        # все свои цвета готовятся ДО открытия экрана: палитра уходит в терминал при открытии (в игре цвета, добавленные позже
+        # только в объект палитры, оставались стандартными)
+        for i in range[0, BG_N - 1]:
+            k = i / (BG_N - 1)
+            palette:set(BG0 + i, _round(_mix(BG_TOP[1], BG_GLOW[1], k)), _round(_mix(BG_TOP[2], BG_GLOW[2], k)), _round(_mix(BG_TOP[3], BG_GLOW[3], k)))
+        for i in range[0, STAR_N - 1]:
+            palette:set(STAR0 + i, BG_TOP[1], BG_TOP[2], BG_TOP[3])
+        palette:set(C_LABEL, BG_TOP[1], BG_TOP[2], BG_TOP[3])
+        palette:set(C_NOTE, NOTE_RGB[1], NOTE_RGB[2], NOTE_RGB[3])
+        palette:set(C_ERR, ERR_RGB[1], ERR_RGB[2], ERR_RGB[3])
+        palette:set(C_ERRTEXT, 230, 232, 245)
+        for g in range[0, GROUPS - 1]:
+            for tone in range[1, TONES]:
+                r, gg, b = self:_ghost(tone)
+                palette:set(self:_slot(g, tone), _round(r), _round(gg), _round(b))
         self.screen = cgl.open({term: self.term, backend: "graphics", palette: palette})
-        # на всякий случай отправляем свои цвета ещё раз явно
         custom = []
-        for n in range[200, 243]:
+        for n in range[BG0, LOGO0 + GROUPS * TONES - 1]:
             r, g, b = palette:get(n)
             custom[len(custom) + 1] = [n, r, g, b]
         self.screen:set_colors(custom)
-        self.palette = palette
         self.w = self.screen.w
         self.h = self.screen.h
         self:_layout()
-        self.bg = surface_mod.new(self.w, self.h, C_BG1)
-        self.bg:fill_gradient(0, 0, self.w, self.h, bg_ramp, "v")
-        self.plain = self.bg:copy()
-        f = self.font
-        tw = surface_mod.measure(f, self.title, 0, self.title_scale)
-        self.bg:text(f, math.floor((self.w - tw) / 2), self.title_y, self.title, C_TEXT, {scale: self.title_scale})
+        self:_paint()
         self.last = self.clock()
-        self.screen.surface:restore(self.bg, 0, 0, self.w, self.h)
+        self.started = self.last
         self:_frame(0)
 
-    # размеры по высоте экрана
+    def _slot(self, g, tone):
+        return LOGO0 + (tone - 1) * GROUPS + g
+
+    # тон до проявления: едва заметный силуэт на фоне
+    def _ghost(self, tone):
+        c = TONE_RGB[tone]
+        return _mix(BG_GLOW[1], c[1], 0.07), _mix(BG_GLOW[2], c[2], 0.07), _mix(BG_GLOW[3], c[3], 0.07)
+
     def _layout(self):
         w = self.w
         h = self.h
-        self.unit = h * 0.40 / logo.LOGO_H
+        name, ver = string.match(self.title, "^(%S+)%s+(.+)$")
+        self.name = name ?? self.title
+        self.ver = ver ?? ""
+        self.unit = h * 0.34 / logo.LOGO_H
         self.cube_w = math.floor(logo.LOGO_W * self.unit)
         self.cube_h = math.floor(logo.LOGO_H * self.unit)
-        self.cube_x = math.floor((w - self.cube_w) / 2)
-        self.cube_y = math.floor(h * 0.10)
-        self.title_scale = math.max(1, math.floor(h / 70))
-        self.title_y = self.cube_y + self.cube_h + math.floor(h * 0.04)
+        self.name_scale = math.max(1, math.floor(h / 70))
         self.text_scale = math.max(1, math.floor(h / 130))
-        self.bar_w = math.floor(w * 0.5)
-        self.bar_h = math.max(4, math.floor(h * 0.022))
-        self.bar_x = math.floor((w - self.bar_w) / 2)
-        self.bar_y = math.floor(h * 0.78)
-        self.label_y = self.bar_y + self.bar_h + math.floor(h * 0.025)
-        self.note_y = self.label_y + self.font.height * self.text_scale + math.floor(h * 0.012)
-        # плитки куба: порядок снизу вверх, чтобы он «вырастал»
-        tiles = []
+        fh = self.font.height
+        block = self.cube_h + math.floor(h * 0.05) + fh * self.name_scale + 4 + fh * self.text_scale
+        self.cube_x = math.floor((w - self.cube_w) / 2)
+        self.cube_y = math.max(2, math.floor((h * 0.82 - block) / 2))
+        self.name_y = self.cube_y + self.cube_h + math.floor(h * 0.05)
+        self.ver_y = self.name_y + fh * self.name_scale + 4
+        self.label_y = math.floor(h * 0.84)
+        self.note_y = self.label_y + fh * self.text_scale + math.max(2, math.floor(h * 0.012))
+        # полосы волны идут по ширине всего логотипа (куб и надпись)
+        nw = surface_mod.measure(self.font, self.name, 1, self.name_scale)
+        vw = surface_mod.measure(self.font, self.ver, 0, self.text_scale)
+        self.x0 = math.min(self.cube_x, math.floor((w - nw) / 2), math.floor((w - vw) / 2)) - 2
+        self.x1 = math.max(self.cube_x + self.cube_w, math.floor((w + nw) / 2), math.floor((w + vw) / 2)) + 2
+        self.extent = self.x1 - self.x0
+        self.band = self.extent / GROUPS
+
+    # фон (виньетка: светлее за логотипом), звёзды, логотип номерами полос; рисуется один раз
+    def _paint(self):
+        w = self.w
+        h = self.h
+        s = self.screen.surface
+        px = s.px
+        cx = w / 2
+        cy = self.cube_y + self.cube_h * 0.6
+        rx = w * 0.62
+        ry = h * 0.75
+        for y in range[0, h - 1]:
+            dy = (y - cy) / ry
+            base = y * w + 1
+            for x in range[0, w - 1]:
+                dx = (x - cx) / rx
+                k = 1 - math.sqrt(dx * dx + dy * dy)
+                # лёгкий упорядоченный дизеринг против полос на градиенте
+                k = k + (((x + y * 2) % 4) - 1.5) * 0.012
+                px[base + x] = BG0 + _clamp(math.floor(k * BG_N), 0, BG_N - 1)
+        self.plain = s:copy()
+        # звёзды: случайные точки вне логотипа, каждая на своём номере мерцания
+        seed = 12345
+        self.star_pts = []
+        for i in range[1, math.floor(w * h / 1400) + 8]:
+            seed = (seed * 1103515245 + 12345) % 2147483648
+            x = seed % w
+            seed = (seed * 1103515245 + 12345) % 2147483648
+            y = seed % math.floor(h * 0.8)
+            if x < self.x0 - 4 or x > self.x1 + 4 or y < self.cube_y - 4 or y > self.ver_y + self.font.height * self.text_scale + 4:
+                px[y * w + x + 1] = STAR0 + i % STAR_N
+        # логотип: сначала тоны на отдельной поверхности, потом номер полосы по столбцу
+        ink = surface_mod.new(w, h, 0)
         u = self.unit
         for face in FACES:
-            for i in range[0, TILES - 1]:
-                for j in range[0, TILES - 1]:
-                    pts = []
-                    cx = 0
-                    cy = 0
-                    for d in [[0, 0], [1, 0], [1, 1], [0, 1]]:
-                        a = (i + d[1]) / TILES
-                        b = (j + d[2]) / TILES
-                        x = self.cube_x + (face.o[1] + face.u[1] * a + face.v[1] * b) * u
-                        y = self.cube_y + (face.o[2] + face.u[2] * a + face.v[2] * b) * u
-                        pts[len(pts) + 1] = [x, y]
-                        cx += x / 4
-                        cy += y / 4
-                    tiles[len(tiles) + 1] = {pts: pts, cx: cx, cy: cy, color: face.color}
-        table.sort(tiles, (a, b) => a.cy > b.cy or (a.cy == b.cy and a.cx < b.cx))
-        self.tiles = tiles
+            pts = []
+            for d in [[0, 0], [1, 0], [1, 1], [0, 1]]:
+                pts[len(pts) + 1] = [self.cube_x + (face.o[1] + face.u[1] * d[1] + face.v[1] * d[2]) * u,
+                    self.cube_y + (face.o[2] + face.u[2] * d[1] + face.v[2] * d[2]) * u]
+            ink:polygon(pts, face.tone, true)
+        f = self.font
+        nw = surface_mod.measure(f, self.name, 1, self.name_scale)
+        ink:text(f, math.floor((w - nw) / 2), self.name_y, self.name, 4, {scale: self.name_scale, spacing: 1})
+        if self.ver != "":
+            vw = surface_mod.measure(f, self.ver, 0, self.text_scale)
+            ink:text(f, math.floor((w - vw) / 2), self.ver_y, self.ver, 4, {scale: self.text_scale})
+        ipx = ink.px
+        for y in range[0, h - 1]:
+            base = y * w + 1
+            for x in range[self.x0, self.x1 - 1]:
+                if x >= 0 and x < w:
+                    tone = ipx[base + x]
+                    if tone > 0:
+                        g = _clamp(math.floor((x - self.x0) / self.band + ((x + y * 2) % 4 - 1.5) * 0.22), 0, GROUPS - 1)
+                        px[base + x] = self:_slot(g, tone)
+        self.with_logo = s:copy()
+        s:mark(0, 0, w - 1, h - 1)
+        self.screen:present()
 
     def progress(self, frac, text):
-        self.target = _clamp(frac, 0, 1)
-        if text != nil and text != self.label:
-            self.old_label = self.label
-            self.label = text
-            self.fade = 0
+        self.target = math.max(self.target, _clamp(frac, 0, 1))
+        if text != nil and text != self.label and text != self.pending:
+            self.pending = text
         self:tick()
 
     def message(self, text):
+        text = text ?? ""
+        if text == self.note:
+            return
         self.note = text
+        self:_draw_note()
         self:tick()
 
     # кадр, если с прошлого прошло достаточно времени
@@ -170,89 +233,130 @@ export class PixelSplash:
         if dt < FRAME_STEP:
             return false
         self.last = t
-        if self.screen == nil or self.failed != nil:
+        if self.screen == nil:
             return false
         self:_frame(math.min(dt, 0.25))
         return true
 
+    def _set(self, list, n, r, g, b):
+        r = _clamp(_round(r), 0, 255)
+        g = _clamp(_round(g), 0, 255)
+        b = _clamp(_round(b), 0, 255)
+        key = r * 65536 + g * 256 + b
+        if self.sent[n] != key:
+            self.sent[n] = key
+            list[len(list) + 1] = [n, r, g, b]
+
     def _frame(self, dt):
-        s = self.screen.surface
-        bg = self.bg
         if self.mode == "error":
             return
-        self.shown += (self.target - self.shown) * math.min(1, dt * (self.fast and 30 or 12))
-        if self.target - self.shown < 0.002:
-            self.shown = self.target
-        self.fade = math.min(1, self.fade + dt * 4)
-        s:restore(bg, self.cube_x - 2, self.cube_y - 2, self.cube_w + 4, self.cube_h + 4)
-        s:restore(bg, 0, self.bar_y - 3, self.w, self.note_y + self.font.height * self.text_scale - self.bar_y + 6)
-        self:_draw_cube(s)
-        self:_draw_bar(s)
-        self:_draw_text(s)
-        self.screen:present()
+        self.t += dt
+        t = self.t
+        # проявление плавно догоняет загрузку: не прыгает и не стоит на месте
+        gap = self.target - self.shown
+        if gap > 0:
+            self.shown = math.min(self.target, self.shown + math.max(dt * 0.05, gap * math.min(1, dt * (self.mode == "done" and 14 or 4))))
+        # смена подписи: старая гаснет, новая проявляется (цвет подписи это один номер палитры)
+        if self.pending != nil:
+            self.label_a = math.max(0, self.label_a - dt * 7)
+            if self.label_a <= 0 or self.label == "":
+                self.label = self.pending
+                self.pending = nil
+                self:_draw_label()
+        elif self.label != "":
+            self.label_a = math.min(1, self.label_a + dt * 4)
+        list = []
+        dim = 1 - self.dark
+        fl = self.flash
+        # фон: ступени светлеют при вспышке
+        for i in range[0, BG_N - 1]:
+            k = i / (BG_N - 1)
+            boost = 1 + fl * 0.9 * k
+            self:_set(list, BG0 + i, _mix(BG_TOP[1], BG_GLOW[1], k) * boost * dim, _mix(BG_TOP[2], BG_GLOW[2], k) * boost * dim,
+                _mix(BG_TOP[3], BG_GLOW[3], k) * boost * dim)
+        # звёзды мерцают
+        for i in range[0, STAR_N - 1]:
+            a = 0.35 + 0.65 * (0.5 + 0.5 * math.sin(t * (0.9 + i * 0.37) + i * 1.7))
+            a = a * a * 0.8
+            self:_set(list, STAR0 + i, _mix(BG_TOP[1], 210, a) * dim, _mix(BG_TOP[2], 220, a) * dim, _mix(BG_TOP[3], 255, a) * dim)
+        # волна: фронт идёт за загрузкой, на фронте блик, позади перелив
+        fade = self.extent * 0.22
+        front = self.shown * (self.extent + 2 * fade) - fade
+        for g in range[0, GROUPS - 1]:
+            gx = (g + 0.5) * self.band
+            k = _clamp((front - gx) / fade, 0, 1)
+            k = k * k * (3 - 2 * k)
+            glow = math.max(0, 1 - math.abs(front - gx) / (fade * 0.55))
+            glow = glow * glow * 0.85
+            shimmer = 1 + 0.08 * math.sin(t * 2.2 - g * 0.22) * k
+            for tone in range[1, TONES]:
+                c = TONE_RGB[tone]
+                gr, gg, gb = self:_ghost(tone)
+                r = _mix(gr, c[1] * shimmer, k)
+                gn = _mix(gg, c[2] * shimmer, k)
+                b = _mix(gb, c[3] * shimmer, k)
+                w = math.min(1, glow + fl)
+                self:_set(list, self:_slot(g, tone), _mix(r, 255, w) * dim, _mix(gn, 255, w) * dim, _mix(b, 255, w) * dim)
+        # подпись
+        bg_r, bg_g, bg_b = self:_bg_at(self.label_y)
+        a = self.label_a
+        self:_set(list, C_LABEL, _mix(bg_r, LABEL_RGB[1], a) * dim, _mix(bg_g, LABEL_RGB[2], a) * dim, _mix(bg_b, LABEL_RGB[3], a) * dim)
+        self:_set(list, C_NOTE, NOTE_RGB[1] * dim, NOTE_RGB[2] * dim, NOTE_RGB[3] * dim)
+        if len(list) > 0:
+            self.screen:set_colors(list)
 
-    def _draw_cube(self, s):
-        n = len(self.tiles)
-        for i in range[1, n]:
-            tile = self.tiles[i]
-            start = (i - 1) / n * 0.8
-            k = _clamp((self.shown - start) / 0.07, 0, 1)
-            if k > 0.02:
-                e = k * (2 - k)
-                scale = 0.94 * e
-                pts = []
-                for p in tile.pts:
-                    pts[len(pts) + 1] = [tile.cx + (p[1] - tile.cx) * scale, tile.cy + (p[2] - tile.cy) * scale]
-                s:polygon(pts, tile.color, true)
+    # цвет фона в середине строки y (подпись гаснет в него)
+    def _bg_at(self, y):
+        v = self.plain:get(math.floor(self.w / 2), y)
+        r, g, b = self.palette:get(v)
+        return r, g, b
 
-    def _draw_bar(self, s):
-        bx = self.bar_x
-        by = self.bar_y
-        s:round_rect(bx, by, self.bar_w, self.bar_h, math.floor(self.bar_h / 2), C_TRACK, true)
-        fw = math.floor(self.shown * self.bar_w)
-        if fw > 1:
-            s:push_clip(bx, by, fw, self.bar_h)
-            s:round_rect(bx, by, math.max(fw, self.bar_h), self.bar_h, math.floor(self.bar_h / 2), C_ACCENT, true)
-            gw = math.max(3, math.floor(self.bar_w * 0.1))
-            gx = bx + math.floor(((self.clock() * 0.6) % 1.4 - 0.2) * self.bar_w)
-            s:fill_rect(gx, by, gw, self.bar_h, C_GLOSS)
-            s:pop_clip()
-
-    def _draw_text(self, s):
+    def _text_line(self, y, text, c):
+        s = self.screen.surface
         f = self.font
         sc = self.text_scale
-        if self.label != "":
-            idx = math.max(1, math.min(8, math.floor(self.fade * 7) + 1))
-            tw = surface_mod.measure(f, self.label, 0, sc)
-            s:text(f, math.floor((self.w - tw) / 2), self.label_y, self.label, self.fade_ramp[idx], {scale: sc})
-        if self.note != "":
-            note = surface_mod.ellipsize(f, self.note, self.w - 8, "...", 0, sc)
-            tw = surface_mod.measure(f, note, 0, sc)
-            s:text(f, math.floor((self.w - tw) / 2), self.note_y, note, C_DIM, {scale: sc})
+        hgt = f.height * sc + 1
+        s:restore(self.with_logo, 0, y, self.w, hgt)
+        if text != "":
+            line = surface_mod.ellipsize(f, text, self.w - 8, "...", 0, sc)
+            tw = surface_mod.measure(f, line, 0, sc)
+            s:text(f, math.floor((self.w - tw) / 2), y, line, c, {scale: sc})
+        self.screen:present()
 
-    # полоса до конца, несколько кадров без ожидания событий
-    # sleep(секунды): пауза между кадрами; из процесса ядра нужно передать sys.sleep (по умолчанию ждёт события CC напрямую)
+    def _draw_label(self):
+        self:_text_line(self.label_y, self.label, C_LABEL)
+
+    def _draw_note(self):
+        if self.mode != "error":
+            self:_text_line(self.note_y, self.note, C_NOTE)
+
+    # финал: волна до конца, вспышка, затухание в чёрный; по времени, а не по числу кадров (около секунды)
+    # pause(секунды): пауза между кадрами; из процесса ядра нужно передать sys.sleep (по умолчанию ждёт события CC напрямую)
     def done(self, pause=nil):
+        self.mode = "done"
         self.target = 1
-        self.old_label = self.label
-        self.fast = true
-        # дорисовываем до конца (куб собран, полоса полная), потом короткая пауза, чтобы готовый экран успел показаться
-        for i in range[1, 60]:
-            self.last = self.clock() - FRAME_STEP
-            self:tick()
-            if self.shown >= 0.999:
+        start = self.clock()
+        while true:
+            el = self.clock() - start
+            if el >= 1.1:
                 break
-            if pause != nil:
-                pause(FRAME_STEP)
-            else:
-                self:_sleep(FRAME_STEP)
-        for i in range[1, 6]:
+            if el > 0.3:
+                self.shown = 1
+            fl = 0
+            if el > 0.3 and el < 0.75:
+                p = (el - 0.3) / 0.45
+                fl = p < 0.25 and p / 0.25 or (1 - (p - 0.25) / 0.75)
+            self.flash = _clamp(fl, 0, 1) * 0.75
+            self.dark = _clamp((el - 0.7) / 0.4, 0, 1)
             self.last = self.clock() - FRAME_STEP
             self:tick()
             if pause != nil:
                 pause(FRAME_STEP)
             else:
                 self:_sleep(FRAME_STEP)
+        self.dark = 1
+        self.flash = 0
+        self:_frame(0)
 
     def _sleep(self, secs):
         timer = os.startTimer(secs)
@@ -261,16 +365,31 @@ export class PixelSplash:
             if ev == "timer" and a == timer:
                 return
 
+    # логотип краснеет там, докуда дошла волна, остальное гаснет; ниже текст ошибки
     def error(self, text):
+        list = []
+        fade = self.extent * 0.22
+        front = self.shown * (self.extent + 2 * fade) - fade
+        for g in range[0, GROUPS - 1]:
+            k = _clamp((front - (g + 0.5) * self.band) / fade, 0, 1)
+            for tone in range[1, TONES]:
+                shade = [1, 0.75, 0.45, 0.9][tone]
+                gr, gg, gb = self:_ghost(tone)
+                self:_set(list, self:_slot(g, tone), _mix(gr, ERR_RGB[1] * shade, math.max(k, 0.35)), _mix(gg, ERR_RGB[2] * shade, math.max(k, 0.35)),
+                    _mix(gb, ERR_RGB[3] * shade, math.max(k, 0.35)))
+        self:_set(list, C_LABEL, 0, 0, 0)
+        self.screen:set_colors(list)
         self.mode = "error"
         s = self.screen.surface
-        s:restore(self.plain, 0, 0, self.w, self.h)
         f = self.font
         sc = self.text_scale
-        s:text(f, 8 * sc, 6 * sc, "Boot failed", C_ERR, {scale: math.max(sc, self.title_scale - 1)})
-        y = 6 * sc + (f.height + 4) * math.max(sc, self.title_scale - 1)
+        top = self.ver_y + f.height * sc + math.floor(self.h * 0.04)
+        s:restore(self.plain, 0, top, self.w, self.h - top)
+        s:text(f, 8 * sc, top, "Boot failed", C_ERR, {scale: math.max(sc, self.name_scale - 1)})
+        y = top + (f.height + 4) * math.max(sc, self.name_scale - 1)
         for line in surface_mod.wrap(f, text, self.w - 16 * sc, 0, sc):
-            s:text(f, 8 * sc, y, line, C_TEXT, {scale: sc})
+            if y + f.height * sc <= self.h:
+                s:text(f, 8 * sc, y, line, C_ERRTEXT, {scale: sc})
             y += (f.height + 2) * sc
         self.screen:present()
 
@@ -290,6 +409,9 @@ export class TextSplash:
         self.label = ""
         self.note = ""
         self.frac = 0
+        self.shown = 0
+        self.last = nil
+        self.cols_shown = -1
 
     def open(self):
         t = self.term
@@ -297,29 +419,53 @@ export class TextSplash:
         self.w = w
         self.h = h
         self.color = t.isColor == nil or t.isColor()
-        rows = logo.logo_rows()
-        total = len(rows) + 5
-        top = math.max(1, math.floor((h - total) / 2) + 1)
-        lw = string.len(rows[1].text)
-        left = math.max(1, math.floor((w - lw) / 2) + 1)
+        self.rows = logo.logo_rows()
+        total = len(self.rows) + 5
+        self.top = math.max(1, math.floor((h - total) / 2) + 1)
+        self.lw = string.len(self.rows[1].text)
+        self.left = math.max(1, math.floor((w - self.lw) / 2) + 1)
         if self.color:
             t.setBackgroundColor(colors.black)
             t.setTextColor(colors.white)
         t.clear()
-        for i in range[1, len(rows)]:
-            t.setCursorPos(left, top + i - 1)
-            if self.color:
-                t.blit(rows[i].text, rows[i].fg, rows[i].bg)
-            else:
-                t.write(string.rep("#", lw))
-        self.title_row = top + len(rows) + 1
+        self.title_row = self.top + len(self.rows) + 1
         self.bar_row = self.title_row + 2
         self.label_row = self.bar_row + 1
         self.note_row = self.label_row + 1
         self.bar_w = math.min(w - 4, 32)
         self.bar_x = math.floor((w - self.bar_w) / 2) + 1
         self:_center(self.title_row, self.title)
+        self.last = self.clock()
+        self:_logo()
         self:_bar()
+
+    # логотип проявляется по столбцам: ещё не дошли тёмно-серый, фронт белый, дальше свои цвета
+    def _logo(self):
+        t = self.term
+        n = math.floor(self.shown * (self.lw + 1))
+        if n == self.cols_shown:
+            return
+        self.cols_shown = n
+        for i in range[1, len(self.rows)]:
+            row = self.rows[i]
+            t.setCursorPos(self.left, self.top + i - 1)
+            if self.color:
+                fg = ""
+                bg = ""
+                for x in range[1, self.lw]:
+                    f = string.sub(row.fg, x, x)
+                    b = string.sub(row.bg, x, x)
+                    if x > n + 1:
+                        f = f != "f" and "7" or "f"
+                        b = b != "f" and "7" or "f"
+                    elif x == n + 1:
+                        f = f != "f" and "0" or "f"
+                        b = b != "f" and "0" or "f"
+                    fg = fg .. f
+                    bg = bg .. b
+                t.blit(row.text, fg, bg)
+            else:
+                t.write(string.rep("#", math.min(n, self.lw)) .. string.rep(" ", self.lw - math.min(n, self.lw)))
 
     def _center(self, row, text):
         t = self.term
@@ -328,31 +474,55 @@ export class TextSplash:
         t.setCursorPos(math.max(1, math.floor((self.w - string.len(text)) / 2) + 1), row)
         t.write(string.sub(text, 1, self.w))
 
+    # полоса с половинками клеток (символ телетекста с закрашенной левой половиной)
     def _bar(self):
         t = self.term
-        n = math.floor(self.frac * self.bar_w + 0.5)
+        halves = math.floor(self.shown * self.bar_w * 2 + 0.5)
+        full = math.floor(halves / 2)
+        half = halves % 2
         t.setCursorPos(self.bar_x, self.bar_row)
         if self.color:
-            t.blit(string.rep(" ", self.bar_w), string.rep("0", self.bar_w), string.rep("b", n) .. string.rep("7", self.bar_w - n))
+            rest = self.bar_w - full - half
+            text = string.rep(" ", full) .. (half == 1 and string.char(149) or "") .. string.rep(" ", rest)
+            fg = string.rep("0", full) .. (half == 1 and "b" or "") .. string.rep("0", rest)
+            bg = string.rep("b", full) .. (half == 1 and "7" or "") .. string.rep("7", rest)
+            t.blit(text, fg, bg)
         else:
+            n = math.floor(self.shown * self.bar_w + 0.5)
             t.write("[" .. string.rep("#", n) .. string.rep("-", self.bar_w - n) .. "]")
 
-    def progress(self, frac, text):
-        self.frac = _clamp(frac, 0, 1)
+    def _step(self, dt):
+        gap = self.frac - self.shown
+        if gap > 0:
+            self.shown = math.min(self.frac, self.shown + math.max(dt * 0.05, gap * math.min(1, dt * 5)))
+        self:_logo()
         self:_bar()
+
+    def progress(self, frac, text):
+        self.frac = math.max(self.frac, _clamp(frac, 0, 1))
         if text != nil and text != self.label:
             self.label = text
             self:_center(self.label_row, text)
+        self:tick()
 
     def message(self, text):
         self.note = text
         self:_center(self.note_row, text)
 
     def tick(self):
-        return false
+        now = self.clock()
+        dt = now - self.last
+        if dt < FRAME_STEP:
+            return false
+        self.last = now
+        self:_step(math.min(dt, 0.25))
+        return true
 
     def done(self, pause=nil):
-        self:progress(1, nil)
+        self.frac = 1
+        self.shown = 1
+        self:_logo()
+        self:_bar()
 
     def error(self, text):
         t = self.term

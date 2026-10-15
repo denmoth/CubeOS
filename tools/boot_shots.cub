@@ -40,13 +40,13 @@ def shoot(cols, rows, tag):
         return clock.now
     s = splash.new({caps: {pixel: true}, term: make_term(cols, rows), clock: tick_clock, assets: "/repo/assets", title: "CubeOS 0.3.0"})
     s:open()
-    steps = [[0.05, "Starting"], [0.35, "Loading the kernel"], [0.7, "Starting services"], [1, "Ready"]]
+    steps = [[0.02, "Loading libraries"], [0.3, "Loading the kernel"], [0.55, "Loading the terminal"], [0.8, "Starting services"], [1, "Ready"]]
     n = 0
     for st in steps:
         s:progress(st[1], st[2])
-        if st[1] == 0.7:
+        if st[1] == 0.8:
             s:message("timed: service ready")
-        for i in range[1, 45]:
+        for i in range[1, 12]:
             s:tick()
         n += 1
         dump(s.inner, "ui_boot_" .. tag .. "_" .. n)

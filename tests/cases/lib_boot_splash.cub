@@ -3,6 +3,9 @@ import boot.splash as splash
 import version
 eq = t.eq
 
+# Экран загрузки (D245): логотип рисуется один раз номерами палитры, волна загрузки это смена цветов; подпись; финал в чёрный;
+# ошибка; текстовый вариант; падение на текстовый при сбое.
+
 # ---------------------------------------------------------------- подставные терминалы
 def fake(opts):
     api = {}
@@ -37,11 +40,15 @@ def tick_clock():
     return clock.now
 
 def new_pixel(extra):
-    o = {caps: {pixel: true}, term: fake({pixel: true}), clock: tick_clock, assets: "/repo/assets"}
+    o = {caps: {pixel: true}, term: fake({pixel: true}), clock: tick_clock, assets: "/repo/assets", title: "CubeOS 0.3.0"}
     if extra != nil:
         for k, v in extra:
             o[k] = v
     return splash.new(o)
+
+def bright(px, n):
+    r, g, b = px.screen.palette:get(n)
+    return r + g + b
 
 # ---------------------------------------------------------------- пиксельный экран
 s = new_pixel(nil)
@@ -50,33 +57,54 @@ eq(s.dead, false, "pixel splash opens")
 px = s.inner
 surf = px.screen.surface
 u = px.unit
-cx = px.cube_x + math.floor(6 * u)
-cy = px.cube_y + math.floor(20 * u)
-before = surf:get(cx, cy)
-eq(before == 209, false, "the cube is not built yet")
-s:progress(0.5, "Loading the kernel")
-for i in range[1, 40]:
-    s:tick()
-eq(px.shown > 0.4, true, "bar follows the target")
-mid = surf:checksum()
+lx = px.cube_x + math.floor(6 * u)
+ly = px.cube_y + math.floor(20 * u)
+slot = surf:get(lx, ly)
+left0 = splash.LOGO0 + splash.GROUPS
+eq(slot >= left0 and slot < left0 + splash.GROUPS, true, "the left face is drawn with left-face wave numbers")
+eq(bright(px, slot) < 200, true, "before loading the cube is only a faint silhouette")
+before_px = surf:checksum()
 s:progress(1, "Starting services")
-s:message("timed is ready")
 for i in range[1, 60]:
     s:tick()
-eq(px.shown, 1, "bar reaches the end")
-eq(surf:get(cx, cy), 209, "the left face is built at 100 percent")
-eq(surf:checksum() != mid, true, "the picture changes with progress")
+eq(px.shown, 1, "the wave reaches the end")
+eq(bright(px, slot) > 400, true, "at 100 percent the cube is lit")
+eq(surf:get(lx, ly), slot, "the cube pixels did not change: the wave is the palette")
+found = 0
+for x in range[0, px.w - 1]:
+    for y in range[px.label_y, px.label_y + 8]:
+        if surf:get(x, y) == splash.C_LABEL:
+            found += 1
+eq(found > 20, true, "the stage caption is drawn")
+eq(px.label, "Starting services", "and it is the latest one")
+s:progress(0.3, "Going back")
+eq(px.target, 1, "progress never goes back")
+s:message("timed is ready")
+eq(surf:checksum() != before_px, true, "captions change the picture")
 s:done()
 eq(s.dead, false, "done does not break the screen")
+eq(bright(px, slot) < 10, true, "the finale fades to black")
 s:error("Cannot start the kernel:\nboom")
 count = 0
 for y in range[0, px.h - 1]:
     for x in range[0, px.w - 1]:
-        if surf:get(x, y) == 207:
+        if surf:get(x, y) == splash.C_ERR:
             count += 1
 eq(count > 20, true, "error text is drawn in the error color")
 s:close()
 eq(px.screen, nil, "close releases the screen")
+
+# ход волны плавный: после половины проявлена середина, а не всё сразу
+s2 = new_pixel(nil)
+s2:open()
+p2 = s2.inner
+s2:progress(0.5, "Loading the kernel")
+for i in range[1, 30]:
+    s2:tick()
+first = p2:_slot(0, 2)
+last = p2:_slot(splash.GROUPS - 1, 2)
+eq(bright(p2, first) > bright(p2, last) + 150, true, "at half the left of the logo is lit and the right is not yet")
+s2:close()
 
 # кадры не чаще шага по времени
 still = splash.new({caps: {pixel: true}, term: fake({pixel: true}), clock: () => 7, assets: "/repo/assets"})
@@ -110,31 +138,46 @@ eq(g2.dead, true, "a dead screen ignores calls")
 tt = fake({})
 x = splash.new({caps: {pixel: false}, term: tt, clock: tick_clock})
 x:open()
+grey_logo = false
+for line in tt.log:
+    if string.find(line, "|", 1, true) != nil and string.find(line, "7", 1, true) != nil and string.find(line, "9", 1, true) == nil:
+        grey_logo = true
+eq(grey_logo, true, "the text logo starts grey")
 x:progress(0.5, "Loading")
+for i in range[1, 40]:
+    x:tick()
 x:message("note")
 found_title = false
 found_bar = false
 for line in tt.log:
     if line == version.full():
         found_title = true
-    if line == string.rep("b", 16) .. string.rep("7", 16) or string.find(line, string.rep("0", 32) .. "|" .. string.rep("b", 16) .. string.rep("7", 16) .. "$") != nil:
+    if string.find(line, "|" .. string.rep("b", 16) .. string.rep("7", 16) .. "$") != nil:
         found_bar = true
 eq(found_title, true, "the title is written")
 eq(found_bar, true, "half of the bar is filled")
 x:done()
-eq(x.inner.frac, 1, "done fills the bar")
+eq(x.inner.shown, 1, "done fills the bar")
+coloured = false
+for line in tt.log:
+    if string.find(line, "9", 1, true) != nil and string.find(line, "|", 1, true) != nil:
+        coloured = true
+eq(coloured, true, "and the logo gets its colours")
 
 mono = fake({color: false})
 m = splash.new({caps: {pixel: false}, term: mono, clock: tick_clock})
 m:open()
 m:progress(0.25, "Loading")
+for i in range[1, 40]:
+    m:tick()
 last_bar = ""
 for line in mono.log:
     if string.sub(line, 1, 1) == "[":
         last_bar = line
 eq(last_bar, "[" .. string.rep("#", 8) .. string.rep("-", 24) .. "]", "monochrome bar uses characters")
 m:error("something failed")
-# свои цвета (фон, подпись) попадают в терминал при открытии, а не позже: иначе в игре они были бы стандартными
+
+# свои цвета (фон, логотип, подпись) попадают в терминал при открытии, а не позже: иначе в игре они были бы стандартными
 sent = {}
 def record_palette(i, r, g, b):
     sent[i] = [r, g, b]
@@ -142,8 +185,7 @@ pt = fake({pixel: true})
 pt.setPaletteColor = record_palette
 ps = splash.new({caps: {pixel: true}, term: pt, clock: tick_clock, assets: "/repo/assets"})
 ps:open()
-eq(sent[200] != nil and sent[212] != nil and sent[235] != nil and sent[236] != nil and sent[243] != nil, true, "the background and label ramps are sent to the terminal")
-eq([math.floor(sent[212][1] * 255 + 0.5), math.floor(sent[212][3] * 255 + 0.5)], [10, 24], "the first background step is the dark navy, not a default color")
-eq(sent[235][1] > sent[212][1], true, "the ramp gets lighter")
+eq(sent[splash.BG0] != nil and sent[splash.LOGO0] != nil and sent[splash.LOGO0 + splash.GROUPS * 4 - 1] != nil, true, "the background and logo colours are sent to the terminal")
+eq([math.floor(sent[splash.BG0][1] * 255 + 0.5), math.floor(sent[splash.BG0][3] * 255 + 0.5)], [6, 20], "the first background step is the dark navy, not a default color")
 ps:close()
 print("done")

@@ -13,7 +13,8 @@ local B = ctx.boot_dir or "/cubeos/sys/boot/"
 
 local function now() return os.epoch("utc") / 1000 end
 
--- этапы и их веса на полосе; реальные цифры лежат в boot.conf (stage_weights), замер каждой загрузки пишется в /cubeos/var/boot.timing
+-- этапы и их веса на полосе. Замер каждой загрузки пишется в /cubeos/var/boot.timing, и следующая загрузка берёт веса из него:
+-- полоса идёт ровно по времени, а не рывками. boot.conf (stage_weights) задаёт веса вручную и важнее замера.
 local ORDER = { "libs", "fs", "kernel", "system", "shell", "setup", "services", "login" }
 local weights = { libs = 0.20, fs = 0.08, kernel = 0.15, system = 0.10, shell = 0.17, setup = 0.05, services = 0.20, login = 0.05 }
 
@@ -74,8 +75,8 @@ local function reset_screen()
 end
 
 local function main()
+  -- до экрана загрузки только чёрный экран (первый кадр системы это уже экран загрузки)
   reset_screen()
-  term.write("Starting CubeOS...")
   blog("info", "stage 2 started (pixel=" .. tostring(ctx.caps and ctx.caps.pixel) .. ", mode=" .. tostring(ctx.mode or "normal") .. ")")
   for _, n in ipairs(ctx.notes or {}) do blog("info", n) end
 
@@ -88,6 +89,23 @@ local function main()
   splash = ctx.splash or import("boot.splash").new({ caps = ctx.caps, term = term, assets = rt.source .. "/assets", title = version.full() })
   splash:open()
   local json5 = import("json5")
+  -- веса по прошлой загрузке (финал «login» не считается: он идёт по своему времени)
+  pcall(function()
+    local f = fs.open((ctx.root or "") .. "/cubeos/var/boot.timing", "r")
+    if not f then return end
+    local t = json5.parse(f.readAll())
+    f.close()
+    local st, sum = type(t) == "table" and t.stages, 0
+    if type(st) ~= "table" then return end
+    for _, n in ipairs(ORDER) do
+      if n ~= "login" and tonumber(st[n]) then sum = sum + tonumber(st[n]) end
+    end
+    if sum <= 0 then return end
+    for _, n in ipairs(ORDER) do
+      if n ~= "login" and tonumber(st[n]) then weights[n] = math.max(0.02, tonumber(st[n]) / sum) end
+    end
+    weights.login = 0.02
+  end)
   local conf_text
   do
     local f = fs.open((ctx.root or "") .. "/cubeos/sys/cfg/boot.conf", "r")
@@ -121,7 +139,7 @@ local function main()
   load("kernel", "Loading the kernel", { "kernel", "kernel.cc", "boot", "boot.console", "crash", "sysfs" })
   -- модули служб подгружаются заранее: иначе они компилировались бы в процессе init одним куском
   load("system", "Loading system services", { "svc.logd", "svc.timed", "svc.devd", "svc.powerd", "svc.crashd", "svc.permd", "svc.notifyd",
-    "svc.clipboard", "svc.stub" })
+    "svc.clipboard", "svc.stub", "svc.fontd", "svc.inputd", "svc.audiod", "svc.netd" })
   if not ctx.shell then
     load("shell", "Loading the terminal", { "ui", "term.session" })
   end
