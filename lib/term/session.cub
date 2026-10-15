@@ -63,7 +63,7 @@ export def program(session, opts=nil):
             if okc and type(data) == "table":
                 lc = data
         tv = view_mod.new(vt, {width: "fill", height: "fill", keyboard: lc.keyboard ?? "ru", layout_mode: lc.keyboard_mode ?? "auto",
-            layout_dirs: [(o.assets ?? "/repo/assets") .. "/layouts", "/cubeos/share/layouts"]})
+            layout_dirs: [(o.assets ?? "/repo/assets") .. "/lang", "/cubeos/share/lang"]})
         env = env_mod.new({vterm: vt, fs: cfs.legacy_fs(view)})
 
         # ROM-библиотеки, которые не загрузились (иначе программы потом падают с пустым colors и подобным), в журнал
@@ -112,7 +112,7 @@ export def program(session, opts=nil):
         cfg = view:expand("$cfg")
         env.cush_opts = {history_path: cfg .. "/cush_history", config_path: cfg .. "/cush.conf", user: session.user, host: o.host,
             home: session.env.home, time: t.time, time_save: time_save, power: power, inputlog: inputlog, log: shell_log, notes: notes, sudo: sudo, account: account,
-            lang_dir: (o.assets ?? "/repo/assets") .. "/lang", unicode: out.kind == "pixel",
+            lang_dir: [(o.assets ?? "/repo/assets") .. "/lang", "/cubeos/share/lang"], unicode: out.kind == "pixel",
             info: {display: out.kind == "pixel" and "pixel mode" or "text mode", font: out.kind == "pixel" and (font_name ?? "cube-mono-6x9") or nil}}
 
         died = {err: nil}

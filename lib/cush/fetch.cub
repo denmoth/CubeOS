@@ -31,35 +31,35 @@ export def facts(sh):
     env = sh.env
     out = []
     w, h = env.term.getSize()
-    out[len(out) + 1] = ["OS", version.full()]
+    out[len(out) + 1] = [sh:t("OS"), version.full()]
     host = _G._HOST ?? "ComputerCraft"
-    out[len(out) + 1] = ["Host", string.gsub(host, " %(.*$", "")]
-    out[len(out) + 1] = ["Kernel", "Cubic -> " .. (_G._VERSION ?? "Lua")]
-    out[len(out) + 1] = ["Uptime", uptime_text()]
-    out[len(out) + 1] = ["Shell", "cush"]
+    out[len(out) + 1] = [sh:t("Host"), string.gsub(host, " %(.*$", "")]
+    out[len(out) + 1] = [sh:t("Kernel"), "Cubic -> " .. (_G._VERSION ?? "Lua")]
+    out[len(out) + 1] = [sh:t("Uptime"), uptime_text()]
+    out[len(out) + 1] = [sh:t("Shell"), "cush"]
     info = sh.info ?? {}
-    out[len(out) + 1] = ["Terminal", w .. "x" .. h .. " cells" .. (info.display != nil and (", " .. info.display) or "")]
+    out[len(out) + 1] = [sh:t("Terminal"), w .. "x" .. h .. " cells" .. (info.display != nil and (", " .. info.display) or "")]
     if info.font != nil:
-        out[len(out) + 1] = ["Font", info.font]
+        out[len(out) + 1] = [sh:t("Font"), info.font]
     id = os.getComputerID()
     label = os.getComputerLabel()
-    out[len(out) + 1] = ["Computer", "#" .. id .. (label != nil and (" " .. label) or "")]
+    out[len(out) + 1] = [sh:t("Computer"), "#" .. id .. (label != nil and (" " .. label) or "")]
     ok, free = pcall(env.fs.getFreeSpace, "/")
     ok2, cap = pcall(env.fs.getCapacity, "/")
     if ok and type(free) == "number":
         if ok2 and type(cap) == "number":
-            out[len(out) + 1] = ["Disk", plural_kb(cap - free) .. " / " .. plural_kb(cap)]
+            out[len(out) + 1] = [sh:t("Disk"), plural_kb(cap - free) .. " / " .. plural_kb(cap)]
         else:
-            out[len(out) + 1] = ["Disk", plural_kb(free) .. " free"]
+            out[len(out) + 1] = [sh:t("Disk"), plural_kb(free) .. " free"]
     gfx = hal.gfx_caps(env.term)
     text = gfx.backend .. ", " .. gfx.palette .. " colors"
     if gfx.pixels != nil:
         text = text .. ", " .. gfx.pixels.w .. "x" .. gfx.pixels.h .. " px"
-    out[len(out) + 1] = ["Graphics", text]
+    out[len(out) + 1] = [sh:t("Graphics"), text]
     # в настоящем CC объём памяти узнать нельзя (нет collectgarbage), тогда строки нет
     mem = hal.memory_kb()
     if mem != nil:
-        out[len(out) + 1] = ["Memory", mem .. " KB in use (Lua)"]
+        out[len(out) + 1] = [sh:t("Memory"), mem .. " KB in use (Lua)"]
     devices = {}
     if env.peripheral != nil:
         devices = hal.scan(env.peripheral)
@@ -74,17 +74,17 @@ export def facts(sh):
     parts = []
     for kind in names:
         parts[len(parts) + 1] = kinds[kind] .. " " .. kind
-    out[len(out) + 1] = ["Peripherals", len(parts) > 0 and table.concat(parts, ", ") or "none"]
+    out[len(out) + 1] = [sh:t("Peripherals"), len(parts) > 0 and table.concat(parts, ", ") or sh:t("none")]
     audio = hal.audio_caps(devices)
     if audio.speakers > 0:
-        out[len(out) + 1] = ["Audio", audio.speakers .. " speaker" .. (audio.speakers > 1 and "s" or "") .. (audio.pcm and ", PCM" or "")]
+        out[len(out) + 1] = [sh:t("Audio"), audio.speakers .. " speaker" .. (audio.speakers > 1 and "s" or "") .. (audio.pcm and ", PCM" or "")]
     net = {}
     if env.http != nil:
         net[len(net) + 1] = "HTTP"
     if kinds.modem != nil:
         net[len(net) + 1] = kinds.modem .. " modem" .. (kinds.modem > 1 and "s" or "")
-    out[len(out) + 1] = ["Network", len(net) > 0 and table.concat(net, ", ") or "none"]
-    out[len(out) + 1] = ["Time", sh.time:date_text() .. " " .. sh.time:time_text()]
+    out[len(out) + 1] = [sh:t("Network"), len(net) > 0 and table.concat(net, ", ") or sh:t("none")]
+    out[len(out) + 1] = [sh:t("Time"), sh.time:date_text() .. " " .. sh.time:time_text()]
     return out
 
 export def run(sh):
@@ -121,7 +121,7 @@ export def run(sh):
             elif ln.rule != nil:
                 sh:write_color("7", string.rep("-", ln.rule))
             elif ln.key != nil:
-                sh:write_color("3", ln.key .. string.rep(" ", 12 - string.len(ln.key)))
+                sh:write_color("3", ln.key .. string.rep(" ", math.max(1, 12 - chars.length(ln.key))))
                 sh:write_color("0", ln.value)
             elif ln.blocks != nil:
                 for k in range[1, 8]:

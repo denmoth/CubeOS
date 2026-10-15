@@ -316,3 +316,7 @@ export const KEY_HELP = [
     ["Shift+PgUp / PgDn", "scroll the screen"],
     ["Drag a file", "drop files from Windows onto the computer window: they are saved in the current folder, all lines"],
 ]
+
+# сообщения, которые приходят текстом от служб и сессии (переводятся при показе через sh:t): ключи для перевода (tools/lang_strings.py)
+export const MESSAGES = ["wrong password", "too many attempts, wait", "needs administrator rights: use sudo", "password needed",
+    "accounts are not available here", "the language is on, but not saved"]

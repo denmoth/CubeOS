@@ -1062,6 +1062,327 @@ msgstr "прокручування екрана"
 msgid "drop files from Windows onto the computer window: they are saved in the current folder, all lines"
 msgstr "перетягніть файли з Windows на вікно комп'ютера: вони збережуться в поточну теку повністю"
 
+msgid "wrong password"
+msgstr "неправильний пароль"
+
+msgid "too many attempts, wait"
+msgstr "забагато спроб, зачекайте"
+
+msgid "needs administrator rights: use sudo"
+msgstr "потрібні права адміністратора: використовуйте sudo"
+
+msgid "password needed"
+msgstr "потрібен пароль"
+
+msgid "accounts are not available here"
+msgstr "облікові записи тут недоступні"
+
+msgid "the language is on, but not saved"
+msgstr "мову ввімкнено, але не збережено"
+
+msgid "no language package {lang} (installed: {list})"
+msgstr "немає мовного пакета {lang} (встановлено: {list})"
+
+msgid "no such file"
+msgstr "немає такого файлу"
+
+msgid "cannot write"
+msgstr "не можна записати"
+
+msgid "command not found"
+msgstr "команду не знайдено"
+
+msgid "cannot read the dropped files"
+msgstr "не вдалося прочитати перетягнуті файли"
+
+msgid "({name} was already there)"
+msgstr "({name} вже був)"
+
+msgid "Received {file}  {bytes} bytes"
+msgstr "Отримано {file}  {bytes} байтів"
+
+msgid "cannot save {name} here"
+msgstr "не можна зберегти {name} тут"
+
+msgid "Done"
+msgstr "Готово"
+
+msgid "Exit"
+msgstr "Вихід"
+
+msgid "Killed"
+msgstr "Вбита"
+
+msgid "Stopped"
+msgstr "Зупинена"
+
+msgid "Every key you press is written there, except passwords and other hidden fields."
+msgstr "Туди пишеться кожна клавіша, крім паролів та інших прихованих полів."
+
+msgid "Input log: off"
+msgstr "Журнал введення: вимкнено"
+
+msgid "Language: {lang}"
+msgstr "Мова: {lang}"
+
+msgid "({lang} needs the pixel terminal)"
+msgstr "({lang} потрібен піксельний термінал)"
+
+msgid "The terminal font cannot draw: {chars}. Install a font for this language."
+msgstr "Шрифт термінала не малює: {chars}. Встановіть шрифт для цієї мови."
+
+msgid "not available here"
+msgstr "тут недоступно"
+
+msgid "{user} is not an administrator"
+msgstr "{user} не адміністратор"
+
+msgid "password for {user}: "
+msgstr "пароль {user}: "
+
+msgid "Current password: "
+msgstr "Поточний пароль: "
+
+msgid "New password (empty: no password): "
+msgstr "Новий пароль (порожньо: без пароля): "
+
+msgid "Repeat the new password: "
+msgstr "Повторіть новий пароль: "
+
+msgid "the passwords do not match"
+msgstr "паролі не збігаються"
+
+msgid "Password changed."
+msgstr "Пароль змінено."
+
+msgid "A PIN is set: you sign in with it."
+msgstr "PIN задано: вхід за ним."
+
+msgid "No PIN: you sign in with your password."
+msgstr "PIN немає: вхід за паролем."
+
+msgid "Your password: "
+msgstr "Ваш пароль: "
+
+msgid "New PIN (4 or more characters): "
+msgstr "Новий PIN (4 символи й більше): "
+
+msgid "Repeat the PIN: "
+msgstr "Повторіть PIN: "
+
+msgid "the PINs do not match"
+msgstr "PIN не збігаються"
+
+msgid "PIN set. Next time you sign in with it."
+msgstr "PIN задано. Наступного разу входьте за ним."
+
+msgid "PIN removed."
+msgstr "PIN прибрано."
+
+msgid "Every login asks for the password or PIN."
+msgstr "Кожен вхід питає пароль або PIN."
+
+msgid "Saved: every login asks."
+msgstr "Збережено: кожен вхід питає."
+
+msgid "Automatic login is off."
+msgstr "Автовхід вимкнено."
+
+msgid "No disks in the drives."
+msgstr "У дисководах немає дискет."
+
+msgid "Disk boot: {mode}"
+msgstr "Завантаження з дискет: {mode}"
+
+msgid "Disk #{id} is not trusted any more."
+msgstr "Дискеті #{id} більше не довіряємо."
+
+msgid "no disk with a startup program"
+msgstr "немає дискети з програмою startup"
+
+msgid "Disk #{id} is trusted. If its startup program changes, trust it again."
+msgstr "Дискеті #{id} довіряємо. Якщо її програма startup зміниться, довіртеся їй знову."
+
+msgid "not a folder"
+msgstr "не тека"
+
+msgid "no such file or folder"
+msgstr "немає такого файлу чи теки"
+
+msgid "Type"
+msgstr "Тип"
+
+msgid "folder"
+msgstr "тека"
+
+msgid "file"
+msgstr "файл"
+
+msgid "Size"
+msgstr "Розмір"
+
+msgid "Rights"
+msgstr "Права"
+
+msgid "read only"
+msgstr "лише читання"
+
+msgid "read and write"
+msgstr "читання й запис"
+
+msgid "Modified"
+msgstr "Змінено"
+
+msgid "the process list is not available here"
+msgstr "список процесів тут недоступний"
+
+msgid "No devices attached."
+msgstr "Пристрої не під'єднано."
+
+msgid "Press Ctrl+V to paste (Ctrl+C cancels)"
+msgstr "Натисніть Ctrl+V, щоб вставити (Ctrl+C скасування)"
+
+msgid "Saved {n} lines ({size}) to {file}"
+msgstr "Збережено рядків: {n} ({size}) у {file}"
+
+msgid "No fonts found."
+msgstr "Шрифтів не знайдено."
+
+msgid "the terminal font; fonts of the same cell size fill in missing letters"
+msgstr "шрифт термінала; шрифти того самого розміру клітинки доповнюють відсутні літери"
+
+msgid "Every character can be drawn."
+msgstr "Усі символи можна намалювати."
+
+msgid "No glyph for: {chars}  (install a font that has them)"
+msgstr "Немає гліфів для: {chars}  (встановіть шрифт, де вони є)"
+
+msgid "no font named {name} (see: fonts list)"
+msgstr "немає шрифту {name} (див.: fonts list)"
+
+msgid "The terminal font is {name} (from the next terminal you open)."
+msgstr "Шрифт термінала: {name} (з наступного відкритого термінала)."
+
+msgid "Writing systems"
+msgstr "Писемності"
+
+msgid "File"
+msgstr "Файл"
+
+msgid "New file"
+msgstr "Новий файл"
+
+msgid "Cannot read the file"
+msgstr "Не вдалося прочитати файл"
+
+msgid "Save as: "
+msgstr "Зберегти як: "
+
+msgid "Cannot save here (no rights?)"
+msgstr "Сюди не можна зберегти (немає прав?)"
+
+msgid "Saved {n} lines"
+msgstr "Збережено рядків: {n}"
+
+msgid "Nothing to undo"
+msgstr "Нічого скасовувати"
+
+msgid "Not found: {text}"
+msgstr "Не знайдено: {text}"
+
+msgid "Unsaved changes: :wq saves, :q! drops them"
+msgstr "Є незбережене: :wq збереже, :q! відкине"
+
+msgid "Unknown command: {cmd}"
+msgstr "Невідома команда: {cmd}"
+
+msgid "Save changes? (y/n, Esc goes back): "
+msgstr "Зберегти зміни? (y/n, Esc назад): "
+
+msgid "Find: "
+msgstr "Знайти: "
+
+msgid "Go to line: "
+msgstr "До рядка: "
+
+msgid "Copied"
+msgstr "Скопійовано"
+
+msgid "new file"
+msgstr "новий файл"
+
+msgid "Ln {y}, Col {x}"
+msgstr "Ряд {y}, Ст {x}"
+
+msgid "normal"
+msgstr "normal"
+
+msgid "i insert  :w save  :q quit  /find  u undo"
+msgstr "i введення  :w зберегти  :q вийти  /пошук  u скасування"
+
+msgid "Esc: normal mode"
+msgstr "Esc: звичайний режим"
+
+msgid "^S save  ^Q quit  ^F find  ^G line  ^Z undo  ^C/^X copy/cut"
+msgstr "^S зберегти  ^Q вийти  ^F знайти  ^G рядок  ^Z скасування  ^C/^X копіювати/вирізати"
+
+msgid "OS"
+msgstr "ОС"
+
+msgid "Host"
+msgstr "Хост"
+
+msgid "Kernel"
+msgstr "Ядро"
+
+msgid "Uptime"
+msgstr "Працює"
+
+msgid "Terminal"
+msgstr "Термінал"
+
+msgid "Font"
+msgstr "Шрифт"
+
+msgid "Computer"
+msgstr "Комп'ютер"
+
+msgid "Disk"
+msgstr "Диск"
+
+msgid "Graphics"
+msgstr "Графіка"
+
+msgid "Memory"
+msgstr "Пам'ять"
+
+msgid "Peripherals"
+msgstr "Периферія"
+
+msgid "none"
+msgstr "немає"
+
+msgid "Audio"
+msgstr "Звук"
+
+msgid "Network"
+msgstr "Мережа"
+
+msgid "Time"
+msgstr "Час"
+
+msgid "+{n} pasted lines: Enter runs all, Ctrl+C drops"
+msgstr "+{n} вставлених рядків: Enter виконає всі, Ctrl+C відкине"
+
+msgid "+{n} pasted line: Enter runs it, Ctrl+C drops"
+msgstr "+{n} вставлений рядок: Enter виконає, Ctrl+C відкине"
+
+msgid "clipboard {i}/{n}, Up/Down, Enter pastes"
+msgstr "буфер {i}/{n}, Вгору/Вниз, Enter вставити"
+
+msgid "search"
+msgstr "пошук"
+
 msgid "-- more: Space next page, Enter next line, q quit --"
 msgstr "-- далі: Пробіл сторінка, Enter рядок, q вихід --"
 

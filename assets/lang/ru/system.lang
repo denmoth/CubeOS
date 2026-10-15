@@ -1062,6 +1062,327 @@ msgstr "прокрутка экрана"
 msgid "drop files from Windows onto the computer window: they are saved in the current folder, all lines"
 msgstr "перетащите файлы из Windows на окно компьютера: они сохранятся в текущую папку целиком"
 
+msgid "wrong password"
+msgstr "неверный пароль"
+
+msgid "too many attempts, wait"
+msgstr "слишком много попыток, подождите"
+
+msgid "needs administrator rights: use sudo"
+msgstr "нужны права администратора: используйте sudo"
+
+msgid "password needed"
+msgstr "нужен пароль"
+
+msgid "accounts are not available here"
+msgstr "учётные записи здесь недоступны"
+
+msgid "the language is on, but not saved"
+msgstr "язык включён, но не сохранён"
+
+msgid "no language package {lang} (installed: {list})"
+msgstr "нет языкового пакета {lang} (установлены: {list})"
+
+msgid "no such file"
+msgstr "нет такого файла"
+
+msgid "cannot write"
+msgstr "нельзя записать"
+
+msgid "command not found"
+msgstr "команда не найдена"
+
+msgid "cannot read the dropped files"
+msgstr "не удалось прочитать перетащенные файлы"
+
+msgid "({name} was already there)"
+msgstr "({name} уже был)"
+
+msgid "Received {file}  {bytes} bytes"
+msgstr "Получен {file}  {bytes} байт"
+
+msgid "cannot save {name} here"
+msgstr "нельзя сохранить {name} здесь"
+
+msgid "Done"
+msgstr "Готово"
+
+msgid "Exit"
+msgstr "Выход"
+
+msgid "Killed"
+msgstr "Убита"
+
+msgid "Stopped"
+msgstr "Остановлена"
+
+msgid "Every key you press is written there, except passwords and other hidden fields."
+msgstr "Туда пишется каждая клавиша, кроме паролей и других скрытых полей."
+
+msgid "Input log: off"
+msgstr "Журнал ввода: выключен"
+
+msgid "Language: {lang}"
+msgstr "Язык: {lang}"
+
+msgid "({lang} needs the pixel terminal)"
+msgstr "({lang} нужен пиксельный терминал)"
+
+msgid "The terminal font cannot draw: {chars}. Install a font for this language."
+msgstr "Шрифт терминала не рисует: {chars}. Установите шрифт для этого языка."
+
+msgid "not available here"
+msgstr "здесь недоступно"
+
+msgid "{user} is not an administrator"
+msgstr "{user} не администратор"
+
+msgid "password for {user}: "
+msgstr "пароль {user}: "
+
+msgid "Current password: "
+msgstr "Текущий пароль: "
+
+msgid "New password (empty: no password): "
+msgstr "Новый пароль (пусто: без пароля): "
+
+msgid "Repeat the new password: "
+msgstr "Повторите новый пароль: "
+
+msgid "the passwords do not match"
+msgstr "пароли не совпадают"
+
+msgid "Password changed."
+msgstr "Пароль изменён."
+
+msgid "A PIN is set: you sign in with it."
+msgstr "PIN задан: вход по нему."
+
+msgid "No PIN: you sign in with your password."
+msgstr "PIN нет: вход по паролю."
+
+msgid "Your password: "
+msgstr "Ваш пароль: "
+
+msgid "New PIN (4 or more characters): "
+msgstr "Новый PIN (4 символа и больше): "
+
+msgid "Repeat the PIN: "
+msgstr "Повторите PIN: "
+
+msgid "the PINs do not match"
+msgstr "PIN не совпадают"
+
+msgid "PIN set. Next time you sign in with it."
+msgstr "PIN задан. В следующий раз входите по нему."
+
+msgid "PIN removed."
+msgstr "PIN убран."
+
+msgid "Every login asks for the password or PIN."
+msgstr "Каждый вход спрашивает пароль или PIN."
+
+msgid "Saved: every login asks."
+msgstr "Сохранено: каждый вход спрашивает."
+
+msgid "Automatic login is off."
+msgstr "Автовход выключен."
+
+msgid "No disks in the drives."
+msgstr "В дисководах нет дискет."
+
+msgid "Disk boot: {mode}"
+msgstr "Загрузка с дискет: {mode}"
+
+msgid "Disk #{id} is not trusted any more."
+msgstr "Дискете #{id} больше не доверяем."
+
+msgid "no disk with a startup program"
+msgstr "нет дискеты с программой startup"
+
+msgid "Disk #{id} is trusted. If its startup program changes, trust it again."
+msgstr "Дискете #{id} доверяем. Если её программа startup изменится, доверьтесь ей снова."
+
+msgid "not a folder"
+msgstr "не папка"
+
+msgid "no such file or folder"
+msgstr "нет такого файла или папки"
+
+msgid "Type"
+msgstr "Тип"
+
+msgid "folder"
+msgstr "папка"
+
+msgid "file"
+msgstr "файл"
+
+msgid "Size"
+msgstr "Размер"
+
+msgid "Rights"
+msgstr "Права"
+
+msgid "read only"
+msgstr "только чтение"
+
+msgid "read and write"
+msgstr "чтение и запись"
+
+msgid "Modified"
+msgstr "Изменён"
+
+msgid "the process list is not available here"
+msgstr "список процессов здесь недоступен"
+
+msgid "No devices attached."
+msgstr "Устройства не подключены."
+
+msgid "Press Ctrl+V to paste (Ctrl+C cancels)"
+msgstr "Нажмите Ctrl+V, чтобы вставить (Ctrl+C отмена)"
+
+msgid "Saved {n} lines ({size}) to {file}"
+msgstr "Сохранено строк: {n} ({size}) в {file}"
+
+msgid "No fonts found."
+msgstr "Шрифты не найдены."
+
+msgid "the terminal font; fonts of the same cell size fill in missing letters"
+msgstr "шрифт терминала; шрифты того же размера клетки дополняют недостающие буквы"
+
+msgid "Every character can be drawn."
+msgstr "Все символы можно нарисовать."
+
+msgid "No glyph for: {chars}  (install a font that has them)"
+msgstr "Нет глифов для: {chars}  (установите шрифт, где они есть)"
+
+msgid "no font named {name} (see: fonts list)"
+msgstr "нет шрифта {name} (см.: fonts list)"
+
+msgid "The terminal font is {name} (from the next terminal you open)."
+msgstr "Шрифт терминала: {name} (со следующего открытого терминала)."
+
+msgid "Writing systems"
+msgstr "Письменности"
+
+msgid "File"
+msgstr "Файл"
+
+msgid "New file"
+msgstr "Новый файл"
+
+msgid "Cannot read the file"
+msgstr "Не удалось прочитать файл"
+
+msgid "Save as: "
+msgstr "Сохранить как: "
+
+msgid "Cannot save here (no rights?)"
+msgstr "Сюда нельзя сохранить (нет прав?)"
+
+msgid "Saved {n} lines"
+msgstr "Сохранено строк: {n}"
+
+msgid "Nothing to undo"
+msgstr "Нечего отменять"
+
+msgid "Not found: {text}"
+msgstr "Не найдено: {text}"
+
+msgid "Unsaved changes: :wq saves, :q! drops them"
+msgstr "Есть несохранённое: :wq сохранит, :q! отбросит"
+
+msgid "Unknown command: {cmd}"
+msgstr "Неизвестная команда: {cmd}"
+
+msgid "Save changes? (y/n, Esc goes back): "
+msgstr "Сохранить изменения? (y/n, Esc назад): "
+
+msgid "Find: "
+msgstr "Найти: "
+
+msgid "Go to line: "
+msgstr "К строке: "
+
+msgid "Copied"
+msgstr "Скопировано"
+
+msgid "new file"
+msgstr "новый файл"
+
+msgid "Ln {y}, Col {x}"
+msgstr "Стр {y}, Кол {x}"
+
+msgid "normal"
+msgstr "normal"
+
+msgid "i insert  :w save  :q quit  /find  u undo"
+msgstr "i ввод  :w сохранить  :q выйти  /поиск  u отмена"
+
+msgid "Esc: normal mode"
+msgstr "Esc: обычный режим"
+
+msgid "^S save  ^Q quit  ^F find  ^G line  ^Z undo  ^C/^X copy/cut"
+msgstr "^S сохранить  ^Q выйти  ^F найти  ^G строка  ^Z отмена  ^C/^X копировать/вырезать"
+
+msgid "OS"
+msgstr "ОС"
+
+msgid "Host"
+msgstr "Хост"
+
+msgid "Kernel"
+msgstr "Ядро"
+
+msgid "Uptime"
+msgstr "Работает"
+
+msgid "Terminal"
+msgstr "Терминал"
+
+msgid "Font"
+msgstr "Шрифт"
+
+msgid "Computer"
+msgstr "Компьютер"
+
+msgid "Disk"
+msgstr "Диск"
+
+msgid "Graphics"
+msgstr "Графика"
+
+msgid "Memory"
+msgstr "Память"
+
+msgid "Peripherals"
+msgstr "Периферия"
+
+msgid "none"
+msgstr "нет"
+
+msgid "Audio"
+msgstr "Звук"
+
+msgid "Network"
+msgstr "Сеть"
+
+msgid "Time"
+msgstr "Время"
+
+msgid "+{n} pasted lines: Enter runs all, Ctrl+C drops"
+msgstr "+{n} вставленных строк: Enter выполнит все, Ctrl+C отбросит"
+
+msgid "+{n} pasted line: Enter runs it, Ctrl+C drops"
+msgstr "+{n} вставленная строка: Enter выполнит, Ctrl+C отбросит"
+
+msgid "clipboard {i}/{n}, Up/Down, Enter pastes"
+msgstr "буфер {i}/{n}, Вверх/Вниз, Enter вставить"
+
+msgid "search"
+msgstr "поиск"
+
 msgid "-- more: Space next page, Enter next line, q quit --"
 msgstr "-- дальше: Пробел страница, Enter строка, q выход --"
 

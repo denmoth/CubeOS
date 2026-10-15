@@ -1,7 +1,7 @@
 # input.layout: раскладки клавиатуры для текста (D233, D235). CC присылает событие char только для печатных символов Latin-1
 # (32..126 и 160..255), кириллицу и другие буквы он отбрасывает. Поэтому буквы таких языков получаются по месту клавиши.
 #
-# Раскладки лежат в файлах <каталог>/<язык>.json5 (assets/layouts, позже языковые пакеты): base и shifted по клавишам английской
+# Раскладка лежит в языковом пакете: <корень>/<язык>/layout.json5 (lib/i18n.cub, корни i18n.ROOTS): base и shifted по клавишам английской
 # раскладки, extra (цифровой ряд с Shift), translit (латиница для имён), label, title. Английский встроен.
 #
 # Режимы (opts.mode):
@@ -26,7 +26,8 @@ import json5
 # место на клавиатуре (английская раскладка), без Shift и с Shift
 const BASE = "qwertyuiop[]asdfghjkl;'zxcvbnm,./`1234567890"
 const SHIFTED = "QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>?~!@#$%^&*()"
-export const DIRS = ["/repo/assets/layouts", "/cubeos/share/layouts"]
+# корни языковых пакетов (как в lib/i18n.cub): раскладка в <корень>/<язык>/layout.json5; плоский <корень>/<язык>.json5 тоже читается
+export const DIRS = ["/repo/assets/lang", "/cubeos/share/lang"]
 
 # клавиши-знаки и цифры по имени в keys (буквы берутся из имени как есть)
 const PUNCT = {semicolon: ";", semiColon: ";", apostrophe: "'", leftBracket: "[", rightBracket: "]", comma: ",", period: ".", slash: "/",
@@ -50,12 +51,13 @@ export def load_layout(name, dirs=nil, fsys=nil):
     if cache[key] != nil:
         return cache[key] != false and cache[key] or nil
     for d in (dirs ?? DIRS):
-        path = d .. "/" .. name .. ".json5"
-        if (fsys ?? fs).exists(path):
-            ok, data = pcall(() => json5.parse(_read(path, fsys)))
-            if ok and type(data) == "table":
-                cache[key] = data
-                return data
+        for path in [d .. "/" .. name .. "/layout.json5", d .. "/" .. name .. ".json5"]:
+            if cache[key] == nil and (fsys ?? fs).exists(path):
+                ok, data = pcall(() => json5.parse(_read(path, fsys)))
+                if ok and type(data) == "table":
+                    cache[key] = data
+        if cache[key] != nil:
+            return cache[key]
     cache[key] = false
     return nil
 
@@ -66,8 +68,12 @@ export def available(dirs=nil, fsys=nil):
     f = fsys ?? fs
     for d in (dirs ?? DIRS):
         if f.isDir(d):
-            for n in f.list(d):
+            names = f.list(d)
+            table.sort(names)
+            for n in names:
                 lang = string.match(n, "^(.+)%.json5$")
+                if lang == nil and f.exists(d .. "/" .. n .. "/layout.json5"):
+                    lang = n
                 if lang != nil and seen[lang] == nil:
                     seen[lang] = true
                     out[len(out) + 1] = lang

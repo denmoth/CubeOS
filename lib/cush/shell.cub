@@ -133,13 +133,14 @@ export class Shell:
         if o.config_path != nil:
             self:_load_config(o.config_path)
         # язык (D228): свой lang в cush.conf, иначе системный /cubeos/sys/cfg/locale.conf, иначе английский; переводы в lang_dir
-        self.lang_dir = o.lang_dir ?? "/repo/assets/lang"
+        self.lang_dir = o.lang_dir
         self:set_lang(self.config.lang ?? self:_system_lang())
         self.maker = bios.do_file(env, "rom/modules/main/cc/require.lua")
         self.hist = hist_mod.new(env.fs, o.history_path ?? "/.cush_history", o.history_limit ?? 1000)
         let me = self
         # подсветка и дополнение работают на каждой клавише: их ошибка не должна мешать набору (строка просто без цвета и подсказок)
         self.editor = editor_mod.new(env, {hist: self.hist, prompt: () => me:prompt_segments(), highlight: (line) => me:safe_highlight(line),
+            t: (text, vars) => me:t(text, vars),
             complete: (line, pos) => me:safe_complete(line, pos)})
         self:_default_path()
 
@@ -210,16 +211,26 @@ export class Shell:
             self.lang = "en"
         self.i18n = i18n.catalog(self.lang, self.lang_dir)
 
+    # перевод сообщения на язык пользователя (английский текст это ключ), {имя} подставляется из vars
+    def t(self, text, vars=nil):
+        if self.i18n == nil:
+            return text
+        return self.i18n:f(text, vars)
+
+    # языки: английский и установленные языковые пакеты
     def languages(self):
-        return i18n.LANGS
+        out = ["en"]
+        for p in i18n.packs(self.lang_dir):
+            out[len(out) + 1] = p.name
+        return out
 
     def save_lang(self, lang):
         known = false
-        for l in i18n.LANGS:
+        for l in self:languages():
             if l == lang:
                 known = true
         if not known:
-            return false, "unknown language " .. tostring(lang) .. " (" .. table.concat(i18n.LANGS, ", ") .. ")"
+            return false, self:t("no language package {lang} (installed: {list})", {lang: tostring(lang), list: table.concat(self:languages(), ", ")})
         self:set_lang(lang)
         self.config.lang = lang
         path = self.opts.config_path
@@ -555,7 +566,7 @@ export class Shell:
             if r.op == "<":
                 lines = self:_read_lines(target)
                 if lines == nil:
-                    self:eprint("cush: " .. target .. ": no such file")
+                    self:eprint("cush: " .. target .. ": " .. self:t("no such file"))
                     return 1, []
                 stdin_lines = lines
             else:
@@ -586,7 +597,7 @@ export class Shell:
         if out_file != nil:
             f = self.env.fs.open(out_file.path, out_file.append and "a" or "w")
             if f == nil:
-                self:eprint("cush: " .. out_file.name .. ": cannot write")
+                self:eprint("cush: " .. out_file.name .. ": " .. self:t("cannot write"))
                 return 1, []
             for l in lines:
                 f.writeLine(l)
@@ -631,7 +642,7 @@ export class Shell:
             return tonumber(res) ?? 0
         path = self:resolve_program(name)
         if path == nil:
-            self:eprint("cush: " .. name .. ": command not found")
+            self:eprint("cush: " .. name .. ": " .. self:t("command not found"))
             return 127
         return self:run_program(path, args)
 
@@ -742,7 +753,7 @@ export class Shell:
     def receive_files(self, transfer):
         ok, files = pcall(() => transfer.getFiles())
         if not ok or type(files) != "table":
-            self:notify("e", "cush: cannot read the dropped files")
+            self:notify("e", "cush: " .. self:t("cannot read the dropped files"))
             return
         fsys = self.env.fs
         for f in files:
@@ -760,12 +771,12 @@ export class Shell:
                     h.close()
                     written = true
             if written:
-                renamed = fsys.getName(target) != base and (" (" .. base .. " was already there)") or ""
-                self:notify("5", "Received " .. fsys.getName(target) .. "  " .. string.len(data) .. " bytes" .. renamed)
+                renamed = fsys.getName(target) != base and ("  " .. self:t("({name} was already there)", {name: base})) or ""
+                self:notify("5", self:t("Received {file}  {bytes} bytes", {file: fsys.getName(target), bytes: string.len(data)}) .. renamed)
                 if self.log != nil:
                     pcall(() => self.log("info", "file received by drag and drop: /" .. target .. " (" .. string.len(data) .. " bytes)"))
             else:
-                self:notify("e", "cush: cannot save " .. base .. " here")
+                self:notify("e", "cush: " .. self:t("cannot save {name} here", {name: base}))
 
     def notify(self, letter, text):
         if self.editor.active:
@@ -809,7 +820,7 @@ export class Shell:
             elif not self.exit_requested:
                 self.editor:begin()
         else:
-            self:notify("3", "[" .. j.id .. "]+  " .. (ok and "Done" or "Exit") .. "  " .. j.name)
+            self:notify("3", "[" .. j.id .. "]+  " .. self:t(ok and "Done" or "Exit") .. "  " .. j.name)
 
     def kill_job(self, j):
         self:deliver(j, va.pack("terminate"))
@@ -829,7 +840,7 @@ export class Shell:
         self:_set_mouse(false)
         self.env.term.setCursorBlink(false)
         self:println("")
-        self:notify("e", "[" .. j.id .. "]  Killed  " .. j.name)
+        self:notify("e", "[" .. j.id .. "]  " .. self:t("Killed") .. "  " .. j.name)
         self.vars["?"] = 137
         self.editor:begin()
 
@@ -842,7 +853,7 @@ export class Shell:
         self:_set_mouse(false)
         self.env.term.setCursorBlink(false)
         self:println("")
-        self:notify("4", "[" .. j.id .. "]+  Stopped  " .. j.name)
+        self:notify("4", "[" .. j.id .. "]+  " .. self:t("Stopped") .. "  " .. j.name)
         self.editor:begin()
 
     def interrupt_fg(self):

@@ -22,6 +22,18 @@ def strings():
     # «see: ["cd", "pwd"]» из двух команд похоже на пару: имена команд не переводятся
     names = set(re.findall(r'^\s+"?([\w]+)"?: \{cat:', reg, flags=re.M))
     out[:] = [s for s in out if s not in names]
+    # сообщения, которые приходят от служб текстом (MESSAGES в реестре)
+    m = re.search(r'export const MESSAGES = \[(.*?)\]', reg, flags=re.S)
+    if m:
+        for x in re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1)):
+            add(x)
+    # все вызовы sh:t("..."), self:t("..."), self.t("...") в оболочке и терминале (и обе ветки t(a and "x" or "y"))
+    for fn in ["shell.cub", "builtins.cub", "tools.cub", "tools2.cub", "textedit.cub", "fetch.cub", "editor.cub"]:
+        src = open(os.path.join(ROOT, "lib", "cush", fn), encoding="utf-8").read()
+        for call in re.finditer(r'[:.]t\(((?:[^()"]|"(?:[^"\\]|\\.)*")*)', src):
+            for lit in re.findall(r'"((?:[^"\\]|\\.)*)"', call.group(1)):
+                if re.search(r'[A-Za-z]', lit) and not re.match(r'^[a-z]$', lit):
+                    add(lit.replace('\\"', '"'))
     hlp = open(os.path.join(ROOT, "lib", "cush", "help.cub"), encoding="utf-8").read()
     for m in re.finditer(r'tr\(sh, "((?:[^"\\]|\\.)*)"\)', hlp):
         add(m.group(1))
@@ -51,7 +63,7 @@ if __name__ == "__main__":
             print(s)
         sys.exit(0)
     for lang in ("ru", "uk"):
-        have = parse(os.path.join(ROOT, "assets", "lang", lang + ".lang"))
+        have = parse(os.path.join(ROOT, "assets", "lang", lang, "system.lang"))
         missing = [s for s in all_ if s not in have]
         print("%s: %d strings, %d missing" % (lang, len(all_), len(missing)))
         for s in missing:

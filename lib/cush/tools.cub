@@ -53,7 +53,7 @@ def b_tree(sh, args):
     fsys = sh.env.fs
     root = sh:resolve(target ?? "")
     if not fsys.isDir(root):
-        sh:eprint("tree: " .. tostring(target ?? ".") .. ": not a folder")
+        sh:eprint("tree: " .. tostring(target ?? ".") .. ": " .. sh:t("not a folder"))
         return 1
     counts = {dirs: 0, files: 0}
     sh:write_color("3", target ?? ".")
@@ -116,7 +116,7 @@ def b_find(sh, args):
     fsys = sh.env.fs
     root = sh:resolve(start ?? "")
     if not fsys.exists(root):
-        sh:eprint("find: " .. tostring(start) .. ": no such file or folder")
+        sh:eprint("find: " .. tostring(start) .. ": " .. sh:t("no such file or folder"))
         return 1
     pat = name != nil and glob_pattern(name) or nil
     found = {n: 0}
@@ -158,7 +158,7 @@ def b_du(sh, args):
     for t in targets:
         p = sh:resolve(t)
         if not fsys.exists(p):
-            sh:eprint("du: " .. t .. ": no such file or folder")
+            sh:eprint("du: " .. t .. ": " .. sh:t("no such file or folder"))
             status = 1
         elif fsys.isDir(p) and not flags.s:
             ok, names = pcall(fsys.list, p)
@@ -211,16 +211,16 @@ def b_stat(sh, args):
         p = sh:resolve(a)
         ok, at = pcall(sh.env.fs.attributes, p)
         if not ok or at == nil:
-            sh:eprint("stat: " .. a .. ": no such file or folder")
+            sh:eprint("stat: " .. a .. ": " .. sh:t("no such file or folder"))
             status = 1
         else:
             sh:write_color("5", show_path(p))
             sh:println("")
-            sh:println("  Type:     " .. (at.isDir and "folder" or "file"))
-            sh:println("  Size:     " .. (at.isDir and kb(size_of(sh.env.fs, p)) or kb(at.size)))
-            sh:println("  Rights:   " .. (at.isReadOnly and "read only" or "read and write"))
+            sh:println("  " .. sh:t("Type") .. ": " .. sh:t(at.isDir and "folder" or "file"))
+            sh:println("  " .. sh:t("Size") .. ": " .. (at.isDir and kb(size_of(sh.env.fs, p)) or kb(at.size)))
+            sh:println("  " .. sh:t("Rights") .. ": " .. sh:t(at.isReadOnly and "read only" or "read and write"))
             if (at.modified ?? 0) > 0:
-                sh:println("  Modified: " .. sh.time:format("%Y-%m-%d %H:%M:%S", at.modified))
+                sh:println("  " .. sh:t("Modified") .. ": " .. sh.time:format("%Y-%m-%d %H:%M:%S", at.modified))
     return status
 add("stat", b_stat)
 
@@ -242,7 +242,7 @@ builtins.table_of.more = b_less
 def b_ps(sh, args):
     lines = read_lines(sh, "/cubeos/proc/ps")
     if lines == nil:
-        sh:eprint("ps: the process list is not available here")
+        sh:eprint("ps: " .. sh:t("the process list is not available here"))
         return 1
     for i, l in lines:
         if i == 1:
@@ -274,7 +274,7 @@ def b_devices(sh, args):
         names[len(names) + 1] = name
     table.sort(names)
     if len(names) == 0:
-        sh:println("No devices attached.")
+        sh:println(sh:t("No devices attached."))
         return 0
     flags, n, rest = flags_of(args)
     for name in names:
@@ -534,7 +534,7 @@ add("dirname", b_dirname)
 
 # paste [файл]: ждёт Ctrl+V и пишет вставленный текст (все строки; многострочно с модом MothPaste) в файл или на экран
 def b_paste(sh, args):
-    sh:write_color("8", "Press Ctrl+V to paste" .. (args[1] != nil and (" into " .. args[1]) or "") .. " (Ctrl+C cancels)")
+    sh:write_color("8", sh:t("Press Ctrl+V to paste (Ctrl+C cancels)") .. (args[1] != nil and ("  -> " .. args[1]) or ""))
     sh:println("")
     ev, text = os.pullEvent("paste")
     text = string.gsub(tostring(text), "\r", "")
@@ -548,11 +548,11 @@ def b_paste(sh, args):
     p = sh:resolve(args[1])
     f = sh.env.fs.open(p, "w")
     if f == nil:
-        sh:eprint("paste: cannot write " .. args[1])
+        sh:eprint("paste: " .. sh:t("cannot write") .. " " .. args[1])
         return 1
     f.write(text)
     f.close()
-    sh:println("Saved " .. lines .. " line" .. (lines > 1 and "s" or "") .. " (" .. kb(string.len(text)) .. ") to " .. args[1])
+    sh:println(sh:t("Saved {n} lines ({size}) to {file}", {n: lines, size: kb(string.len(text)), file: args[1]}))
     return 0
 add("paste", b_paste)
 
@@ -622,13 +622,13 @@ def b_fonts(sh, args):
     f, current = fonts_mod.terminal_font(conf, list_)
     if sub == "list":
         if len(list_) == 0:
-            sh:println("No fonts found.")
+            sh:println(sh:t("No fonts found."))
             return 0
         for info in list_:
             sh:write_color(info.name == current and "5" or "0", (info.name == current and "* " or "  ") .. info.name)
             sh:write_color("8", "  " .. info.width .. "x" .. info.height .. ", " .. info.glyphs .. " glyphs, " .. table.concat(info.scripts, " "))
             sh:println("")
-        sh:write_color("8", "* the terminal font; fonts of the same cell size fill in missing letters")
+        sh:write_color("8", "* " .. sh:t("the terminal font; fonts of the same cell size fill in missing letters"))
         sh:println("")
         return 0
     if sub == "check":
@@ -638,14 +638,14 @@ def b_fonts(sh, args):
             return 2
         miss = fonts_mod.missing(text, f)
         if len(miss) == 0:
-            sh:println("Every character can be drawn.")
+            sh:println(sh:t("Every character can be drawn."))
             return 0
-        sh:println("No glyph for: " .. table.concat(miss, " ") .. "  (install a font that has them)")
+        sh:println(sh:t("No glyph for: {chars}  (install a font that has them)", {chars: table.concat(miss, " ")}))
         return 1
     if sub == "set":
         name = args[2]
         if name == nil or fonts_mod.find(name, list_) == nil:
-            sh:eprint("fonts: no font named " .. tostring(name) .. " (see: fonts list)")
+            sh:eprint("fonts: " .. sh:t("no font named {name} (see: fonts list)", {name: tostring(name)}))
             return 1
         if conf_path == nil:
             sh:eprint("fonts: no user settings here")
@@ -657,7 +657,7 @@ def b_fonts(sh, args):
             return 1
         h.write(json5.patch(old, ["terminal"], name))
         h.close()
-        sh:println("The terminal font is " .. name .. " (from the next terminal you open).")
+        sh:println(sh:t("The terminal font is {name} (from the next terminal you open).", {name: name}))
         return 0
     if sub == "info":
         info = fonts_mod.find(args[2] ?? current, list_)
@@ -665,8 +665,8 @@ def b_fonts(sh, args):
             sh:eprint("fonts: no font named " .. tostring(args[2]))
             return 1
         sh:println(info.name .. ": " .. info.width .. "x" .. info.height .. " pixels, " .. info.glyphs .. " glyphs")
-        sh:println("Writing systems: " .. table.concat(info.scripts, ", "))
-        sh:println("File: " .. info.path)
+        sh:println(sh:t("Writing systems") .. ": " .. table.concat(info.scripts, ", "))
+        sh:println(sh:t("File") .. ": " .. info.path)
         return 0
     sh:eprint("usage: fonts [list | check TEXT | set NAME | info NAME]")
     return 2

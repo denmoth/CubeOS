@@ -117,11 +117,11 @@ export class TextEditor:
     def load(self):
         fsys = self.env.fs
         if not fsys.exists(self.path):
-            self.msg = "New file"
+            self.msg = self.sh:t("New file")
             return
         h = fsys.open(self.path, "r")
         if h == nil:
-            self.msg = "Cannot read the file"
+            self.msg = self.sh:t("Cannot read the file")
             return
         text = h.readAll() ?? ""
         h.close()
@@ -137,17 +137,17 @@ export class TextEditor:
 
     def save(self):
         if self.path == nil:
-            self:ask("Save as: ", "save_as")
+            self:ask(self.sh:t("Save as: "), "save_as")
             return false
         text = table.concat(self.lines, "\n") .. (self.trailing_nl and "\n" or "")
         h = self.env.fs.open(self.path, "w")
         if h == nil:
-            self.msg = "Cannot save here (no rights?)"
+            self.msg = self.sh:t("Cannot save here (no rights?)")
             return false
         h.write(text)
         h.close()
         self.modified = false
-        self.msg = "Saved " .. len(self.lines) .. " lines"
+        self.msg = self.sh:t("Saved {n} lines", {n: len(self.lines)})
         return true
 
     # ------------------------------------------------------------ правка
@@ -171,7 +171,7 @@ export class TextEditor:
 
     def _restore(self, from_, to):
         if len(from_) == 0:
-            self.msg = "Nothing to undo"
+            self.msg = self.sh:t("Nothing to undo")
             return
         to[len(to) + 1] = self:_snap()
         s = table.remove(from_)
@@ -394,7 +394,7 @@ export class TextEditor:
                 self.cx = unicode.length(string.sub(self.lines[y], 1, s - 1)) + 1
                 self.msg = nil
                 return true
-        self.msg = "Not found: " .. text
+        self.msg = self.sh:t("Not found: {text}", {text: text})
         return false
 
     # ------------------------------------------------------------ строка вопроса (найти, строка, сохранить как, :команда)
@@ -450,7 +450,7 @@ export class TextEditor:
             self:save()
         elif c == "q":
             if self.modified:
-                self.msg = "Unsaved changes: :wq saves, :q! drops them"
+                self.msg = self.sh:t("Unsaved changes: :wq saves, :q! drops them")
             else:
                 self.quit = true
         elif c == "q!":
@@ -466,11 +466,11 @@ export class TextEditor:
         elif c == "set nonu" or c == "set nonumber":
             self.numbers = false
         else:
-            self.msg = "Unknown command: " .. c
+            self.msg = self.sh:t("Unknown command: {cmd}", {cmd: c})
 
     def request_quit(self):
         if self.modified:
-            self:ask("Save changes? (y/n, Esc goes back): ", "quit")
+            self:ask(self.sh:t("Save changes? (y/n, Esc goes back): "), "quit")
         else:
             self.quit = true
 
@@ -485,11 +485,11 @@ export class TextEditor:
         elif ctrl and code == keys.q:
             self:request_quit()
         elif ctrl and code == keys.f:
-            self:ask("Find: ", "find", self.find ?? "")
+            self:ask(self.sh:t("Find: "), "find", self.find ?? "")
         elif code == keys.f3:
             self:find_next(self.find, shift)
         elif ctrl and code == keys.g:
-            self:ask("Go to line: ", "goto")
+            self:ask(self.sh:t("Go to line: "), "goto")
         elif ctrl and code == keys.a:
             self.anchor = {x: 1, y: 1}
             self.cy = len(self.lines)
@@ -498,7 +498,7 @@ export class TextEditor:
             t = self:selected_text()
             if t != nil:
                 view_mod.copy_text(t)
-                self.msg = "Copied"
+                self.msg = self.sh:t("Copied")
         elif ctrl and code == keys.x:
             t = self:selected_text()
             if t != nil:
@@ -896,7 +896,7 @@ export class TextEditor:
             t = self:selected_text()
             if t != nil:
                 view_mod.copy_text(t)
-                self.msg = "Copied"
+                self.msg = self.sh:t("Copied")
         elif ev == "mouse_click":
             w, h = self.term.getSize()
             if c <= h - 2:
@@ -967,10 +967,10 @@ export class TextEditor:
                     self:_write(table.concat(run), run_fg, run_bg)
         # строка состояния
         t.setCursorPos(1, h - 1)
-        name = self.path != nil and ("/" .. self.path) or "[new file]"
+        name = self.path != nil and ("/" .. self.path) or ("[" .. self.sh:t("new file") .. "]")
         mode = self.vim and ("-- " .. string.upper(self.mode == "edit" and "insert" or self.mode) .. " --  ") or ""
         left = " " .. mode .. name .. (self.modified and " *" or "")
-        right = "Ln " .. self.cy .. ", Col " .. self.cx .. " "
+        right = self.sh:t("Ln {y}, Col {x}", {y: self.cy, x: self.cx}) .. " "
         pad = math.max(1, w - unicode.length(left) - unicode.length(right))
         self:_write(unicode.sub(left .. string.rep(" ", pad) .. right, 1, w), "f", "8")
         # строка вопроса, сообщение или подсказка
@@ -984,9 +984,9 @@ export class TextEditor:
             line = self.msg
             fg = "4"
         elif self.vim:
-            line = self.mode == "normal" and "i insert  :w save  :q quit  /find  u undo" or "Esc: normal mode"
+            line = self.sh:t(self.mode == "normal" and "i insert  :w save  :q quit  /find  u undo" or "Esc: normal mode")
         else:
-            line = "^S save  ^Q quit  ^F find  ^G line  ^Z undo  ^C/^X copy/cut"
+            line = self.sh:t("^S save  ^Q quit  ^F find  ^G line  ^Z undo  ^C/^X copy/cut")
         self:_write(unicode.sub(line .. string.rep(" ", w), 1, w), fg, "f")
         if self.prompt != nil:
             t.setCursorPos(math.min(w, unicode.length(line) + 1), h)

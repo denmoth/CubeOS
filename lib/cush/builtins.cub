@@ -9,6 +9,8 @@ import svc.logd as logd
 import cush.help as help_mod
 import json5
 import sha256
+import i18n
+import fonts as fonts_mod
 
 # имя -> функция; описания, флаги и примеры в реестре cush.commands (справка: cush.help)
 export const table_of = {}
@@ -731,9 +733,9 @@ def b_inputlog(sh, args):
         return 1
     if st.on:
         sh:println("Input log: on, " .. tostring(st.minutes_left) .. " min left, file " .. st.path)
-        sh:println("Every key you press is written there, except passwords and other hidden fields.")
+        sh:println(sh:t("Every key you press is written there, except passwords and other hidden fields."))
     else:
-        sh:println("Input log: off")
+        sh:println(sh:t("Input log: off"))
     if st.delete:
         sh:println("The file is deleted " .. st.ttl_minutes .. " minutes after it was created.")
     return 0
@@ -804,18 +806,29 @@ add("help", b_help)
 def b_locale(sh, args):
     sub = args[1]
     if sub == nil:
-        sh:println("Language: " .. sh.lang .. (sh.lang_wanted != nil and sh.lang_wanted != sh.lang and (" (" .. sh.lang_wanted .. " needs the pixel terminal)") or ""))
+        sh:println(sh:t("Language: {lang}", {lang: sh.lang}) .. (sh.lang_wanted != nil and sh.lang_wanted != sh.lang and ("  " .. sh:t("({lang} needs the pixel terminal)", {lang: sh.lang_wanted})) or ""))
         return 0
     if sub == "list":
-        for l in sh:languages():
-            sh:println(l)
+        sh:write_color("5", "en")
+        sh:println("  English")
+        for p in i18n.packs(sh.lang_dir):
+            sh:write_color("5", p.name)
+            sh:println("  " .. tostring(p.title ?? "") .. (p.english != nil and ("  (" .. p.english .. ")") or "") .. (p.version != nil and ("  " .. p.version) or ""))
         return 0
     if sub == "set" and args[2] != nil:
         ok, why = sh:save_lang(args[2])
         if not ok:
             sh:eprint("locale: " .. tostring(why))
             return 1
-        sh:println("Language: " .. sh.lang .. (sh.lang_wanted != sh.lang and (" (" .. sh.lang_wanted .. " needs the pixel terminal)") or ""))
+        sh:println(sh:t("Language: {lang}", {lang: sh.lang}) .. (sh.lang_wanted != sh.lang and ("  " .. sh:t("({lang} needs the pixel terminal)", {lang: sh.lang_wanted})) or ""))
+        # хватает ли шрифтам букв языка (pack.json5: letters)
+        pack = i18n.find_pack(args[2], sh.lang_dir)
+        if pack != nil and pack.letters != nil:
+            f = fonts_mod.terminal_font(fonts_mod.read_conf((p) => nil), fonts_mod.scan())
+            miss = fonts_mod.missing(pack.letters, f)
+            if len(miss) > 0:
+                sh:write_color("4", sh:t("The terminal font cannot draw: {chars}. Install a font for this language.", {chars: table.concat(miss, " ")}))
+                sh:println("")
         return 0
     sh:eprint("usage: locale [set LANG | list]")
     return 2
@@ -838,7 +851,7 @@ def account_or_fail(sh, name):
 # или права уже не повышены (5 минут)
 def b_sudo(sh, args):
     if sh.sudo == nil:
-        sh:eprint("sudo: not available here")
+        sh:eprint("sudo: " .. sh:t("not available here"))
         return 1
     if args[1] == "-k":
         sh.sudo("forget")
@@ -848,7 +861,7 @@ def b_sudo(sh, args):
         return 2
     st = sh.sudo("status")
     if type(st) != "table" or not st.admin:
-        sh:eprint("sudo: " .. sh.vars.USER .. " is not an administrator")
+        sh:eprint("sudo: " .. sh:t("{user} is not an administrator", {user: sh.vars.USER}))
         return 1
     if not st.elevated:
         ok = false
@@ -857,15 +870,15 @@ def b_sudo(sh, args):
             ok, why = sh.sudo("elevate")
         if not ok:
             for attempt in range[1, 3]:
-                pw = ask_secret(sh, "[sudo] password for " .. sh.vars.USER .. ": ")
+                pw = ask_secret(sh, "[sudo] " .. sh:t("password for {user}: ", {user: sh.vars.USER}))
                 if pw == nil:
                     return 1
                 ok, why = sh.sudo("elevate", pw)
                 if ok or string.find(tostring(why), "wait", 1, true) != nil:
                     break
-                sh:eprint("sudo: " .. tostring(why))
+                sh:eprint("sudo: " .. sh:t(tostring(why)))
         if not ok:
-            sh:eprint("sudo: " .. tostring(why))
+            sh:eprint("sudo: " .. sh:t(tostring(why)))
             return 1
     fs_admin = sh.sudo("fs")
     old = sh.env.fs
@@ -886,17 +899,17 @@ def b_passwd(sh, args):
     st = sh.account("status")
     old = nil
     if type(st) == "table" and st.password:
-        old = ask_secret(sh, "Current password: ")
-    new = ask_secret(sh, "New password (empty: no password): ")
-    again = ask_secret(sh, "Repeat the new password: ")
+        old = ask_secret(sh, sh:t("Current password: "))
+    new = ask_secret(sh, sh:t("New password (empty: no password): "))
+    again = ask_secret(sh, sh:t("Repeat the new password: "))
     if new != again:
-        sh:eprint("passwd: the passwords do not match")
+        sh:eprint("passwd: " .. sh:t("the passwords do not match"))
         return 1
     ok, why = sh.account("passwd", {password: old, new: new})
     if not ok:
-        sh:eprint("passwd: " .. tostring(why))
+        sh:eprint("passwd: " .. sh:t(tostring(why)))
         return 1
-    sh:println("Password changed.")
+    sh:println(sh:t("Password changed."))
     return 0
 
 # pin [set|remove]: PIN для входа (пароль остаётся для sudo, восстановления и CraftOS)
@@ -906,26 +919,26 @@ def b_pin(sh, args):
     sub = args[1] ?? "status"
     st = sh.account("status")
     if sub == "status":
-        sh:println(type(st) == "table" and st.pin and "A PIN is set: you sign in with it." or "No PIN: you sign in with your password.")
+        sh:println(type(st) == "table" and st.pin and sh:t("A PIN is set: you sign in with it.") or sh:t("No PIN: you sign in with your password."))
         return 0
     if sub != "set" and sub != "remove":
         sh:eprint("usage: pin [set | remove]")
         return 2
     pw = nil
     if type(st) == "table" and st.password:
-        pw = ask_secret(sh, "Your password: ")
+        pw = ask_secret(sh, sh:t("Your password: "))
     pin = nil
     if sub == "set":
-        pin = ask_secret(sh, "New PIN (4 or more characters): ")
-        again = ask_secret(sh, "Repeat the PIN: ")
+        pin = ask_secret(sh, sh:t("New PIN (4 or more characters): "))
+        again = ask_secret(sh, sh:t("Repeat the PIN: "))
         if pin != again:
-            sh:eprint("pin: the PINs do not match")
+            sh:eprint("pin: " .. sh:t("the PINs do not match"))
             return 1
     ok, why = sh.account("pin", {password: pw, pin: pin})
     if not ok:
-        sh:eprint("pin: " .. tostring(why))
+        sh:eprint("pin: " .. sh:t(tostring(why)))
         return 1
-    sh:println(sub == "set" and "PIN set. Next time you sign in with it." or "PIN removed.")
+    sh:println(sub == "set" and sh:t("PIN set. Next time you sign in with it.") or sh:t("PIN removed."))
     return 0
 
 # remember [MINUTES|off]: не спрашивать пароль столько минут после последнего входа
@@ -935,7 +948,7 @@ def b_remember(sh, args):
     st = sh.account("status")
     if args[1] == nil:
         m = type(st) == "table" and st.remember or 0
-        sh:println(m > 0 and ("The login does not ask again for " .. m .. " minutes after you signed in.") or "Every login asks for the password or PIN.")
+        sh:println(m > 0 and ("The login does not ask again for " .. m .. " minutes after you signed in.") or sh:t("Every login asks for the password or PIN."))
         return 0
     minutes = args[1] == "off" and 0 or tonumber(args[1])
     if minutes == nil or minutes < 0:
@@ -943,12 +956,12 @@ def b_remember(sh, args):
         return 2
     pw = nil
     if type(st) == "table" and st.password:
-        pw = ask_secret(sh, "Your password: ")
+        pw = ask_secret(sh, sh:t("Your password: "))
     ok, why = sh.account("remember", {password: pw, minutes: math.floor(minutes)})
     if not ok:
-        sh:eprint("remember: " .. tostring(why))
+        sh:eprint("remember: " .. sh:t(tostring(why)))
         return 1
-    sh:println(minutes > 0 and ("Saved: no password for " .. math.floor(minutes) .. " minutes after a login.") or "Saved: every login asks.")
+    sh:println(minutes > 0 and ("Saved: no password for " .. math.floor(minutes) .. " minutes after a login.") or sh:t("Saved: every login asks."))
     return 0
 
 # autologin [NAME|off]: кто входит сам при включении (только с sudo)
@@ -961,9 +974,9 @@ def b_autologin(sh, args):
     name = args[1] != "off" and args[1] or nil
     ok, why = sh.account("autologin", {name: name, sudo: sh.sudo_active == true})
     if not ok:
-        sh:eprint("autologin: " .. tostring(why))
+        sh:eprint("autologin: " .. sh:t(tostring(why)))
         return 1
-    sh:println(name != nil and (name .. " will be signed in automatically at start.") or "Automatic login is off.")
+    sh:println(name != nil and (name .. " will be signed in automatically at start.") or sh:t("Automatic login is off."))
     return 0
 
 # disk [list | trust [SIDE] | untrust ID | boot MODE]: дискеты и загрузка с них (D224)
@@ -987,7 +1000,7 @@ def b_disk(sh, args):
             drives[len(drives) + 1] = side
     if sub == "list":
         if len(drives) == 0:
-            sh:println("No disks in the drives.")
+            sh:println(sh:t("No disks in the drives."))
         for side in drives:
             mount = d.hasData(side) and d.getMountPath(side) or nil
             start = mount != nil and _disk_startup(mount) or nil
@@ -999,16 +1012,16 @@ def b_disk(sh, args):
     if sub == "boot":
         ok, why = sh.account("disk_boot", {mode: args[2], sudo: sh.sudo_active == true})
         if not ok:
-            sh:eprint("disk: " .. tostring(why))
+            sh:eprint("disk: " .. sh:t(tostring(why)))
             return 1
-        sh:println("Disk boot: " .. tostring(args[2]))
+        sh:println(sh:t("Disk boot: {mode}", {mode: tostring(args[2])}))
         return 0
     if sub == "untrust":
         ok, why = sh.account("trust_disk", {id: tonumber(args[2]), remove: true, sudo: sh.sudo_active == true})
         if not ok:
-            sh:eprint("disk: " .. tostring(why))
+            sh:eprint("disk: " .. sh:t(tostring(why)))
             return 1
-        sh:println("Disk #" .. tostring(args[2]) .. " is not trusted any more.")
+        sh:println(sh:t("Disk #{id} is not trusted any more.", {id: tostring(args[2])}))
         return 0
     if sub == "trust":
         side = args[2]
@@ -1021,16 +1034,16 @@ def b_disk(sh, args):
                     side = s_
                     break
         if start == nil:
-            sh:eprint("disk: no disk with a startup program" .. (args[2] != nil and (" in " .. args[2]) or ""))
+            sh:eprint("disk: " .. sh:t("no disk with a startup program") .. (args[2] != nil and (" (" .. args[2] .. ")") or ""))
             return 1
         f = fs.open(start, "r")
         text = f.readAll() ?? ""
         f.close()
         ok, why = sh.account("trust_disk", {id: d.getID(side), hash: sha256.hex(text), label: d.getLabel(side) ?? "", sudo: sh.sudo_active == true})
         if not ok:
-            sh:eprint("disk: " .. tostring(why))
+            sh:eprint("disk: " .. sh:t(tostring(why)))
             return 1
-        sh:println("Disk #" .. tostring(d.getID(side)) .. " is trusted. If its startup program changes, trust it again.")
+        sh:println(sh:t("Disk #{id} is trusted. If its startup program changes, trust it again.", {id: tostring(d.getID(side))}))
         return 0
     sh:eprint("usage: disk [list | trust [SIDE] | untrust ID | boot off|trusted|password|all]")
     return 2

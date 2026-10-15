@@ -1,5 +1,11 @@
-# i18n: переводы текста системы (D228, docs/18). Английский текст в коде это база и ключ; переводы лежат в файлах .lang,
-# по одному на язык: <каталог>/<язык>.lang (сейчас /repo/assets/lang, позже в пакетах).
+# i18n: переводы текста системы (D228, D232, D239). Английский текст в коде это база и ключ.
+#
+# Языковой пакет это папка <корень>/<язык>/ (корни: /repo/assets/lang при разработке, /cubeos/share/lang в установленной системе;
+# потом пакеты stew, их могут быть сотни):
+#   pack.json5      {name, title, english, version, letters (буквы, которые должен уметь шрифт)}
+#   *.lang          переводы (system.lang и любые другие: все файлы папки складываются в один каталог)
+#   layout.json5    раскладка клавиатуры (lib/input/layout.cub), если язык не на Latin-1
+#   fonts/*.font    свои шрифты (lib/fonts.cub находит их сам)
 #
 # Формат .lang (как PO у gettext, без лишнего):
 #   # комментарий
@@ -7,13 +13,17 @@
 #   msgstr "Список файлов в папке"
 # Строки в кавычках, внутри \" и \n; пустой msgstr значит «перевода нет» (покажется английский).
 #
-#   cat = i18n.catalog("ru", "/repo/assets/lang")   каталог языка (без файла пустой: всё по-английски)
+#   cat = i18n.catalog("ru")                        каталог языка (нет пакета: всё по-английски)
 #   cat:t("List files in a folder")                 перевод или сам текст
 #   cat:f("{n} files in {dir}", {n: 3, dir: "/"})   перевод и подстановка {имя}
+#   i18n.packs()                                    установленные пакеты [{name, title, english, version, letters, path}]
 #   i18n.parse(text)                                {msgid: msgstr}
-#   i18n.LANGS                                      языки, у которых есть переводы системы
+#   i18n.LANGS                                      языки, у которых есть переводы в репозитории (en всегда)
+
+import json5
 
 export const LANGS = ["en", "ru", "uk"]
+export const ROOTS = ["/repo/assets/lang", "/cubeos/share/lang"]
 
 def _unquote(s):
     body = string.match(s, '^"(.*)"%s*$')
@@ -55,20 +65,72 @@ export class Catalog:
     def has(self, text):
         return self.table[text] != nil
 
-# каталог языка lang из dir (fs: CraftOS-подобный fs, по умолчанию настоящий); английский и неизвестный язык дают пустой каталог
-export def catalog(lang, dir, fsys=nil):
-    f = fsys ?? fs
-    if lang == nil or lang == "en" or dir == nil:
-        return Catalog("en")
-    path = dir .. "/" .. lang .. ".lang"
-    if not f.exists(path):
-        return Catalog(lang)
+def _read(path, f):
     h = f.open(path, "r")
     if h == nil:
-        return Catalog(lang)
+        return nil
     text = h.readAll()
     h.close()
-    return Catalog(lang, parse(text))
+    return text
+
+# корни: строка (один каталог), список или nil (ROOTS)
+def _roots(dirs):
+    if dirs == nil:
+        return ROOTS
+    if type(dirs) == "string":
+        return [dirs]
+    return dirs
+
+# каталог языка lang: все *.lang из папок пакета во всех корнях (и старый плоский <корень>/<язык>.lang)
+export def catalog(lang, dirs=nil, fsys=nil):
+    f = fsys ?? fs
+    if lang == nil or lang == "en":
+        return Catalog("en")
+    merged = {}
+    for root in _roots(dirs):
+        folder = root .. "/" .. lang
+        files = []
+        if f.isDir(folder):
+            names = f.list(folder)
+            table.sort(names)
+            for n in names:
+                if string.match(n, "%.lang$") != nil:
+                    files[len(files) + 1] = folder .. "/" .. n
+        if f.exists(root .. "/" .. lang .. ".lang"):
+            files[len(files) + 1] = root .. "/" .. lang .. ".lang"
+        for path in files:
+            text = _read(path, f)
+            if text != nil:
+                for k, v in parse(text):
+                    if merged[k] == nil:
+                        merged[k] = v
+    return Catalog(lang, merged)
+
+# установленные языковые пакеты (первый корень с данным языком важнее)
+export def packs(dirs=nil, fsys=nil):
+    f = fsys ?? fs
+    out = []
+    seen = {}
+    for root in _roots(dirs):
+        if f.isDir(root):
+            names = f.list(root)
+            table.sort(names)
+            for n in names:
+                manifest = root .. "/" .. n .. "/pack.json5"
+                if seen[n] == nil and f.exists(manifest):
+                    ok, data = pcall(() => json5.parse(_read(manifest, f)))
+                    if ok and type(data) == "table":
+                        seen[n] = true
+                        data.name = data.name ?? n
+                        data.path = root .. "/" .. n
+                        out[len(out) + 1] = data
+    return out
+
+export def find_pack(lang, dirs=nil, fsys=nil):
+    for p in packs(dirs, fsys):
+        if p.name == lang:
+            return p
+    return nil
 
 export def english():
     return Catalog("en")

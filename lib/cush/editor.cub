@@ -27,6 +27,8 @@ export class Editor:
         self.hist = o.hist
         self.prompt_fn = o.prompt
         self.highlight_fn = o.highlight
+        # перевод подсказок (оболочка даёт свой t), без него английский
+        self.t = o.t ?? ((text, vars) => text)
         self.complete_fn = o.complete
         self.line = []
         self.pos = 0
@@ -121,7 +123,7 @@ export class Editor:
         n = 1
         for c in string.gmatch(self.paste_rest, "\n"):
             n += 1
-        return "  [+" .. n .. " pasted line" .. (n > 1 and "s" or "") .. ": Enter runs all, Ctrl+C drops]"
+        return "  [" .. self.t(n > 1 and "+{n} pasted lines: Enter runs all, Ctrl+C drops" or "+{n} pasted line: Enter runs it, Ctrl+C drops", {n: n}) .. "]"
 
     # все строки для выполнения: текущая и ждущие после многострочной вставки
     def full_text(self):
@@ -171,7 +173,7 @@ export class Editor:
         if self.pick != nil:
             # история буфера (Alt+V): один фрагмент в строке, переводы строк как « | »
             item = self.pick.items[self.pick.index] ?? ""
-            label = "(clipboard " .. self.pick.index .. "/" .. len(self.pick.items) .. ", Up/Down, Enter pastes) "
+            label = "(" .. self.t("clipboard {i}/{n}, Up/Down, Enter pastes", {i: self.pick.index, n: len(self.pick.items)}) .. ") "
             shown = string.gsub(item, "[\r\n]+", " | ")
             term.setCursorPos(1, self.sy)
             term.clearLine()
@@ -184,7 +186,7 @@ export class Editor:
             term.setBackgroundColor(old_bg)
             return
         if self.search != nil:
-            label = "(search) `" .. self.search.query .. "': "
+            label = "(" .. self.t("search") .. ") `" .. self.search.query .. "': "
             term.setCursorPos(1, self.sy)
             term.setTextColor(_color("9"))
             term.write(label)
