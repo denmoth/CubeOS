@@ -23,7 +23,20 @@
 | `permd` | `svc.permd` | **заглушка**: `check {pid, cap}` разрешает системе и администраторам, остальным отказывает и пишет отказ в журнал |
 | `notifyd` | `svc.notifyd` | уведомления: `post`, `list {unread}`, `read`, `dismiss`, `clear`, `subscribe` (события `notification`); до 100 штук |
 | `clipboard` | `svc.clipboard` | буфер обмена в памяти: `set {text, source}`, `get`, `history {n}`, `clear`; до 50 записей, запись до 64 КБ |
-| `fontd`, `audiod`, `netd` | `svc.stub` | **заглушки** (`ping`, `status`), нужны зависимостям и проверкам готовности до шагов 4, 7, 8 |
+| `fontd` | `svc.fontd` | шрифты (D239, D244): `list`, `info {name}`, `terminal {user_conf}` (шрифт терминала и запасные), `missing {text}` (каких букв нет), `rescan`; каталоги системы, языковых пакетов и пользователя |
+| `inputd` | `svc.inputd` | клавиатура системы (D235): `get`, `set {keyboard, mode}` (только администратор), запись в `locale.conf`, событие `cubeos_keyboard` всем терминалам |
+| `audiod` | `svc.audiod` | звук (D244): `speakers`, `note`, `sound`, `play {data, title}` (DFPWM в фоне), `stop`, `status`, `volume {value}`; громкость в `audio.conf` |
+| `netd` | `svc.netd` | сеть CubeNet (D242, ниже) |
+
+## Сеть (`netd`, D242)
+
+Код `lib/svc/netd.cub`, `lib/net/proto.cub` (сообщения, подпись, свежесть), `lib/net/link.cub` (отправка и ожидание ответа), `lib/net/remote.cub` (папка другого компьютера как провайдер CFS). Тесты `lib_svc_netd` (два ядра с подставным проводным модемом), `lib_cush_net`. Настройки `/cubeos/sys/cfg/net.conf` (`name`, `wireless`, `shares`, `mounts`), ключи `/cubeos/sys/sec/net_keys.lock`.
+
+- Запросы: `status`, `scan {seconds}`, `ping {host}`, `peers`, `name {name}`, `pair_code`, `pair {host, code}`, `forget {host}`, `share {name, path, readonly}`, `unshare {name}`, `shares`, `remote_shares {host}`, `mount {host, share, point}`, `unmount {point}`, `mounts`. Менять может только администратор.
+- Команды `net` (подкоманды те же) и `ping ХОСТ [N]`. Хост это имя из `net scan` или номер компьютера.
+- Помощник `netd-events` ждёт `modem_message` и `peripheral` и шлёт их службе; сама служба, когда спрашивает другой компьютер (поиск, сопряжение), ждёт ответ системным вызовом `wait_event` с `keep`.
+- Удалённый диск ждёт ответ в том процессе, который читает файл: в процессе ядра напрямую, в программе терминала через `compat.proc` (он пропускает к ядру только ожидание `modem_message` не дольше 10 с). Пока ответа нет, терминал стоит (до 3 с, потом `EIO`).
+- Права: `/cubeos/net/**` всем на чтение, администраторам на запись (правила CFS этого компьютера); удаление там без корзины.
 
 Порядок запуска: `logd` первым (остальные `after: ["logd"]`), дальше по имени. Службы без `safe: false` работают и в безопасном режиме; `clipboard`, `fontd`, `audiod`, `netd` в нём не запускаются.
 
