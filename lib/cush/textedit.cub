@@ -1,11 +1,11 @@
-# cush.textedit: текстовый редактор cubed (CUBe EDitor; команды cubed, vi, vim, D238). edit из ROM не трогается.
+# cush.textedit: текстовый редактор cubed (CUBe EDitor; команды cubed и cedit, D238). edit из ROM не трогается.
 #
 # По умолчанию как в Windows: стрелки, Home/End, PgUp/PgDn, Ctrl+стрелки по словам, Shift выделяет, Ctrl+A всё, Ctrl+C/X копировать и
 # вырезать (буфер терминала), вставка Ctrl+V (из Windows) и Ctrl+Shift+V (буфер терминала), Ctrl+Z/Y отмена и возврат, Ctrl+S
 # сохранить, Ctrl+Q выйти, Ctrl+F найти (F3 дальше), Ctrl+G строка, Ctrl+D повторить строку, Alt+стрелки переставить строку, Tab
 # отступ, автоотступ на Enter, мышь ставит курсор, колесо листает. Подсветка Lua и Cubic, номера строк.
 #
-# Режим vim (cubed -v, vi, vim или cush.conf: editor.mode "vim"): normal, insert, visual. Движения h j k l w b e 0 ^ $ gg G,
+# Режим vim (cubed -v или cush.conf: editor.mode "vim"): normal, insert, visual. Движения h j k l w b e 0 ^ $ gg G,
 # счётчик (3dd, 5j), x X dd D dw cw cc C yy yw p P r J >> << u Ctrl+R, i a I A o O, v (d y c x > <), / n N, :w :q :q! :wq :x
 # :число, ZZ ZQ. Esc в normal.
 #

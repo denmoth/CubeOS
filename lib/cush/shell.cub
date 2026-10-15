@@ -37,8 +37,7 @@ const ROM_DIRS = ["rom/programs", "rom/programs/advanced", "rom/programs/rednet"
     "rom/programs/fun/advanced", "rom/programs/pocket", "rom/programs/command"]
 
 const DEFAULT_ALIASES = {dir: "ls", ll: "ls -l", la: "ls -a", cls: "clear", clr: "clear", copy: "cp", move: "mv", delete: "rm",
-    rename: "mv", ff: "fetch", neofetch: "fetch", fastfetch: "fetch", man: "help", rs: "redstone", pr: "print",
-    nano: "cubed"}
+    rename: "mv", ff: "fetch", neofetch: "fetch", fastfetch: "fetch", man: "help", rs: "redstone", pr: "print"}
 
 def letter_color(letter):
     return 2 ** (string.find("0123456789abcdef", letter, 1, true) - 1)

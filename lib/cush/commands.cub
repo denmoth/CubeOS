@@ -95,13 +95,11 @@ export const COMMANDS = {
         examples: [["sha256sum a.lua b.lua", "Are two files the same"]], see: ["diff"]},
 
     cubed: {cat: "files", summary: "Text editor", usage: "cubed [-v] [file]",
-        about: "Works like Notepad: arrows, Shift selects, Ctrl+S saves, Ctrl+Q quits, Ctrl+F finds (F3 next), Ctrl+G goes to a line, Ctrl+Z/Y undo and redo, Ctrl+C/X copy and cut, Ctrl+V pastes from Windows and Ctrl+Shift+V from the terminal, Ctrl+D repeats a line, Alt+Up/Down moves it, Tab indents. Lua and Cubic are colored. -v (or vi, vim) opens it in vim mode.",
-        flags: [["-v", "Vim mode: Esc for normal mode, i to type, :w save, :q quit"]],
-        examples: [["cubed startup.lua", "Edit a program"], ["vim notes.txt", "The same in vim mode"]], see: ["vim", "cat"]},
-    vi: {cat: "files", summary: "The editor in vim mode", usage: "vi [file]", about: "Same as cubed -v.", flags: [], examples: [], see: ["vim", "cubed"]},
-    vim: {cat: "files", summary: "The editor in vim mode", usage: "vim [file]",
-        about: "Normal mode: h j k l w b e 0 ^ $ gg G move (a number repeats: 5j), x dd D dw cw yy yw p P r J >> << change, u and Ctrl+R undo and redo, i a I A o O start typing, v selects, / n N search, :w :q :q! :wq :NUMBER, ZZ saves and quits. Esc returns to normal mode.",
-        flags: [], examples: [["vim config.lua", "Edit with vim keys"]], see: ["cubed"]},
+        about: "Works like Notepad: arrows, Shift selects, Ctrl+S saves, Ctrl+Q quits, Ctrl+F finds (F3 next), Ctrl+G goes to a line, Ctrl+Z/Y undo and redo, Ctrl+C/X copy and cut, Ctrl+V pastes from Windows and Ctrl+Shift+V from the terminal, Ctrl+D repeats a line, Alt+Up/Down moves it, Tab indents. Lua and Cubic are colored. cedit is another name for it.",
+        flags: [["-v", "Vim mode. Normal mode: h j k l w b e 0 ^ $ gg G move (a number repeats: 5j), x dd D dw cw yy yw p P r J >> << change, u and Ctrl+R undo and redo, i a I A o O start typing, v selects, / n N search, :w :q :q! :wq :NUMBER, ZZ saves and quits. Esc returns to normal mode."]],
+        examples: [["cubed startup.lua", "Edit a program"], ["cubed -v notes.txt", "The same in vim mode"]], see: ["cedit", "cat"]},
+    cedit: {cat: "files", summary: "Same as cubed", usage: "cedit [-v] [file]", about: "Another name for the cubed text editor.", flags: [],
+        examples: [], see: ["cubed"]},
 
     # ------------------------------------------------------------ текст
     echo: {cat: "text", summary: "Print words", usage: "echo [-n] words...",

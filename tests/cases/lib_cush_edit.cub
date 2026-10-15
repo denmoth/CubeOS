@@ -54,6 +54,8 @@ def screen():
 run("cd " .. DIR)
 
 # ------------------------------------------------------------ обычный режим
+run("type vim")
+eq(string.find(screen(), "not found", 1, true) != nil, true, "vi and vim are not taken by cubed")
 run("type edit")
 eq(string.find(screen(), "rom/programs/edit", 1, true) != nil, true, "edit is the CraftOS program again")
 run("cubed hello.lua")
@@ -106,8 +108,8 @@ eq(get("hello.lua"), "local x = 1\nlocal x = 1\nprint(x)\n    if x then\n    п�
 
 # ------------------------------------------------------------ vim
 put("v.txt", "one\ntwo\nthree\n")
-run("vi v.txt")
-eq(string.find(screen(), "NORMAL", 1, true) != nil, true, "vi opens in normal mode")
+run("cubed -v v.txt")
+eq(string.find(screen(), "NORMAL", 1, true) != nil, true, "cubed -v opens in normal mode")
 chars_("dd")
 chars_("p")
 chars_(":w")
@@ -122,7 +124,7 @@ chars_("u")
 chars_("3x")
 chars_("ZZ")
 eq(get("v.txt"), "two!\non\nthree\n", "A appends; in normal mode the cursor stays on a character; u undoes; ZZ saves and quits")
-run("vim v.txt")
+run("cedit -v v.txt")
 chars_("Gyyp")
 chars_("/two")
 key(keys.enter)
