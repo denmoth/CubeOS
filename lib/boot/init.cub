@@ -119,7 +119,7 @@ export class Boot:
         auth = auth_mod.new(fsys, auth_opts)
         auth:load()
         system = {mode: mode, reason: reason, state: sys_state, conf: conf, release: release, auth: auth, fsys: fsys,
-            console: self.console, unclean: unclean, recovered: recovered, bootlog: o.bootlog, boot_ms: (o.clock ?? (() => os.epoch("utc")))()}
+            console: self.console, unclean: unclean, recovered: recovered, bootlog: o.bootlog, input_log: o.input_log == true, boot_ms: (o.clock ?? (() => os.epoch("utc")))()}
         self.system = system
         if mode == "recovery":
             self:_say("Recovery mode: " .. tostring(reason))

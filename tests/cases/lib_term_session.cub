@@ -152,6 +152,20 @@ system.kernel:feed("terminate")
 type_text(system, "echo after the interrupt")
 eq(wait_text(system, "after the interrupt"), true, "terminate interrupts the running command and the shell goes on")
 
+# скрытый ввод программы CraftOS (read("*")) не попадает в журнал ввода: ядро видит, что идёт ввод секрета (D220)
+traced = []
+system.kernel.input_fn = (line) => table.insert(traced, line)
+fsys:write_file(nil, "/cubeos/users/ivan/home/pw.lua", "local p = read('*') print('length ' .. #p)")
+type_text(system, "pw.lua")
+settle(system, 10)
+type_text(system, "hunter2")
+eq(wait_text(system, "length 7"), true, "the program got the hidden input")
+all_traced = table.concat(traced, "\n")
+eq(string.find(all_traced, "char \"h\"", 1, true), nil, "hidden characters are not in the input log")
+eq(string.find(all_traced, "secret input entered in", 1, true) != nil, true, "only a single hidden line")
+eq(string.find(all_traced, "char \"p\"", 1, true) != nil, true, "the command line before it is logged as usual")
+system.kernel.input_fn = nil
+
 # выход из оболочки возвращает на вход, оттуда выключение
 type_text(system, "exit")
 eq(wait(system, () => len(con.prompts) >= 3), true, "after exit the login screen is back")

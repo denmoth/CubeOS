@@ -1,21 +1,31 @@
 # svc.logd: служба журнала (docs/spec/services.md). Принимает записи, пишет /cubeos/var/log/<источник>.log и общий system.log,
-# ротирует по размеру и по загрузкам, отдаёт строки на чтение. Строка: «2026-10-15T12:00:00Z info timed сообщение» (время UTC).
+# ротирует по размеру и по загрузкам, отдаёт строки на чтение. Строка: «2026-10-15T14:00:00+03:00 info timed сообщение»
+# (местное время по time.conf со смещением, D221).
 #
-# Запросы (svc.rpc): log {level, source, text} (можно без ответа: sys.log), read {source, level, n}, list, rotate, set_level {level}.
+# Запросы (svc.rpc): log {level, source, text} (можно без ответа: sys.log), read {source, level, n}, list, rotate, set_level {level},
+#   input {on} (журнал ввода, только администратор; без on: состояние).
 # Настройки /cubeos/sys/cfg/log.conf (JSON5): level (debug|info|warn|error|crit, по умолчанию info), max_size (байт, 65536), keep (архивов, 4),
-#   rotate_boots (true: system.log ротируется при каждом запуске), kernel (true: строки журнала ядра тоже идут в журнал, уровень debug).
+#   rotate_boots (true: system.log ротируется при каждом запуске), kernel (true: строки журнала ядра тоже идут в журнал, уровень debug),
+#   max_total (байт на все журналы, 131072; сверх него удаляются самые старые архивы, 0: без предела), max_age_days (архивы старше
+#   удаляются, 7; 0: не удалять), input_ttl_minutes (журнал ввода выключается и удаляется через столько минут, 90), input_delete
+#   (true: удалять input.log по сроку), input_max_size (байт, 65536: дальше журнал ввода выключается).
+# Журнал ввода (D220): /cubeos/var/log/input.log, пишет ядро (kernel.input_fn) каждое событие ввода с миллисекундами, кроме секретных полей.
+#   Включается командой inputlog или пунктом меню загрузки (args.system.input_log) только на эту загрузку.
 # Строки журнала ядра, накопленные до запуска logd, записываются при старте; дальше ядро отдаёт их через общий буфер.
 # Секреты в журнал не пишутся (D196): это обязанность того, кто вызывает sys.log.
 # main(sys, args): args.system (контекст загрузки; kernel), args.view, args.path (каталог журналов), args.conf_path, args.clock (мс UTC).
 
 import json5
 import std.time as stime
+import clock as clock_mod
 import svc.rpc as rpc
 
 export const LOG_DIR = "/cubeos/var/log"
 export const CONF_PATH = "/cubeos/sys/cfg/log.conf"
+export const TIME_CONF = "/cubeos/sys/cfg/time.conf"
 export const LEVELS = ["debug", "info", "warn", "error", "crit"]
-const DEFAULTS = {level: "info", max_size: 65536, keep: 4, rotate_boots: true, kernel: true}
+const DEFAULTS = {level: "info", max_size: 65536, keep: 4, rotate_boots: true, kernel: true, max_total: 131072, max_age_days: 7,
+    input_ttl_minutes: 90, input_delete: true, input_max_size: 65536}
 
 export def rank(level):
     for i, name in LEVELS:
@@ -33,9 +43,22 @@ export def iso(ms):
     d = stime.to_date(ms)
     return string.format("%04d-%02d-%02dT%02d:%02d:%02dZ", d.year, d.month, d.day, d.hour, d.minute, d.second)
 
-export def format_line(ms, level, source, text):
+# время строки журнала: местное по часам c (clock) со смещением, «2026-10-15T14:00:00+03:00», с with_ms ещё «.347» перед смещением;
+# без часов UTC (iso)
+export def stamp(ms, c=nil, with_ms=false):
+    if c == nil:
+        if with_ms:
+            return string.sub(iso(ms), 1, 19) .. string.format(".%03dZ", math.floor(ms) % 1000)
+        return iso(ms)
+    p = c:parts(ms)
+    s = string.format("%04d-%02d-%02dT%02d:%02d:%02d", p.year, p.month, p.day, p.hour, p.min, p.sec)
+    if with_ms:
+        s = s .. string.format(".%03d", math.floor(ms) % 1000)
+    return s .. (p.offset_min == 0 and "Z" or clock_mod.format_offset(p.offset_min))
+
+export def format_line(ms, level, source, text, c=nil):
     one_line = string.gsub(tostring(text), "[\r\n]+", " ")
-    return iso(ms) .. " " .. level .. " " .. _name(source) .. " " .. one_line .. "\n"
+    return stamp(ms, c) .. " " .. level .. " " .. _name(source) .. " " .. one_line .. "\n"
 
 # разбор строки журнала: время, уровень, источник, текст (nil, если строка не по формату)
 export def parse_line(line):
@@ -66,6 +89,20 @@ export def main(sys, args):
 
     pcall(() => view:mkdir(dir, {parents: true}))
 
+    # часы для местного времени строк: time.conf перечитывается раз в 30 секунд (смена пояса командой timedatectl)
+    tpath = a.time_conf ?? TIME_CONF
+    tc = {clock: nil, checked: -1000000, cleaned: 0, input_checked: 0}
+    def load_time():
+        tc.checked = clock()
+        if view != nil and view:exists(tpath):
+            ok, c = pcall(() => clock_mod.from_text(view:read(tpath)))
+            if ok:
+                tc.clock = c
+        elif tc.clock == nil:
+            tc.clock = clock_mod.new()
+    if a.local_time != false:
+        load_time()
+
     def rotate_file(path):
         if not view:exists(path):
             return
@@ -81,27 +118,139 @@ export def main(sys, args):
         else:
             view:remove(path)
 
+    # чистка (D221): архивы (*.log.N) старше max_age_days удаляются; если все журналы вместе больше max_total, удаляются архивы,
+    # начиная с самых старых номеров. Текущие файлы не трогаются.
+    def cleanup():
+        tc.cleaned = clock()
+        ok, entries = pcall(() => view:list(dir))
+        if not ok:
+            return
+        now = clock()
+        archives = []
+        total = 0
+        for e in entries:
+            if e.type == "file":
+                arch_no = string.match(e.name, "%.log%.(%d+)$")
+                old = arch_no != nil and conf.max_age_days > 0 and (e.modified ?? 0) > 0 and now - e.modified > conf.max_age_days * 86400000
+                if old:
+                    pcall(() => view:remove(dir .. "/" .. e.name))
+                else:
+                    total += e.size ?? 0
+                    if arch_no != nil:
+                        archives[len(archives) + 1] = {name: e.name, num: tonumber(arch_no), size: e.size ?? 0, modified: e.modified ?? 0}
+        if conf.max_total <= 0 or total <= conf.max_total:
+            return
+        table.sort(archives, (x, y) => x.num > y.num or (x.num == y.num and x.modified < y.modified))
+        for e in archives:
+            if total <= conf.max_total:
+                break
+            if pcall(() => view:remove(dir .. "/" .. e.name)):
+                total -= e.size
+
     def append(path, line):
         st = view:stat(path)
         if st != nil and st.size + len(line) > conf.max_size:
             rotate_file(path)
+            cleanup()
         view:append(path, line)
 
     def write(level, source, text, at=nil):
         r = rank(level) ?? 2
         if r < min_rank:
             return false
-        line = format_line(at ?? clock(), LEVELS[r], source, text)
+        line = format_line(at ?? clock(), LEVELS[r], source, text, tc.clock)
         name = _name(source)
         ok, err = pcall(() => append(dir .. "/system.log", line))
         if name != "system" and name != "boot":
             pcall(() => append(dir .. "/" .. name .. ".log", line))
         return ok
 
+    # ------------------------------------------------------------ журнал ввода (D220)
+    # Первая строка файла «# input log created <мс> ...»: по ней файл удаляется через input_ttl_minutes после создания, даже после
+    # перезагрузки. Сам журнал выключается через тот же срок после включения и при перезагрузке (включается только на одну загрузку).
+    ipath = dir .. "/input.log"
+    input = {on: false, started: nil, created: nil, size: 0}
+    ipending = []
+
+    def input_created():
+        if view == nil or not view:exists(ipath):
+            return nil
+        first = string.match(view:read(ipath), "^# input log created (%d+)")
+        return first != nil and tonumber(first) or nil
+
+    def push_input(text):
+        ipending[len(ipending) + 1] = {ms: clock(), text: text}
+
+    def input_stop(why):
+        if not input.on:
+            return
+        push_input("input log off: " .. why)
+        input.on = false
+        if kernel != nil:
+            kernel.input_fn = nil
+        write("info", "logd", "input log turned off: " .. why)
+
+    def input_start(by):
+        if input.on or kernel == nil:
+            return
+        now = clock()
+        input.created = input_created()
+        if input.created == nil:
+            input.created = now
+            pcall(() => view:remove(ipath))
+            view:append(ipath, "# input log created " .. string.format("%.0f", now) .. " (" .. stamp(now, tc.clock) .. "); " ..
+                (conf.input_delete and ("deleted " .. conf.input_ttl_minutes .. " minutes after that") or "kept") .. "\n")
+        st = view:stat(ipath)
+        input.size = st != nil and st.size or 0
+        input.on = true
+        input.started = now
+        push_input("input log on (by " .. tostring(by) .. "); it stops after " .. conf.input_ttl_minutes .. " minutes or at reboot")
+        kernel.input_fn = push_input
+        write("warn", "logd", "input log turned on by " .. tostring(by) .. ": every key except secret fields goes to " .. ipath ..
+            " for " .. conf.input_ttl_minutes .. " minutes")
+
+    def flush_input():
+        if len(ipending) == 0:
+            return
+        parts = []
+        for rec in ipending:
+            parts[len(parts) + 1] = stamp(rec.ms, tc.clock, true) .. " " .. string.gsub(rec.text, "[%c]+", " ") .. "\n"
+        ipending = []
+        text = table.concat(parts)
+        if pcall(() => view:append(ipath, text)):
+            input.size += len(text)
+        if input.on and input.size > conf.input_max_size:
+            input_stop("the file reached " .. conf.input_max_size .. " bytes")
+            flush_input()
+
+    # срок: выключить журнал и удалить файл через input_ttl_minutes
+    def input_check():
+        tc.input_checked = clock()
+        ttl = conf.input_ttl_minutes * 60000
+        now = clock()
+        if input.on and now - input.started >= ttl:
+            input_stop("the " .. conf.input_ttl_minutes .. " minute limit is over")
+            flush_input()
+        if input.created == nil:
+            input.created = input_created()
+        if conf.input_delete and input.created != nil and not input.on and now - input.created >= ttl:
+            pcall(() => view:remove(ipath))
+            input.created = nil
+            write("info", "logd", "input log deleted (" .. conf.input_ttl_minutes .. " minutes after it was created)")
+
+    def is_admin(sub):
+        for r in sub.roles ?? []:
+            if r == "admin":
+                return true
+        auth = a.system != nil and a.system.auth or nil
+        return auth != nil and auth:is_admin(sub.name)
+
     # загрузка: прошлый system.log уходит в архив, строки ядра до запуска записываются
     if view != nil:
         if conf.rotate_boots:
             pcall(() => rotate_file(dir .. "/system.log"))
+        cleanup()
+        input_check()
         write("info", "logd", "log service started, level " .. conf.level)
         # журнал загрузки (stage2, пока logd не было) и записи ядра с их уровнями: с уровнем info в system.log попадают запуск и сбои служб,
         # смены фокуса, сессии, потерянный ввод; с debug ещё и каждый процесс
@@ -115,6 +264,8 @@ export def main(sys, args):
             def push(text, level):
                 pending[len(pending) + 1] = {level: level ?? "debug", source: "kernel", text: text}
             kernel.log_fn = push
+        if a.system != nil and a.system.input_log:
+            input_start("the boot menu")
 
     def flush():
         while len(pending) > 0:
@@ -124,6 +275,14 @@ export def main(sys, args):
             write(rec.level, rec.source, rec.text)
             if len(pending) > 2000:
                 pending = []
+        flush_input()
+        now = clock()
+        if now - tc.input_checked >= 10000:
+            input_check()
+        if a.local_time != false and now - tc.checked >= 30000:
+            load_time()
+        if now - tc.cleaned >= 60000:
+            cleanup()
 
     def read_lines(path):
         if not view:exists(path):
@@ -185,6 +344,26 @@ export def main(sys, args):
         min_rank = r
         return true
     handlers.set_level = set_level
+
+    # журнал ввода: {on: true|false} включает и выключает (только администратор), без on возвращает состояние
+    def input_ctl(q, sender):
+        o = q ?? {}
+        if o.on != nil:
+            p = kernel != nil and kernel.procs[sender] or nil
+            sub = p != nil and p.subject or nil
+            if sub != nil and not is_admin(sub):
+                raise Error("only an administrator can turn the input log on or off")
+            who = sub != nil and sub.name or "system"
+            if o.on:
+                input_start(who)
+            else:
+                input_stop("turned off by " .. who)
+            flush_input()
+        left = nil
+        if input.on:
+            left = math.max(0, math.ceil((conf.input_ttl_minutes * 60000 - (clock() - input.started)) / 60000))
+        return {on: input.on, path: ipath, ttl_minutes: conf.input_ttl_minutes, minutes_left: left, delete: conf.input_delete}
+    handlers.input = input_ctl
 
     sys.register("logd")
     rpc.serve(sys, handlers, {tick: flush, timeout: () => 1})

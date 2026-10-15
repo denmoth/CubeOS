@@ -122,6 +122,8 @@ export def read_line(env, replace_char=nil, history=nil, complete=nil, default=n
     completion_index = 0
     if replace_char != nil:
         replace_char = chars.sub(replace_char, 1, 1)
+        # скрытый ввод (пароль): хозяин терминала сообщает ядру, и журнал ввода его не пишет (D220)
+        env.secret_input = (env.secret_input ?? 0) + 1
     def shown(s):
         if replace_char != nil:
             return string.rep(replace_char, chars.length(s))
@@ -261,6 +263,8 @@ export def read_line(env, replace_char=nil, history=nil, complete=nil, default=n
     term.setCursorPos(w + 1, y)
     # перевод строки после ввода
     print_text(env, va.pack(), 0)
+    if replace_char != nil:
+        env.secret_input = math.max(0, (env.secret_input ?? 1) - 1)
     return line
 
 # ---------------------------------------------------------------- загрузка кода

@@ -67,9 +67,12 @@ export def program(session, opts=nil):
             return host_call("time_save", changes)
         def power(action):
             return host_call("power", action)
+        # журнал ввода (logd input): on true/false включает и выключает, nil спрашивает состояние
+        def inputlog(on):
+            return host_call("inputlog", on)
         cfg = view:expand("$cfg")
         env.cush_opts = {history_path: cfg .. "/cush_history", config_path: cfg .. "/cush.conf", user: session.user, host: o.host,
-            home: session.env.home, time: t.time, time_save: time_save, power: power,
+            home: session.env.home, time: t.time, time_save: time_save, power: power, inputlog: inputlog,
             info: {display: out.kind == "pixel" and "pixel mode" or "text mode", font: out.kind == "pixel" and "Monocraft 6x9" or nil}}
 
         died = {err: nil}
@@ -104,10 +107,23 @@ export def program(session, opts=nil):
                     res, err = rpc.call(sys, "powerd", req.payload)
                     ok = res != nil
                     why = err
+                elif req.name == "inputlog":
+                    res, err = rpc.call(sys, "logd", "input", req.payload != nil and {on: req.payload} or {})
+                    ok = res
+                    why = err
                 proc:feed("cubeos_reply", req.id, ok, why)
+
+        # скрытый ввод в программе (read("*")): ядро не пишет его в журнал ввода (D220)
+        secret = {on: false}
+        def sync_secret():
+            want = (env.secret_input ?? 0) > 0
+            if want != secret.on:
+                secret.on = want
+                sys.secret_input(want)
 
         def pull():
             serve_pending()
+            sync_secret()
             ev, a, b, c, d, e = sys.wait_event()
             if ev == "terminate":
                 proc:feed("terminate")

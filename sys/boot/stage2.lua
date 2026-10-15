@@ -43,6 +43,7 @@ local DIRS = { "/cubeos/sys/services", "/cubeos/sys/cfg", "/cubeos/sys/sec", "/c
 local bootlog = {}
 local blog_path = (ctx.root or "") .. "/cubeos/var/log/boot.log"
 local blog_rotated = false
+local blog_stamp   -- местное время по time.conf, когда библиотеки уже загружены (до этого UTC)
 local function blog(level, text)
   bootlog[#bootlog + 1] = { ms = os.epoch("utc"), level = level, text = tostring(text) }
 end
@@ -59,7 +60,7 @@ local function blog_flush()
     end
     local f = fs.open(blog_path, "w")
     for _, r in ipairs(bootlog) do
-      f.write(os.date("!%Y-%m-%dT%H:%M:%SZ", math.floor(r.ms / 1000)) .. " " .. r.level .. " boot " .. r.text:gsub("[\r\n]+", " ") .. "\n")
+      f.write((blog_stamp and blog_stamp(r.ms) or os.date("!%Y-%m-%dT%H:%M:%SZ", math.floor(r.ms / 1000))) .. " " .. r.level .. " boot " .. r.text:gsub("[\r\n]+", " ") .. "\n")
     end
     f.close()
   end)
@@ -136,6 +137,13 @@ local function main()
 
   local ready = false
   local power = ctx.power or { shutdown = function() os.shutdown() end, reboot = function() os.reboot() end }
+  pcall(function()
+    local f = fs.open((ctx.root or "") .. "/cubeos/sys/cfg/time.conf", "r")
+    local text = f and f.readAll()
+    if f then f.close() end
+    local c, logd = import("clock").from_text(text), import("svc.logd")
+    blog_stamp = function(ms) return logd.stamp(ms, c) end
+  end)
   local system
   local b = boot.new({
     fsys = fsys,
@@ -148,6 +156,7 @@ local function main()
     kernel = { rt = rt.cubic.rt, cubic = rt.cubic, pull = cckernel.pull },
     power = power,
     bootlog = bootlog,
+    input_log = ctx.input_log,
     -- службы подняты: экран загрузки закрывается ЗДЕСЬ, до экрана входа (вход идёт в этом же процессе после возврата), и текст чистится,
     -- иначе строки загрузки проступали бы под экраном входа
     on_ready = function(_, ksys)

@@ -136,4 +136,66 @@ for line in k.log_lines:
     if string.find(line, "[warn] orphan: no logd here", 1, true) != nil:
         found = true
 eq(found, true, "sys.log falls back to the kernel log")
+
+# ---------------------------------------------------------------- местное время (D221)
+import clock as clock_mod
+kyiv = clock_mod.new({tz: "Europe/Kyiv"})
+eq(logd.stamp(stime.from_date(2026, 10, 15, 11, 2, 10) + 347, kyiv), "2026-10-15T14:02:10+03:00", "local time with the offset")
+eq(logd.stamp(stime.from_date(2026, 10, 15, 11, 2, 10) + 347, kyiv, true), "2026-10-15T14:02:10.347+03:00", "with milliseconds")
+fsys, view, k = make(nil, nil)
+fsys:write_file(nil, "/cubeos/sys/cfg/time.conf", "{tz: 'Europe/Kyiv'}")
+start(k, view)
+settle(k)
+eq(string.find(fsys:read_file(nil, "/cubeos/var/log/system.log"), "+03:00 info logd log service started", 1, true) != nil, true,
+    "logd writes the local time from time.conf")
+
+# ---------------------------------------------------------------- предел на все журналы и возраст архивов (D221)
+fsys, view, k = make("{max_total: 3000, max_age_days: 7}", nil)
+for i in range[1, 4]:
+    fsys:write_file(nil, "/cubeos/var/log/timed.log." .. i, string.rep("x", 1000))
+fsys:write_file(nil, "/cubeos/var/log/devd.log", string.rep("y", 500))
+start(k, view)
+settle(k)
+left = 0
+for e in fsys:list(nil, "/cubeos/var/log"):
+    left += e.size
+eq(left <= 3000, true, "all logs together fit max_total")
+eq(fsys:exists(nil, "/cubeos/var/log/timed.log.4"), false, "the oldest archive goes first")
+eq(fsys:exists(nil, "/cubeos/var/log/devd.log"), true, "current files are kept")
+
+# ---------------------------------------------------------------- журнал ввода (D220)
+fsys, view, k = make("{input_ttl_minutes: 2}", nil)
+start(k, view)
+settle(k)
+user = rules.subject("bob", ["user"])
+admin = rules.subject("alice", ["user", "admin"])
+answers = {}
+def ask(sys, args):
+    res, err = rpc.call(sys, "logd", "input", args.q)
+    answers[args.tag] = res ?? err
+k:spawn(ask, {q: {on: true}, tag: "user"}, {name: "u", subject: user})
+settle(k)
+eq(string.find(tostring(answers.user), "only an administrator", 1, true) != nil, true, "an ordinary user cannot turn it on")
+k:spawn(ask, {q: {on: true}, tag: "admin"}, {name: "a", subject: admin})
+settle(k)
+eq(answers.admin.on, true, "an administrator turns it on")
+eq(answers.admin.minutes_left, 2, "minutes left")
+k:feed("char", "q")
+k:feed("key", keys.enter, false)
+settle(k)
+input = fsys:read_file(nil, "/cubeos/var/log/input.log")
+eq(string.find(input, "char \"q\" %-> dropped: no process has the focus") != nil, true, "keys are written even with nobody to receive them")
+eq(string.find(input, "key enter (" .. keys.enter .. ")", 1, true) != nil, true, "keys by name")
+# срок: через 2 минуты журнал выключается и файл удаляется
+for i in range[1, 13]:
+    advance(k, 10000)
+eq(k.input_fn, nil, "the input log turns itself off after the limit")
+eq(fsys:exists(nil, "/cubeos/var/log/input.log"), false, "and its file is deleted")
+eq(string.find(fsys:read_file(nil, "/cubeos/var/log/system.log"), "input log deleted", 1, true) != nil, true, "the deletion is in the system log")
+# старый файл от прошлой загрузки удаляется при старте logd
+fsys, view, k = make("{input_ttl_minutes: 90}", nil)
+fsys:write_file(nil, "/cubeos/var/log/input.log", "# input log created " .. string.format("%.0f", wall.ms - 91 * 60000) .. " (old)\nkey a\n")
+start(k, view)
+settle(k)
+eq(fsys:exists(nil, "/cubeos/var/log/input.log"), false, "an expired input log from an earlier boot is deleted at start")
 print("done")

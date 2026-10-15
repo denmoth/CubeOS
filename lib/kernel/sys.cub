@@ -68,6 +68,10 @@ export def getpid():
     return _check(_call({op: "info"})).pid
 
 # сведения о своём процессе: {pid, name, parent, user, cpu_ms, started}
+# сейчас вводится секрет (пароль, PIN): журнал ввода не пишет события этого процесса (D220). Включать на время поля ввода.
+export def secret_input(on):
+    _call({op: "secret_input", on: on == true})
+
 export def info():
     return _check(_call({op: "info"}))
 

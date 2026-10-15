@@ -699,6 +699,34 @@ add("poweroff", "poweroff  то же, что shutdown", power_command("shutdown"
 add("reboot", "reboot  перезагрузить компьютер штатно", power_command("reboot"))
 add("restart", "restart  то же, что reboot", power_command("reboot"))
 
+# inputlog [on|off|status]: журнал ввода (D220), каждое нажатие клавиши в /cubeos/var/log/input.log, кроме паролей
+def b_inputlog(sh, args):
+    if sh.inputlog == nil:
+        sh:eprint("inputlog: the log service is not available here")
+        return 1
+    sub = args[1] ?? "status"
+    on = nil
+    if sub == "on":
+        on = true
+    elif sub == "off":
+        on = false
+    elif sub != "status":
+        sh:eprint("usage: inputlog [on|off|status]")
+        return 1
+    st, why = sh.inputlog(on)
+    if type(st) != "table":
+        sh:eprint("inputlog: " .. tostring(why ?? st))
+        return 1
+    if st.on:
+        sh:println("Input log: on, " .. tostring(st.minutes_left) .. " min left, file " .. st.path)
+        sh:println("Every key you press is written there, except passwords and other hidden fields.")
+    else:
+        sh:println("Input log: off")
+    if st.delete:
+        sh:println("The file is deleted " .. st.ttl_minutes .. " minutes after it was created.")
+    return 0
+add("inputlog", "inputlog [on|off|status]  журнал ввода для отладки клавиатуры", b_inputlog)
+
 def b_whoami(sh, args):
     sh:println(sh.vars.USER)
     return 0

@@ -60,7 +60,9 @@ export class TermConsole:
         sys = self.sys
         term.write(prompt)
         buf = ""
-        # ввод в журнал не пишется: здесь вводят пароли (D196, D220)
+        # ввод отсюда в журналы не пишется; скрытое поле (пароль) прячется и от журнала ввода (D196, D220)
+        if hidden and sys.secret_input != nil:
+            sys.secret_input(true)
         while true:
             ev, a = sys.wait_event(["char", "key", "paste"])
             if (ev == "char" or ev == "paste") and type(a) == "string":
@@ -76,6 +78,8 @@ export class TermConsole:
                         term.setCursorPos(x - 1, y)
                         term.write(" ")
                         term.setCursorPos(x - 1, y)
+        if hidden and sys.secret_input != nil:
+            sys.secret_input(false)
         self:_newline()
         return buf
 

@@ -23,6 +23,18 @@ const MAX_EXITED = 64
 def _default_clock():
     return os.epoch("utc")
 
+# событие ввода словами для журнала ввода: «key enter (28)», «char "a"», «paste (12 chars)», «mouse_click 1 at 5,3»
+def _describe(name, args):
+    a = args[1]
+    if name == "key" or name == "key_up":
+        key_name = type(a) == "number" and keys.getName(a) or nil
+        return name .. " " .. tostring(key_name ?? "?") .. " (" .. tostring(a) .. ")" .. (args[2] == true and " held" or "")
+    if name == "char":
+        return "char \"" .. tostring(a) .. "\""
+    if name == "paste":
+        return "paste (" .. (type(a) == "string" and len(a) or 0) .. " chars)"
+    return name .. " " .. tostring(a) .. " at " .. tostring(args[2]) .. "," .. tostring(args[3])
+
 def _matches(filter, name):
     if filter == nil:
         return not INTERNAL_EVENTS[name]
@@ -342,8 +354,11 @@ export class Kernel:
     # передаёт событие CC: ввод идёт активной программе, остальное ждущим подходящим программам
     def feed(self, name, *args):
         ev = {name: name, args: args, at: self.clock()}
+        if name == "terminate" and self.input_fn != nil:
+            self.input_fn("terminate (Ctrl+T held by the player)")
         if INPUT_EVENTS[name]:
             target = self.focus_pid != nil and self.procs[self.focus_pid] or nil
+            self:_trace(name, args, target)
             if target != nil:
                 if not self.input_seen:
                     self.input_seen = true
@@ -363,6 +378,21 @@ export class Kernel:
             elif p.interest != nil and p.state != "dead" and _matches(p.interest, name):
                 self:_enqueue(p, ev)
 
+    # ------------------------------------------------------------ журнал ввода (D220)
+
+    # logd задаёт input_fn(text), пока журнал ввода включён. Пишется каждое событие ввода и кто его получил; пока процесс вводит
+    # секрет (sys.secret_input(true): пароль, PIN, read("*")), его события не пишутся совсем, по окончании одна строка без длины.
+    def _trace(self, name, args, target):
+        if self.input_fn == nil:
+            return
+        if target != nil and target.secret:
+            target.secret_seen = true
+            return
+        who = " -> dropped: no process has the focus"
+        if target != nil:
+            who = " -> " .. target.pid .. " " .. target.name .. " (" .. (target.state == "waiting" and "waiting for input" or "busy") .. ")"
+        self.input_fn(_describe(name, args) .. who)
+
     # ------------------------------------------------------------ фокус
 
     def set_focus(self, pid):
@@ -370,6 +400,8 @@ export class Kernel:
             return false
         self.focus_pid = pid
         self:log("focus -> " .. pid .. " " .. self.procs[pid].name, "info")
+        if self.input_fn != nil:
+            self.input_fn("focus -> " .. pid .. " " .. self.procs[pid].name)
         return true
 
     # переключает фокус на следующую программу с интерфейсом
@@ -631,6 +663,17 @@ export class Kernel:
         def view(proc, req):
             return "value", {view: proc.view}
         h.view = view
+
+        # процесс вводит секрет (пароль, PIN): журнал ввода не пишет его события, по окончании одна строка без длины (D220)
+        def secret_input(proc, req):
+            on = req.on == true
+            if not on and proc.secret and proc.secret_seen and k.input_fn != nil:
+                k.input_fn("secret input entered in " .. proc.pid .. " " .. proc.name .. " (hidden)")
+            if not on:
+                proc.secret_seen = false
+            proc.secret = on
+            return "value", {ok: true}
+        h.secret_input = secret_input
 
         def klog(proc, req):
             k:log(tostring(req.text), req.level ?? "info")

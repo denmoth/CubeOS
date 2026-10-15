@@ -92,6 +92,7 @@ export class Shell:
         self.time_save = o.time_save
         # sh.power(action) -> ok, причина: просьба службе питания (shutdown, reboot); без неё команды сообщают, что службы нет
         self.power = o.power
+        self.inputlog = o.inputlog
         # имя компьютера в приглашении это его метка (имена с пробелами через дефис), без метки cubeos
         label = env.os.getComputerLabel()
         host = o.host
@@ -658,6 +659,8 @@ export class Shell:
         if j == self.fg:
             self.fg = nil
             self:_set_mouse(false)
+            # программа закончилась посреди скрытого ввода (прервали): скрытый ввод тоже закончился
+            self.env.secret_input = 0
             self.vars["?"] = status
             nxt = self.promote_to
             self.promote_to = nil
