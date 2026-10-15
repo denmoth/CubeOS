@@ -1,0 +1,70 @@
+# hal: слой возможностей (docs/01-architecture.md, HAL): приложения не проверяют наличие аддонов, а спрашивают, что умеет железо
+#
+#   hal.gfx_caps(term)            {backend ("cc-graphics"|"teletext"|"text"), pixel, color, palette, cells {w, h}, pixels {w, h}, subpixels {w, h}}
+#   hal.audio_caps(devices)       {speakers, notes, sounds, pcm}
+#   hal.periph_has(devices, what) true, если есть устройство такого типа или с таким методом ("speaker", "chatBox", "playNote")
+#   hal.scan(peripheral)          {имя: {type, methods}} по настоящей периферии (тот же вид отдаёт служба devd: запрос list)
+#
+# Устройства (devices) берутся у devd (rpc.call(sys, "devd", "list")) или из hal.scan. Всё без побочных действий, подставные term и peripheral
+# позволяют проверять на ПК.
+
+export def gfx_caps(t=nil):
+    t = t ?? term
+    pixel = t.setGraphicsMode != nil and t.drawPixels != nil
+    color = t.isColor == nil or t.isColor() == true
+    w, h = t.getSize()
+    caps = {pixel: pixel, color: color, cells: {w: w, h: h}}
+    if pixel:
+        caps.backend = "cc-graphics"
+        caps.palette = 256
+        def pixel_size():
+            return t.getSize(true)
+        ok, pw, ph = pcall(pixel_size)
+        if ok and type(pw) == "number" and type(ph) == "number":
+            caps.pixels = {w: pw, h: ph}
+    elif color:
+        # символы 128..159: субпиксели 2x3 на клетку
+        caps.backend = "teletext"
+        caps.palette = 16
+        caps.subpixels = {w: w * 2, h: h * 3}
+    else:
+        caps.backend = "text"
+        caps.palette = 2
+    return caps
+
+def _has_method(d, name):
+    for m in d.methods ?? []:
+        if m == name:
+            return true
+    return false
+
+export def periph_has(devices, what):
+    for name, d in devices:
+        if d.type == what or _has_method(d, what):
+            return true
+    return false
+
+export def audio_caps(devices):
+    caps = {speakers: 0, notes: false, sounds: false, pcm: false}
+    for name, d in devices:
+        if d.type == "speaker":
+            caps.speakers += 1
+            caps.notes = caps.notes or _has_method(d, "playNote")
+            caps.sounds = caps.sounds or _has_method(d, "playSound")
+            caps.pcm = caps.pcm or _has_method(d, "playAudio")
+    return caps
+
+export def scan(p=nil):
+    p = p ?? peripheral
+    out = {}
+    for name in p.getNames():
+        ok, kind = pcall(() => p.getType(name))
+        if ok and kind != nil:
+            ok2, methods = pcall(() => p.getMethods(name))
+            sorted = []
+            if ok2 and methods != nil:
+                for m in methods:
+                    sorted[len(sorted) + 1] = m
+            table.sort(sorted)
+            out[name] = {type: kind, methods: sorted}
+    return out

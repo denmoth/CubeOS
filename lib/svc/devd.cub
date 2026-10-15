@@ -4,12 +4,13 @@
 # Диски: стандартный дисковод ("drive") монтируется в /cubeos/drives/floppy/<метка или disk-<id>>, другое хранилище с getMountPath
 # в /cubeos/drives/<метка или id>. Привязка к диску (ID, метка), а не к стороне дисковода. Код с носителей сам не запускается
 # (D…, docs/02-filesystem.md): запуск только по запросу с показом источника и прав (песочница, шаг 6).
-# Запросы (svc.rpc): list (устройства), drives (смонтированные диски), has {type}, mount {name}, unmount {name}.
+# Запросы (svc.rpc): list (устройства), drives (смонтированные диски), has {type|what}, audio_caps, mount {name}, unmount {name}.
 # main(sys, args): args.system (контекст; fsys), args.fsys, args.periph (замена глобального peripheral для тестов).
 # Помощник devd-events ждёт события CC и шлёт их службе сообщениями {event, args}.
 
 import cfs
 import sysfs
+import hal
 import svc.rpc as rpc
 
 export const DRIVES = "/cubeos/drives"
@@ -138,12 +139,12 @@ export def main(sys, args):
         return out
     handlers.drives = list_drives
 
+    # has {type} или has {what}: есть устройство такого типа или с таким методом (hal.periph_has)
     def has_type(q, sender):
-        for name, d in devices:
-            if d.type == q.type:
-                return true
-        return false
+        return hal.periph_has(devices, q.what ?? q.type)
     handlers.has = has_type
+
+    handlers.audio_caps = () => hal.audio_caps(devices)
 
     def do_mount(q, sender):
         ok, why = mount(q.name)

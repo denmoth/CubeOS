@@ -1,0 +1,60 @@
+import t
+import cfs
+import cfs.rules as rules
+import chainlog
+eq = t.eq
+
+fsys = cfs.new({})
+fsys:mount("/", cfs.memory())
+fsys:mkdir(nil, "/var", {parents: true})
+v = cfs.view(fsys, rules.subject("system", ["system"]), {})
+tick = {n: 0}
+def clock():
+    tick.n = tick.n + 1000
+    return tick.n
+
+log = chainlog.new(v, "/var/audit.chain", {clock: clock})
+eq(log:verify(), {ok: true, count: 0}, "a missing log is an empty, valid chain")
+e1 = log:append({event: "open", user: "ivan"})
+e2 = log:append({event: "transfer", amount: 5})
+e3 = log:append({event: "close"})
+eq([e1.seq, e2.seq, e3.seq], [1, 2, 3], "records are numbered")
+eq(e1.hash != e2.hash, true, "every record has its own hash")
+eq(log:verify(), {ok: true, count: 3}, "an intact chain verifies")
+eq(log:head(), {seq: 3, hash: e3.hash}, "head is the last record")
+entries = log:entries()
+eq([len(entries), entries[2].data.amount, entries[3].time], [3, 5, 3000], "entries come back with their data")
+
+# продолжение после перезапуска: хэш и номер берутся из файла
+log2 = chainlog.new(v, "/var/audit.chain", {clock: clock})
+e4 = log2:append({event: "reopen"})
+eq(e4.seq, 4, "a new instance continues the numbering")
+eq(log2:verify(), {ok: true, count: 4}, "and the chain stays valid")
+
+# подмена записи
+text = fsys:read_file(nil, "/var/audit.chain")
+tampered = string.gsub(text, "\"amount\":5", "\"amount\":500")
+fsys:write_file(nil, "/var/audit.chain", tampered)
+res = log2:verify()
+eq([res.ok, res.bad_seq, res.count], [false, 2, 1], "a changed record is found at its number")
+eq(string.find(res.reason, "changed", 1, true) != nil, true, "with a reason")
+
+# удаление записи из середины
+lines = []
+for line in string.gmatch(text, "([^\n]*)\n"):
+    lines[len(lines) + 1] = line
+fsys:write_file(nil, "/var/audit.chain", lines[1] .. "\n" .. lines[3] .. "\n" .. lines[4] .. "\n")
+res = log2:verify()
+eq([res.ok, res.bad_seq], [false, 2], "a removed record breaks the chain")
+
+# обрезка хвоста незаметна без внешней головы; с головой видна
+fsys:write_file(nil, "/var/audit.chain", lines[1] .. "\n" .. lines[2] .. "\n")
+res = log2:verify()
+eq(res, {ok: true, count: 2}, "a truncated tail still verifies by itself")
+eq(chainlog.new(v, "/var/audit.chain"):head().seq != log2:head().seq, true, "but the head no longer matches the one sent outside")
+
+# мусор
+fsys:write_file(nil, "/var/audit.chain", "not a record\n")
+res = log2:verify()
+eq([res.ok, res.bad_seq], [false, 1], "garbage is reported")
+print("done")

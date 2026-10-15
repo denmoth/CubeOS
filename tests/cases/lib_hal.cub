@@ -1,0 +1,45 @@
+import t
+import hal
+eq = t.eq
+
+def make_term(opts):
+    api = {}
+    def size(px):
+        if px:
+            return 306, 171
+        return 51, 19
+    api.getSize = size
+    if opts.color != nil:
+        api.isColor = () => opts.color
+    if opts.pixel:
+        api.setGraphicsMode = () => nil
+        api.drawPixels = () => nil
+    return api
+
+# ---------------------------------------------------------------- графика
+g = hal.gfx_caps(make_term({pixel: true, color: true}))
+eq([g.backend, g.pixel, g.color, g.palette], ["cc-graphics", true, true, 256], "a terminal with graphics reports cc-graphics")
+eq([g.pixels.w, g.pixels.h, g.cells.w, g.cells.h], [306, 171, 51, 19], "with pixel and cell sizes")
+tt = hal.gfx_caps(make_term({pixel: false, color: true}))
+eq([tt.backend, tt.pixel, tt.palette], ["teletext", false, 16], "a colour terminal falls back to teletext")
+eq([tt.subpixels.w, tt.subpixels.h, tt.pixels], [102, 57, nil], "with 2x3 subpixels per cell")
+tx = hal.gfx_caps(make_term({pixel: false, color: false}))
+eq([tx.backend, tx.palette, tx.color], ["text", 2, false], "a monochrome terminal is plain text")
+nocolor = hal.gfx_caps(make_term({pixel: false}))
+eq(nocolor.backend, "teletext", "a terminal without isColor counts as colour")
+
+# ---------------------------------------------------------------- периферия и звук
+devices = {monitor_0: {type: "monitor", methods: ["getSize", "setTextScale"]}, speaker_0: {type: "speaker", methods: ["playNote", "playSound"]},
+    speaker_1: {type: "speaker", methods: ["playAudio", "playNote"]}, chat: {type: "chatBox", methods: ["sendMessage"]}}
+eq([hal.periph_has(devices, "monitor"), hal.periph_has(devices, "modem")], [true, false], "periph_has matches a type")
+eq([hal.periph_has(devices, "sendMessage"), hal.periph_has(devices, "chatBox")], [true, true], "and a method")
+eq(hal.periph_has({}, "monitor"), false, "nothing is present without devices")
+a = hal.audio_caps(devices)
+eq(a, {speakers: 2, notes: true, sounds: true, pcm: true}, "audio caps merge the speakers")
+eq(hal.audio_caps({}), {speakers: 0, notes: false, sounds: false, pcm: false}, "no speakers, no audio")
+
+# сканирование подставной периферии
+fake = {getNames: () => ["right", "top"], getType: (n) => n == "right" and "monitor" or nil, getMethods: (n) => ["b", "a"]}
+scanned = hal.scan(fake)
+eq(scanned, {right: {type: "monitor", methods: ["a", "b"]}}, "scan keeps typed devices and sorts the methods")
+print("done")

@@ -43,7 +43,7 @@ export def main(sys, args):
         if not ok:
             return false, tostring(res)
         pcall(() => view:mkdir("/cubeos/sys/cfg", {parents: true}))
-        ok, err = pcall(() => view:write(path, res))
+        ok, err = pcall(() => view:write_atomic(path, res))
         if not ok:
             return false, tostring(err)
         return true

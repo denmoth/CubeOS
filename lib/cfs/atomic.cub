@@ -1,0 +1,124 @@
+# cfs.atomic: атомарная запись файла и восстановление после грязного выключения (D201, docs/spec/cfs.md)
+#
+#   store = atomic.fsys_io(fsys, subject)        или atomic.view_io(view)
+#   atomic.write(store, "/cubeos/sys/cfg/x.conf", data)     пишет рядом x.conf.tmp, проверяет размер и CRC32, подменяет файл
+#   atomic.recover(store, "/cubeos/sys/cfg")                 при старте: доигрывает или откатывает прерванные записи в каталоге
+#
+# В CC нельзя заменить файл одной операцией, поэтому порядок такой: (1) пишем <имя>.tmp и читаем обратно, сверяем размер и CRC32;
+# (2) старый файл переименовываем в <имя>.old; (3) <имя>.tmp становится <имя>; (4) удаляем <имя>.old. Прерывание на любом шаге чинится
+# recover: есть файл: лишнее .tmp и .old удаляются (старое содержимое осталось, запись не состоялась или уже закончена);
+# нет файла, но есть .old и .tmp: .tmp завершён (проверен до шага 2), он становится файлом; нет файла и есть только .old: возвращаем его;
+# только .tmp без файла: запись нового файла не дошла до конца, .tmp удаляется.
+#
+# store: {exists(p), read(p), write(p, data), move(a, b), remove(p), list(dir) -> имена, mkdir(dir)}; hook(stage) (необязательно, для тестов
+# падений): stage это "tmp_written", "tmp_verified", "old_moved", "new_in_place".
+
+import crc32
+
+export const TMP = ".tmp"
+export const OLD = ".old"
+
+export def fsys_io(fsys, subject):
+    store = {}
+    store.exists = (p) => fsys:exists(subject, p)
+    store.read = (p) => fsys:read_file(subject, p)
+    store.write = (p, d) => fsys:write_file(subject, p, d)
+    store.move = (a, b) => fsys:move(subject, a, b)
+    store.remove = (p) => fsys:remove(subject, p, {permanent: true})
+    store.mkdir = (d) => fsys:mkdir(subject, d, {parents: true})
+    def list(d):
+        names = []
+        for e in fsys:list(subject, d):
+            names[len(names) + 1] = e.name
+        return names
+    store.list = list
+    return store
+
+export def view_io(view):
+    store = {}
+    store.exists = (p) => view:exists(p)
+    store.read = (p) => view:read(p)
+    store.write = (p, d) => view:write(p, d)
+    store.move = (a, b) => view:move(a, b)
+    store.remove = (p) => view:remove(p, {permanent: true})
+    store.mkdir = (d) => view:mkdir(d, {parents: true})
+    def list(d):
+        names = []
+        for e in view:list(d):
+            names[len(names) + 1] = e.name
+        return names
+    store.list = list
+    return store
+
+def _same(a, b):
+    return len(a) == len(b) and crc32.crc32(a) == crc32.crc32(b)
+
+export def write(store, path, data, hook=nil):
+    tmp = path .. TMP
+    old = path .. OLD
+    if store.exists(tmp):
+        store.remove(tmp)
+    store.write(tmp, data)
+    if hook != nil:
+        hook("tmp_written")
+    back = store.read(tmp)
+    if not _same(back, data):
+        store.remove(tmp)
+        raise Error("atomic write of " .. path .. " failed: the data read back does not match")
+    if hook != nil:
+        hook("tmp_verified")
+    had_old = store.exists(path)
+    if had_old:
+        if store.exists(old):
+            store.remove(old)
+        store.move(path, old)
+        if hook != nil:
+            hook("old_moved")
+    store.move(tmp, path)
+    if hook != nil:
+        hook("new_in_place")
+    if had_old:
+        store.remove(old)
+
+# чинит одну пару; возвращает "restored" (файл появился или вернулся), "cleaned" (убран мусор) или nil
+export def recover_file(store, path):
+    tmp = path .. TMP
+    old = path .. OLD
+    has_tmp = store.exists(tmp)
+    has_old = store.exists(old)
+    if not has_tmp and not has_old:
+        return nil
+    if store.exists(path):
+        if has_tmp:
+            store.remove(tmp)
+        if has_old:
+            store.remove(old)
+        return "cleaned"
+    if has_old and has_tmp:
+        store.move(tmp, path)
+        store.remove(old)
+        return "restored"
+    if has_old:
+        store.move(old, path)
+        return "restored"
+    store.remove(tmp)
+    return "cleaned"
+
+# просматривает каталог; возвращает {restored: число, cleaned: число}
+export def recover(store, dir):
+    result = {restored: 0, cleaned: 0}
+    if not store.exists(dir):
+        return result
+    seen = {}
+    for name in store.list(dir):
+        base = nil
+        if string.sub(name, -len(TMP)) == TMP:
+            base = string.sub(name, 1, len(name) - len(TMP))
+        elif string.sub(name, -len(OLD)) == OLD:
+            base = string.sub(name, 1, len(name) - len(OLD))
+        if base != nil and base != "" and seen[base] == nil:
+            seen[base] = true
+            how = recover_file(store, dir .. "/" .. base)
+            if how != nil:
+                result[how] += 1
+    return result

@@ -1,0 +1,132 @@
+import t
+import cfs
+import cfs.atomic as atomic
+import cfs.journal as journal
+eq = t.eq
+
+def fresh():
+    fsys = cfs.new({})
+    fsys:mount("/", cfs.memory())
+    fsys:mkdir(nil, "/cfg", {parents: true})
+    fsys:mkdir(nil, "/sec", {parents: true})
+    store = atomic.fsys_io(fsys, nil)
+    return fsys, store, journal.new(store, "/var/journal")
+
+def wal_count(store):
+    n = 0
+    if store.exists("/var/journal"):
+        for name in store.list("/var/journal"):
+            if string.sub(name, -4) == ".wal":
+                n += 1
+    return n
+
+def crash_at(stage):
+    def hook(s):
+        if s == stage:
+            error("power loss at " .. s, 0)
+    return hook
+
+# ---------------------------------------------------------------- обычная фиксация
+fsys, store, j = fresh()
+fsys:write_file(nil, "/sec/old.lock", "to remove")
+txn = j:begin("create user")
+txn:write("/cfg/users.conf", "users")
+txn:write("/sec/shadow.lock", "shadow")
+txn:remove("/sec/old.lock")
+eq(txn:commit(), true, "commit succeeds")
+eq([fsys:read_file(nil, "/cfg/users.conf"), fsys:read_file(nil, "/sec/shadow.lock"), fsys:exists(nil, "/sec/old.lock")], ["users", "shadow", false], "all operations are applied")
+eq(wal_count(store), 0, "the journal is removed after the commit")
+ok, err = pcall(() => txn:commit())
+eq(ok, false, "a transaction cannot be committed twice")
+eq(j:begin("empty"):commit(), true, "an empty transaction is fine")
+a = j:begin("abandoned")
+a:write("/cfg/never", "x")
+a:abort()
+eq(fsys:exists(nil, "/cfg/never"), false, "an aborted transaction changes nothing")
+
+# бинарные данные и пустое
+txn = j:begin("binary")
+bin = ""
+for i in range[0, 255]:
+    bin = bin .. string.char(i)
+txn:write("/cfg/bin", bin)
+txn:write("/cfg/empty", "")
+txn:commit()
+eq([fsys:read_file(nil, "/cfg/bin") == bin, fsys:read_file(nil, "/cfg/empty")], [true, ""], "binary and empty data round trip")
+
+# ---------------------------------------------------------------- прерывание после записи журнала: доигрывается целиком
+fsys, store, j = fresh()
+fsys:write_file(nil, "/cfg/users.conf", "old users")
+fsys:write_file(nil, "/sec/shadow.lock", "old shadow")
+txn = j:begin("change")
+txn:write("/cfg/users.conf", "new users")
+txn:write("/sec/shadow.lock", "new shadow")
+ok, err = pcall(() => txn:commit(crash_at("logged")))
+eq(ok, false, "the crash after the journal was written interrupts the commit")
+eq(fsys:read_file(nil, "/cfg/users.conf"), "old users", "nothing was applied yet")
+eq(wal_count(store), 1, "the journal is on disk")
+j2 = journal.new(store, "/var/journal")
+r = j2:recover()
+eq(r, {replayed: 1, dropped: 0}, "recover replays the journal")
+eq([fsys:read_file(nil, "/cfg/users.conf"), fsys:read_file(nil, "/sec/shadow.lock")], ["new users", "new shadow"], "both files have the new content: all or nothing")
+eq(wal_count(store), 0, "and the journal is gone")
+
+# прерывание посреди применения
+fsys, store, j = fresh()
+txn = j:begin("two files")
+txn:write("/cfg/a", "A")
+txn:write("/cfg/b", "B")
+pcall(() => txn:commit(crash_at("applied_1")))
+eq([fsys:exists(nil, "/cfg/a"), fsys:exists(nil, "/cfg/b")], [true, false], "a crash in the middle leaves half the changes")
+r = journal.new(store, "/var/journal"):recover()
+eq([fsys:read_file(nil, "/cfg/a"), fsys:read_file(nil, "/cfg/b"), r.replayed], ["A", "B", 1], "recover finishes the transaction")
+
+# прерывание внутри атомарной записи применяемого файла
+fsys, store, j = fresh()
+fsys:write_file(nil, "/cfg/a", "old")
+txn = j:begin("swap")
+txn:write("/cfg/a", "new")
+swap_hook = crash_at("old_moved")
+# прерывание на шаге атомарной записи внутри применения: подставляем store, который падает при перемещении tmp
+armed = {on: true}
+orig_move = store.move
+def flaky_move(a, b):
+    if armed.on and a == "/cfg/a.tmp" and b == "/cfg/a":
+        armed.on = false
+        error("power loss during the swap", 0)
+    return orig_move(a, b)
+store.move = flaky_move
+ok, err = pcall(() => txn:commit())
+eq(ok, false, "a crash inside the atomic swap interrupts the commit")
+store.move = orig_move
+r = journal.new(store, "/var/journal"):recover()
+eq(fsys:read_file(nil, "/cfg/a"), "new", "the journal replay completes the swap")
+
+# ---------------------------------------------------------------- повреждённые и недописанные журналы выбрасываются
+fsys, store, j = fresh()
+fsys:write_file(nil, "/cfg/a", "keep")
+store.mkdir("/var/journal")
+fsys:write_file(nil, "/var/journal/1-1.wal", "CWAL1 00000000 5\n{\"ops\":[]}\n")
+fsys:write_file(nil, "/var/journal/1-2.wal", "garbage without a header")
+fsys:write_file(nil, "/var/journal/1-3.wal", "")
+good = j:begin("good")
+good:write("/cfg/b", "B")
+pcall(() => good:commit(crash_at("logged")))
+r = journal.new(store, "/var/journal"):recover()
+eq(r, {replayed: 1, dropped: 3}, "bad journals are dropped, the good one is replayed")
+eq([fsys:read_file(nil, "/cfg/a"), fsys:read_file(nil, "/cfg/b")], ["keep", "B"], "bad journals change nothing")
+eq(wal_count(store), 0, "no journals remain")
+
+# один изменённый символ в данных ломает CRC
+fsys, store, j = fresh()
+t2 = j:begin("tamper")
+t2:write("/cfg/x", "payload")
+pcall(() => t2:commit(crash_at("logged")))
+name = store.list("/var/journal")[1]
+text = fsys:read_file(nil, "/var/journal/" .. name)
+tampered = string.gsub(text, "cGF5", "cGF6")
+fsys:write_file(nil, "/var/journal/" .. name, tampered)
+r = journal.new(store, "/var/journal"):recover()
+eq([r.replayed, r.dropped, fsys:exists(nil, "/cfg/x")], [0, 1, false], "a changed byte breaks the CRC and the journal is dropped")
+eq(journal.new(store, "/nowhere"):recover(), {replayed: 0, dropped: 0}, "recover without a journal directory is a no-op")
+print("done")

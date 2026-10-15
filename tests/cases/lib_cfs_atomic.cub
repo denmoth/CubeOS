@@ -1,0 +1,91 @@
+import t
+import cfs
+import cfs.rules as rules
+import cfs.atomic as atomic
+eq = t.eq
+
+fsys = cfs.new({})
+fsys:mount("/", cfs.memory())
+fsys:mkdir(nil, "/cfg", {parents: true})
+store = atomic.fsys_io(fsys, nil)
+
+def names():
+    out = store.list("/cfg")
+    table.sort(out)
+    return out
+
+# обычная запись: новый файл, замена, без мусора
+atomic.write(store, "/cfg/a.conf", "one")
+eq(fsys:read_file(nil, "/cfg/a.conf"), "one", "a new file is written")
+eq(names(), ["a.conf"], "no temp files are left")
+atomic.write(store, "/cfg/a.conf", "two")
+eq(fsys:read_file(nil, "/cfg/a.conf"), "two", "an existing file is replaced")
+eq(names(), ["a.conf"], "and again nothing is left")
+atomic.write(store, "/cfg/a.conf", "")
+eq(fsys:read_file(nil, "/cfg/a.conf"), "", "an empty file works")
+bin = ""
+for i in range[0, 255]:
+    bin = bin .. string.char(i)
+atomic.write(store, "/cfg/bin", bin)
+eq(fsys:read_file(nil, "/cfg/bin"), bin, "binary data survives")
+
+# прерывание на каждом шаге и восстановление: файл всегда целый, старый или новый
+def crash_at(stage):
+    def hook(s):
+        if s == stage:
+            error("power loss at " .. s, 0)
+    return hook
+
+def attempt(path, data, stage):
+    ok, err = pcall(() => atomic.write(store, path, data, crash_at(stage)))
+    eq(ok, false, "the simulated crash at " .. stage .. " interrupts the write")
+
+cases = [["tmp_written", "old", 1], ["tmp_verified", "old", 1], ["old_moved", "new", 1], ["new_in_place", "new", 1]]
+for c in cases:
+    atomic.write(store, "/cfg/f", "old")
+    attempt("/cfg/f", "new", c[1])
+    r = atomic.recover(store, "/cfg")
+    eq(fsys:read_file(nil, "/cfg/f"), c[2], "after a crash at " .. c[1] .. " the file holds " .. c[2])
+    eq(r.restored + r.cleaned, c[3], "recover reports the repair at " .. c[1])
+    eq(store.exists("/cfg/f.tmp") or store.exists("/cfg/f.old"), false, "no leftovers after recover at " .. c[1])
+    store.remove("/cfg/f")
+
+# новый файл: прерывание до замены не оставляет ничего, после замены файл на месте
+attempt("/cfg/n", "fresh", "tmp_written")
+atomic.recover(store, "/cfg")
+eq(store.exists("/cfg/n"), false, "a crash before the first write finished leaves no file")
+eq(store.exists("/cfg/n.tmp"), false, "and no temp file")
+attempt("/cfg/n", "fresh", "tmp_verified")
+atomic.recover(store, "/cfg")
+eq(store.exists("/cfg/n"), false, "a half-done first write is dropped (the file never existed)")
+atomic.write(store, "/cfg/n", "fresh")
+eq(fsys:read_file(nil, "/cfg/n"), "fresh", "a new file written normally")
+
+# только .old без файла: возвращаем
+fsys:write_file(nil, "/cfg/lost.old", "saved")
+r = atomic.recover(store, "/cfg")
+eq([fsys:read_file(nil, "/cfg/lost"), r.restored], ["saved", 1], "an orphan .old is restored")
+# и мусор рядом с живым файлом убирается
+fsys:write_file(nil, "/cfg/lost.tmp", "junk")
+fsys:write_file(nil, "/cfg/lost.old", "junk")
+r = atomic.recover(store, "/cfg")
+eq([fsys:read_file(nil, "/cfg/lost"), r.cleaned], ["saved", 1], "leftovers next to a live file are removed")
+eq(atomic.recover(store, "/nothing"), {restored: 0, cleaned: 0}, "recover on a missing directory is a no-op")
+
+# проверка чтения обратно: подмена read ловит порчу
+bad = atomic.fsys_io(fsys, nil)
+real_read = bad.read
+bad.read = (p) => string.find(p, ".tmp", 1, true) != nil and "corrupted" or real_read(p)
+atomic.write(store, "/cfg/v", "good")
+ok, err = pcall(() => atomic.write(bad, "/cfg/v", "better"))
+eq(ok, false, "a write that does not read back correctly fails")
+eq(fsys:read_file(nil, "/cfg/v"), "good", "the old content is untouched")
+eq(store.exists("/cfg/v.tmp"), false, "and the bad temp file is removed")
+
+# через вид файловой системы пользователя
+system = rules.subject("system", ["system"])
+v = cfs.view(fsys, system, {})
+vio = atomic.view_io(v)
+atomic.write(vio, "/cfg/viewed", "via view")
+eq(fsys:read_file(nil, "/cfg/viewed"), "via view", "view_io writes through a view")
+print("done")

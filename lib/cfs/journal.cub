@@ -1,0 +1,124 @@
+# cfs.journal: журнал операций (write-ahead log) для изменений из нескольких файлов, например учётные записи (D201, docs/spec/cfs.md)
+#
+#   j = journal.new(store, "/cubeos/var/journal")        store как в cfs.atomic
+#   txn = j:begin("create user")
+#   txn:write("/cubeos/sys/cfg/users.conf", text)
+#   txn:write("/cubeos/sys/sec/shadow.lock", text2)
+#   txn:remove("/cubeos/sys/sec/old.lock")
+#   txn:commit()                    все изменения применены; прерванная фиксация доигрывается при старте
+#   j:recover()                     при старте: незавершённые фиксации доигрываются, недописанные журналы выбрасываются
+#
+# commit пишет файл <id>.wal (заголовок с CRC32 и длиной, затем JSON со списком операций, данные в base64) атомарно, и только потом применяет
+# операции (cfs.atomic) и удаляет журнал. Поэтому: журнал целый (CRC сошёлся) значит все операции будут применены (повтор идемпотентен);
+# журнал не дописан или повреждён значит ни одна операция ещё не применялась, он удаляется. Итог для вызывающего: всё или ничего.
+
+import cfs.atomic as atomic
+import json5
+import crc32
+import base64
+
+export const MAGIC = "CWAL1"
+
+export class Txn:
+    def init(self, journal, name):
+        self.journal = journal
+        self.name = name
+        self.ops = []
+        self.done = false
+
+    def write(self, path, data):
+        self.ops[len(self.ops) + 1] = {op: "write", path: path, data: base64.encode(data)}
+
+    def remove(self, path):
+        self.ops[len(self.ops) + 1] = {op: "remove", path: path}
+
+    def commit(self, hook=nil):
+        if self.done:
+            raise Error("the transaction is already finished")
+        self.done = true
+        return self.journal:_commit(self, hook)
+
+    # отказ: ничего не применялось
+    def abort(self):
+        self.done = true
+
+export class Journal:
+    def init(self, store, dir):
+        self.store = store
+        self.dir = dir
+        self.counter = 0
+
+    def begin(self, name):
+        return Txn(self, name)
+
+    def _next_id(self):
+        self.counter += 1
+        return string.format("%.0f-%05d", os.epoch("utc"), self.counter)
+
+    def _encode(self, txn):
+        payload = json5.stringify({name: txn.name, ops: txn.ops}, {indent: 0, sort_keys: true})
+        header = MAGIC .. " " .. string.format("%08x", crc32.crc32(payload)) .. " " .. len(payload)
+        return header .. "\n" .. payload .. "\n"
+
+    # hook(stage): "logged" (журнал записан), "applied_N" (применена N-я операция), для проверки прерываний
+    def _commit(self, txn, hook):
+        if len(txn.ops) == 0:
+            return true
+        self.store.mkdir(self.dir)
+        path = self.dir .. "/" .. self:_next_id() .. ".wal"
+        atomic.write(self.store, path, self:_encode(txn))
+        if hook != nil:
+            hook("logged")
+        self:_apply(txn.ops, hook)
+        self.store.remove(path)
+        return true
+
+    def _apply(self, ops, hook):
+        for i, op in ops:
+            if op.op == "write":
+                atomic.write(self.store, op.path, base64.decode(op.data))
+            elif op.op == "remove":
+                if self.store.exists(op.path):
+                    self.store.remove(op.path)
+            if hook != nil:
+                hook("applied_" .. i)
+
+    # читает журнал; возвращает список операций или nil, если он недописан или повреждён
+    def _read(self, path):
+        ok, text = pcall(() => self.store.read(path))
+        if not ok or type(text) != "string":
+            return nil
+        header, payload = string.match(text, "^([^\n]*)\n(.*)\n$")
+        if header == nil:
+            return nil
+        magic, crc, length = string.match(header, "^(%S+) (%x+) (%d+)$")
+        if magic != MAGIC or tonumber(length) != len(payload) or string.format("%08x", crc32.crc32(payload)) != crc:
+            return nil
+        ok2, data = pcall(() => json5.parse(payload))
+        if not ok2 or type(data) != "table" or type(data.ops) != "table":
+            return nil
+        return data.ops
+
+    # при старте: возвращает {replayed: число доигранных, dropped: число выброшенных}
+    def recover(self):
+        result = {replayed: 0, dropped: 0}
+        if not self.store.exists(self.dir):
+            return result
+        atomic.recover(self.store, self.dir)
+        names = self.store.list(self.dir)
+        table.sort(names)
+        for name in names:
+            if string.sub(name, -4) == ".wal":
+                path = self.dir .. "/" .. name
+                ops = self:_read(path)
+                if ops == nil:
+                    self.store.remove(path)
+                    result.dropped += 1
+                else:
+                    self:_apply(ops, nil)
+                    self.store.remove(path)
+                    result.replayed += 1
+        return result
+
+export def new(store, dir=nil):
+    return Journal(store, dir ?? "/cubeos/var/journal")

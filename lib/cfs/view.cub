@@ -14,6 +14,7 @@
 import cfs.path as paths
 import cfs.errors as errors
 import cfs.rules as rules_mod
+import cfs.atomic as atomic
 
 export def default_aliases(user, app_id=nil):
     a = {sys: "/cubeos/sys", var: "/cubeos/var", shared: "/cubeos/shared", apps: "/cubeos/shared/apps",
@@ -191,6 +192,10 @@ export class View:
         def go():
             self.fsys:write_file(self.subject, self:_prep(path, true), data)
         self:_guard(path, go)
+
+    # запись без риска получить половину файла при отключении: рядом .tmp, проверка, подмена (см. cfs.atomic)
+    def write_atomic(self, path, data):
+        atomic.write(atomic.view_io(self), path, data)
 
     def append(self, path, data):
         def go():

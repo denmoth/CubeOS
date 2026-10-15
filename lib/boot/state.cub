@@ -10,6 +10,7 @@
 
 import json5
 import cfs.path as paths
+import cfs.atomic as atomic
 
 export const STATE_PATH = "/cubeos/var/boot.state"
 
@@ -33,7 +34,7 @@ export class BootState:
 
     def save(self):
         self.fsys:mkdir(nil, paths.parent(self.path), {parents: true})
-        self.fsys:write_file(nil, self.path, json5.stringify(self.data, {json5: true, indent: 2}) .. "\n")
+        atomic.write(atomic.fsys_io(self.fsys, nil), self.path, json5.stringify(self.data, {json5: true, indent: 2}) .. "\n")
 
     # вызывается в начале загрузки; возвращает режим ("normal", "safe", "recovery") и причину
     def begin(self, ctrl_held=false):

@@ -55,6 +55,14 @@
 
 Права по умолчанию (`cfs.defaults`): все читают `/cubeos/proc`, `/run`, `/hardware`; `/cubeos/drives` читают все, пишут администраторы.
 
+## HAL (`hal`)
+
+Слой возможностей из [01-architecture.md](../01-architecture.md): приложения спрашивают, что умеет железо, а не проверяют аддоны. Код `lib/hal.cub`, тест `lib_hal`.
+
+- `hal.gfx_caps(term)`: `{backend ("cc-graphics" | "teletext" | "text"), pixel, color, palette (256 | 16 | 2), cells {w, h}, pixels {w, h} (только cc-graphics), subpixels {w, h} (teletext: 2x3 на клетку)}`.
+- `hal.audio_caps(devices)`: `{speakers, notes, sounds, pcm}`. `hal.periph_has(devices, что)`: есть устройство такого типа или с таким методом. `hal.scan(peripheral)` собирает устройства (то же, что отдаёт `devd`).
+- Через службу: `rpc.call(sys, "devd", "audio_caps")`, `rpc.call(sys, "devd", "has", {what: "chatBox"})`. `fetch` показывает графику, память, периферию списком по типам, звук и сеть.
+
 ## Что дальше
 
-Подключение к сессии (`cush` как оболочка сессии получает `time`, `time_save`, `power` через `svc.timeclient` и `rpc.call`), HAL (`gfx.caps()`, `audio.caps()`, `periph.has()` на запросах `devd`), уведомления о монтировании в `notifyd`, права в `permd`, атомарная запись для `logd` и конфигов (пункт 7 плана).
+Уведомления о монтировании дисков в `notifyd`, права вместо заглушки `permd` (шаг 6), журнал с цепочкой хэшей в аудите, `logd` на `chainlog` для журналов прав, звук и сеть вместо заглушек (шаги 7 и 8), проверка всего этого в настоящем CC.

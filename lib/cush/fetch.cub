@@ -7,6 +7,7 @@
 
 import version
 import logo
+import hal
 import term.chars as chars
 
 
@@ -50,10 +51,36 @@ export def facts(sh):
             out[len(out) + 1] = ["Disk", plural_kb(cap - free) .. " / " .. plural_kb(cap)]
         else:
             out[len(out) + 1] = ["Disk", plural_kb(free) .. " free"]
-    count = 0
+    gfx = hal.gfx_caps(env.term)
+    text = gfx.backend .. ", " .. gfx.palette .. " colors"
+    if gfx.pixels != nil:
+        text = text .. ", " .. gfx.pixels.w .. "x" .. gfx.pixels.h .. " px"
+    out[len(out) + 1] = ["Graphics", text]
+    out[len(out) + 1] = ["Memory", math.floor(collectgarbage("count")) .. " KB in use (Lua)"]
+    devices = {}
     if env.peripheral != nil:
-        count = len(env.peripheral.getNames())
-    out[len(out) + 1] = ["Peripherals", tostring(count)]
+        devices = hal.scan(env.peripheral)
+    kinds = {}
+    names = []
+    for name, d in devices:
+        if kinds[d.type] == nil:
+            kinds[d.type] = 0
+            names[len(names) + 1] = d.type
+        kinds[d.type] += 1
+    table.sort(names)
+    parts = []
+    for kind in names:
+        parts[len(parts) + 1] = kinds[kind] .. " " .. kind
+    out[len(out) + 1] = ["Peripherals", len(parts) > 0 and table.concat(parts, ", ") or "none"]
+    audio = hal.audio_caps(devices)
+    if audio.speakers > 0:
+        out[len(out) + 1] = ["Audio", audio.speakers .. " speaker" .. (audio.speakers > 1 and "s" or "") .. (audio.pcm and ", PCM" or "")]
+    net = {}
+    if env.http != nil:
+        net[len(net) + 1] = "HTTP"
+    if kinds.modem != nil:
+        net[len(net) + 1] = kinds.modem .. " modem" .. (kinds.modem > 1 and "s" or "")
+    out[len(out) + 1] = ["Network", len(net) > 0 and table.concat(net, ", ") or "none"]
     out[len(out) + 1] = ["Time", sh.time:date_text() .. " " .. sh.time:time_text()]
     return out
 

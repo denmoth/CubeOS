@@ -1,0 +1,103 @@
+import t
+import cfs
+import cfs.rules as rules
+import cfs.atomic as atomic
+import cfs.journal as journal
+import boot
+import boot.auth as auth_mod
+import kernel
+eq = t.eq
+
+clock = {now: 1000}
+def now():
+    return clock.now
+
+def build_fs():
+    let fsys = cfs.new({clock: now})
+    fsys:mount("/", cfs.memory({now: now}))
+    fsys:mount("/cubeos/tmp", cfs.tmp(65536, now))
+    cfs.install_defaults(fsys)
+    for dir in ["/cubeos/sys/services", "/cubeos/sys/cfg", "/cubeos/sys/sec", "/cubeos/var"]:
+        fsys:mkdir(nil, dir, {parents: true})
+    fsys:write_file(nil, "/cubeos/sys/cfg/boot.conf", "{rounds: 2}")
+    return fsys
+
+def start(fsys):
+    return boot.new({fsys: fsys, clock: now, kernel: {clock: now}, power: {shutdown: () => nil, reboot: () => nil}}):start()
+
+# ---------------------------------------------------------------- сохранение учётных записей одной фиксацией
+fsys = build_fs()
+a = auth_mod.new(fsys, {rounds: 2, clock: now})
+a:load()
+a:create_user({name: "ivan"}, "secret", true)
+eq(fsys:exists(nil, "/cubeos/sys/cfg/users.conf") and fsys:exists(nil, "/cubeos/sys/sec/shadow.lock") and fsys:exists(nil, "/cubeos/sys/sec/sudoers.lock"), true, "an account is saved to all three files")
+eq(len(fsys:list(nil, "/cubeos/var/journal")), 0, "and the journal is empty afterwards")
+
+# ---------------------------------------------------------------- после грязного выключения
+# 1. файл потерян в середине подмены: есть .old и .tmp
+fsys = build_fs()
+good = auth_mod.new(fsys, {rounds: 2, clock: now})
+good:load()
+good:create_user({name: "anna"}, "pw", false)
+users_text = fsys:read_file(nil, "/cubeos/sys/cfg/users.conf")
+fsys:remove(nil, "/cubeos/sys/cfg/users.conf", {permanent: true})
+fsys:write_file(nil, "/cubeos/sys/cfg/users.conf.tmp", users_text)
+fsys:write_file(nil, "/cubeos/sys/cfg/users.conf.old", "{users: []}")
+system = start(fsys)
+eq(system.recovered.restored, 1, "an interrupted swap is finished at boot")
+eq(system.auth:user("anna") != nil, true, "and the account is there")
+eq([fsys:exists(nil, "/cubeos/sys/cfg/users.conf.tmp"), fsys:exists(nil, "/cubeos/sys/cfg/users.conf.old")], [false, false], "no leftovers")
+found = false
+for line in system.kernel.log_lines:
+    if string.find(line, "file recovery: 1 restored", 1, true) != nil:
+        found = true
+eq(found, true, "the recovery is logged")
+
+# 2. журнал записан, но не применён: доигрывается
+fsys = build_fs()
+store = atomic.fsys_io(fsys, nil)
+j = journal.new(store, "/cubeos/var/journal")
+t1 = j:begin("accounts")
+t1:write("/cubeos/sys/cfg/users.conf", "{users: [{name: 'boris'}]}\n")
+t1:write("/cubeos/sys/sec/shadow.lock", "{}\n")
+t1:write("/cubeos/sys/sec/sudoers.lock", "{admins: ['boris']}\n")
+pcall(() => t1:commit((s) => s == "logged" and error("power loss", 0) or nil))
+eq(fsys:exists(nil, "/cubeos/sys/cfg/users.conf"), false, "nothing was applied before the crash")
+system = start(fsys)
+eq(system.recovered.replayed, 1, "the journal is replayed at boot")
+eq([system.auth:user("boris") != nil, system.auth:is_admin("boris")], [true, true], "the whole change is in effect")
+
+# 3. нечего чинить: счётчики нулевые, строки в журнале ядра нет
+fsys = build_fs()
+system = start(fsys)
+eq(system.recovered, {restored: 0, cleaned: 0, replayed: 0, dropped: 0}, "a clean disk needs no recovery")
+noisy = false
+for line in system.kernel.log_lines:
+    if string.find(line, "file recovery", 1, true) != nil:
+        noisy = true
+eq(noisy, false, "and nothing is logged")
+
+# boot.state пишется атомарно
+st = fsys:read_file(nil, "/cubeos/var/boot.state")
+eq(string.find(st, "pending", 1, true) != nil, true, "boot.state is written")
+eq([fsys:exists(nil, "/cubeos/var/boot.state.tmp"), fsys:exists(nil, "/cubeos/var/boot.state.old")], [false, false], "without leftovers")
+
+# ---------------------------------------------------------------- вид и sys.txn
+system_subject = rules.subject("system", ["system"])
+v = cfs.view(fsys, system_subject, {})
+v:write_atomic("/cubeos/var/x.dat", "via view")
+eq(fsys:read_file(nil, "/cubeos/var/x.dat"), "via view", "a view writes atomically")
+v:write_atomic("/cubeos/var/x.dat", "again")
+eq([fsys:read_file(nil, "/cubeos/var/x.dat"), fsys:exists(nil, "/cubeos/var/x.dat.old")], ["again", false], "and replaces")
+
+k = kernel.new({clock: now})
+got = {}
+def prog(sys, args):
+    tx = sys.txn("pair")
+    tx:write("/cubeos/var/p1", "one")
+    tx:write("/cubeos/var/p2", "two")
+    got.ok = tx:commit()
+k:spawn(prog, [], {name: "prog", subject: system_subject, view: v})
+k:run_ready()
+eq([got.ok, fsys:read_file(nil, "/cubeos/var/p1"), fsys:read_file(nil, "/cubeos/var/p2")], [true, "one", "two"], "sys.txn commits several files together")
+print("done")

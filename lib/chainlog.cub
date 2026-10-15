@@ -1,0 +1,96 @@
+# chainlog: журнал только на дописывание с цепочкой хэшей (D201): основа для аудита и денежных журналов (шаг 6)
+#
+#   log = chainlog.new(view, "$var/audit.chain")
+#   entry = log:append({event: "transfer", from: "a", to: "b", amount: 5})      {seq, time, hash}
+#   res = log:verify()                  {ok, count, bad_seq, reason}: цепочка цела или первая испорченная запись
+#   log:head()                          {seq, hash} последней записи: его можно отправить вовне (внешний журнал), тогда обрезка не пройдёт незамеченной
+#   log:entries()                       список записей {seq, time, data}
+#
+# Строка файла: «<хэш> <JSON записи>», хэш n-й записи это SHA-256 от (хэш предыдущей + JSON этой записи), для первой «предыдущий» это 64 нуля.
+# Подмена, вставка и удаление записи в середине ломают цепочку после неё. Обрезка хвоста и пересчёт всей цепочки тем, у кого есть доступ
+# к файлу, обнаруживаются только по заранее отправленной голове (head), поэтому настоящая защита это права на файл и внешняя копия.
+
+import json5
+import sha256
+
+const ZERO = string.rep("0", 64)
+
+export class ChainLog:
+    # view: вид CFS (или любой объект с exists, read, append, mkdir); path: файл журнала; opts: clock (мс)
+    def init(self, view, path, opts=nil):
+        o = opts ?? {}
+        self.view = view
+        self.path = path
+        self.clock = o.clock ?? (() => os.epoch("utc"))
+        self.seq = nil
+        self.hash = nil
+
+    def _lines(self):
+        out = []
+        if not self.view:exists(self.path):
+            return out
+        for line in string.gmatch(self.view:read(self.path), "([^\n]*)\n"):
+            if line != "":
+                out[len(out) + 1] = line
+        return out
+
+    # последняя запись по файлу (читается один раз, потом ведётся в памяти)
+    def _load(self):
+        if self.seq != nil:
+            return
+        self.seq = 0
+        self.hash = ZERO
+        for line in self:_lines():
+            h, json = string.match(line, "^(%x+) (.*)$")
+            if h != nil:
+                ok, rec = pcall(() => json5.parse(json))
+                if ok and type(rec) == "table":
+                    self.seq = rec.seq
+                    self.hash = h
+
+    def append(self, data):
+        self:_load()
+        seq = self.seq + 1
+        json = json5.stringify({seq: seq, time: self.clock(), data: data, prev: self.hash}, {indent: 0, sort_keys: true})
+        h = sha256.hex(self.hash .. json)
+        self.view:append(self.path, h .. " " .. json .. "\n")
+        self.seq = seq
+        self.hash = h
+        return {seq: seq, hash: h}
+
+    def head(self):
+        self:_load()
+        return {seq: self.seq, hash: self.hash}
+
+    def verify(self):
+        prev = ZERO
+        expect = 1
+        count = 0
+        for line in self:_lines():
+            h, json = string.match(line, "^(%x+) (.*)$")
+            if h == nil:
+                return {ok: false, count: count, bad_seq: expect, reason: "a line is out of format"}
+            ok, rec = pcall(() => json5.parse(json))
+            if not ok or type(rec) != "table":
+                return {ok: false, count: count, bad_seq: expect, reason: "a record does not parse"}
+            if rec.seq != expect:
+                return {ok: false, count: count, bad_seq: expect, reason: "a record is missing or out of order"}
+            if rec.prev != prev or sha256.hex(prev .. json) != h:
+                return {ok: false, count: count, bad_seq: expect, reason: "the hash does not match: the record was changed"}
+            prev = h
+            expect += 1
+            count += 1
+        return {ok: true, count: count}
+
+    def entries(self):
+        out = []
+        for line in self:_lines():
+            h, json = string.match(line, "^(%x+) (.*)$")
+            if h != nil:
+                ok, rec = pcall(() => json5.parse(json))
+                if ok and type(rec) == "table":
+                    out[len(out) + 1] = {seq: rec.seq, time: rec.time, data: rec.data}
+        return out
+
+export def new(view, path, opts=nil):
+    return ChainLog(view, path, opts)

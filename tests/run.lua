@@ -54,6 +54,7 @@ end
 
 local function run_case(name, label, force)
   -- между тестами отдаём управление: иначе весь прогон идёт без yield и CC (в игре и в эмуляторе) убивает его за «Too long without yielding»
+  collectgarbage()
   os.queueEvent("cubic_yield")
   os.pullEvent("cubic_yield")
   local base = ROOT .. "/tests/cases/" .. name
@@ -163,9 +164,18 @@ for _, f in ipairs(fs.list(ROOT .. "/tests/cases")) do
 end
 table.sort(names)
 
+-- аргумент: подстрока имени, либо «=имя1,имя2,...» (точный список; «=unit» это только unit-тесты, «=:» ничего из cases)
 local only = ...
+local exact
+if only and only:sub(1, 1) == "=" then
+  exact = {}
+  for n in only:sub(2):gmatch("[^,]+") do exact[n] = true end
+  only = nil
+end
+local timings = {}
 for _, n in ipairs(names) do
-  if not only or n:find(only, 1, true) then
+  if (exact and exact[n]) or (not exact and (not only or n:find(only, 1, true))) then
+    local t0 = os.epoch("utc")
     local ok, err = pcall(run_case, n, n)
     if not ok then record(n, false, "test runner error: " .. tostring(err)) end
     local has_err = fs.exists(ROOT .. "/tests/cases/" .. n .. ".err") or fs.exists(ROOT .. "/tests/cases/" .. n .. ".rterr")
@@ -173,11 +183,12 @@ for _, n in ipairs(names) do
       local ok2, err2 = pcall(run_case, n, "min:" .. n, { minify = true })
       if not ok2 then record("min:" .. n, false, "test runner error: " .. tostring(err2)) end
     end
+    timings[#timings + 1] = { n, os.epoch("utc") - t0 }
   end
 end
 
 -- unit-тесты на Lua: tests/unit/*.lua вызываются как chunk(cubic, ROOT, record)
-if not only or ("unit"):find(only, 1, true) then
+if (exact and exact.unit) or (not exact and (not only or ("unit"):find(only, 1, true))) then
   if fs.isDir(ROOT .. "/tests/unit") then
     for _, f in ipairs(fs.list(ROOT .. "/tests/unit")) do
       if f:match("%.lua$") then
@@ -193,6 +204,14 @@ if not only or ("unit"):find(only, 1, true) then
       end
     end
   end
+end
+
+-- самые медленные тесты (мс), чтобы замечать, что прогон разбухает
+table.sort(timings, function(a, b) return a[2] > b[2] end)
+local tf = fs.open(ROOT .. "/build/test-timing.txt", "w")
+if tf then
+  for i = 1, math.min(15, #timings) do tf.write(timings[i][1] .. " " .. timings[i][2] .. " ms\n") end
+  tf.close()
 end
 
 local out = fs.open(ROOT .. "/build/test-result.txt", "w")

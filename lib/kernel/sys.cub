@@ -12,6 +12,9 @@
 #   sys.send(pid, msg); from, msg = sys.receive(timeout)
 #   sys.exit(0)
 
+import cfs.atomic as atomic
+import cfs.journal as journal
+
 def _call(request):
     return coroutine.yield(request)
 
@@ -105,3 +108,16 @@ export def log(level, text):
         _call({op: "send", to: pid, msg: {op: "log", args: {level: level, source: name, text: tostring(text)}}})
     else:
         _call({op: "klog", text: "[" .. level .. "] " .. name .. ": " .. tostring(text)})
+
+# журнал операций: изменения из нескольких файлов «всё или ничего» (cfs.journal). dir: где лежат журналы; для системных процессов
+# /cubeos/var/journal (по умолчанию), обычная программа должна выбрать свой каталог, например "$data/journal".
+#   txn = sys.txn("move money")
+#   txn:write("$data/a", text)
+#   txn:write("$data/b", text2)
+#   txn:commit()
+# После отключения питания незаконченную фиксацию доиграет journal.new(...):recover(); система делает это для своего каталога при загрузке.
+export def txn(name, dir=nil):
+    v = view()
+    if v == nil:
+        raise Error("the process has no file system view")
+    return journal.new(atomic.view_io(v), dir ?? "/cubeos/var/journal"):begin(name)

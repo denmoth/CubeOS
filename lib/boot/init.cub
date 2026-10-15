@@ -15,6 +15,8 @@
 import json5
 import cfs
 import cfs.rules as rules_mod
+import cfs.atomic as atomic
+import cfs.journal as journal
 import kernel
 import boot.auth as auth_mod
 import boot.session as session_mod
@@ -25,6 +27,9 @@ import sysfs
 
 export const BOOT_CONF = "/cubeos/sys/cfg/boot.conf"
 export const OS_RELEASE = "/cubeos/sys/cfg/os-release.conf"
+
+# каталоги, где при старте чинятся прерванные атомарные записи (.tmp, .old)
+const RECOVER_DIRS = ["/cubeos/sys/cfg", "/cubeos/sys/sec", "/cubeos/var"]
 
 const DEFAULTS = {autologin: nil, lang: "ru", de: "tui", elevate_ms: 300000, rounds: 1000, title: "CubeOS"}
 
@@ -77,9 +82,23 @@ export class Boot:
 
     # ------------------------------------------------------------ запуск
 
+    # после грязного выключения: доигрываем прерванные атомарные записи в каталогах настроек и доигрываем или выбрасываем журнал операций (D201)
+    def _recover_files(self):
+        store = atomic.fsys_io(self.fsys, nil)
+        total = {restored: 0, cleaned: 0, replayed: 0, dropped: 0}
+        for dir in RECOVER_DIRS:
+            r = atomic.recover(store, dir)
+            total.restored += r.restored
+            total.cleaned += r.cleaned
+        j = journal.new(store, auth_mod.JOURNAL_DIR):recover()
+        total.replayed = j.replayed
+        total.dropped = j.dropped
+        return total
+
     def start(self):
         o = self.opts
         fsys = self.fsys
+        recovered = self:_recover_files()
         sys_state = state_mod.new(fsys, {clock: o.clock})
         mode, reason = sys_state:begin(o.ctrl ?? false)
         unclean = sys_state.prev_clean == false
@@ -100,7 +119,7 @@ export class Boot:
         auth = auth_mod.new(fsys, auth_opts)
         auth:load()
         system = {mode: mode, reason: reason, state: sys_state, conf: conf, release: release, auth: auth, fsys: fsys,
-            console: self.console, unclean: unclean, boot_ms: (o.clock ?? (() => os.epoch("utc")))()}
+            console: self.console, unclean: unclean, recovered: recovered, boot_ms: (o.clock ?? (() => os.epoch("utc")))()}
         self.system = system
         if mode == "recovery":
             self:_say("Recovery mode: " .. tostring(reason))
@@ -113,6 +132,8 @@ export class Boot:
             kernel_opts.clock = o.clock
         k = kernel.new(kernel_opts)
         system.kernel = k
+        if recovered.restored + recovered.cleaned + recovered.replayed + recovered.dropped > 0:
+            k:log("file recovery: " .. recovered.restored .. " restored, " .. recovered.cleaned .. " cleaned, " .. recovered.replayed .. " transactions replayed, " .. recovered.dropped .. " dropped")
         self:_mount_virtual(system)
         sessions = session_mod.new(fsys, auth, {kernel: k, clock: o.clock, elevate_ms: conf.elevate_ms, lang: conf.lang, de: conf.de})
         system.sessions = sessions
