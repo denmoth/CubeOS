@@ -138,6 +138,21 @@ msgstr "Контрольная сумма файлов"
 msgid "The SHA-256 hash of each file: equal hashes mean equal files. Without files it hashes a pipe."
 msgstr "Хэш SHA-256 каждого файла: одинаковые хэши значат одинаковые файлы. Без файлов считает пайп."
 
+msgid "Text editor"
+msgstr "Текстовый редактор"
+
+msgid "Works like Notepad: arrows, Shift selects, Ctrl+S saves, Ctrl+Q quits, Ctrl+F finds (F3 next), Ctrl+G goes to a line, Ctrl+Z/Y undo and redo, Ctrl+C/X copy and cut, Ctrl+V pastes from Windows and Ctrl+Shift+V from the terminal, Ctrl+D repeats a line, Alt+Up/Down moves it, Tab indents. Lua and Cubic are colored. -v (or vi, vim) opens it in vim mode."
+msgstr "Работает как Блокнот: стрелки, Shift выделяет, Ctrl+S сохранить, Ctrl+Q выйти, Ctrl+F найти (F3 дальше), Ctrl+G к строке, Ctrl+Z/Y отменить и вернуть, Ctrl+C/X копировать и вырезать, Ctrl+V вставляет из Windows, Ctrl+Shift+V из терминала, Ctrl+D повторяет строку, Alt+Вверх/Вниз двигает её, Tab отступ. Lua и Cubic подсвечены. -v (или vi, vim) открывает в режиме vim."
+
+msgid "The editor in vim mode"
+msgstr "Редактор в режиме vim"
+
+msgid "Same as edit -v."
+msgstr "То же, что edit -v."
+
+msgid "Normal mode: h j k l w b e 0 ^ $ gg G move (a number repeats: 5j), x dd D dw cw yy yw p P r J >> << change, u and Ctrl+R undo and redo, i a I A o O start typing, v selects, / n N search, :w :q :q! :wq :NUMBER, ZZ saves and quits. Esc returns to normal mode."
+msgstr "Обычный режим: h j k l w b e 0 ^ $ gg G двигают (число повторяет: 5j), x dd D dw cw yy yw p P r J >> << правят, u и Ctrl+R отмена и возврат, i a I A o O начинают ввод, v выделяет, / n N поиск, :w :q :q! :wq :ЧИСЛО, ZZ сохранить и выйти. Esc возвращает в обычный режим."
+
 msgid "Print words"
 msgstr "Напечатать слова"
 
@@ -653,6 +668,18 @@ msgstr "Первые 64 байта"
 
 msgid "Are two files the same"
 msgstr "Одинаковы ли два файла"
+
+msgid "Vim mode: Esc for normal mode, i to type, :w save, :q quit"
+msgstr "Режим vim: Esc обычный режим, i печатать, :w сохранить, :q выйти"
+
+msgid "Edit a program"
+msgstr "Править программу"
+
+msgid "The same in vim mode"
+msgstr "То же в режиме vim"
+
+msgid "Edit with vim keys"
+msgstr "Править клавишами vim"
 
 msgid "Do not end with a new line"
 msgstr "Не переводить строку в конце"

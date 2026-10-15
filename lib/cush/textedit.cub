@@ -1,0 +1,1016 @@
+# cush.textedit: текстовый редактор оболочки (команды edit, vi, vim) вместо edit из ROM (D238).
+#
+# По умолчанию как в Windows: стрелки, Home/End, PgUp/PgDn, Ctrl+стрелки по словам, Shift выделяет, Ctrl+A всё, Ctrl+C/X копировать и
+# вырезать (буфер терминала), вставка Ctrl+V (из Windows) и Ctrl+Shift+V (буфер терминала), Ctrl+Z/Y отмена и возврат, Ctrl+S
+# сохранить, Ctrl+Q выйти, Ctrl+F найти (F3 дальше), Ctrl+G строка, Ctrl+D повторить строку, Alt+стрелки переставить строку, Tab
+# отступ, автоотступ на Enter, мышь ставит курсор, колесо листает. Подсветка Lua и Cubic, номера строк.
+#
+# Режим vim (edit -v, vi, vim или cush.conf: editor.mode "vim"): normal, insert, visual. Движения h j k l w b e 0 ^ $ gg G,
+# счётчик (3dd, 5j), x X dd D dw cw cc C yy yw p P r J >> << u Ctrl+R, i a I A o O, v (d y c x > <), / n N, :w :q :q! :wq :x
+# :число, ZZ ZQ. Esc в normal.
+#
+#   ed = textedit.new(sh, "/путь", {vim: false})
+#   ed:run()          до выхода; возвращает 0
+
+import unicode
+import term.view as view_mod
+
+const HEX = "0123456789abcdef"
+const KEYWORDS = {"and": true, "break": true, "do": true, "else": true, "elseif": true, "end": true, "for": true,
+    "function": true, "goto": true, "if": true, "in": true, "local": true, "not": true, "or": true, "repeat": true, "return": true,
+    "then": true, "until": true, "while": true, "def": true, "class": true, "elif": true, "import": true, "export": true,
+    "const": true, "let": true, "try": true, "except": true, "raise": true, "as": true, "pass": true, "continue": true,
+    "self": true, "super": true, "step": true, "range": true, "async": true, "await": true, "override": true}
+const VALUES = {"true": true, "false": true, "nil": true}
+
+def _color(letter):
+    i = string.find(HEX, letter, 1, true)
+    return 2 ** ((i ?? 1) - 1)
+
+# раскраска строки: список букв цвета по символам
+export def highlight(line, lang):
+    cs = unicode.chars(line)
+    n = len(cs)
+    out = []
+    for i in range[1, n]:
+        out[i] = "0"
+    if lang == nil:
+        return out
+    comment = lang == "lua" and "--" or "#"
+    i = 1
+    while i <= n:
+        ch = cs[i]
+        two = ch .. (cs[i + 1] ?? "")
+        if (lang == "lua" and two == "--") or (lang == "cub" and ch == "#"):
+            for k in range[i, n]:
+                out[k] = "8"
+            break
+        if ch == "\"" or ch == "'":
+            k = i + 1
+            while k <= n and cs[k] != ch:
+                if cs[k] == "\\":
+                    k += 1
+                k += 1
+            for m in range[i, math.min(k, n)]:
+                out[m] = "4"
+            i = k + 1
+        elif string.match(ch, "%d") != nil and (i == 1 or string.match(cs[i - 1], "[%w_]") == nil):
+            k = i
+            while k <= n and string.match(cs[k], "[%w%.]") != nil:
+                out[k] = "a"
+                k += 1
+            i = k
+        elif string.match(ch, "[%a_]") != nil:
+            k = i
+            word = []
+            while k <= n and string.match(cs[k], "[%w_]") != nil:
+                word[len(word) + 1] = cs[k]
+                k += 1
+            w = table.concat(word)
+            col = KEYWORDS[w] and "3" or (VALUES[w] and "9" or (cs[k] == "(" and "5" or "0"))
+            for m in range[i, k - 1]:
+                out[m] = col
+            i = k
+        else:
+            i += 1
+    return out
+
+export class TextEditor:
+    def init(self, sh, path=nil, opts=nil):
+        o = opts ?? {}
+        self.sh = sh
+        self.env = sh.env
+        self.term = sh.env.term
+        self.path = path
+        self.lines = [""]
+        self.trailing_nl = true
+        self.cx = 1
+        self.cy = 1
+        self.top = 1
+        self.left = 1
+        self.anchor = nil
+        self.vim = o.vim == true
+        self.mode = self.vim and "normal" or "edit"
+        self.modified = false
+        self.undo = []
+        self.redo = []
+        self.last_edit = nil
+        self.msg = nil
+        self.mods = {ctrl: false, shift: false, alt: false}
+        self.numbers = o.numbers != false
+        self.tab = o.tab ?? 4
+        self.prompt = nil
+        self.find = nil
+        self.pending = ""
+        self.count = ""
+        self.quit = false
+        self.lang = nil
+        if path != nil:
+            if string.match(path, "%.lua$") != nil:
+                self.lang = "lua"
+            elif string.match(path, "%.cub[h]?$") != nil:
+                self.lang = "cub"
+            self:load()
+
+    # ------------------------------------------------------------ файл
+
+    def load(self):
+        fsys = self.env.fs
+        if not fsys.exists(self.path):
+            self.msg = "New file"
+            return
+        h = fsys.open(self.path, "r")
+        if h == nil:
+            self.msg = "Cannot read the file"
+            return
+        text = h.readAll() ?? ""
+        h.close()
+        self.trailing_nl = string.sub(text, -1) == "\n"
+        text = string.gsub(text, "\r", "")
+        self.lines = []
+        for l in string.gmatch(text .. "\n", "([^\n]*)\n"):
+            self.lines[len(self.lines) + 1] = l
+        if self.trailing_nl and len(self.lines) > 1:
+            table.remove(self.lines)
+        if len(self.lines) == 0:
+            self.lines = [""]
+
+    def save(self):
+        if self.path == nil:
+            self:ask("Save as: ", "save_as")
+            return false
+        text = table.concat(self.lines, "\n") .. (self.trailing_nl and "\n" or "")
+        h = self.env.fs.open(self.path, "w")
+        if h == nil:
+            self.msg = "Cannot save here (no rights?)"
+            return false
+        h.write(text)
+        h.close()
+        self.modified = false
+        self.msg = "Saved " .. len(self.lines) .. " lines"
+        return true
+
+    # ------------------------------------------------------------ правка
+
+    def _snap(self):
+        copy_ = []
+        for i, l in self.lines:
+            copy_[i] = l
+        return {lines: copy_, cx: self.cx, cy: self.cy}
+
+    # перед правкой: подряд набранные буквы одного слова отменяются вместе
+    def _remember(self, kind):
+        if kind == "char" and self.last_edit == "char":
+            return
+        self.undo[len(self.undo) + 1] = self:_snap()
+        if len(self.undo) > 200:
+            table.remove(self.undo, 1)
+        self.redo = []
+        self.last_edit = kind
+        self.modified = true
+
+    def _restore(self, from_, to):
+        if len(from_) == 0:
+            self.msg = "Nothing to undo"
+            return
+        to[len(to) + 1] = self:_snap()
+        s = table.remove(from_)
+        self.lines = s.lines
+        self.cy = math.min(s.cy, len(self.lines))
+        self.cx = s.cx
+        self.anchor = nil
+        self.last_edit = nil
+        self.modified = true
+        self:_clamp()
+
+    def line(self, y=nil):
+        return self.lines[y ?? self.cy] ?? ""
+
+    def llen(self, y=nil):
+        return unicode.length(self:line(y))
+
+    # в обычном режиме vim курсор стоит на символе, а не за концом строки
+    def _clamp(self):
+        self.cy = math.max(1, math.min(self.cy, len(self.lines)))
+        limit = self:llen() + 1
+        if self.mode == "normal":
+            limit = math.max(1, self:llen())
+        self.cx = math.max(1, math.min(self.cx, limit))
+
+    # класс символа для движений vim: 1 буква или цифра, 2 пробел, 3 знак
+    def _cls(self, ch):
+        if ch == nil:
+            return 0
+        if string.match(ch, "^%s$") != nil:
+            return 2
+        if self:_is_word(ch):
+            return 1
+        return 3
+
+    # конец «слова» для dw/cw/yw: dw и yw захватывают пробелы после, cw (как ce) только само слово
+    def _word_end(self, x, with_space):
+        cs = unicode.chars(self:line())
+        n = len(cs)
+        if x > n:
+            return x
+        c0 = self:_cls(cs[x])
+        while x <= n and self:_cls(cs[x]) == c0:
+            x += 1
+        if with_space:
+            while x <= n and self:_cls(cs[x]) == 2:
+                x += 1
+        return x
+
+    # выделение: начало и конец {x, y} по порядку или nil
+    def _sel(self):
+        if self.anchor == nil:
+            return nil, nil
+        a = self.anchor
+        b = {x: self.cx, y: self.cy}
+        if a.y == b.y and a.x == b.x:
+            return nil, nil
+        if a.y < b.y or (a.y == b.y and a.x < b.x):
+            return a, b
+        return b, a
+
+    def selected_text(self):
+        a, b = self:_sel()
+        if a == nil:
+            return nil
+        if a.y == b.y:
+            return unicode.sub(self:line(a.y), a.x, b.x - 1)
+        parts = [unicode.sub(self:line(a.y), a.x)]
+        for y in range[a.y + 1, b.y - 1]:
+            parts[len(parts) + 1] = self:line(y)
+        parts[len(parts) + 1] = unicode.sub(self:line(b.y), 1, b.x - 1)
+        return table.concat(parts, "\n")
+
+    def delete_selection(self):
+        a, b = self:_sel()
+        if a == nil:
+            return false
+        head = unicode.sub(self:line(a.y), 1, a.x - 1)
+        tail = unicode.sub(self:line(b.y), b.x)
+        for y in range[b.y, a.y + 1] step -1:
+            table.remove(self.lines, y)
+        self.lines[a.y] = head .. tail
+        self.cy = a.y
+        self.cx = a.x
+        self.anchor = nil
+        return true
+
+    def insert(self, text):
+        self:delete_selection()
+        l = self:line()
+        head = unicode.sub(l, 1, self.cx - 1)
+        tail = unicode.sub(l, self.cx)
+        parts = []
+        for p in string.gmatch(text .. "\n", "([^\n]*)\n"):
+            parts[len(parts) + 1] = p
+        if len(parts) == 1:
+            self.lines[self.cy] = head .. text .. tail
+            self.cx += unicode.length(text)
+            return
+        self.lines[self.cy] = head .. parts[1]
+        for i in range[2, len(parts)]:
+            table.insert(self.lines, self.cy + i - 1, parts[i])
+        self.cy += len(parts) - 1
+        self.cx = unicode.length(parts[len(parts)]) + 1
+        self.lines[self.cy] = self.lines[self.cy] .. tail
+
+    def newline(self):
+        indent = string.match(self:line(), "^(%s*)") ?? ""
+        self:insert("\n" .. indent)
+
+    def backspace(self):
+        if self:delete_selection():
+            return
+        if self.cx > 1:
+            l = self:line()
+            self.lines[self.cy] = unicode.sub(l, 1, self.cx - 2) .. unicode.sub(l, self.cx)
+            self.cx -= 1
+        elif self.cy > 1:
+            prev = self:line(self.cy - 1)
+            self.cx = unicode.length(prev) + 1
+            self.lines[self.cy - 1] = prev .. self:line()
+            table.remove(self.lines, self.cy)
+            self.cy -= 1
+
+    def delete(self):
+        if self:delete_selection():
+            return
+        l = self:line()
+        if self.cx <= unicode.length(l):
+            self.lines[self.cy] = unicode.sub(l, 1, self.cx - 1) .. unicode.sub(l, self.cx + 1)
+        elif self.cy < len(self.lines):
+            self.lines[self.cy] = l .. self:line(self.cy + 1)
+            table.remove(self.lines, self.cy + 1)
+
+    # ------------------------------------------------------------ движение
+
+    def _is_word(self, ch):
+        return ch != nil and string.match(ch, "^[%w_]$") != nil or (ch != nil and len(ch) > 1)
+
+    def word_right(self):
+        cs = unicode.chars(self:line())
+        x = self.cx
+        if x > len(cs):
+            if self.cy < len(self.lines):
+                self.cy += 1
+                self.cx = 1
+            return
+        while x <= len(cs) and self:_is_word(cs[x]):
+            x += 1
+        while x <= len(cs) and not self:_is_word(cs[x]):
+            x += 1
+        self.cx = x
+
+    def word_left(self):
+        cs = unicode.chars(self:line())
+        x = self.cx - 1
+        if x < 1:
+            if self.cy > 1:
+                self.cy -= 1
+                self.cx = self:llen() + 1
+            return
+        while x >= 1 and not self:_is_word(cs[x]):
+            x -= 1
+        while x >= 1 and self:_is_word(cs[x]):
+            x -= 1
+        self.cx = x + 1
+
+    def move(self, dx, dy, select=false):
+        if select and self.anchor == nil:
+            self.anchor = {x: self.cx, y: self.cy}
+        elif not select and self.mode != "visual":
+            self.anchor = nil
+        if dy != 0:
+            self.cy = math.max(1, math.min(len(self.lines), self.cy + dy))
+            self.cx = math.min(self.cx, self:llen() + 1)
+        if dx < 0:
+            if self.cx > 1:
+                self.cx -= 1
+            elif self.cy > 1 and self.mode == "edit":
+                self.cy -= 1
+                self.cx = self:llen() + 1
+        elif dx > 0:
+            if self.cx <= self:llen():
+                self.cx += 1
+            elif self.cy < len(self.lines) and self.mode == "edit":
+                self.cy += 1
+                self.cx = 1
+
+    def home(self):
+        indent = unicode.length(string.match(self:line(), "^(%s*)") ?? "") + 1
+        self.cx = self.cx == indent and 1 or indent
+
+    # ------------------------------------------------------------ поиск
+
+    def find_next(self, text, backwards=false):
+        if text == nil or text == "":
+            return false
+        n = len(self.lines)
+        low = string.lower(text)
+        for step_ in range[0, n]:
+            y = backwards and ((self.cy - 1 - step_ - 1) % n + 1) or ((self.cy - 1 + step_) % n + 1)
+            l = string.lower(self.lines[y])
+            from_ = 1
+            if step_ == 0 and not backwards:
+                from_ = string.len(unicode.sub(self.lines[y], 1, self.cx)) + 1
+            s = nil
+            if backwards:
+                pos = 1
+                limit = step_ == 0 and string.len(unicode.sub(self.lines[y], 1, self.cx - 1)) or string.len(l)
+                while true:
+                    p = string.find(l, low, pos, true)
+                    if p == nil or p > limit:
+                        break
+                    s = p
+                    pos = p + 1
+            else:
+                s = string.find(l, low, from_, true)
+            if s != nil:
+                self.cy = y
+                self.cx = unicode.length(string.sub(self.lines[y], 1, s - 1)) + 1
+                self.msg = nil
+                return true
+        self.msg = "Not found: " .. text
+        return false
+
+    # ------------------------------------------------------------ строка вопроса (найти, строка, сохранить как, :команда)
+
+    def ask(self, label, kind, initial=""):
+        self.prompt = {label: label, kind: kind, text: initial}
+
+    def prompt_key(self, code):
+        p = self.prompt
+        if code == keys.enter or code == keys.numPadEnter:
+            self.prompt = nil
+            self:prompt_done(p.kind, p.text)
+        elif code == keys.backspace:
+            if unicode.length(p.text) > 0:
+                p.text = unicode.sub(p.text, 1, unicode.length(p.text) - 1)
+            elif p.kind == "ex" or p.kind == "search":
+                self.prompt = nil
+        elif code == keys.escape or (self.mods.ctrl and code == keys.c):
+            self.prompt = nil
+
+    def prompt_done(self, kind, text):
+        if kind == "find" or kind == "search":
+            self.find = text
+            self:find_next(text)
+        elif kind == "goto":
+            n = tonumber(text)
+            if n != nil:
+                self.cy = n
+                self.cx = 1
+                self:_clamp()
+        elif kind == "save_as":
+            if text != "":
+                self.path = self.sh:resolve(text)
+                self:save()
+        elif kind == "quit":
+            t = string.lower(text)
+            if t == "y" or t == "yes":
+                if self:save():
+                    self.quit = true
+            elif t == "n" or t == "no":
+                self.quit = true
+        elif kind == "ex":
+            self:ex(text)
+
+    # :команды vim
+    def ex(self, cmd):
+        c = string.gsub(cmd, "^%s+", "")
+        if tonumber(c) != nil:
+            self.cy = tonumber(c)
+            self.cx = 1
+            self:_clamp()
+        elif c == "w":
+            self:save()
+        elif c == "q":
+            if self.modified:
+                self.msg = "Unsaved changes: :wq saves, :q! drops them"
+            else:
+                self.quit = true
+        elif c == "q!":
+            self.quit = true
+        elif c == "wq" or c == "x":
+            if self:save():
+                self.quit = true
+        elif string.sub(c, 1, 2) == "w ":
+            self.path = self.sh:resolve(string.sub(c, 3))
+            self:save()
+        elif c == "set nu" or c == "set number":
+            self.numbers = true
+        elif c == "set nonu" or c == "set nonumber":
+            self.numbers = false
+        else:
+            self.msg = "Unknown command: " .. c
+
+    def request_quit(self):
+        if self.modified:
+            self:ask("Save changes? (y/n, Esc goes back): ", "quit")
+        else:
+            self.quit = true
+
+    # ------------------------------------------------------------ клавиши: обычный режим (как в Windows) и insert vim
+
+    def edit_key(self, code):
+        ctrl = self.mods.ctrl
+        shift = self.mods.shift
+        alt = self.mods.alt
+        if ctrl and code == keys.s:
+            self:save()
+        elif ctrl and code == keys.q:
+            self:request_quit()
+        elif ctrl and code == keys.f:
+            self:ask("Find: ", "find", self.find ?? "")
+        elif code == keys.f3:
+            self:find_next(self.find, shift)
+        elif ctrl and code == keys.g:
+            self:ask("Go to line: ", "goto")
+        elif ctrl and code == keys.a:
+            self.anchor = {x: 1, y: 1}
+            self.cy = len(self.lines)
+            self.cx = self:llen() + 1
+        elif ctrl and code == keys.c:
+            t = self:selected_text()
+            if t != nil:
+                view_mod.copy_text(t)
+                self.msg = "Copied"
+        elif ctrl and code == keys.x:
+            t = self:selected_text()
+            if t != nil:
+                view_mod.copy_text(t)
+                self:_remember("cut")
+                self:delete_selection()
+        elif ctrl and code == keys.z:
+            self:_restore(self.undo, self.redo)
+        elif ctrl and code == keys.y:
+            self:_restore(self.redo, self.undo)
+        elif ctrl and code == keys.d:
+            self:_remember("dup")
+            table.insert(self.lines, self.cy + 1, self:line())
+            self.cy += 1
+        elif alt and (code == keys.up or code == keys.down):
+            to = self.cy + (code == keys.up and -1 or 1)
+            if to >= 1 and to <= len(self.lines):
+                self:_remember("move")
+                l = self.lines[self.cy]
+                self.lines[self.cy] = self.lines[to]
+                self.lines[to] = l
+                self.cy = to
+        elif code == keys.left:
+            if ctrl:
+                if shift and self.anchor == nil:
+                    self.anchor = {x: self.cx, y: self.cy}
+                elif not shift:
+                    self.anchor = nil
+                self:word_left()
+            else:
+                self:move(-1, 0, shift)
+        elif code == keys.right:
+            if ctrl:
+                if shift and self.anchor == nil:
+                    self.anchor = {x: self.cx, y: self.cy}
+                elif not shift:
+                    self.anchor = nil
+                self:word_right()
+            else:
+                self:move(1, 0, shift)
+        elif code == keys.up:
+            self:move(0, -1, shift)
+        elif code == keys.down:
+            self:move(0, 1, shift)
+        elif code == keys.pageUp or code == keys.pageDown:
+            w, h = self.term.getSize()
+            self:move(0, (code == keys.pageUp and -1 or 1) * math.max(1, h - 3), shift)
+        elif code == keys.home:
+            if shift and self.anchor == nil:
+                self.anchor = {x: self.cx, y: self.cy}
+            elif not shift:
+                self.anchor = nil
+            if ctrl:
+                self.cy = 1
+                self.cx = 1
+            else:
+                self:home()
+        elif code == keys["end"]:
+            if shift and self.anchor == nil:
+                self.anchor = {x: self.cx, y: self.cy}
+            elif not shift:
+                self.anchor = nil
+            if ctrl:
+                self.cy = len(self.lines)
+            self.cx = self:llen() + 1
+        elif code == keys.enter or code == keys.numPadEnter:
+            self:_remember("line")
+            self:newline()
+        elif code == keys.backspace:
+            self:_remember("del")
+            if ctrl and self.anchor == nil:
+                self.anchor = {x: self.cx, y: self.cy}
+                self:word_left()
+            self:backspace()
+        elif code == keys.delete:
+            self:_remember("del")
+            if ctrl and self.anchor == nil:
+                self.anchor = {x: self.cx, y: self.cy}
+                self:word_right()
+            self:delete()
+        elif code == keys.tab:
+            self:_remember("tab")
+            if shift:
+                l = self:line()
+                cut = math.min(self.tab, unicode.length(string.match(l, "^( *)") ?? ""))
+                self.lines[self.cy] = unicode.sub(l, cut + 1)
+                self.cx = math.max(1, self.cx - cut)
+            else:
+                self:insert(string.rep(" ", self.tab - (self.cx - 1) % self.tab))
+        elif code == keys.escape:
+            if self.mode == "insert":
+                self.mode = "normal"
+                self.cx = math.max(1, self.cx - 1)
+            self.anchor = nil
+
+    # ------------------------------------------------------------ vim: normal и visual
+
+    def _count(self):
+        n = tonumber(self.count) ?? 1
+        self.count = ""
+        return n
+
+    def vim_char(self, ch):
+        p = self.pending
+        if string.match(ch, "%d") != nil and (ch != "0" or self.count != "") and p == "":
+            self.count = self.count .. ch
+            return
+        n = self:_count()
+        self.pending = ""
+        if p == "r":
+            self:_remember("r")
+            l = self:line()
+            if self.cx <= unicode.length(l):
+                self.lines[self.cy] = unicode.sub(l, 1, self.cx - 1) .. ch .. unicode.sub(l, self.cx + 1)
+            return
+        if p == "g":
+            if ch == "g":
+                self.cy = 1
+                self.cx = 1
+            return
+        if p == "Z":
+            if ch == "Z":
+                if self:save():
+                    self.quit = true
+            elif ch == "Q":
+                self.quit = true
+            return
+        if p == "d" or p == "y" or p == "c" or p == ">" or p == "<":
+            self:operator(p, ch, n)
+            return
+        visual = self.mode == "visual"
+        if ch == "h":
+            for i in range[1, n]:
+                self:move(-1, 0, visual)
+        elif ch == "l":
+            for i in range[1, n]:
+                if self.cx <= self:llen() - (visual and 0 or 1):
+                    self.cx += 1
+        elif ch == "j":
+            self:move(0, n, visual)
+        elif ch == "k":
+            self:move(0, -n, visual)
+        elif ch == "w" or ch == "e":
+            for i in range[1, n]:
+                self:word_right()
+        elif ch == "b":
+            for i in range[1, n]:
+                self:word_left()
+        elif ch == "0":
+            self.cx = 1
+        elif ch == "^":
+            self.cx = unicode.length(string.match(self:line(), "^(%s*)") ?? "") + 1
+        elif ch == "$":
+            self.cx = math.max(1, self:llen())
+        elif ch == "G":
+            self.cy = self.count != "" and n or (n > 1 and n or len(self.lines))
+            self.cx = 1
+        elif ch == "g" or ch == "d" or ch == "y" or ch == "c" or ch == "r" or ch == "Z" or ch == ">" or ch == "<":
+            if visual and (ch == "d" or ch == "y" or ch == "c" or ch == ">" or ch == "<"):
+                self:visual_op(ch)
+            else:
+                self.pending = ch
+                self.count = n > 1 and tostring(n) or ""
+        elif ch == "x":
+            if visual:
+                self:visual_op("d")
+            else:
+                self:_remember("x")
+                view_mod.copy_text(unicode.sub(self:line(), self.cx, self.cx + n - 1))
+                for i in range[1, n]:
+                    if self.cx <= self:llen():
+                        self:delete()
+        elif ch == "X":
+            self:_remember("x")
+            for i in range[1, n]:
+                if self.cx > 1:
+                    self:backspace()
+        elif ch == "D":
+            self:_remember("D")
+            view_mod.copy_text(unicode.sub(self:line(), self.cx))
+            self.lines[self.cy] = unicode.sub(self:line(), 1, self.cx - 1)
+        elif ch == "C":
+            self:_remember("C")
+            self.lines[self.cy] = unicode.sub(self:line(), 1, self.cx - 1)
+            self.mode = "insert"
+        elif ch == "J":
+            if self.cy < len(self.lines):
+                self:_remember("J")
+                nxt = string.gsub(self:line(self.cy + 1), "^%s+", "")
+                self.cx = self:llen() + 1
+                self.lines[self.cy] = self:line() .. " " .. nxt
+                table.remove(self.lines, self.cy + 1)
+        elif ch == "p" or ch == "P":
+            self:put(ch == "P")
+        elif ch == "u":
+            for i in range[1, n]:
+                self:_restore(self.undo, self.redo)
+        elif ch == "i":
+            self.mode = "insert"
+        elif ch == "a":
+            self.cx = math.min(self.cx + 1, self:llen() + 1)
+            self.mode = "insert"
+        elif ch == "I":
+            self.cx = unicode.length(string.match(self:line(), "^(%s*)") ?? "") + 1
+            self.mode = "insert"
+        elif ch == "A":
+            self.cx = self:llen() + 1
+            self.mode = "insert"
+        elif ch == "o" or ch == "O":
+            self:_remember("o")
+            indent = string.match(self:line(), "^(%s*)") ?? ""
+            at = ch == "o" and self.cy + 1 or self.cy
+            table.insert(self.lines, at, indent)
+            self.cy = at
+            self.cx = unicode.length(indent) + 1
+            self.mode = "insert"
+        elif ch == "v":
+            if visual:
+                self.mode = "normal"
+                self.anchor = nil
+            else:
+                self.mode = "visual"
+                self.anchor = {x: self.cx, y: self.cy}
+        elif ch == "/":
+            self:ask("/", "search")
+        elif ch == "n" or ch == "N":
+            self:find_next(self.find, ch == "N")
+        elif ch == ":":
+            self:ask(":", "ex")
+        self:_clamp()
+
+    # dd yy cc >> << и d/y/c с движением (w, $, 0)
+    def operator(self, op, motion, n):
+        if motion == op:
+            first = self.cy
+            last = math.min(len(self.lines), self.cy + n - 1)
+            if op == ">" or op == "<":
+                self:_remember("indent")
+                for y in range[first, last]:
+                    if op == ">":
+                        self.lines[y] = string.rep(" ", self.tab) .. self.lines[y]
+                    else:
+                        cut = math.min(self.tab, unicode.length(string.match(self.lines[y], "^( *)") ?? ""))
+                        self.lines[y] = unicode.sub(self.lines[y], cut + 1)
+                return
+            taken = []
+            for y in range[first, last]:
+                taken[len(taken) + 1] = self.lines[y]
+            view_mod.copy_text(table.concat(taken, "\n") .. "\n")
+            if op == "y":
+                self.msg = len(taken) .. " lines copied"
+                return
+            self:_remember(op)
+            for y in range[last, first] step -1:
+                table.remove(self.lines, y)
+            if op == "c":
+                indent = string.match(taken[1], "^(%s*)") ?? ""
+                table.insert(self.lines, first, indent)
+                self.cy = first
+                self.cx = unicode.length(indent) + 1
+                self.mode = "insert"
+                return
+            if len(self.lines) == 0:
+                self.lines = [""]
+            self.cy = math.min(first, len(self.lines))
+            self.cx = 1
+            return
+        # движение внутри строки
+        start = self.cx
+        stop = self.cx
+        if motion == "w" or motion == "e":
+            for i in range[1, n]:
+                stop = self:_word_end(stop, motion == "w" and op != "c")
+        elif motion == "$":
+            stop = self:llen() + 1
+        elif motion == "0":
+            start = 1
+            stop = self.cx
+        else:
+            return
+        l = self:line()
+        view_mod.copy_text(unicode.sub(l, start, stop - 1))
+        if op == "y":
+            return
+        self:_remember(op)
+        self.lines[self.cy] = unicode.sub(l, 1, start - 1) .. unicode.sub(l, stop)
+        self.cx = start
+        if op == "c":
+            self.mode = "insert"
+
+    def visual_op(self, op):
+        a, b = self:_sel()
+        if a == nil:
+            a = {x: self.cx, y: self.cy}
+            b = {x: self.cx + 1, y: self.cy}
+            self.anchor = a
+            self.cx = b.x
+        else:
+            # в visual выделение включает символ под курсором
+            b = {x: b.x + 1, y: b.y}
+            if self.anchor.y == a.y and self.anchor.x == a.x:
+                self.cx = b.x
+            else:
+                self.anchor = {x: b.x, y: b.y}
+        if op == ">" or op == "<":
+            self.mode = "normal"
+            self.anchor = nil
+            self.cy = a.y
+            self:operator(op, op, b.y - a.y + 1)
+            return
+        t = self:selected_text()
+        if t != nil:
+            view_mod.copy_text(t)
+        if op == "y":
+            self.anchor = nil
+            self.cy = a.y
+            self.cx = a.x
+        else:
+            self:_remember(op)
+            self:delete_selection()
+        self.mode = op == "c" and "insert" or "normal"
+        self.anchor = nil
+
+    # p и P: целые строки (если в буфере строки с переводом в конце) или текст в строке
+    def put(self, before):
+        t = view_mod.clipboard.text ?? ""
+        if t == "":
+            return
+        self:_remember("put")
+        if string.sub(t, -1) == "\n":
+            body = string.sub(t, 1, -2)
+            at = before and self.cy or self.cy + 1
+            for l in string.gmatch(body .. "\n", "([^\n]*)\n"):
+                table.insert(self.lines, at, l)
+                at += 1
+            self.cy = before and self.cy or self.cy + 1
+            self.cx = 1
+        else:
+            if not before:
+                self.cx = math.min(self.cx + 1, self:llen() + 1)
+            self:insert(t)
+
+    # ------------------------------------------------------------ события
+
+    def handle(self, ev, a, b, c):
+        if ev == "key" or ev == "key_up":
+            down = ev == "key"
+            if a == keys.leftCtrl or a == keys.rightCtrl:
+                self.mods.ctrl = down
+                return
+            if a == keys.leftShift or a == keys.rightShift:
+                self.mods.shift = down
+                return
+            if a == keys.leftAlt or a == keys.rightAlt:
+                self.mods.alt = down
+                return
+            if not down:
+                return
+            self.msg = nil
+            if self.prompt != nil:
+                self:prompt_key(a)
+                return
+            if self.mode == "normal" or self.mode == "visual":
+                if a == keys.escape:
+                    self.mode = "normal"
+                    self.anchor = nil
+                    self.pending = ""
+                    self.count = ""
+                elif self.mods.ctrl and a == keys.r:
+                    self:_restore(self.redo, self.undo)
+                elif self.mods.ctrl and a == keys.s:
+                    self:save()
+                elif a == keys.left or a == keys.right or a == keys.up or a == keys.down:
+                    self:vim_char(a == keys.left and "h" or (a == keys.right and "l" or (a == keys.up and "k" or "j")))
+                elif a == keys.enter:
+                    self:move(0, 1, self.mode == "visual")
+                return
+            self:edit_key(a)
+        elif ev == "char":
+            if self.prompt != nil:
+                self.prompt.text = self.prompt.text .. a
+                return
+            if self.mode == "normal" or self.mode == "visual":
+                self:vim_char(a)
+                return
+            self:_remember("char")
+            self:insert(a)
+        elif ev == "paste":
+            if self.prompt != nil:
+                self.prompt.text = self.prompt.text .. (string.match(a, "^[^\n]*") ?? "")
+                return
+            self:_remember("paste")
+            self:insert(string.gsub(a, "\r", ""))
+        elif ev == "cubeos_copy":
+            t = self:selected_text()
+            if t != nil:
+                view_mod.copy_text(t)
+                self.msg = "Copied"
+        elif ev == "mouse_click":
+            w, h = self.term.getSize()
+            if c <= h - 2:
+                self.anchor = nil
+                self.cy = self.top + c - 1
+                self.cx = self.left + b - 1 - self:_gutter()
+                self:_clamp()
+        elif ev == "mouse_scroll":
+            self.top = math.max(1, math.min(len(self.lines), self.top + a * 3))
+
+    # ------------------------------------------------------------ рисование
+
+    def _gutter(self):
+        return self.numbers and (len(tostring(len(self.lines))) + 1) or 0
+
+    def _scroll(self, w, rows):
+        if self.cy < self.top:
+            self.top = self.cy
+        elif self.cy >= self.top + rows:
+            self.top = self.cy - rows + 1
+        width = w - self:_gutter()
+        if self.cx < self.left:
+            self.left = self.cx
+        elif self.cx >= self.left + width:
+            self.left = self.cx - width + 1
+
+    def _write(self, text, fg, bg):
+        self.term.setTextColor(_color(fg))
+        self.term.setBackgroundColor(_color(bg))
+        self.term.write(text)
+
+    def draw(self):
+        t = self.term
+        w, h = t.getSize()
+        rows = h - 2
+        self:_scroll(w, rows)
+        g = self:_gutter()
+        sa, sb = self:_sel()
+        if self.mode == "visual" and sa != nil:
+            sb = {x: sb.x + 1, y: sb.y}
+        for r in range[1, rows]:
+            y = self.top + r - 1
+            t.setCursorPos(1, r)
+            if y > len(self.lines):
+                self:_write(string.rep(" ", g) .. "~" .. string.rep(" ", w - g - 1), "7", "f")
+            else:
+                if g > 0:
+                    lnum = tostring(y)
+                    self:_write(string.rep(" ", g - 1 - len(lnum)) .. lnum .. " ", y == self.cy and "4" or "7", "f")
+                cs = unicode.chars(self.lines[y])
+                cols = highlight(self.lines[y], self.lang)
+                run = []
+                run_fg = nil
+                run_bg = nil
+                for x in range[self.left, self.left + w - g - 1]:
+                    ch = cs[x] ?? " "
+                    fg = cols[x] ?? "0"
+                    sel = sa != nil and ((y > sa.y or (y == sa.y and x >= sa.x)) and (y < sb.y or (y == sb.y and x < sb.x)))
+                    bg = sel and "b" or "f"
+                    if fg != run_fg or bg != run_bg:
+                        if len(run) > 0:
+                            self:_write(table.concat(run), run_fg, run_bg)
+                        run = []
+                        run_fg = fg
+                        run_bg = bg
+                    run[len(run) + 1] = ch
+                if len(run) > 0:
+                    self:_write(table.concat(run), run_fg, run_bg)
+        # строка состояния
+        t.setCursorPos(1, h - 1)
+        name = self.path != nil and ("/" .. self.path) or "[new file]"
+        mode = self.vim and ("-- " .. string.upper(self.mode == "edit" and "insert" or self.mode) .. " --  ") or ""
+        left = " " .. mode .. name .. (self.modified and " *" or "")
+        right = "Ln " .. self.cy .. ", Col " .. self.cx .. " "
+        pad = math.max(1, w - unicode.length(left) - unicode.length(right))
+        self:_write(unicode.sub(left .. string.rep(" ", pad) .. right, 1, w), "f", "8")
+        # строка вопроса, сообщение или подсказка
+        t.setCursorPos(1, h)
+        line = nil
+        fg = "8"
+        if self.prompt != nil:
+            line = self.prompt.label .. self.prompt.text
+            fg = "0"
+        elif self.msg != nil:
+            line = self.msg
+            fg = "4"
+        elif self.vim:
+            line = self.mode == "normal" and "i insert  :w save  :q quit  /find  u undo" or "Esc: normal mode"
+        else:
+            line = "^S save  ^Q quit  ^F find  ^G line  ^Z undo  ^C/^X copy/cut"
+        self:_write(unicode.sub(line .. string.rep(" ", w), 1, w), fg, "f")
+        if self.prompt != nil:
+            t.setCursorPos(math.min(w, unicode.length(line) + 1), h)
+        else:
+            t.setCursorPos(math.max(1, g + self.cx - self.left + 1), self.cy - self.top + 1)
+        t.setTextColor(_color("0"))
+        t.setBackgroundColor(_color("f"))
+        t.setCursorBlink(true)
+
+    def run(self):
+        while not self.quit:
+            self:draw()
+            ev, a, b, c = os.pullEvent()
+            if ev == "term_resize":
+                pass
+            else:
+                self:handle(ev, a, b, c)
+        t = self.term
+        t.setCursorBlink(false)
+        t.setTextColor(_color("0"))
+        t.setBackgroundColor(_color("f"))
+        t.clear()
+        t.setCursorPos(1, 1)
+        return 0
+
+export def new(sh, path=nil, opts=nil):
+    return TextEditor(sh, path, opts)

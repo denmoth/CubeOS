@@ -410,4 +410,13 @@ T = {
 "Save into a file": ("Сохранить в файл", "Зберегти у файл"),
 "Only the status and headers": ("Только статус и заголовки", "Лише статус і заголовки"),
 "Download a file": ("Скачать файл", "Завантажити файл"),
+"Text editor": ("Текстовый редактор", "Текстовий редактор"),
+"Works like Notepad: arrows, Shift selects, Ctrl+S saves, Ctrl+Q quits, Ctrl+F finds (F3 next), Ctrl+G goes to a line, Ctrl+Z/Y undo and redo, Ctrl+C/X copy and cut, Ctrl+V pastes from Windows and Ctrl+Shift+V from the terminal, Ctrl+D repeats a line, Alt+Up/Down moves it, Tab indents. Lua and Cubic are colored. -v (or vi, vim) opens it in vim mode.": ("Работает как Блокнот: стрелки, Shift выделяет, Ctrl+S сохранить, Ctrl+Q выйти, Ctrl+F найти (F3 дальше), Ctrl+G к строке, Ctrl+Z/Y отменить и вернуть, Ctrl+C/X копировать и вырезать, Ctrl+V вставляет из Windows, Ctrl+Shift+V из терминала, Ctrl+D повторяет строку, Alt+Вверх/Вниз двигает её, Tab отступ. Lua и Cubic подсвечены. -v (или vi, vim) открывает в режиме vim.", "Працює як Блокнот: стрілки, Shift виділяє, Ctrl+S зберегти, Ctrl+Q вийти, Ctrl+F знайти (F3 далі), Ctrl+G до рядка, Ctrl+Z/Y скасувати й повернути, Ctrl+C/X копіювати й вирізати, Ctrl+V вставляє з Windows, Ctrl+Shift+V з термінала, Ctrl+D повторює рядок, Alt+Вгору/Вниз пересуває його, Tab відступ. Lua і Cubic підсвічені. -v (або vi, vim) відкриває в режимі vim."),
+"Vim mode: Esc for normal mode, i to type, :w save, :q quit": ("Режим vim: Esc обычный режим, i печатать, :w сохранить, :q выйти", "Режим vim: Esc звичайний режим, i друкувати, :w зберегти, :q вийти"),
+"Edit a program": ("Править программу", "Редагувати програму"),
+"The same in vim mode": ("То же в режиме vim", "Те саме в режимі vim"),
+"The editor in vim mode": ("Редактор в режиме vim", "Редактор у режимі vim"),
+"Same as edit -v.": ("То же, что edit -v.", "Те саме, що edit -v."),
+"Normal mode: h j k l w b e 0 ^ $ gg G move (a number repeats: 5j), x dd D dw cw yy yw p P r J >> << change, u and Ctrl+R undo and redo, i a I A o O start typing, v selects, / n N search, :w :q :q! :wq :NUMBER, ZZ saves and quits. Esc returns to normal mode.": ("Обычный режим: h j k l w b e 0 ^ $ gg G двигают (число повторяет: 5j), x dd D dw cw yy yw p P r J >> << правят, u и Ctrl+R отмена и возврат, i a I A o O начинают ввод, v выделяет, / n N поиск, :w :q :q! :wq :ЧИСЛО, ZZ сохранить и выйти. Esc возвращает в обычный режим.", "Звичайний режим: h j k l w b e 0 ^ $ gg G рухають (число повторює: 5j), x dd D dw cw yy yw p P r J >> << правлять, u і Ctrl+R скасування й повернення, i a I A o O починають введення, v виділяє, / n N пошук, :w :q :q! :wq :ЧИСЛО, ZZ зберегти й вийти. Esc повертає у звичайний режим."),
+"Edit with vim keys": ("Править клавишами vim", "Редагувати клавішами vim"),
 }

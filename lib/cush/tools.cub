@@ -10,6 +10,7 @@ import hal
 import unicode
 import std.time as stime
 import version
+import cush.textedit as textedit
 
 flags_of = builtins.flags_of
 read_lines = builtins.read_lines
@@ -562,3 +563,33 @@ def b_clip(sh, args):
     sh:println(len(lines) .. " line" .. (len(lines) != 1 and "s" or "") .. " copied; Ctrl+Shift+V pastes")
     return 0
 add("clip", b_clip)
+
+# ------------------------------------------------------------ редактор (D238)
+
+# edit [-v] [файл]; vi и vim открывают в режиме vim. Настройки: cush.conf editor {mode: "simple"|"vim", tab: 4, numbers: true}
+def run_editor(sh, args, vim):
+    conf = (sh.config ?? {}).editor ?? {}
+    path = nil
+    for a in args:
+        if a == "-v":
+            vim = true
+        elif path == nil:
+            path = sh:resolve(a)
+    if conf.mode == "vim" and vim == nil:
+        vim = true
+    ed = textedit.new(sh, path, {vim: vim == true, tab: conf.tab, numbers: conf.numbers})
+    sh.raw_keys = true
+    ok, res = pcall(() => ed:run())
+    sh.raw_keys = false
+    if not ok:
+        if res == "Terminated":
+            sh.env.term.clear()
+            sh.env.term.setCursorPos(1, 1)
+            error(res, 0)
+        sh:eprint("edit: " .. tostring(res))
+        return 1
+    return 0
+
+add("edit", (sh, args) => run_editor(sh, args, nil))
+add("vi", (sh, args) => run_editor(sh, args, true))
+add("vim", (sh, args) => run_editor(sh, args, true))

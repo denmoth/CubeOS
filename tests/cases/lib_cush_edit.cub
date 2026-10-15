@@ -1,0 +1,139 @@
+import t
+import term.vterm as vterm
+import term.view as view_mod
+import compat.env as compat_env
+import compat.proc as compat_proc
+import cush.shell as cush
+import cush.textedit as textedit
+eq = t.eq
+
+# Редактор (D238): обычный режим как в Windows и режим vim; правка через настоящую оболочку (события как от терминала).
+
+HIST = "/repo/build/cush_edit_history"
+DIR = "/repo/build/edit_test"
+for p in [HIST, DIR]:
+    if fs.exists(p):
+        fs.delete(p)
+fs.makeDir(DIR)
+def get(path):
+    f = fs.open(DIR .. "/" .. path, "r")
+    if f == nil:
+        return nil
+    text = f.readAll()
+    f.close()
+    return text
+def put(path, text):
+    f = fs.open(DIR .. "/" .. path, "w")
+    f.write(text)
+    f.close()
+
+vt = vterm.new(50, 15, {history: 200})
+env = compat_env.new({vterm: vt})
+env.cush_opts = {history_path: HIST, greeting: false, user: "tester", host: "cube"}
+proc = compat_proc.new(env, "cush", [], {name: "cush", main: cush.main})
+proc:start()
+
+def chars_(text):
+    for i in range[1, string.len(text)]:
+        proc:feed("char", string.sub(text, i, i))
+def key(code, mods=nil):
+    for m in (mods ?? []):
+        proc:feed("key", m, false)
+    proc:feed("key", code, false)
+    proc:feed("key_up", code)
+    for m in (mods ?? []):
+        proc:feed("key_up", m)
+def run(text):
+    chars_(text)
+    key(keys.enter)
+CTRL = [keys.leftCtrl]
+SHIFT = [keys.leftShift]
+def screen():
+    return table.concat(vt:all_lines(), "\n")
+
+run("cd " .. DIR)
+
+# ------------------------------------------------------------ обычный режим
+run("edit hello.lua")
+eq(string.find(screen(), "hello.lua", 1, true) != nil and string.find(screen(), "New file", 1, true) != nil, true, "the editor opens a new file")
+chars_("local x = 1")
+key(keys.enter)
+chars_("print(x)")
+key(keys.s, CTRL)
+eq(get("hello.lua"), "local x = 1\nprint(x)\n", "typing, Enter and Ctrl+S save the file")
+# Ctrl+C внутри редактора копирует, а не убивает его
+key(keys.home)
+key(keys["end"], SHIFT)
+key(keys.c, CTRL)
+eq(view_mod.clipboard.text, "print(x)", "Shift+End selects, Ctrl+C copies")
+key(keys.z, CTRL)
+key(keys.z, CTRL)
+key(keys.s, CTRL)
+eq(get("hello.lua"), "local x = 1\n", "Ctrl+C did not stop the editor; Ctrl+Z undoes")
+key(keys.y, CTRL)
+key(keys.y, CTRL)
+key(keys.s, CTRL)
+eq(get("hello.lua"), "local x = 1\nprint(x)\n", "Ctrl+Y redoes")
+# Ctrl+F, Ctrl+D, Tab, автоотступ, кириллица
+key(keys.f, CTRL)
+chars_("x =")
+key(keys.enter)
+key(keys["end"])
+key(keys.d, CTRL)
+key(keys.s, CTRL)
+eq(get("hello.lua"), "local x = 1\nlocal x = 1\nprint(x)\n", "Ctrl+F finds, Ctrl+D repeats the line")
+key(keys.down)
+key(keys.down)
+key(keys["end"])
+key(keys.enter)
+key(keys.tab)
+chars_("if x then")
+key(keys.enter)
+proc:feed("char", "п")
+proc:feed("char", "ё")
+key(keys.s, CTRL)
+eq(get("hello.lua"), "local x = 1\nlocal x = 1\nprint(x)\n    if x then\n    пё\n", "Tab indents, Enter keeps the indent, Cyrillic is typed")
+proc:feed("paste", "a\nb")
+key(keys.q, CTRL)
+eq(string.find(screen(), "Save changes?", 1, true) != nil, true, "Ctrl+Q asks about unsaved changes")
+chars_("n")
+key(keys.enter)
+run("echo back in the shell")
+eq(string.find(screen(), "back in the shell", 1, true) != nil, true, "n quits without saving")
+eq(get("hello.lua"), "local x = 1\nlocal x = 1\nprint(x)\n    if x then\n    пё\n", "the paste was not saved")
+
+# ------------------------------------------------------------ vim
+put("v.txt", "one\ntwo\nthree\n")
+run("vi v.txt")
+eq(string.find(screen(), "NORMAL", 1, true) != nil, true, "vi opens in normal mode")
+chars_("dd")
+chars_("p")
+chars_(":w")
+key(keys.enter)
+eq(get("v.txt"), "two\none\nthree\n", "dd and p move a line, :w saves")
+chars_("gg")
+chars_("A!")
+key(keys.escape)
+chars_("j")
+chars_("x")
+chars_("u")
+chars_("3x")
+chars_("ZZ")
+eq(get("v.txt"), "two!\non\nthree\n", "A appends; in normal mode the cursor stays on a character; u undoes; ZZ saves and quits")
+run("vim v.txt")
+chars_("Gyyp")
+chars_("/two")
+key(keys.enter)
+chars_("cwTWO")
+key(keys.escape)
+chars_(":wq")
+key(keys.enter)
+eq(get("v.txt"), "TWO!\non\nthree\nthree\n", "yy p, / search, cw changes only the word, :wq")
+
+# раскраска
+cols = textedit.highlight("local s = \"hi\" -- note", "lua")
+eq([cols[1], cols[11], cols[17]], ["3", "4", "8"], "keywords, strings and comments are colored")
+
+fs.delete(DIR)
+fs.delete(HIST)
+print("done")
