@@ -6,6 +6,8 @@
 # Тексты английские: родной терминал CC не умеет русские буквы (решение D135); локализованный экран входа
 # придёт вместе с графической и плиточной библиотекой интерфейса.
 
+import boot.auth as auth_mod
+
 export class TextGreeter:
     # opts: title (по умолчанию "CubeOS"), allow_guest (true), retries (3), notice (строка под заголовком, например про грязное выключение)
     def init(self, console, auth, sessions, opts=nil):
@@ -64,7 +66,10 @@ export class TextGreeter:
         self:_header()
         c:write_line("Welcome! Create the first account (administrator).")
         while true:
-            name = c:read_line("Name: ")
+            display = c:read_line("Your name (shown on the screen): ")
+            if display == nil:
+                return nil
+            name = self:_account_for(display)
             if name == nil:
                 return nil
             password = c:read_line("Password (empty for none): ", true)
@@ -75,11 +80,34 @@ export class TextGreeter:
                 if again != password:
                     c:write_line("The passwords do not match.")
                     continue
-            ok, err = pcall(() => self.auth:create_user({name: name}, password != "" and password or nil, true))
+            ok, err = pcall(() => self.auth:create_user({name: name, display: display}, password != "" and password or nil, true))
             if not ok:
                 c:write_line("Cannot create the account: " .. tostring(err))
                 continue
             return self.sessions:open(name, password != "" and password or nil)
+
+    # имя учётной записи для отображаемого имени (D236): латинское имя подходит как есть; иначе объясняем разницу и предлагаем
+    # транслитерацию (Enter соглашается). nil, если ввод отменён
+    def _account_for(self, display):
+        c = self.console
+        if auth_mod.account_problem(display) == nil and self.auth:user(display) == nil:
+            return display
+        suggestion = auth_mod.suggest_account(display, self.auth)
+        c:write_line("")
+        c:write_line("Two names: the one above is only shown on the screen.")
+        c:write_line("The account name is for signing in, folders and sudo:")
+        c:write_line("Latin letters, digits, - and _ (it cannot be changed later).")
+        while true:
+            entered = c:read_line("Account name [" .. suggestion .. "]: ")
+            if entered == nil:
+                return nil
+            name = entered == "" and suggestion or entered
+            problem = auth_mod.account_problem(name)
+            if problem == nil and self.auth:user(name) != nil:
+                problem = "this account name is taken"
+            if problem == nil:
+                return name
+            c:write_line("Cannot use it: " .. problem)
 
     def login(self):
         c = self.console
@@ -88,7 +116,9 @@ export class TextGreeter:
         self:_header()
         users = self.auth:list()
         for i, u in users:
-            c:write_line("  " .. i .. ". " .. u.display .. (u.temp and " (guest)" or "") .. (u.passwordless and "" or ""))
+            # отображаемое имя и, если оно другое, имя учётной записи (обычный терминал CC не рисует кириллицу)
+            shown = u.display != u.name and (u.display .. " (" .. u.name .. ")") or u.name
+            c:write_line("  " .. i .. ". " .. shown .. (u.temp and " (guest)" or ""))
         c:write_line("  s. Shut down")
         c:write_line("  r. Restart")
         c:write_line("")
@@ -104,8 +134,8 @@ export class TextGreeter:
         n = tonumber(choice)
         if n != nil and users[n] != nil:
             name = users[n].name
-        elif self.auth:user(choice) != nil:
-            name = self.auth:user(choice).name
+        elif self.auth:find(choice) != nil:
+            name = self.auth:find(choice).name
         if name == nil:
             c:write_line("No such user.")
             return nil

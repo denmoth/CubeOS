@@ -23,6 +23,7 @@ import cfs.rules as rules_mod
 import cfs.path as paths
 import cfs.atomic as atomic
 import cfs.journal as journal
+import input.layout as layout_mod
 
 export const USERS_PATH = "/cubeos/sys/cfg/users.conf"
 export const SHADOW_PATH = "/cubeos/sys/sec/shadow.lock"
@@ -51,6 +52,36 @@ def _same(a, b):
         if string.byte(a, i) != string.byte(b, i):
             diff += 1
     return diff == 0
+
+# имя учётной записи (D236): только латиница, цифры, - и _, с буквы, до 32 символов. Это имя папки профиля и имя для sudo;
+# на экране показывается отдельное отображаемое имя (display), оно может быть любым, хоть по-русски
+export def account_problem(name):
+    if name == nil or name == "":
+        return "the account name is empty"
+    if len(name) > 32:
+        return "the account name is longer than 32 characters"
+    if string.match(name, "^[A-Za-z][A-Za-z0-9_%-]*$") == nil:
+        return "the account name must start with a Latin letter and use only Latin letters, digits, - and _"
+    return nil
+
+# латинское имя учётной записи по отображаемому: транслитерация (раскладки языков), нижний регистр, пробелы в «-»;
+# если занято, добавляется 2, 3... (никаких случайных цифр)
+export def suggest_account(display, auth=nil):
+    base = string.lower(layout_mod.transliterate(display ?? ""))
+    base = string.gsub(base, "%s+", "-")
+    base = string.gsub(base, "[^a-z0-9_%-]", "")
+    base = string.gsub(base, "%-+", "-")
+    base = string.gsub(base, "^[^a-z]+", "")
+    base = string.gsub(base, "%-$", "")
+    if base == "":
+        base = "user"
+    base = string.sub(base, 1, 24)
+    name = base
+    n = 2
+    while auth != nil and auth:user(name) != nil:
+        name = base .. n
+        n += 1
+    return name
 
 export def make_hash(password, salt_hex, rounds):
     return "pbkdf2-sha256$" .. rounds .. "$" .. salt_hex .. "$" .. sha256.to_hex(sha256.pbkdf2(password, _from_hex(salt_hex), rounds))
@@ -133,6 +164,17 @@ export class Auth:
                 return rec
         return nil
 
+    # по имени учётной записи или по отображаемому имени (на экране входа можно набрать любое)
+    def find(self, text):
+        rec = self:user(text)
+        if rec != nil:
+            return rec
+        lowered = unicode.lower(text)
+        for r in self.records:
+            if r.display != nil and unicode.lower(r.display) == lowered:
+                return r
+        return nil
+
     # публичные сведения для экрана входа (без хэшей)
     def list(self):
         out = []
@@ -150,7 +192,7 @@ export class Auth:
 
     # record: {name, display?, roles?, groups?, color?, temp?}; admin: сделать администратором; password: nil без пароля
     def create_user(self, record, password=nil, admin=false):
-        problem = paths.name_problem(record.name)
+        problem = account_problem(record.name)
         if problem != nil:
             raise Error("invalid user name: " .. problem)
         if self:user(record.name) != nil:

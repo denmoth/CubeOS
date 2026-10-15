@@ -111,8 +111,12 @@ def message_of(f):
     return nil
 eq(string.find(message_of(() => a3:create_user({name: "ivan"})), "already exists", 1, true) != nil, true, "duplicate user")
 eq(string.find(message_of(() => a3:create_user({name: "bad:name"})), "invalid user name", 1, true) != nil, true, "bad name")
-a3:create_user({name: "Иван"})
-eq(a3:user("иван") != nil, true, "cyrillic user names are allowed")
+# имя учётной записи латиницей, отображаемое любое (D236)
+eq(string.find(message_of(() => a3:create_user({name: "Иван"})), "Latin letter", 1, true) != nil, true, "a Cyrillic account name is refused")
+a3:create_user({name: "petr", display: "Пётр"})
+eq(a3:find("пётр").name, "petr", "the login screen finds an account by its display name too")
+eq(auth.suggest_account("Денис Щукин", a3), "denis-shchukin", "a Latin account name is suggested from the display name")
+eq(auth.suggest_account("Ivan", a3), "ivan2", "a taken name gets a number, not random digits")
 strict = auth.new(fsys, {rounds: 2, min_password: 6})
 eq(string.find(message_of(() => strict:create_user({name: "tom"}, "abc")), "too short", 1, true) != nil, true, "minimum password length")
 
