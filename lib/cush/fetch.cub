@@ -54,7 +54,7 @@ export def facts(sh):
     if env.peripheral != nil:
         count = len(env.peripheral.getNames())
     out[len(out) + 1] = ["Peripherals", tostring(count)]
-    out[len(out) + 1] = ["Time", os.date("%Y-%m-%d %H:%M")]
+    out[len(out) + 1] = ["Time", sh.time:date_text() .. " " .. sh.time:time_text()]
     return out
 
 export def run(sh):

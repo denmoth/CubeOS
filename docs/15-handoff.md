@@ -53,6 +53,7 @@
 - `term/`: `chars` (байты CC, UTF-8 клетки, `decode/encode/length/sub`), `vterm` (виртуальный терминал, полный API `term`, прокрутка назад, `all_lines`, `row_at`), `window`, `view` (виджет ui: прокрутка, выделение, буфер, раскладки), `app` (программа «Терминал» для ui.shell), `palette` (палитры).
 - `compat/`: слой совместимости CraftOS: `bios` (write, print, read с `env.stdin`, sleep, loadfile, os.run, loadAPI), `env` (окружение с ROM-API, `os.version` = «CubeOS 0.3.0»), `proc` (legacy-процесс, `opts.main` вместо файла), `vararg.lua` (помощники для `...`, которых нет в Cubic).
 - `cush/`: оболочка (`lex`, `shell` с задачами и пайпами, `editor`, `hist`, `builtins`, `fetch`).
+- `clock.cub` (время: зоны, форматы, игровое время), `svc/` (службы: `rpc`, `timed`, `timeclient`; манифесты в `sys/services/`), `logo.cub` (логотип блоками телетекста). `docs/spec/time.md`.
 - `input/layout.cub`: раскладки EN, RU, UK (замена клавиш по месту, Ctrl+Shift или Alt+Shift).
 
 ## 4. Команды

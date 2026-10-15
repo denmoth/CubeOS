@@ -1,0 +1,416 @@
+# clock: время системы (D206): часовой пояс и летнее время, игровое время, форматы, секунды, 12/24 часа. Чистая логика без служб;
+# службу timed (lib/svc/timed.cub), команды date и timedatectl, fetch и панель CDE строятся на ней.
+#
+#   c = clock.new({tz: "Europe/Kyiv", seconds: true})            настройки как в time.conf (см. docs/spec/time.md)
+#   c:now()                  миллисекунды UTC (os.epoch("utc"))
+#   c:parts()                {year, month, day, hour, min, sec, wday (1 = воскресенье), yday, isdst, offset_min, ms}
+#   c:format("%Y-%m-%d %H:%M", ms)    strftime: Y y m d e H I M S p A a B b j u w Z z F T R D s %
+#   c:time_text()            "14:32" или "14:32:05" или "2:32 PM" по настройкам (источник ingame: время суток Minecraft)
+#   c:date_text()            дата по date_format (источник ingame: "Day 12")
+#   c:ingame()               {day, hour, min, sec, text}
+#   c:zone()                 {name, offset_min, isdst, abbr}
+#   c:set_conf({tz: "UTC"})  меняет настройки; возвращает true или false и список проблем
+#   c:check_drift(utc, mono) true, если часы ушли от монотонного времени больше drift_ms (пересчитывает опорную точку)
+#   clock.from_text(json5_text, src)       часы по тексту time.conf (при ошибке разбора настройки по умолчанию)
+#   clock.patch_text(text, {tz: "UTC"})    текст time.conf с изменёнными ключами, комментарии остаются
+#   clock.zone_names(фильтр)               отсортированные имена встроенных зон
+#
+# Встроенная таблица зон: смещения и правила перехода (eu, us, au), без базы IANA. Свои зоны добавляются в conf.zones.
+
+import std.time as stime
+import json5
+
+export const DEFAULTS = {source: "utc", tz: "UTC", dst: "auto", seconds: false, format: "24h", date_format: "%Y-%m-%d",
+    week_start: "monday", locale: "en", drift_ms: 2000}
+
+# [имя, стандартное смещение в минутах, правило перехода: "" нет, "eu", "us", "au"]
+const ZONE_LIST = [
+    ["UTC", 0, ""], ["GMT", 0, ""], ["Etc/UTC", 0, ""],
+    ["Europe/London", 0, "eu"], ["Europe/Dublin", 0, "eu"], ["Europe/Lisbon", 0, "eu"], ["Atlantic/Reykjavik", 0, ""],
+    ["Europe/Berlin", 60, "eu"], ["Europe/Paris", 60, "eu"], ["Europe/Madrid", 60, "eu"], ["Europe/Rome", 60, "eu"],
+    ["Europe/Warsaw", 60, "eu"], ["Europe/Prague", 60, "eu"], ["Europe/Vienna", 60, "eu"], ["Europe/Amsterdam", 60, "eu"],
+    ["Europe/Brussels", 60, "eu"], ["Europe/Zurich", 60, "eu"], ["Europe/Stockholm", 60, "eu"], ["Europe/Oslo", 60, "eu"],
+    ["Europe/Copenhagen", 60, "eu"], ["Europe/Budapest", 60, "eu"], ["Europe/Belgrade", 60, "eu"],
+    ["Europe/Kyiv", 120, "eu"], ["Europe/Kiev", 120, "eu"], ["Europe/Athens", 120, "eu"], ["Europe/Helsinki", 120, "eu"],
+    ["Europe/Bucharest", 120, "eu"], ["Europe/Sofia", 120, "eu"], ["Europe/Riga", 120, "eu"], ["Europe/Vilnius", 120, "eu"],
+    ["Europe/Tallinn", 120, "eu"], ["Europe/Chisinau", 120, "eu"], ["Europe/Kaliningrad", 120, ""],
+    ["Europe/Moscow", 180, ""], ["Europe/Minsk", 180, ""], ["Europe/Istanbul", 180, ""], ["Asia/Riyadh", 180, ""],
+    ["Europe/Samara", 240, ""], ["Asia/Dubai", 240, ""], ["Asia/Baku", 240, ""], ["Asia/Tbilisi", 240, ""],
+    ["Asia/Yekaterinburg", 300, ""], ["Asia/Tashkent", 300, ""], ["Asia/Karachi", 300, ""],
+    ["Asia/Almaty", 300, ""], ["Asia/Omsk", 360, ""], ["Asia/Dhaka", 360, ""], ["Asia/Novosibirsk", 420, ""],
+    ["Asia/Bangkok", 420, ""], ["Asia/Jakarta", 420, ""], ["Asia/Krasnoyarsk", 420, ""],
+    ["Asia/Shanghai", 480, ""], ["Asia/Singapore", 480, ""], ["Asia/Hong_Kong", 480, ""], ["Asia/Irkutsk", 480, ""],
+    ["Asia/Tokyo", 540, ""], ["Asia/Seoul", 540, ""], ["Asia/Yakutsk", 540, ""],
+    ["Australia/Sydney", 600, "au"], ["Australia/Melbourne", 600, "au"], ["Asia/Vladivostok", 600, ""],
+    ["Asia/Magadan", 660, ""], ["Asia/Kamchatka", 720, ""],
+    ["America/New_York", -300, "us"], ["America/Toronto", -300, "us"], ["America/Chicago", -360, "us"],
+    ["America/Mexico_City", -360, ""], ["America/Denver", -420, "us"], ["America/Phoenix", -420, ""],
+    ["America/Los_Angeles", -480, "us"], ["America/Vancouver", -480, "us"], ["America/Anchorage", -540, "us"],
+    ["Pacific/Honolulu", -600, ""], ["America/Sao_Paulo", -180, ""], ["America/Argentina/Buenos_Aires", -180, ""],
+    ["America/Bogota", -300, ""],
+]
+
+const MONTHS_ALL = {
+    en: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+    ru: ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"],
+    uk: ["січня", "лютого", "березня", "квітня", "травня", "червня", "липня", "серпня", "вересня", "жовтня", "листопада", "грудня"],
+}
+const MONTHS_SHORT = {
+    en: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+    ru: ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"],
+    uk: ["січ", "лют", "бер", "кві", "тра", "чер", "лип", "сер", "вер", "жов", "лис", "гру"],
+}
+# с воскресенья
+const DAYS_ALL = {
+    en: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+    ru: ["Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"],
+    uk: ["Неділя", "Понеділок", "Вівторок", "Середа", "Четвер", "П'ятниця", "Субота"],
+}
+const DAYS_SHORT = {
+    en: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+    ru: ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"],
+    uk: ["Нд", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"],
+}
+
+zone_index = {}
+for z in ZONE_LIST:
+    zone_index[string.lower(z[1])] = z
+
+# "+03:00", "-0530", "+3", "UTC+3", "GMT-02:30" -> минуты; nil, если это не смещение
+export def parse_offset(text):
+    if type(text) == "number":
+        return text
+    if type(text) != "string":
+        return nil
+    s = string.gsub(text, "^[UuGg][TtMm][CcTt]", "")
+    sign, hh, mm = string.match(s, "^([+-])(%d%d?):?(%d%d)$")
+    if sign == nil:
+        sign, hh = string.match(s, "^([+-])(%d%d?)$")
+        mm = "0"
+    if sign == nil:
+        return nil
+    minutes = tonumber(hh) * 60 + tonumber(mm)
+    if tonumber(mm) >= 60 or minutes > 14 * 60 + 59:
+        return nil
+    return sign == "-" and -minutes or minutes
+
+export def format_offset(minutes, colon=true):
+    sign = minutes < 0 and "-" or "+"
+    m = math.abs(minutes)
+    return string.format(colon and "%s%02d:%02d" or "%s%02d%02d", sign, math.floor(m / 60), m % 60)
+
+# ------------------------------------------------------------ летнее время
+
+def _days_in_month(year, month):
+    if month == 2:
+        return stime.is_leap_year(year) and 29 or 28
+    if month == 4 or month == 6 or month == 9 or month == 11:
+        return 30
+    return 31
+
+# день месяца последнего воскресенья
+def last_sunday(year, month):
+    d = _days_in_month(year, month)
+    return d - stime.weekday(stime.from_date(year, month, d))
+
+# день месяца n-го воскресенья (n с 1)
+def nth_sunday(year, month, n):
+    wd = stime.weekday(stime.from_date(year, month, 1))
+    first = 1 + (7 - wd) % 7
+    return first + 7 * (n - 1)
+
+# true, если в момент utc_ms (мс UTC) по правилу rule действует летнее время для зоны со стандартным смещением std (минуты)
+export def is_dst(rule, std, utc_ms):
+    if rule == "" or rule == nil:
+        return false
+    y = stime.to_date(utc_ms + std * 60000).year
+    if rule == "eu":
+        start = stime.from_date(y, 3, last_sunday(y, 3), 1, 0, 0)
+        stop = stime.from_date(y, 10, last_sunday(y, 10), 1, 0, 0)
+        return utc_ms >= start and utc_ms < stop
+    if rule == "us":
+        start = stime.from_date(y, 3, nth_sunday(y, 3, 2), 2, 0, 0) - std * 60000
+        stop = stime.from_date(y, 11, nth_sunday(y, 11, 1), 2, 0, 0) - (std + 60) * 60000
+        return utc_ms >= start and utc_ms < stop
+    if rule == "au":
+        # южное полушарие: летнее время с первого воскресенья октября по первое воскресенье апреля
+        start = stime.from_date(y, 10, nth_sunday(y, 10, 1), 2, 0, 0) - std * 60000
+        stop = stime.from_date(y, 4, nth_sunday(y, 4, 1), 3, 0, 0) - (std + 60) * 60000
+        return utc_ms >= start or utc_ms < stop
+    return false
+
+# ------------------------------------------------------------ настройки
+
+# {name, std, rule}: из conf.zones, встроенной таблицы или смещения; nil, если зоны нет
+export def resolve_zone(conf):
+    tz = conf.tz
+    custom = (conf.zones ?? {})[tz]
+    if custom != nil:
+        off = parse_offset(custom.offset)
+        if off == nil:
+            return nil
+        return {name: tz, std: off, rule: custom.dst ?? ""}
+    z = zone_index[string.lower(tostring(tz))]
+    if z != nil:
+        return {name: z[1], std: z[2], rule: z[3]}
+    off = parse_offset(tz)
+    if off != nil:
+        return {name: "UTC" .. format_offset(off), std: off, rule: ""}
+    return nil
+
+# приводит настройки к полному виду; возвращает conf и список проблем (неверные поля заменяются значениями по умолчанию)
+export def normalize(conf):
+    out = {}
+    problems = []
+    for k, v in DEFAULTS:
+        out[k] = v
+    for k, v in (conf ?? {}):
+        out[k] = v
+    def pick(name, allowed):
+        ok = false
+        for a in allowed:
+            if out[name] == a:
+                ok = true
+        if not ok:
+            problems[len(problems) + 1] = name .. ": " .. tostring(out[name]) .. " is not one of " .. table.concat(allowed, ", ")
+            out[name] = DEFAULTS[name]
+    pick("source", ["utc", "ingame"])
+    pick("format", ["24h", "12h"])
+    pick("week_start", ["monday", "sunday", "saturday"])
+    if type(out.seconds) != "boolean":
+        problems[len(problems) + 1] = "seconds: must be true or false"
+        out.seconds = false
+    if type(out.date_format) != "string":
+        problems[len(problems) + 1] = "date_format: must be a string"
+        out.date_format = DEFAULTS.date_format
+    if MONTHS_ALL[out.locale] == nil:
+        problems[len(problems) + 1] = "locale: " .. tostring(out.locale) .. " is not supported (en, ru, uk), using en"
+        out.locale = "en"
+    if type(out.drift_ms) != "number" or out.drift_ms <= 0:
+        out.drift_ms = DEFAULTS.drift_ms
+    if out.zones == nil:
+        out.zones = {}
+    if out.dst != "auto" and out.dst != "off" and parse_offset(out.dst) == nil:
+        problems[len(problems) + 1] = "dst: must be auto, off or an offset like +01:00"
+        out.dst = "auto"
+    if resolve_zone(out) == nil:
+        problems[len(problems) + 1] = "tz: unknown zone " .. tostring(out.tz) .. ", using UTC"
+        out.tz = "UTC"
+    return out, problems
+
+# ------------------------------------------------------------ часы
+
+def _default_source():
+    return {
+        utc_ms: () => os.epoch("utc"),
+        ingame_hours: () => os.time("ingame"),
+        ingame_day: () => os.day("ingame"),
+    }
+
+def _pad(n, width, ch="0"):
+    s = tostring(n)
+    while string.len(s) < width:
+        s = ch .. s
+    return s
+
+export class Clock:
+    def init(self, conf=nil, src=nil):
+        self.src = src ?? _default_source()
+        self.conf = nil
+        self.problems = []
+        self.conf, self.problems = normalize(conf)
+        self.base_utc = nil
+        self.base_mono = nil
+
+    def set_conf(self, partial):
+        merged = {}
+        for k, v in self.conf:
+            merged[k] = v
+        for k, v in partial:
+            merged[k] = v
+        conf, problems = normalize(merged)
+        if len(problems) > 0:
+            return false, problems
+        self.conf = conf
+        return true, []
+
+    def now(self):
+        return self.src.utc_ms()
+
+    # смещение и признак летнего времени в момент ms
+    def _offset(self, ms):
+        z = resolve_zone(self.conf)
+        std = z.std
+        dst = false
+        if self.conf.dst == "auto":
+            dst = is_dst(z.rule, std, ms)
+            if dst:
+                std += 60
+        elif self.conf.dst != "off":
+            std += parse_offset(self.conf.dst)
+            dst = true
+        return std, dst
+
+    def zone(self, ms=nil):
+        z = resolve_zone(self.conf)
+        off, dst = self:_offset(ms ?? self:now())
+        abbr = off == 0 and "UTC" or ("UTC" .. format_offset(off))
+        return {name: z.name, offset_min: off, isdst: dst, abbr: abbr}
+
+    def parts(self, ms=nil):
+        t = ms ?? self:now()
+        off, dst = self:_offset(t)
+        shifted = t + off * 60000
+        d = stime.to_date(shifted)
+        yday = stime.days_from_civil(d.year, d.month, d.day) - stime.days_from_civil(d.year, 1, 1) + 1
+        return {year: d.year, month: d.month, day: d.day, hour: d.hour, min: d.minute, sec: d.second, wday: d.weekday + 1,
+            yday: yday, isdst: dst, offset_min: off, ms: t}
+
+    def ingame(self):
+        h = self.src.ingame_hours()
+        day = self.src.ingame_day()
+        total = math.floor(h * 3600)
+        hh = math.floor(total / 3600) % 24
+        mm = math.floor(total / 60) % 60
+        ss = total % 60
+        return {day: day, hour: hh, min: mm, sec: ss, text: _pad(hh, 2) .. ":" .. _pad(mm, 2)}
+
+    # strftime
+    def format(self, fmt, ms=nil):
+        t = self:parts(ms)
+        loc = self.conf.locale
+        out = []
+        i = 1
+        n = string.len(fmt)
+        while i <= n:
+            ch = string.sub(fmt, i, i)
+            if ch != "%" or i == n:
+                out[len(out) + 1] = ch
+                i += 1
+            else:
+                f = string.sub(fmt, i + 1, i + 1)
+                i += 2
+                h12 = t.hour % 12
+                if h12 == 0:
+                    h12 = 12
+                if f == "Y":
+                    out[len(out) + 1] = tostring(t.year)
+                elif f == "y":
+                    out[len(out) + 1] = _pad(t.year % 100, 2)
+                elif f == "m":
+                    out[len(out) + 1] = _pad(t.month, 2)
+                elif f == "d":
+                    out[len(out) + 1] = _pad(t.day, 2)
+                elif f == "e":
+                    out[len(out) + 1] = _pad(t.day, 2, " ")
+                elif f == "H":
+                    out[len(out) + 1] = _pad(t.hour, 2)
+                elif f == "I":
+                    out[len(out) + 1] = _pad(h12, 2)
+                elif f == "M":
+                    out[len(out) + 1] = _pad(t.min, 2)
+                elif f == "S":
+                    out[len(out) + 1] = _pad(t.sec, 2)
+                elif f == "p":
+                    out[len(out) + 1] = t.hour < 12 and "AM" or "PM"
+                elif f == "A":
+                    out[len(out) + 1] = DAYS_ALL[loc][t.wday]
+                elif f == "a":
+                    out[len(out) + 1] = DAYS_SHORT[loc][t.wday]
+                elif f == "B":
+                    out[len(out) + 1] = MONTHS_ALL[loc][t.month]
+                elif f == "b":
+                    out[len(out) + 1] = MONTHS_SHORT[loc][t.month]
+                elif f == "j":
+                    out[len(out) + 1] = _pad(t.yday, 3)
+                elif f == "u":
+                    out[len(out) + 1] = tostring(t.wday == 1 and 7 or t.wday - 1)
+                elif f == "w":
+                    out[len(out) + 1] = tostring(t.wday - 1)
+                elif f == "Z":
+                    out[len(out) + 1] = self:zone(t.ms).abbr
+                elif f == "z":
+                    out[len(out) + 1] = format_offset(t.offset_min, false)
+                elif f == "s":
+                    out[len(out) + 1] = tostring(math.floor(t.ms / 1000))
+                elif f == "F":
+                    out[len(out) + 1] = self:format("%Y-%m-%d", t.ms)
+                elif f == "T":
+                    out[len(out) + 1] = self:format("%H:%M:%S", t.ms)
+                elif f == "R":
+                    out[len(out) + 1] = self:format("%H:%M", t.ms)
+                elif f == "D":
+                    out[len(out) + 1] = self:format("%m/%d/%y", t.ms)
+                elif f == "%":
+                    out[len(out) + 1] = "%"
+                else:
+                    out[len(out) + 1] = "%" .. f
+        return table.concat(out)
+
+    # время для показа (панель, fetch, date): по source, seconds и format
+    def time_text(self, ms=nil):
+        c = self.conf
+        if c.source == "ingame":
+            g = self:ingame()
+            return c.seconds and (g.text .. ":" .. _pad(g.sec, 2)) or g.text
+        t = self:parts(ms)
+        if c.format == "12h":
+            h12 = t.hour % 12
+            if h12 == 0:
+                h12 = 12
+            s = h12 .. ":" .. _pad(t.min, 2)
+            if c.seconds:
+                s = s .. ":" .. _pad(t.sec, 2)
+            return s .. (t.hour < 12 and " AM" or " PM")
+        s = _pad(t.hour, 2) .. ":" .. _pad(t.min, 2)
+        if c.seconds:
+            s = s .. ":" .. _pad(t.sec, 2)
+        return s
+
+    def date_text(self, ms=nil):
+        if self.conf.source == "ingame":
+            return "Day " .. tostring(self:ingame().day)
+        return self:format(self.conf.date_format, ms)
+
+    # часы с монотонным временем: true, если расхождение больше drift_ms (после этого опорная точка обновляется)
+    def check_drift(self, utc, mono):
+        if self.base_utc == nil:
+            self.base_utc = utc
+            self.base_mono = mono
+            return false
+        drift = (utc - self.base_utc) - (mono - self.base_mono)
+        self.base_utc = utc
+        self.base_mono = mono
+        return math.abs(drift) > self.conf.drift_ms
+
+export def new(conf=nil, src=nil):
+    return Clock(conf, src)
+
+export def from_text(text, src=nil):
+    conf = nil
+    if text != nil:
+        ok, data = pcall(() => json5.parse(text))
+        if ok and type(data) == "table":
+            conf = data
+    return Clock(conf, src)
+
+# text: прежний текст файла (или nil); changes: {ключ: значение}; остальной текст не трогается
+export def patch_text(text, changes):
+    out = text
+    if out == nil or string.match(out, "^%s*$") != nil:
+        out = "{}\n"
+    keys = []
+    for k, v in changes:
+        keys[len(keys) + 1] = k
+    table.sort(keys)
+    for k in keys:
+        out = json5.patch(out, [k], changes[k])
+    return out
+
+export def zone_names(filter=nil):
+    names = []
+    for z in ZONE_LIST:
+        if filter == nil or string.find(string.lower(z[1]), string.lower(filter), 1, true) != nil:
+            names[len(names) + 1] = z[1]
+    table.sort(names)
+    return names

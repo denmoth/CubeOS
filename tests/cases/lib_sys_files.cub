@@ -1,0 +1,29 @@
+import t
+import json5
+import clock
+import boot.services as services
+eq = t.eq
+
+# поставляемые манифесты служб и настройки (sys/) должны разбираться и проходить проверку
+def read(path):
+    f = fs.open(path, "r")
+    text = f.readAll()
+    f.close()
+    return text
+
+count = 0
+for name in fs.list("/repo/sys/services"):
+    if string.sub(name, -5) == ".conf":
+        ok, res = pcall(() => services.normalize(json5.parse(read("/repo/sys/services/" .. name)), name))
+        eq(ok, true, "manifest " .. name .. " is valid: " .. tostring(res))
+        if ok:
+            eq(res.name .. ".conf", name, "manifest " .. name .. " is named after its file")
+            mod_path = "/repo/lib/" .. string.gsub(res.module, "%.", "/") .. ".cub"
+            eq(fs.exists(mod_path), true, "manifest " .. name .. " points to an existing module " .. res.module)
+        count += 1
+eq(count >= 1, true, "there are service manifests")
+
+c = clock.from_text(read("/repo/sys/cfg/time.conf"))
+eq(c.problems, [], "the default time.conf has no problems")
+eq(c.conf.tz, "UTC", "the default zone is UTC")
+print("done")

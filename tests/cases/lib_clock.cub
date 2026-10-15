@@ -1,0 +1,123 @@
+import t
+import clock
+import std.time as stime
+eq = t.eq
+
+fixed = {ms: 0, hours: 6.5, day: 12}
+src = {utc_ms: () => fixed.ms, ingame_hours: () => fixed.hours, ingame_day: () => fixed.day}
+def at(y, mo, d, h, mi, s):
+    return stime.from_date(y, mo, d, h, mi, s)
+def mk(conf):
+    return clock.new(conf, src)
+def hm(c, ms):
+    return c:format("%H:%M", ms)
+
+# ---------------------------------------------------------------- смещения
+eq([clock.parse_offset("+03:00"), clock.parse_offset("-0530"), clock.parse_offset("+3"), clock.parse_offset("UTC+3"), clock.parse_offset("GMT-02:30")], [180, -330, 180, 180, -150], "offsets parse")
+eq([clock.parse_offset("abc"), clock.parse_offset("+25:00"), clock.parse_offset("+03:75")], [nil, nil, nil], "bad offsets are nil")
+eq(clock.format_offset(-330), "-05:30", "offset text")
+eq(clock.format_offset(180, false), "+0300", "offset text without a colon")
+
+# ---------------------------------------------------------------- Киев, переход в 2026 году
+kyiv = mk({tz: "Europe/Kyiv"})
+noon = at(2026, 10, 15, 12, 0, 0)
+eq(hm(kyiv, noon), "15:00", "Kyiv in summer is UTC+3")
+eq(kyiv:zone(noon).isdst, true, "summer time is flagged")
+eq(kyiv:zone(noon).abbr, "UTC+03:00", "abbreviation")
+eq(hm(kyiv, at(2026, 10, 25, 0, 59, 0)), "03:59", "just before the autumn change")
+eq(hm(kyiv, at(2026, 10, 25, 1, 0, 0)), "03:00", "the autumn change at 01:00 UTC")
+eq(hm(kyiv, at(2026, 3, 29, 0, 59, 0)), "02:59", "just before the spring change")
+eq(hm(kyiv, at(2026, 3, 29, 1, 0, 0)), "04:00", "the spring change at 01:00 UTC")
+eq(hm(kyiv, at(2026, 1, 15, 12, 0, 0)), "14:00", "Kyiv in winter is UTC+2")
+eq(kyiv:zone(at(2026, 1, 15, 12, 0, 0)).isdst, false, "winter is not summer time")
+
+# США и южное полушарие
+ny = mk({tz: "America/New_York"})
+eq(hm(ny, at(2026, 3, 8, 6, 59, 0)), "01:59", "New York before the spring change (UTC-5)")
+eq(hm(ny, at(2026, 3, 8, 7, 0, 0)), "03:00", "New York after the spring change (UTC-4)")
+eq(hm(ny, at(2026, 11, 1, 5, 59, 0)), "01:59", "New York before the autumn change (UTC-4)")
+eq(hm(ny, at(2026, 11, 1, 6, 0, 0)), "01:00", "New York after the autumn change (UTC-5)")
+syd = mk({tz: "Australia/Sydney"})
+eq(hm(syd, at(2026, 1, 15, 12, 0, 0)), "23:00", "Sydney in January is UTC+11")
+eq(hm(syd, at(2026, 7, 15, 12, 0, 0)), "22:00", "Sydney in July is UTC+10")
+eq(hm(syd, at(2026, 10, 3, 15, 59, 0)), "01:59", "Sydney before the October change")
+eq(hm(syd, at(2026, 10, 3, 16, 0, 0)), "03:00", "Sydney after the October change")
+eq(hm(syd, at(2026, 4, 4, 15, 59, 0)), "02:59", "Sydney before the April change")
+eq(hm(syd, at(2026, 4, 4, 16, 0, 0)), "02:00", "Sydney after the April change")
+
+# смещение, правило dst, свои зоны, ошибки
+eq(hm(mk({tz: "+05:30"}), noon), "17:30", "a fixed offset as the zone")
+eq(hm(mk({tz: "Europe/Kyiv", dst: "off"}), noon), "14:00", "dst off keeps the standard time")
+eq(hm(mk({tz: "UTC", dst: "+01:00"}), noon), "13:00", "a fixed dst offset is always applied")
+moon = mk({tz: "Moon/Base", zones: {"Moon/Base": {offset: "-03:30", dst: "eu"}}})
+eq(hm(moon, noon), "09:30", "a custom zone with the eu rule")
+eq(hm(moon, at(2026, 1, 15, 12, 0, 0)), "08:30", "a custom zone in winter")
+bad = mk({tz: "Mars/Olympus"})
+eq(bad.conf.tz, "UTC", "an unknown zone falls back to UTC")
+eq(len(bad.problems), 1, "the unknown zone is reported")
+eq(hm(mk({tz: "europe/kyiv"}), noon), "15:00", "zone names are case-insensitive")
+
+# ---------------------------------------------------------------- разбор и форматы
+utc = mk({})
+eq(utc:format("%Y-%m-%d %H:%M:%S", noon), "2026-10-15 12:00:00", "default format")
+eq(utc:parts(noon).wday, 5, "Thursday is 5 (Sunday = 1)")
+eq(utc:parts(noon).yday, 288, "day of the year")
+eq(utc:format("%j %u %w %%", noon), "288 4 4 %", "day numbers and percent")
+eq(utc:format("%a %A %b %B", noon), "Thu Thursday Oct October", "english names")
+eq(mk({locale: "ru"}):format("%A, %d %B %Y", noon), "Четверг, 15 октября 2026", "russian names")
+eq(mk({locale: "uk"}):format("%a %e %b", noon), "Чт 15 жов", "ukrainian names")
+eq(kyiv:format("%z %Z", noon), "+0300 UTC+03:00", "zone fields")
+eq(utc:format("%s", noon), tostring(noon / 1000), "epoch seconds")
+eq(utc:format("%F %T %R %D %y %I %p", at(2026, 3, 5, 0, 7, 9)), "2026-03-05 00:07:09 00:07 03/05/26 26 12 AM", "composite fields")
+eq(utc:format("100%", noon), "100%", "a trailing percent stays")
+eq(utc:format("%Q", noon), "%Q", "unknown fields stay as written")
+
+# показ времени
+eq(kyiv:time_text(noon), "15:00", "24 hour time")
+eq(mk({tz: "Europe/Kyiv", seconds: true}):time_text(at(2026, 10, 15, 12, 0, 5)), "15:00:05", "seconds on")
+eq(mk({tz: "Europe/Kyiv", format: "12h"}):time_text(noon), "3:00 PM", "12 hour time")
+eq(mk({format: "12h", seconds: true}):time_text(at(2026, 10, 15, 0, 5, 9)), "12:05:09 AM", "midnight in 12 hour time")
+eq(mk({date_format: "%d.%m.%Y"}):date_text(noon), "15.10.2026", "date format")
+
+# ---------------------------------------------------------------- игровое время
+g = mk({source: "ingame"})
+eq(g:ingame(), {day: 12, hour: 6, min: 30, sec: 0, text: "06:30"}, "in-game time")
+eq(g:time_text(), "06:30", "the in-game clock shows the in-game time")
+eq(g:date_text(), "Day 12", "the in-game date is a day number")
+fixed.hours = 23.99
+eq(mk({source: "ingame", seconds: true}):time_text(), "23:59:24", "in-game seconds")
+fixed.hours = 6.5
+
+# ---------------------------------------------------------------- настройки и дрейф
+ok, problems = utc:set_conf({tz: "Nowhere"})
+eq([ok, len(problems)], [false, 1], "bad settings are rejected")
+eq(utc.conf.tz, "UTC", "rejected settings do not change the clock")
+ok, problems = utc:set_conf({tz: "Asia/Tokyo", seconds: true})
+eq(ok, true, "good settings are accepted")
+eq(utc:time_text(noon), "21:00:00", "new settings apply at once")
+ok, problems = utc:set_conf({format: "13h", week_start: "friday"})
+eq([ok, len(problems)], [false, 2], "every bad field is listed")
+c2, p2 = clock.normalize({source: "mars", seconds: "yes", locale: "de", drift_ms: -1, dst: "sometimes"})
+eq(len(p2), 4, "normalize reports bad fields")
+eq([c2.source, c2.seconds, c2.locale, c2.drift_ms, c2.dst], ["utc", false, "en", 2000, "auto"], "and replaces them with defaults")
+
+d = mk({})
+eq(d:check_drift(1000, 1000), false, "the first call only records the base")
+eq(d:check_drift(3000, 3001), false, "small differences are normal")
+eq(d:check_drift(10000, 4000), true, "a jump of the real time is drift")
+eq(d:check_drift(11000, 5000), false, "the base is renewed after a jump")
+fixed.ms = noon
+eq(utc:now(), noon, "now comes from the source")
+
+# ---------------------------------------------------------------- файл настроек
+import json5
+eq(clock.from_text("{tz: 'Europe/Kyiv' // comment\n}").conf.tz, "Europe/Kyiv", "settings come from the file text")
+eq(clock.from_text("garbage{").conf.tz, "UTC", "a broken file gives the defaults")
+eq(clock.from_text(nil).conf.format, "24h", "no file gives the defaults")
+patched = clock.patch_text("{\n  // my zone\n  tz: 'UTC',\n}\n", {tz: "Asia/Tokyo", seconds: true})
+eq(string.find(patched, "// my zone", 1, true) != nil, true, "patching keeps the comments")
+eq([json5.parse(patched).tz, json5.parse(patched).seconds], ["Asia/Tokyo", true], "patching changes and adds keys")
+eq(json5.parse(clock.patch_text(nil, {tz: "UTC"})).tz, "UTC", "patching a missing file creates one")
+eq(clock.zone_names("kyiv"), ["Europe/Kyiv"], "zone names can be filtered")
+eq(len(clock.zone_names()) > 60, true, "the built-in zone table has dozens of zones")
+print("done")

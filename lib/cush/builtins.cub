@@ -4,6 +4,7 @@
 
 import term.chars as chars
 import unicode
+import clock
 
 export const table_of = {}
 export const help_of = {}
@@ -510,10 +511,89 @@ add("type", "type команда  чем является команда", b_typ
 table_of.which = table_of.type
 help_of.which = "which команда  то же, что type"
 
+# копия часов с другими настройками (для date -u и date -s)
+def derived(c, over):
+    conf = {}
+    for k, v in c.conf:
+        conf[k] = v
+    for k, v in over:
+        conf[k] = v
+    return clock.new(conf, c.src)
+
+# date [-u] [-s] [+ФОРМАТ]: -u время UTC, -s с секундами; без формата показ по настройкам (игровое время при source: ingame)
 def b_date(sh, args):
-    sh:println(os.date("%Y-%m-%d %H:%M:%S"))
+    c = sh.time
+    utc = false
+    fmt = nil
+    for a in args:
+        if a == "-u":
+            utc = true
+        elif a == "-s":
+            c = derived(c, {seconds: true})
+        elif string.sub(a, 1, 1) == "+":
+            fmt = string.sub(a, 2)
+        else:
+            sh:eprint("date: unknown argument " .. a)
+            return 1
+    if utc:
+        c = derived(c, {tz: "UTC", dst: "off", source: "utc"})
+    if fmt != nil:
+        sh:println(c:format(fmt))
+    elif c.conf.source == "ingame":
+        sh:println(c:date_text() .. " " .. c:time_text() .. " (in-game)")
+    else:
+        sh:println(c:format("%a %e %b %Y") .. " " .. c:time_text() .. " " .. c:zone().abbr)
     return 0
-add("date", "date  дата и время", b_date)
+add("date", "date [-u] [-s] [+формат]  дата и время (-u UTC, -s с секундами)", b_date)
+
+def tdc_status(sh):
+    c = sh.time
+    z = c:zone()
+    local_t = c:format("%Y-%m-%d %H:%M:%S")
+    sh:println("      Local time: " .. c:format("%a ") .. local_t .. " " .. z.abbr)
+    sh:println("  Universal time: " .. clock.new({tz: "UTC"}, c.src):format("%a %Y-%m-%d %H:%M:%S") .. " UTC")
+    sh:println("       Time zone: " .. z.name .. " (" .. z.abbr .. (z.isdst and ", summer time" or "") .. ")")
+    sh:println("          Source: " .. c.conf.source)
+    sh:println("         Seconds: " .. (c.conf.seconds and "on" or "off"))
+    sh:println("          Format: " .. c.conf.format .. ", " .. c.conf.date_format)
+    g = c:ingame()
+    sh:println("   In-game time: day " .. g.day .. ", " .. g.text)
+
+# timedatectl [status | set-timezone ЗОНА | set-source utc|ingame | set-seconds on|off | set-format 12h|24h | list-timezones [фильтр]]
+def b_timedatectl(sh, args):
+    sub = args[1] ?? "status"
+    c = sh.time
+    if sub == "status":
+        tdc_status(sh)
+        return 0
+    if sub == "list-timezones":
+        for name in clock.zone_names(args[2]):
+            sh:println(name)
+        return 0
+    changes = nil
+    if sub == "set-timezone" and args[2] != nil:
+        changes = {tz: args[2]}
+    elif sub == "set-source" and args[2] != nil:
+        changes = {source: args[2]}
+    elif sub == "set-seconds" and (args[2] == "on" or args[2] == "off"):
+        changes = {seconds: args[2] == "on"}
+    elif sub == "set-format" and args[2] != nil:
+        changes = {format: args[2]}
+    if changes == nil:
+        sh:eprint("usage: timedatectl [status | set-timezone ZONE | set-source utc|ingame | set-seconds on|off | set-format 12h|24h | list-timezones [filter]]")
+        return 1
+    ok, problems = c:set_conf(changes)
+    if not ok:
+        for p in problems:
+            sh:eprint("timedatectl: " .. p)
+        return 1
+    if sh.time_save != nil:
+        saved, why = sh.time_save(changes)
+        if not saved:
+            sh:eprint("timedatectl: the setting is applied but not saved: " .. tostring(why))
+            return 1
+    return 0
+add("timedatectl", "timedatectl [команда]  время: зона, источник, секунды, формат", b_timedatectl)
 
 def b_whoami(sh, args):
     sh:println(sh.vars.USER)

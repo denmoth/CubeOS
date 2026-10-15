@@ -99,6 +99,7 @@ export class ServiceManager:
         self.kernel = kernel
         self.importer = o.import
         self.subject = o.subject ?? rules_mod.subject("system", ["system"])
+        self.view = o.view
         self.on_state = o.on_state
         self.log = o.log
         self.manifests = {}
@@ -165,7 +166,7 @@ export class ServiceManager:
             if not ok:
                 self:_set(m.name, "failed", program)
                 return
-            pid = sys.spawn(program, [], {name: m.name, subject: self.subject, detached: true})
+            pid = sys.spawn(program, [], {name: m.name, subject: self.subject, detached: true, view: self.view})
             st.pid = pid
             if m.ready == "immediate":
                 self:_set(m.name, "running")
@@ -222,7 +223,7 @@ export class ServiceManager:
             else:
                 self:_set(m.name, "starting")
                 st.wanted = true
-                st.supervisor = sys.spawn((s, a) => self:_supervise(s, m), [], {name: "svc-" .. m.name, detached: true, subject: self.subject})
+                st.supervisor = sys.spawn((s, a) => self:_supervise(s, m), [], {name: "svc-" .. m.name, detached: true, subject: self.subject, view: self.view})
                 ok, why = self:_wait_ready(sys, m)
                 if ok:
                     if st.state != "running" and st.state != "failed":

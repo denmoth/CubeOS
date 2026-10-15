@@ -1,0 +1,128 @@
+# svc.timed: служба времени (D206, docs/spec/time.md). Держит настройки из /cubeos/sys/cfg/time.conf, отвечает на запросы
+# (svc.rpc), рассылает подписчикам события и будит по будильникам. Вся логика времени в clock.cub.
+#
+# Запросы (op, args): now, parts {ms}, format {fmt, ms}, time_text {ms}, date_text {ms}, zone {ms}, ingame, get_conf,
+#   set_conf {ключ: значение} (проверяет, применяет, сохраняет в time.conf с сохранением комментариев),
+#   subscribe / unsubscribe, alarm {at (мс UTC), tag} -> id, cancel_alarm {id}.
+# События подписчикам (sys.send(pid, {event: ...})): {event: "minute", ms, text}, {event: "time_changed", reason: "settings"|"drift"},
+#   {event: "alarm", tag, at, id}. Будильник приходит и тому, кто его поставил, без подписки.
+# main(sys, args): args.path (файл настроек), args.view (вид CFS, по умолчанию sys.view()), args.src (источники времени для тестов).
+# Права: пока запросы принимаются от любого процесса; проверка прав придёт с permd (шаг 6).
+
+import clock
+import svc.rpc as rpc
+
+export const CONF_PATH = "/cubeos/sys/cfg/time.conf"
+const ALARM_LIMIT = 256
+
+export def main(sys, args):
+    a = args ?? {}
+    path = a.path ?? CONF_PATH
+    view = a.view ?? sys.view()
+    text = nil
+    if view != nil and view:exists(path):
+        text = view:read(path)
+    c = clock.from_text(text, a.src)
+    subs = {}
+    alarms = []
+    alarm_id = 0
+    last_minute = nil
+
+    def notify(event):
+        for pid, flag in subs:
+            if not sys.send(pid, event):
+                subs[pid] = nil
+
+    def persist(changes):
+        if view == nil:
+            return true
+        old = nil
+        if view:exists(path):
+            old = view:read(path)
+        ok, res = pcall(() => clock.patch_text(old, changes))
+        if not ok:
+            return false, tostring(res)
+        pcall(() => view:mkdir("/cubeos/sys/cfg", {parents: true}))
+        ok, err = pcall(() => view:write(path, res))
+        if not ok:
+            return false, tostring(err)
+        return true
+
+    def tick():
+        utc = c:now()
+        if c:check_drift(utc, sys.now()):
+            notify({event: "time_changed", reason: "drift"})
+        m = math.floor(utc / 60000)
+        if last_minute != nil and m != last_minute:
+            notify({event: "minute", ms: utc, text: c:time_text(utc)})
+        last_minute = m
+        i = 1
+        while i <= len(alarms):
+            al = alarms[i]
+            if al.at <= utc:
+                sys.send(al.pid, {event: "alarm", tag: al.tag, at: al.at, id: al.id})
+                table.remove(alarms, i)
+            else:
+                i += 1
+
+    # сколько ждать сообщение: до следующей минуты или ближайшего будильника, но не дольше 5 секунд (проверка дрейфа)
+    def timeout():
+        utc = c:now()
+        wait = (60000 - utc % 60000) / 1000 + 0.01
+        for al in alarms:
+            wait = math.min(wait, math.max(0, (al.at - utc) / 1000) + 0.01)
+        return math.max(0.05, math.min(5, wait))
+
+    def at_ms(q):
+        return q != nil and q.ms or nil
+
+    handlers = {}
+    handlers.now = () => c:now()
+    handlers.parts = (q) => c:parts(at_ms(q))
+    handlers.format = (q) => c:format(q.fmt, q.ms)
+    handlers.time_text = (q) => c:time_text(at_ms(q))
+    handlers.date_text = (q) => c:date_text(at_ms(q))
+    handlers.zone = (q) => c:zone(at_ms(q))
+    handlers.ingame = () => c:ingame()
+    handlers.get_conf = () => c.conf
+
+    def set_conf(changes):
+        ok, problems = c:set_conf(changes ?? {})
+        if not ok:
+            return {ok: false, problems: problems}
+        saved, why = persist(changes)
+        notify({event: "time_changed", reason: "settings"})
+        return {ok: true, saved: saved, why: why}
+    handlers.set_conf = set_conf
+
+    def subscribe(q, sender):
+        subs[sender] = true
+        return true
+    handlers.subscribe = subscribe
+
+    def unsubscribe(q, sender):
+        subs[sender] = nil
+        return true
+    handlers.unsubscribe = unsubscribe
+
+    def alarm(q, sender):
+        if q == nil or type(q.at) != "number":
+            raise Error("alarm needs at (milliseconds UTC)")
+        if len(alarms) >= ALARM_LIMIT:
+            raise Error("too many alarms")
+        alarm_id += 1
+        alarms[len(alarms) + 1] = {at: q.at, tag: q.tag, pid: sender, id: alarm_id}
+        return alarm_id
+    handlers.alarm = alarm
+
+    def cancel_alarm(q, sender):
+        for i, al in alarms:
+            if al.id == q.id and al.pid == sender:
+                table.remove(alarms, i)
+                return true
+        return false
+    handlers.cancel_alarm = cancel_alarm
+
+    sys.register("timed")
+    tick()
+    rpc.serve(sys, handlers, {tick: tick, timeout: timeout})

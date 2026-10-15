@@ -19,6 +19,7 @@ import cush.hist as hist_mod
 import cush.editor as editor_mod
 import cush.builtins as builtins
 import cush.fetch as fetch
+import clock
 import version
 import unicode
 
@@ -85,6 +86,9 @@ export class Shell:
         self.env = env
         self.opts = o
         self.info = o.info
+        # часы системы (clock.new) и сохранение настроек времени; сессия подставляет службу timed, терминал сам читает time.conf
+        self.time = o.time ?? clock.new(nil)
+        self.time_save = o.time_save
         # имя компьютера в приглашении это его метка (имена с пробелами через дефис), без метки cubeos
         label = env.os.getComputerLabel()
         host = o.host
@@ -795,8 +799,39 @@ def run_command_line(sh, line):
     sh.current = {target: sh.console, stdin: nil, piped: false}
     return sh:run_text(line)
 
+const TIME_CONF = "/cubeos/sys/cfg/time.conf"
+
+def _read_file(env, path):
+    f = env.fs.open(path, "r")
+    if f == nil:
+        return nil
+    text = f.readAll()
+    f.close()
+    return text
+
+# без службы времени: настройки из time.conf, изменения пишутся обратно в него
+def _default_time(env, o):
+    text = _read_file(env, TIME_CONF)
+    o.time = clock.from_text(text)
+    o.time_save = (changes) => _save_time(env, changes)
+
+def _save_time(env, changes):
+    text = _read_file(env, TIME_CONF)
+    ok, res = pcall(() => clock.patch_text(text, changes))
+    if not ok:
+        return false, tostring(res)
+    env.fs.makeDir("/cubeos/sys/cfg")
+    f = env.fs.open(TIME_CONF, "w")
+    if f == nil:
+        return false, "cannot write " .. TIME_CONF
+    f.write(res)
+    f.close()
+    return true
+
 export def main(env, args):
     o = env.cush_opts ?? {}
+    if o.time == nil:
+        _default_time(env, o)
     sh = Shell(env, o)
     env.cush = sh
     if args[1] == "-c" and args[2] != nil:

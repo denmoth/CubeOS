@@ -1,0 +1,77 @@
+import t
+import term.vterm as vterm
+import compat.env as compat_env
+import compat.proc as compat_proc
+import cush.shell as cush
+import clock
+import std.time as stime
+eq = t.eq
+
+HIST = "/repo/build/cush_time_history"
+if fs.exists(HIST):
+    fs.delete(HIST)
+
+fixed = {ms: stime.from_date(2026, 10, 15, 12, 0, 0)}
+src = {utc_ms: () => fixed.ms, ingame_hours: () => 6.5, ingame_day: () => 12}
+saved = []
+def save(changes):
+    saved[len(saved) + 1] = changes
+    return true
+
+def make():
+    vt = vterm.new(70, 24, {history: 200})
+    env = compat_env.new({vterm: vt})
+    env.cush_opts = {history_path: HIST, greeting: false, user: "tester", host: "cube", time: clock.new({tz: "Europe/Kyiv"}, src), time_save: save}
+    proc = compat_proc.new(env, "cush", [], {name: "cush", main: cush.main})
+    proc:start()
+    return vt, proc
+
+def run(proc, text):
+    for i in range[1, string.len(text)]:
+        proc:feed("char", string.sub(text, i, i))
+    proc:feed("key", keys.enter, false)
+    proc:feed("key_up", keys.enter)
+
+def screen(vt):
+    lines = []
+    for y in range[1, vt.h]:
+        lines[y] = vt:line_text(y)
+    return table.concat(lines, "\n")
+
+def has(vt, text):
+    return string.find(screen(vt), text, 1, true) != nil
+
+vt, proc = make()
+run(proc, "date")
+eq(has(vt, "Thu 15 Oct 2026 15:00 UTC+03:00"), true, "date shows the local date, time and zone")
+run(proc, "date -u")
+eq(has(vt, "Thu 15 Oct 2026 12:00 UTC"), true, "date -u shows UTC")
+run(proc, "date -s")
+eq(has(vt, "15:00:00 UTC+03:00"), true, "date -s shows seconds")
+run(proc, "date +%H.%M")
+eq(has(vt, "15.00"), true, "date +FORMAT")
+run(proc, "date --bogus")
+eq(has(vt, "unknown argument"), true, "date rejects unknown arguments")
+
+run(proc, "timedatectl")
+eq(has(vt, "Time zone: Europe/Kyiv (UTC+03:00, summer time)"), true, "status shows the zone")
+eq(has(vt, "In-game time: day 12, 06:30"), true, "status shows the in-game time")
+run(proc, "timedatectl set-timezone Asia/Tokyo")
+run(proc, "date")
+eq(has(vt, "21:00 UTC+09:00"), true, "a new zone applies at once")
+eq(saved, [{tz: "Asia/Tokyo"}], "the change is saved")
+run(proc, "timedatectl set-timezone Nowhere")
+eq(has(vt, "unknown zone"), true, "an unknown zone is rejected with a message")
+eq(len(saved), 1, "a rejected change is not saved")
+run(proc, "timedatectl set-seconds on")
+eq(saved[2], {seconds: true}, "seconds are saved")
+run(proc, "timedatectl set-source ingame")
+run(proc, "date")
+eq(has(vt, "Day 12 06:30:00 (in-game)"), true, "the in-game source shows the in-game time")
+run(proc, "timedatectl list-timezones kyiv")
+eq(has(vt, "Europe/Kyiv"), true, "list-timezones filters")
+run(proc, "timedatectl frobnicate")
+eq(has(vt, "usage: timedatectl"), true, "unknown subcommands print the usage")
+run(proc, "fetch")
+eq(has(vt, "Time"), true, "fetch has a time line")
+print("done")

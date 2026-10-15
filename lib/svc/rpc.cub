@@ -1,0 +1,54 @@
+# svc.rpc: запросы к службам поверх сообщений ядра (sys.send / sys.receive)
+#
+# Служба:
+#   rpc.serve(sys, {now: (args, from) => ..., set: (args, from) => ...}, {tick: () => ..., timeout: () => секунды})
+#     читает сообщения {op, args, from, id}, вызывает handlers[op](args, from), отвечает {id, result} или {id, error}.
+#     tick() вызывается после каждого сообщения и по таймауту; timeout() задаёт, сколько ждать сообщение (nil: без ограничения).
+# Клиент (из процесса ядра):
+#   result, err = rpc.call(sys, "timed", "get_conf", nil, 2)       err: текст, если службы нет, она не ответила или ответила ошибкой
+#
+# Сообщения службы своим подписчикам (события) это просто sys.send(pid, {event: "minute", ...}): подписчик читает их своим receive.
+# Ответы и события различаются полем id и event; call() пропускает чужие события, пока ждёт свой ответ.
+
+const state = {next_id: 0}
+
+export def call(sys, service, op, args=nil, timeout=2):
+    pid = sys.lookup(service)
+    if pid == nil:
+        return nil, "service is not running: " .. service
+    state.next_id += 1
+    id = state.next_id
+    sys.send(pid, {op: op, args: args, sender: sys.getpid(), id: id})
+    while true:
+        _who, msg = sys.receive(timeout)
+        if msg == nil:
+            return nil, "no answer from " .. service
+        if type(msg) == "table" and msg.id == id:
+            if msg.error != nil:
+                return nil, msg.error
+            return msg.result
+        # чужое сообщение (событие): пропускаем
+
+def reply(sys, msg, result, err):
+    if msg.sender != nil and msg.id != nil:
+        sys.send(msg.sender, {id: msg.id, result: result, error: err})
+
+export def serve(sys, handlers, opts=nil):
+    o = opts ?? {}
+    while true:
+        wait = nil
+        if o.timeout != nil:
+            wait = o.timeout()
+        _who, msg = sys.receive(wait)
+        if msg != nil and type(msg) == "table" and msg.op != nil:
+            h = handlers[msg.op]
+            if h == nil:
+                reply(sys, msg, nil, "unknown operation: " .. tostring(msg.op))
+            else:
+                ok, res = pcall(h, msg.args, msg.sender)
+                if ok:
+                    reply(sys, msg, res, nil)
+                else:
+                    reply(sys, msg, nil, tostring(res))
+        if o.tick != nil:
+            o.tick()

@@ -13,6 +13,7 @@
 # Подробности: docs/spec/boot.md
 
 import json5
+import cfs
 import cfs.rules as rules_mod
 import kernel
 import boot.auth as auth_mod
@@ -123,7 +124,7 @@ export class Boot:
                 if m.safe != false:
                     kept[len(kept) + 1] = m
             manifests = kept
-        mgr = services_mod.new(k, {import: o.import, subject: system_subject})
+        mgr = services_mod.new(k, {import: o.import, subject: system_subject, view: cfs.view(fsys, system_subject, {})})
         mgr:add_all(manifests)
         system.services = mgr
         let me = self

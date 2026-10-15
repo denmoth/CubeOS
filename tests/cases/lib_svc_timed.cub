@@ -1,0 +1,164 @@
+import t
+import kernel
+import cfs
+import cfs.rules as rules
+import std.time as stime
+import svc.timed as timed
+import svc.rpc as rpc
+import svc.timeclient as timeclient
+eq = t.eq
+
+mono = {now: 1000}
+fixed = {ms: stime.from_date(2026, 10, 15, 12, 0, 30)}
+src = {utc_ms: () => fixed.ms, ingame_hours: () => 6.5, ingame_day: () => 12}
+
+def advance(k, ms, real_ms):
+    mono.now = mono.now + ms
+    fixed.ms = fixed.ms + (real_ms ?? ms)
+    k:tick()
+    k:run_ready()
+
+def settle(k):
+    k:run_ready()
+    for i in range[1, 20]:
+        advance(k, 10)
+
+system = rules.subject("system", ["system"])
+fsys = cfs.new({})
+fsys:mount("/", cfs.memory())
+fsys:mkdir(nil, "/cubeos/sys/cfg", {parents: true})
+fsys:write_file(nil, "/cubeos/sys/cfg/time.conf", "{\n  // my settings\n  tz: 'Europe/Kyiv',\n  seconds: true,\n}\n")
+view = cfs.view(fsys, system, {})
+k = kernel.new({clock: () => mono.now})
+timed_pid = k:spawn(timed.main, {src: src, view: view}, {name: "timed", subject: system, view: view})
+k:run_ready()
+eq(k.services["timed"], timed_pid, "the service registers itself")
+
+# ---------------------------------------------------------------- запросы
+got = {}
+def client(sys, args):
+    conf = rpc.call(sys, "timed", "get_conf")
+    got.tz = conf.tz
+    got.seconds = conf.seconds
+    got.text = rpc.call(sys, "timed", "time_text")
+    got.fmt = rpc.call(sys, "timed", "format", {fmt: "%Y-%m-%d %H:%M", ms: stime.from_date(2026, 10, 15, 12, 0, 0)})
+    got.zone = rpc.call(sys, "timed", "zone").abbr
+    got.ingame = rpc.call(sys, "timed", "ingame").text
+    got.now = rpc.call(sys, "timed", "now")
+    got.parts = rpc.call(sys, "timed", "parts").hour
+    res = rpc.call(sys, "timed", "set_conf", {tz: "Asia/Tokyo"})
+    got.set_ok = res.ok
+    got.saved = res.saved
+    got.text2 = rpc.call(sys, "timed", "time_text")
+    bad = rpc.call(sys, "timed", "set_conf", {tz: "Nowhere"})
+    got.bad_ok = bad.ok
+    got.bad_problems = len(bad.problems)
+    got.tz_after_bad = rpc.call(sys, "timed", "get_conf").tz
+    r, err = rpc.call(sys, "timed", "frobnicate")
+    got.unknown = err
+    r, err = rpc.call(sys, "nosuchd", "now")
+    got.missing = err
+    r, err = rpc.call(sys, "timed", "alarm", {})
+    got.bad_alarm = err
+    got.done = true
+k:spawn(client, [], {name: "client", subject: system})
+settle(k)
+eq(got.done, true, "the client finished its calls")
+eq([got.tz, got.seconds], ["Europe/Kyiv", true], "get_conf returns the file settings")
+eq(got.text, "15:00:30", "time_text follows the settings")
+eq(got.fmt, "2026-10-15 15:00", "format works through the service")
+eq(got.zone, "UTC+03:00", "zone")
+eq(got.ingame, "06:30", "in-game time")
+eq(got.now, stime.from_date(2026, 10, 15, 12, 0, 30) + 0, "now is the source time") or nil
+eq(got.parts, 15, "parts")
+eq([got.set_ok, got.saved], [true, true], "set_conf applies and saves")
+eq(got.text2, "21:00:30", "the new zone applies at once")
+eq([got.bad_ok, got.bad_problems], [false, 1], "bad settings are rejected with the problem list")
+eq(got.tz_after_bad, "Asia/Tokyo", "a rejected change does not apply")
+eq(got.unknown, "unknown operation: frobnicate", "an unknown operation is an error")
+eq(string.find(got.missing, "service is not running", 1, true) != nil, true, "a missing service is reported")
+eq(string.find(got.bad_alarm, "alarm needs at", 1, true) != nil, true, "a bad alarm is rejected")
+saved_text = fsys:read_file(nil, "/cubeos/sys/cfg/time.conf")
+eq(string.find(saved_text, "Asia/Tokyo", 1, true) != nil, true, "the file got the new zone")
+eq(string.find(saved_text, "// my settings", 1, true) != nil, true, "and kept the comment")
+
+# ---------------------------------------------------------------- события и будильники
+events = []
+state = {stop: false}
+def listener(sys, args):
+    rpc.call(sys, "timed", "subscribe")
+    a1 = rpc.call(sys, "timed", "alarm", {at: fixed.ms + 5000, tag: "tea"})
+    a2 = rpc.call(sys, "timed", "alarm", {at: fixed.ms + 8000, tag: "cancelled"})
+    rpc.call(sys, "timed", "cancel_alarm", {id: a2})
+    while not state.stop:
+        who, msg = sys.receive(1)
+        if msg != nil:
+            events[len(events) + 1] = msg
+k:spawn(listener, [], {name: "listener", subject: system})
+k:run_ready()
+for i in range[1, 40]:
+    advance(k, 1000)
+kinds = []
+for e in events:
+    kinds[len(kinds) + 1] = e.event
+has_alarm = false
+alarms_seen = 0
+minutes = 0
+for e in events:
+    if e.event == "alarm":
+        alarms_seen += 1
+        has_alarm = e.tag == "tea"
+    if e.event == "minute":
+        minutes += 1
+eq([alarms_seen, has_alarm], [1, true], "the alarm fires once; the cancelled one never does")
+eq(minutes >= 1, true, "a minute event arrives when the minute changes")
+first_minute = nil
+for e in events:
+    if e.event == "minute" and first_minute == nil:
+        first_minute = e.text
+eq(first_minute != nil, true, "the minute event carries the time text")
+
+# дрейф: настоящее время прыгнуло, монотонное нет
+events = []
+advance(k, 1000, 3600000)
+for i in range[1, 6]:
+    advance(k, 1000)
+drift = false
+for e in events:
+    if e.event == "time_changed" and e.reason == "drift":
+        drift = true
+eq(drift, true, "a jump of the real time is reported as drift")
+
+# смена настроек рассылается
+events = []
+def changer(sys, args):
+    rpc.call(sys, "timed", "set_conf", {seconds: false})
+k:spawn(changer, [], {name: "changer", subject: system})
+settle(k)
+settings_event = false
+for e in events:
+    if e.event == "time_changed" and e.reason == "settings":
+        settings_event = true
+eq(settings_event, true, "a settings change is announced")
+
+# ---------------------------------------------------------------- клиент для сессии
+tc = {}
+def session(sys, args):
+    api = timeclient.new(sys)
+    tc.tz = api.time.conf.tz
+    tc.ok = api.save({tz: "Europe/Kyiv"})
+    r, why = api.save({tz: "Nowhere"})
+    tc.bad = r
+    tc.why = why
+    api.refresh()
+    tc.after = api.time.conf.tz
+k:spawn(session, [], {name: "session", subject: system})
+settle(k)
+eq(tc.tz, "Asia/Tokyo", "the client reads the service settings")
+eq([tc.ok, tc.bad], [true, false], "save goes through the service and rejects bad input")
+eq(string.find(tc.why, "unknown zone", 1, true) != nil, true, "the rejection explains why")
+eq(tc.after, "Europe/Kyiv", "refresh rereads the settings")
+
+state.stop = true
+k:kill(timed_pid, "kill")
+print("done")

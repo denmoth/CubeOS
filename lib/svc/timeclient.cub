@@ -1,0 +1,30 @@
+# svc.timeclient: часы для процесса ядра (оболочка сессии, панель): настройки берутся у службы timed, расчёты идут у себя
+#
+#   t = timeclient.new(sys)         {time: часы clock.Clock, save: (changes) -> ok, err}; без службы часы по умолчанию (save даёт ошибку)
+#   shell options: {time: t.time, time_save: t.save}
+#   t.refresh()                      перечитать настройки (после события time_changed)
+
+import clock
+import svc.rpc as rpc
+
+export def new(sys, timeout=2):
+    conf, err = rpc.call(sys, "timed", "get_conf", nil, timeout)
+    c = clock.new(conf)
+    api = {time: c}
+    def refresh():
+        fresh, why = rpc.call(sys, "timed", "get_conf", nil, timeout)
+        if fresh != nil:
+            c.conf = clock.normalize(fresh)
+        return fresh != nil
+    api.refresh = refresh
+    def save(changes):
+        res, why = rpc.call(sys, "timed", "set_conf", changes, timeout)
+        if res == nil:
+            return false, why
+        if not res.ok:
+            return false, table.concat(res.problems, "; ")
+        if not res.saved:
+            return false, res.why
+        return true
+    api.save = save
+    return api
