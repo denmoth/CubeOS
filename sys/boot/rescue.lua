@@ -14,8 +14,31 @@ end
 
 term.clear()
 term.setCursorPos(1, 1)
-print(arg.gate and "CubeOS: access to CraftOS" or "CubeOS recovery")
+print(arg.disk and ("CubeOS: boot from " .. arg.disk) or arg.gate and "CubeOS: access to CraftOS" or "CubeOS recovery")
 if arg.reason then print("Reason: " .. tostring(arg.reason)) end
+
+-- предупреждение перед CraftOS и загрузкой с дискеты (D225): понятно игроку, без жаргона
+local WARNING = {
+  "",
+  "WARNING: CubeOS cannot protect this computer",
+  "while it runs CraftOS or a program from a disk.",
+  "",
+  "Anyone who walks up to it can read, change or",
+  "delete any file: your data, other users' data",
+  "and the system itself.",
+  "",
+  "If this computer holds anything important, do",
+  "only what you came to do, then shut it down",
+  "(hold Ctrl+S, or type: shutdown) so nobody can",
+  "use it after you.",
+  "",
+}
+if arg.gate then
+  for _, l in ipairs(WARNING) do print(l) end
+  write("Continue? (y/N) ")
+  local yes = (read() or ""):lower()
+  if yes ~= "y" and yes ~= "yes" then return "reboot" end
+end
 
 -- хвост журнала загрузки: что происходило перед сбоем (читается без пароля: там нет секретов)
 do

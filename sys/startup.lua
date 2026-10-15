@@ -6,6 +6,7 @@ local function run(f, a) f = loadfile(S .. f) if not f then return false end ret
 local ok, r = run("stage1.lua")
 if not ok then ok, r = run("rescue.lua", { reason = tostring(r or "stage1.lua is missing") }) end
 os.pullEvent = pe
+if ok and type(r) == "table" and r.disk then shell.run(r.disk) return end   -- загрузка с дискеты (D224, diskboot.lua)
 if not ok and fs.exists("/cubeos/sys/cfg/users.conf") then   -- система есть, но восстановить нечем: заперто
   print("CubeOS: system files are damaged and recovery is unavailable.")
   sleep(5) os.shutdown()

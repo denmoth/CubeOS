@@ -76,6 +76,7 @@ local function main()
   reset_screen()
   term.write("Starting CubeOS...")
   blog("info", "stage 2 started (pixel=" .. tostring(ctx.caps and ctx.caps.pixel) .. ", mode=" .. tostring(ctx.mode or "normal") .. ")")
+  for _, n in ipairs(ctx.notes or {}) do blog("info", n) end
 
   rt = dofile(B .. "runtime.lua")
   local import = rt.import

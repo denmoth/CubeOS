@@ -17,6 +17,7 @@ local SRC = {
   stage1 = slurp(ROOT .. "/sys/boot/stage1.lua"),
   rescue = slurp(ROOT .. "/sys/boot/rescue.lua"),
   startup = slurp(ROOT .. "/sys/startup.lua"),
+  diskboot = slurp(ROOT .. "/sys/boot/diskboot.lua"),
 }
 local B = "/cubeos/sys/boot/"
 
@@ -58,9 +59,35 @@ local function world(o)
       return { readAll = function() return text end, close = function() end }
     end,
     exists = function(path) return w.files[path] ~= nil end,
+    isDir = function(path) return false end,
+    combine = function(a, b) return a .. "/" .. b end,
   }
+  -- настройки CraftOS и дисководы: o.settings {имя = значение}, o.disks {сторона = {id, label, files {путь = текст}}}
+  w.settings_data = o.settings or { ["shell.allow_disk_startup"] = true }
+  w.saved = 0
+  w.settings = {
+    get = function(k) return w.settings_data[k] end,
+    set = function(k, v) w.settings_data[k] = v end,
+    save = function() w.saved = w.saved + 1 end,
+  }
+  local disks = o.disks or {}
+  local names = {}
+  for side in pairs(disks) do names[#names + 1] = side end
+  table.sort(names)
+  w.peripheral = { getNames = function() return names end }
+  w.disk = {
+    isPresent = function(s) return disks[s] ~= nil end,
+    hasData = function(s) return disks[s] ~= nil end,
+    getMountPath = function(s) return "disk" end,
+    getID = function(s) return disks[s].id end,
+    getLabel = function(s) return disks[s].label end,
+  }
+  for side, d in pairs(disks) do
+    for path, text in pairs(d.files or {}) do w.files["/disk/" .. path] = text end
+  end
   env = setmetatable({
     os = w.os, fs = w.fs, term = w.term, colors = colors, keys = keys,
+    settings = w.settings, peripheral = w.peripheral, disk = w.disk,
     print = function(...)
       local parts = {}
       for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
@@ -72,11 +99,12 @@ local function world(o)
     loadfile = function(path)
       local l = o.loaders and o.loaders[path]
       if l == "rescue" then return chunk("rescue", SRC.rescue) end
+      if l == "diskboot" then return chunk("diskboot", SRC.diskboot) end
       if type(l) == "function" then return l end
       return nil, path .. ": No such file"
     end,
   }, { __index = _G })
-  w.run = function(name) return chunk(name, SRC[name])() end
+  w.run = function(name, a) return chunk(name, SRC[name])(a) end
   w.text = function() return table.concat(w.out, "\n") end
   return w
 end
@@ -94,7 +122,7 @@ do
   check("plain boot returns nil", r == nil, r)
   check("loader got caps", seen and seen.caps.pixel == true and seen.caps.color == false)
   check("normal mode has no override", seen and seen.mode == nil and seen.menu == false)
-  check("hint is shown", w.text():find("F2: menu", 1, true) ~= nil)
+  check("hint is shown", w.text():find("Del: menu", 1, true) ~= nil)
 end
 
 -- 2. Ctrl+T (terminate) во время окна и меню ничего не ломает
@@ -106,19 +134,19 @@ do
   check("terminate is ignored in the key window", seen ~= nil)
 end
 
--- 3. F2 открывает меню; Enter запускает обычную загрузку
+-- 3. Delete открывает меню; Enter запускает обычную загрузку
 do
   local seen
-  local w = world({ events = { { "key", "f2" }, { "key", "enter" } }, loaders = { [B .. "stage2.lua"] = function(ctx) seen = ctx end } })
+  local w = world({ events = { { "key", "delete" }, { "key", "enter" } }, loaders = { [B .. "stage2.lua"] = function(ctx) seen = ctx end } })
   w.run("stage1")
   check("menu is drawn", w.text():find("CubeOS boot menu", 1, true) ~= nil)
-  check("F2 then Enter boots normally", seen and seen.mode == nil and seen.menu == true)
+  check("Delete then Enter boots normally", seen and seen.mode == nil and seen.menu == true)
 end
 
--- 4. F2, вниз, Enter: безопасный режим
+-- 4. Delete, вниз, Enter: безопасный режим
 do
   local seen
-  local w = world({ events = { { "key", "f2" }, { "key", "down" }, { "key", "enter" } },
+  local w = world({ events = { { "key", "delete" }, { "key", "down" }, { "key", "enter" } },
     loaders = { [B .. "stage2.lua"] = function(ctx) seen = ctx end } })
   w.run("stage1")
   check("safe mode is passed to the loader", seen and seen.mode == "safe")
@@ -169,14 +197,14 @@ end
 
 -- 10. пункт меню CraftOS: без учётных записей открыт, при отказе возврат в меню
 do
-  local w = world({ events = { { "key", "f2" }, { "key", "down" }, { "key", "down" }, { "key", "down" }, { "key", "enter" } },
-    loaders = { [B .. "rescue.lua"] = "rescue" } })
+  local w = world({ events = { { "key", "delete" }, { "key", "down" }, { "key", "down" }, { "key", "down" }, { "key", "down" }, { "key", "enter" } },
+    reads = { "y" }, loaders = { [B .. "rescue.lua"] = "rescue" } })
   local r = w.run("stage1")
   check("CraftOS entry without accounts", r == "craftos", r)
 end
 do
   local calls, log = 0, {}
-  local w = world({ events = { { "key", "f2" }, { "key", "down" }, { "key", "down" }, { "key", "down" }, { "key", "enter" }, { "key", "enter" } },
+  local w = world({ events = { { "key", "delete" }, { "key", "down" }, { "key", "down" }, { "key", "down" }, { "key", "down" }, { "key", "enter" }, { "key", "enter" } },
     loaders = { [B .. "rescue.lua"] = function(arg) calls = calls + 1; log[#log + 1] = arg.gate; return "reboot" end,
       [B .. "stage2.lua"] = function() return "booted" end } })
   local r = w.run("stage1")
@@ -198,7 +226,7 @@ do
   check("zero window skips waiting", seen ~= nil)
 
   seen = nil
-  w = world({ events = { { "key", "f2" }, { "timer" } }, files = { ["/cubeos/sys/cfg/boot.conf"] = "{ menu: \"off\" }" },
+  w = world({ events = { { "key", "delete" }, { "timer" } }, files = { ["/cubeos/sys/cfg/boot.conf"] = "{ menu: \"off\" }" },
     loaders = { [B .. "stage2.lua"] = function(ctx) seen = ctx end } })
   w.run("stage1")
   check("menu off ignores the key", seen and seen.menu == false)
@@ -234,7 +262,7 @@ do
   check("startup uses raw events", SRC.startup:find("os.pullEvent = os.pullEventRaw", 1, true) ~= nil)
   -- размер кода без комментариев (русские комментарии в байтах тяжёлые): этап 1 остаётся небольшим
   local code = SRC.stage1:gsub("%-%-[^\n]*", ""):gsub("\n%s*\n", "\n")
-  check("stage1 is small", #code < 5500, #code)
+  check("stage1 is small", #code < 6500, #code)   -- дискеты вынесены в diskboot.lua
 end
 
 -- 14. runtime.recovery_login с настоящими CFS и Auth (временный корень данных)
@@ -263,4 +291,63 @@ do
   fs.makeDir(root)
   check("recovery is open without accounts", rt.recovery_login(console({}), { root = root }) == true)
   fs.delete(root)
+end
+
+-- 15. дискеты (D224): загрузка с дискет ROM выключается, своя загрузка по disk_boot, доверенные по номеру и хэшу, предупреждение
+do
+  local fake_rt = function() return { import = function() return {
+    digest = function(t) return t end, to_hex = function(t) return string.format("%08x", #t) end } end } end
+  local function boot(conf, disks, extra)
+    local seen
+    local o = { events = { { "timer" } }, disks = disks, files = { ["/cubeos/sys/cfg/boot.conf"] = conf },
+      loaders = { [B .. "diskboot.lua"] = "diskboot", [B .. "runtime.lua"] = fake_rt,
+        [B .. "stage2.lua"] = function(ctx) seen = ctx end } }
+    for k, v in pairs(extra or {}) do
+      if k == "loaders" then for a, b in pairs(v) do o.loaders[a] = b end else o[k] = v end
+    end
+    if o.trusted then o.files["/cubeos/sys/cfg/trusted_disks.conf"] = o.trusted end
+    local w = world(o)
+    local r = w.run("stage1")
+    return r, seen, w
+  end
+  local DISK = { right = { id = 7, label = "tools", files = { ["startup.lua"] = "print('hi')" } } }
+
+  local r, seen, w = boot("{}", {})
+  check("ROM disk startup is turned off", w.settings_data["shell.allow_disk_startup"] == false and w.saved == 1)
+  check("the note reaches stage2", seen and seen.notes[1] and seen.notes[1]:find("turned it off", 1, true) ~= nil)
+  r, seen, w = boot("{ rom_disk_startup: true }", {})
+  check("rom_disk_startup: true leaves it alone", w.settings_data["shell.allow_disk_startup"] == true and w.saved == 0)
+
+  r, seen = boot("{}", DISK)
+  check("disk_boot off by default: the disk is ignored", r == nil and seen ~= nil)
+  r, seen = boot("{ disk_boot: 'all' }", DISK)
+  check("disk_boot all boots any disk", type(r) == "table" and r.disk == "/disk/startup.lua" and seen == nil, r)
+  r, seen = boot("{ disk_boot: 'trusted' }", DISK)
+  check("trusted: an unknown disk is ignored", r == nil and seen ~= nil and seen.notes[#seen.notes]:find("not trusted", 1, true) ~= nil)
+  r, seen = boot("{ disk_boot: 'trusted' }", DISK, { trusted = "7 0000000b tools\n" })
+  check("trusted: id and hash match", type(r) == "table" and r.disk == "/disk/startup.lua")
+  r, seen = boot("{ disk_boot: 'trusted' }", DISK, { trusted = "7 0000000c tools\n" })
+  check("trusted: a changed startup is not trusted", r == nil and table.concat(seen.notes, "|"):find("changed", 1, true) ~= nil)
+
+  local gates = {}
+  local pw = function(answer) return function(arg) gates[#gates + 1] = arg; return answer end end
+  r, seen = boot("{ disk_boot: 'password' }", DISK, { loaders = { [B .. "rescue.lua"] = pw("craftos") } })
+  check("password: the admin password boots an unknown disk", type(r) == "table" and gates[1].gate == true and gates[1].disk:find("disk 7", 1, true) ~= nil)
+  r, seen = boot("{ disk_boot: 'password' }", DISK, { loaders = { [B .. "rescue.lua"] = pw("reboot") } })
+  check("password: refused means a normal boot", r == nil and seen ~= nil)
+
+  -- предупреждение: без «y» в CraftOS не пускает, текст понятный
+  local w2 = world({ reads = { "n" }, loaders = { [B .. "rescue.lua"] = "rescue" } })
+  local r2 = w2.run("rescue", { gate = true })
+  check("the CraftOS warning needs a yes", r2 == "reboot" and w2.text():find("cannot protect this computer", 1, true) ~= nil, r2)
+  check("the warning says to shut down", w2.text():find("shut it down", 1, true) ~= nil)
+end
+
+-- 16. пункт меню «журнал ввода» (D220): обычная загрузка с флагом
+do
+  local seen
+  local w = world({ events = { { "key", "delete" }, { "key", "down" }, { "key", "down" }, { "key", "enter" } },
+    loaders = { [B .. "stage2.lua"] = function(ctx) seen = ctx end } })
+  w.run("stage1")
+  check("input log menu entry", seen and seen.input_log == true and seen.mode == nil, seen and tostring(seen.input_log))
 end

@@ -1,6 +1,6 @@
 -- CubeOS, этап 1 загрузки (D204, D207, docs/16-kernel-integration.md). Чистый Lua: без компилятора и библиотек.
 -- Вызывается из startup.lua. Результат: nil (выключить), "reboot" или "craftos" (отдать управление оболочке CraftOS).
--- Делает: ждёт клавишу меню (F2) или Ctrl около секунды, показывает меню, выбирает и запускает загрузчик DE,
+-- Делает: ждёт клавишу меню (Delete, D218) или Ctrl около секунды, показывает меню, выбирает и запускает загрузчик DE,
 -- при любом сбое загрузчика уходит в восстановление с паролем (rescue.lua), а не в голый CraftOS.
 -- Ctrl+T не прерывает: startup.lua подменяет os.pullEvent на os.pullEventRaw, здесь везде только raw.
 
@@ -33,6 +33,7 @@ end
 local ITEMS = {
   { "CubeOS", "boot" },
   { "CubeOS (safe mode)", "safe" },
+  { "CubeOS (input log)", "inputlog" },
   { "Recovery", "recovery" },
   { "CraftOS", "craftos" },
 }
@@ -93,22 +94,32 @@ local function rescue(arg)
   return "reboot"
 end
 
+-- загрузка с дискет (diskboot.lua): путь к startup дискеты или nil
+local function disk_boot(conf, notes)
+  local f = loadfile(B .. "diskboot.lua")
+  if not f then return nil end
+  local function gate(info) return rescue({ gate = true, disk = info.disk }) == "craftos" end
+  local ok, r = pcall(f, { conf = conf, opt = opt, gate = gate, notes = notes })
+  if not ok then notes[#notes + 1] = "disk boot check failed: " .. tostring(r) return nil end
+  return r
+end
+
 local function run(conf)
   -- чистый экран перед всем остальным: от прошлой программы или загрузки на экране не должно остаться ни символа
   if term.isColor() then term.setBackgroundColor(colors.black) term.setTextColor(colors.white) end
   term.clear()
   term.setCursorPos(1, 1)
   local caps = { pixel = type(term.setGraphicsMode) == "function", color = term.isColor() }
-  local mode = opt(conf, "menu", "key")                      -- "key" (F2 открывает меню), "always", "off"
+  local mode = opt(conf, "menu", "key")                      -- "key" (Delete открывает меню), "always", "off"
   local window = (tonumber(opt(conf, "key_window_ms", 1000)) or 1000) / 1000
-  local name = tostring(opt(conf, "menu_key", "f2"))
+  local name = tostring(opt(conf, "menu_key", "delete"))
   local menukey = keys[name] or keys[name:lower()]
   local want_menu, ctrl = mode == "always", false
   if mode ~= "always" and window > 0 then
     local w, h = term.getSize()
     if term.isColor() then term.setTextColor(colors.gray) term.setBackgroundColor(colors.black) end
     term.setCursorPos(1, h)
-    term.write(name:upper() .. ": menu   Ctrl: recovery")
+    term.write((name == "delete" and "Del" or name:upper()) .. ": menu   Ctrl: recovery")
     local timer = os.startTimer(window)
     while true do
       local e, a = raw()
@@ -136,11 +147,24 @@ local function run(conf)
     end
   end
 
+  -- дискеты: всегда (выключает загрузку с дискет ROM), запуск дискеты только не в безопасном режиме
+  local notes = {}
+  local path = disk_boot(conf, notes)
+  if path and choice ~= "safe" then
+    pcall(function()
+      local f = fs.open("/cubeos/var/log/boot.log", "a")
+      for _, n in ipairs(notes) do f.write(os.date("!%Y-%m-%dT%H:%M:%SZ") .. " info boot " .. n .. "\n") end
+      f.close()
+    end)
+    return { disk = path }
+  end
+
   local de = rd(DE_CONF)
   local path = opt(de, "boot", B .. "stage2.lua")
   local fn, err = loadfile(path)
   if not fn then return rescue({ reason = "cannot load the boot loader: " .. tostring(err) }) end
-  local ctx = { caps = caps, mode = choice == "safe" and "safe" or nil, menu = want_menu, boot_dir = B, conf_path = CONF }
+  local ctx = { caps = caps, mode = choice == "safe" and "safe" or nil, menu = want_menu, boot_dir = B, conf_path = CONF,
+    notes = notes, input_log = choice == "inputlog" }
   local ok, res, why = pcall(fn, ctx)
   if not ok then return rescue({ reason = tostring(res) }) end
   if res == "recovery" then return rescue({ reason = why or "requested by the boot loader" }) end
