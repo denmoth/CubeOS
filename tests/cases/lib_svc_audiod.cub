@@ -63,7 +63,7 @@ eq(calls[1], "note bell 1 12", "a note, with the volume halved by audio.conf (50
 r = call("note", {instrument: "kazoo"}, "bad")
 eq(string.find(tostring(r[2]), "unknown instrument", 1, true) != nil, true, "an unknown instrument is refused")
 call("sound", {name: "minecraft:entity.cat.ambient"}, "snd")
-eq(calls[2], "sound minecraft:entity.cat.ambient 0.5", "a Minecraft sound")
+eq(calls[2], "sound minecraft:entity.cat.ambient 1.5", "a Minecraft sound: no volume given is the speaker maximum (3) times 50%")
 r = call("play", {data: string.rep("x", 20000), title: "song"}, "p")
 eq(r[1], true, "music starts in the background")
 eq(call("status", nil, "st")[1].playing, true, "status says it is playing")
@@ -80,6 +80,7 @@ for c in calls:
         audio_calls += 1
 eq(audio_calls, 2, "20000 bytes go out in two chunks, after the speaker frees up")
 eq(call("status", nil, "st2")[1].playing, false, "and then it stops by itself")
+eq(call("volume", {value: 37.5}, "vf")[1], 37.5, "fractional volume is kept")
 call("volume", {value: 80}, "v")
 eq(string.find(fsys:read_file(nil, "/cubeos/sys/cfg/audio.conf"), "80", 1, true) != nil, true, "the volume is saved")
 r = call("volume", {value: 300}, "v2")

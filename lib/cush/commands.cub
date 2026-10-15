@@ -181,7 +181,7 @@ export const COMMANDS = {
         flags: [["FILE", "Play a .dfpwm file in the background"], ["note", "One note: instrument, pitch 0-24, volume 0-3"],
             ["sound", "A Minecraft sound, for example minecraft:entity.cat.ambient"], ["stop", "Stop the music"], ["status", "What is playing, volume, speakers"]],
         examples: [["play song.dfpwm", "Music"], ["play note bell 12", "One bell note"]], see: ["volume"]},
-    volume: {cat: "system", summary: "Sound volume", usage: "volume [0-100]", about: "Shows or sets the volume of everything the computer plays.",
+    volume: {cat: "system", summary: "Sound volume", usage: "volume [0-100]", about: "Shows or sets the volume of everything the computer plays: 100 is the loudest a speaker can play, fractions like 37.5 work.",
         flags: [], examples: [["volume 50", "Half as loud"]], see: ["play"]},
     top: {cat: "system", summary: "Processes, live", usage: "top [-N]",
         about: "The process list, refreshed every second (or every N seconds). q quits.", flags: [["-N", "Refresh every N seconds"]],

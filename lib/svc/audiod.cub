@@ -42,10 +42,11 @@ export def main(sys, args):
         table.sort(out)
         return out
 
+    # итоговая громкость CC (0..3): громкость звука (по умолчанию 3, максимум динамика) × общая громкость; 100% это максимум
     def gain(v):
         if state.muted:
             return 0
-        return (v ?? 1) * state.volume / 100
+        return (v ?? 3) * state.volume / 100
 
     def each_speaker(fn):
         n = 0
@@ -100,7 +101,7 @@ export def main(sys, args):
             for name in speakers():
                 sp = per.wrap(name)
                 if sp != nil:
-                    while not state.stop and not sp.playAudio(buffer, math.min(3, gain(1))):
+                    while not state.stop and not sp.playAudio(buffer, math.min(3, gain(nil))):
                         psys.wait_event(["speaker_audio_empty"])
         state.playing = false
         state.title = nil
@@ -141,7 +142,7 @@ export def main(sys, args):
             v = tonumber(o.value)
             if v == nil or v < 0 or v > 100:
                 raise Error("the volume is 0 to 100")
-            state.volume = math.floor(v)
+            state.volume = math.floor(v * 10 + 0.5) / 10
             state.muted = false
             text = view:exists(CONF_PATH) and view:read(CONF_PATH) or "{}\n"
             text = json5.patch(json5.patch(text, ["volume"], state.volume), ["muted"], false)

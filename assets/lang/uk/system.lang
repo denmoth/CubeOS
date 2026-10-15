@@ -291,8 +291,8 @@ msgstr "Грає через усі динаміки, під'єднані до к
 msgid "Sound volume"
 msgstr "Гучність звуку"
 
-msgid "Shows or sets the volume of everything the computer plays."
-msgstr "Показує або задає гучність усього, що грає комп'ютер."
+msgid "Shows or sets the volume of everything the computer plays: 100 is the loudest a speaker can play, fractions like 37.5 work."
+msgstr "Показує або задає гучність усього, що грає комп'ютер: 100 це максимум динаміка, можна дробові на кшталт 37.5."
 
 msgid "Processes, live"
 msgstr "Процеси наживо"
