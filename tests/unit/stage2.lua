@@ -37,11 +37,29 @@ fresh()
 local power = {}
 local quick_shell = function(session) return function(sys, args) sys.out("hi") end end
 local con = console({ "root", "", "s" })
-local ok, res, why = pcall(stage2, { shell = quick_shell, boot_dir = ROOT .. "/sys/boot/", root = root, console = con, caps = { pixel = false, color = false },
+-- язык системы с подписями экрана загрузки (пакет zz с одним boot.lang) и экран, который запоминает подписи
+local function put(path, text)
+  fs.makeDir(fs.getDir(path))
+  local f = fs.open(path, "w") f.write(text) f.close()
+end
+put(root .. "/cubeos/sys/cfg/locale.conf", '{lang: "zz"}')
+put(root .. "/cubeos/share/lang/zz/boot.lang", 'msgid "Loading the kernel"\nmsgstr "ZZ kernel"\n')
+local labels = {}
+local rec = {}
+function rec:open() end
+function rec:progress(f, text) if text then labels[#labels + 1] = text end end
+function rec:message() end
+function rec:tick() return false end
+function rec:done() end
+function rec:close() end
+function rec:error() end
+local ok, res, why = pcall(stage2, { shell = quick_shell, boot_dir = ROOT .. "/sys/boot/", root = root, console = con, caps = { pixel = false, color = false }, splash = rec,
   power = { shutdown = function() power[#power + 1] = "shutdown" end, reboot = function() power[#power + 1] = "reboot" end } })
 check("first boot runs to the shutdown", ok and res == nil, ok and (tostring(res) .. " " .. tostring(why)) or res)
 check("the greeter offered the first account", con:text():find("Create the first account", 1, true) ~= nil, con:text())
 check("shutdown reached the power hook", power[1] == "shutdown", power[1])
+check("boot captions come in the system language from boot.lang", table.concat(labels, "|"):find("ZZ kernel", 1, true) ~= nil, table.concat(labels, "|"))
+check("captions without a translation stay English", table.concat(labels, "|"):find("Loading libraries", 1, true) ~= nil, table.concat(labels, "|"))
 local state = read(root .. "/cubeos/var/boot.state") or ""
 check("boot state is clean after the cycle", state:find("pending: false", 1, true) ~= nil or state:find('"pending": false', 1, true) ~= nil, state)
 local timing = read(root .. "/cubeos/var/boot.timing") or ""

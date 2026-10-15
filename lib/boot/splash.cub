@@ -71,6 +71,7 @@ export class PixelSplash:
         self.term = opts.term ?? term
         self.clock = opts.clock ?? _now
         self.title = opts.title ?? version.full()
+        self.tr = opts.tr ?? ((s) => s)
         self.target = 0
         self.shown = 0
         self.label = ""
@@ -385,7 +386,7 @@ export class PixelSplash:
         sc = self.text_scale
         top = self.ver_y + f.height * sc + math.floor(self.h * 0.04)
         s:restore(self.plain, 0, top, self.w, self.h - top)
-        s:text(f, 8 * sc, top, "Boot failed", C_ERR, {scale: math.max(sc, self.name_scale - 1)})
+        s:text(f, 8 * sc, top, self.tr("Boot failed"), C_ERR, {scale: math.max(sc, self.name_scale - 1)})
         y = top + (f.height + 4) * math.max(sc, self.name_scale - 1)
         for line in surface_mod.wrap(f, text, self.w - 16 * sc, 0, sc):
             if y + f.height * sc <= self.h:
@@ -406,6 +407,7 @@ export class TextSplash:
         self.term = opts.term ?? term
         self.clock = opts.clock ?? _now
         self.title = opts.title ?? version.full()
+        self.tr = opts.tr ?? ((s) => s)
         self.label = ""
         self.note = ""
         self.frac = 0
@@ -531,7 +533,7 @@ export class TextSplash:
             t.setTextColor(colors.red)
         t.clear()
         t.setCursorPos(1, 1)
-        t.write("Boot failed")
+        t.write(self.tr("Boot failed"))
         if self.color:
             t.setTextColor(colors.white)
         row = 3
@@ -602,7 +604,7 @@ export class Guard:
     def close(self):
         return self:_call("close")
 
-# opts: caps ({pixel: bool}), term, assets, font, clock, title, text (true: принудительно текстовый вариант)
+# opts: caps ({pixel: bool}), term, assets, font, clock, title, tr (перевод подписей), text (true: принудительно текстовый вариант)
 export def new(opts=nil):
     o = opts ?? {}
     caps = o.caps ?? {}

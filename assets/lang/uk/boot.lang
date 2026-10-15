@@ -1,0 +1,28 @@
+# CubeOS: подписи экрана загрузки (uk). Создано tools/gen_lang.py; править tools/lang_data.py.
+
+msgid "Loading libraries"
+msgstr "Завантаження бібліотек"
+
+msgid "Loading the filesystem"
+msgstr "Завантаження файлової системи"
+
+msgid "Loading the kernel"
+msgstr "Завантаження ядра"
+
+msgid "Loading system services"
+msgstr "Завантаження системних служб"
+
+msgid "Loading the terminal"
+msgstr "Завантаження термінала"
+
+msgid "Preparing the system"
+msgstr "Підготовка системи"
+
+msgid "Starting services"
+msgstr "Запуск служб"
+
+msgid "Ready"
+msgstr "Готово"
+
+msgid "Boot failed"
+msgstr "Завантаження не вдалося"

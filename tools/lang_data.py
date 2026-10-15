@@ -666,4 +666,13 @@ T = {
 "List the Minecraft sounds with WORD in the name (after play sound, Tab completes them)": ("Список звуков Minecraft со СЛОВОМ в имени (после play sound их дополняет Tab)", "Список звуків Minecraft зі СЛОВОМ в імені (після play sound їх доповнює Tab)"),
 "...and {n} more: add a word to narrow it down": ("...и ещё {n}: добавьте слово, чтобы сузить", "...і ще {n}: додайте слово, щоб звузити"),
 "{n} sounds": ("Звуков: {n}", "Звуків: {n}"),
+"Loading libraries": ("Загрузка библиотек", "Завантаження бібліотек"),
+"Loading the filesystem": ("Загрузка файловой системы", "Завантаження файлової системи"),
+"Loading the kernel": ("Загрузка ядра", "Завантаження ядра"),
+"Loading system services": ("Загрузка системных служб", "Завантаження системних служб"),
+"Loading the terminal": ("Загрузка терминала", "Завантаження термінала"),
+"Preparing the system": ("Подготовка системы", "Підготовка системи"),
+"Starting services": ("Запуск служб", "Запуск служб"),
+"Ready": ("Готово", "Готово"),
+"Boot failed": ("Загрузка не удалась", "Завантаження не вдалося"),
 }

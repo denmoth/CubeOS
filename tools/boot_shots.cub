@@ -33,17 +33,18 @@ def dump(inner, name):
         f.write(table.concat(parts))
     f.close()
 
-def shoot(cols, rows, tag):
+def shoot(cols, rows, tag, words=nil):
+    tr = (x) => (words != nil and words[x]) or x
     clock = {now: 100}
     def tick_clock():
         clock.now = clock.now + 0.1
         return clock.now
-    s = splash.new({caps: {pixel: true}, term: make_term(cols, rows), clock: tick_clock, assets: "/repo/assets", title: "CubeOS 0.3.0"})
+    s = splash.new({caps: {pixel: true}, term: make_term(cols, rows), clock: tick_clock, assets: "/repo/assets", title: "CubeOS 0.3.0", tr: tr})
     s:open()
     steps = [[0.02, "Loading libraries"], [0.3, "Loading the kernel"], [0.55, "Loading the terminal"], [0.8, "Starting services"], [1, "Ready"]]
     n = 0
     for st in steps:
-        s:progress(st[1], st[2])
+        s:progress(st[1], tr(st[2]))
         if st[1] == 0.8:
             s:message("timed: service ready")
         for i in range[1, 12]:
@@ -55,3 +56,4 @@ def shoot(cols, rows, tag):
 
 shoot(COLS, ROWS, "small")
 shoot(164, 81, "monitor")
+shoot(COLS, ROWS, "ru", {"Loading the kernel": "Загрузка ядра", "Loading the terminal": "Загрузка терминала", "Boot failed": "Загрузка не удалась"})

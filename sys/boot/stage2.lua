@@ -19,8 +19,36 @@ local ORDER = { "libs", "fs", "kernel", "system", "shell", "setup", "services", 
 local weights = { libs = 0.20, fs = 0.08, kernel = 0.15, system = 0.10, shell = 0.17, setup = 0.05, services = 0.20, login = 0.05 }
 
 local splash, rt, booted
+-- подписи экрана на языке системы (locale.conf: lang), из boot.lang языкового пакета
+local boot_tr = {}
+local function tr(s) return boot_tr[s] or s end
+local function load_boot_lang(json5, assets)
+  pcall(function()
+    local f = fs.open((ctx.root or "") .. "/cubeos/sys/cfg/locale.conf", "r")
+    if not f then return end
+    local conf = json5.parse(f.readAll())
+    f.close()
+    local lang = type(conf) == "table" and conf.lang
+    if type(lang) ~= "string" or lang == "en" or not lang:match("^[%w_%-]+$") then return end
+    for _, root in ipairs({ assets .. "/lang", (ctx.root or "") .. "/cubeos/share/lang" }) do
+      local h = fs.open(root .. "/" .. lang .. "/boot.lang", "r")
+      if h then
+        local id
+        local function unq(s) return (s:gsub('\\"', '"'):gsub("\\n", "\n")) end
+        for line in h.readAll():gmatch("[^\n]+") do
+          local a = line:match('^msgid%s+"(.*)"%s*$')
+          local b = line:match('^msgstr%s+"(.*)"%s*$')
+          if a then id = unq(a) elseif b and id then if b ~= "" then boot_tr[id] = unq(b) end id = nil end
+        end
+        h.close()
+        return
+      end
+    end
+  end)
+end
 local function report(stage, f, text)
   if not splash then return end
+  text = text and tr(text)
   local sum, before = 0, 0
   for _, n in ipairs(ORDER) do
     if n == stage then before = sum end
@@ -86,9 +114,10 @@ local function main()
   -- минимум для экрана, потом он показывается и дальше полоса ведёт загрузку
   rt.preload({ "version", "json5", "boot.splash" })
   local version = import("version")
-  splash = ctx.splash or import("boot.splash").new({ caps = ctx.caps, term = term, assets = rt.source .. "/assets", title = version.full() })
+  splash = ctx.splash or import("boot.splash").new({ caps = ctx.caps, term = term, assets = rt.source .. "/assets", title = version.full(), tr = tr })
   splash:open()
   local json5 = import("json5")
+  load_boot_lang(json5, rt.source .. "/assets")
   -- веса по прошлой загрузке (финал «login» не считается: он идёт по своему времени)
   pcall(function()
     local f = fs.open((ctx.root or "") .. "/cubeos/var/boot.timing", "r")
