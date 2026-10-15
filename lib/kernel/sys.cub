@@ -76,6 +76,10 @@ export def secret_input(on):
 export def busy(reason):
     _call({op: "busy", reason: reason})
 
+# событие cubeos_* всем процессам, которые его ждут (настройки изменились и т.п.)
+export def broadcast(name, *args):
+    return _check(_call({op: "broadcast", name: name, args: args}))
+
 export def info():
     return _check(_call({op: "info"}))
 

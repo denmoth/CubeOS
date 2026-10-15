@@ -1,0 +1,69 @@
+import t
+import kernel
+import cfs
+import cfs.rules as rules
+import svc.inputd as inputd
+import svc.rpc as rpc
+import json5
+eq = t.eq
+
+# Служба ввода (D235): настройки клавиатуры, смена только администратором, событие cubeos_keyboard всем, кто ждёт.
+
+fsys = cfs.new({})
+fsys:mount("/", cfs.memory())
+fsys:mkdir(nil, "/cubeos/sys/cfg", {parents: true})
+fsys:write_file(nil, "/cubeos/sys/cfg/locale.conf", "{\n  lang: \"en\",\n  // второй язык\n  keyboard: \"ru\",\n}\n")
+system_sub = rules.subject("system", ["system"])
+view = cfs.view(fsys, system_sub, {})
+k = kernel.new({clock: () => 0})
+k:spawn(inputd.main, {view: view, dirs: ["/repo/assets/lang"], system: {kernel: k}}, {name: "inputd", subject: system_sub})
+for i in range[1, 5]:
+    k:run_ready()
+
+answers = {}
+def ask(sys, args):
+    res, err = rpc.call(sys, "inputd", args.op, args.q)
+    answers[args.tag] = res ?? err
+user = rules.subject("bob", ["user"])
+admin = rules.subject("alice", ["user", "admin"])
+k:spawn(ask, {op: "get", tag: "get"}, {name: "a1", subject: user})
+for i in range[1, 10]:
+    k:run_ready()
+eq(answers.get.keyboard, "ru", "the second language from locale.conf")
+eq(answers.get.mode, "auto", "auto mode by default")
+eq(len(answers.get.layouts) >= 2, true, "the installed layouts")
+k:spawn(ask, {op: "set", q: {keyboard: "uk"}, tag: "user"}, {name: "a2", subject: user})
+for i in range[1, 10]:
+    k:run_ready()
+eq(string.find(tostring(answers.user), "only an administrator", 1, true) != nil, true, "an ordinary user cannot change it")
+
+# кто-то ждёт событие cubeos_keyboard (как терминал)
+heard = {}
+def listener(sys, args):
+    ev, kb, mode = sys.wait_event(["cubeos_keyboard"])
+    heard.ev = ev
+    heard.kb = kb
+    heard.mode = mode
+k:spawn(listener, [], {name: "terminal", subject: admin})
+k:spawn(ask, {op: "set", q: {keyboard: "uk", mode: "manual"}, tag: "admin"}, {name: "a3", subject: admin})
+for i in range[1, 15]:
+    k:run_ready()
+eq(answers.admin.keyboard, "uk", "an administrator changes the second language")
+eq([heard.ev, heard.kb, heard.mode], ["cubeos_keyboard", "uk", "manual"], "waiting processes get the new settings at once")
+text = fsys:read_file(nil, "/cubeos/sys/cfg/locale.conf")
+eq(json5.parse(text).keyboard, "uk", "saved to locale.conf")
+eq(string.find(text, "// второй язык", 1, true) != nil, true, "comments in the file are kept")
+k:spawn(ask, {op: "set", q: {keyboard: "xx"}, tag: "bad"}, {name: "a4", subject: admin})
+for i in range[1, 10]:
+    k:run_ready()
+eq(string.find(tostring(answers.bad), "no keyboard layout", 1, true) != nil, true, "an unknown layout is refused")
+
+# только события cubeos_* можно разослать
+res = {}
+def faker(sys, args):
+    res.ok, res.err = pcall(() => sys.broadcast("key", 28))
+k:spawn(faker, [], {name: "faker"})
+for i in range[1, 5]:
+    k:run_ready()
+eq(res.ok, false, "a program cannot fake a key press with broadcast")
+print("done")

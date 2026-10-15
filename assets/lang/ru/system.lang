@@ -300,6 +300,12 @@ msgstr "Скачать страницу или файл"
 msgid "Gets the address over HTTP and prints it or saves it. HTTP must be allowed on the server."
 msgstr "Получает адрес по HTTP и печатает или сохраняет. HTTP должен быть разрешён на сервере."
 
+msgid "Keyboard layout of the system"
+msgstr "Раскладка клавиатуры системы"
+
+msgid "English is always there, plus one second language. In auto mode CubeOS follows the layout you switch in Windows; in manual mode you switch it in CubeOS with Ctrl+Shift or Alt+Shift. Changing it needs an administrator; open terminals switch at once."
+msgstr "Английский есть всегда, плюс один второй язык. В режиме auto CubeOS следует за раскладкой, которую вы переключаете в Windows; в режиме manual переключаете в CubeOS через Ctrl+Shift или Alt+Shift. Менять может администратор; открытые терминалы переключаются сразу."
+
 msgid "Fonts of the terminal"
 msgstr "Шрифты терминала"
 
@@ -846,6 +852,18 @@ msgstr "Только статус и заголовки"
 msgid "Download a file"
 msgstr "Скачать файл"
 
+msgid "The second language: ru, uk or another installed layout"
+msgstr "Второй язык: ru, uk или другая установленная раскладка"
+
+msgid "Follow Windows"
+msgstr "Следовать за Windows"
+
+msgid "Switch inside CubeOS"
+msgstr "Переключать в CubeOS"
+
+msgid "Ukrainian as the second layout"
+msgstr "Украинская второй раскладкой"
+
 msgid "Installed fonts; * marks the terminal font"
 msgstr "Установленные шрифты; * отмечает шрифт терминала"
 
@@ -1080,6 +1098,15 @@ msgstr "учётные записи здесь недоступны"
 msgid "the language is on, but not saved"
 msgstr "язык включён, но не сохранён"
 
+msgid "only an administrator can change the system keyboard"
+msgstr "клавиатуру системы может менять только администратор"
+
+msgid "the mode is auto or manual"
+msgstr "режим: auto или manual"
+
+msgid "service is not running: inputd"
+msgstr "служба inputd не запущена"
+
 msgid "no language package {lang} (installed: {list})"
 msgstr "нет языкового пакета {lang} (установлены: {list})"
 
@@ -1202,6 +1229,21 @@ msgstr "нет дискеты с программой startup"
 
 msgid "Disk #{id} is trusted. If its startup program changes, trust it again."
 msgstr "Дискете #{id} доверяем. Если её программа startup изменится, доверьтесь ей снова."
+
+msgid "Keyboard: English + {lang}, mode {mode}"
+msgstr "Клавиатура: английский + {lang}, режим {mode}"
+
+msgid "auto"
+msgstr "auto"
+
+msgid "Switch the layout in Windows; CubeOS follows it."
+msgstr "Переключайте раскладку в Windows; CubeOS следует за ней."
+
+msgid "Switch the layout with Ctrl+Shift or Alt+Shift (press and release)."
+msgstr "Переключайте раскладку Ctrl+Shift или Alt+Shift (нажать и отпустить)."
+
+msgid "Layouts: {list}"
+msgstr "Раскладки: {list}"
 
 msgid "not a folder"
 msgstr "не папка"

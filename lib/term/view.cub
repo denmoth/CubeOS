@@ -184,6 +184,11 @@ export class TermView(widget.Widget):
             let me = self
             self.ui:after(1.5, () => me:_hide_layout())
 
+    # новые настройки клавиатуры системы (событие cubeos_keyboard от inputd)
+    def set_keyboard(self, keyboard, mode):
+        self.kbd = layout_mod.new(nil, nil, {mode: mode ?? "auto", keyboard: keyboard, dirs: self.kbd.dirs})
+        self:_show_layout()
+
     def _hide_layout(self):
         self.flash = false
         self:invalidate()

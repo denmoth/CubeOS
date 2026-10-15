@@ -1054,3 +1054,37 @@ add("pin", b_pin)
 add("remember", b_remember)
 add("autologin", b_autologin)
 add("disk", b_disk)
+
+# keyboard [set LANG | mode auto|manual]: клавиатура системы (служба inputd, D235)
+def b_keyboard(sh, args):
+    if sh.keyboard == nil:
+        sh:eprint("keyboard: " .. sh:t("not available here"))
+        return 1
+    if args[1] == nil:
+        st, why = sh.keyboard("get")
+        if type(st) != "table":
+            sh:eprint("keyboard: " .. sh:t(tostring(why)))
+            return 1
+        sh:println(sh:t("Keyboard: English + {lang}, mode {mode}", {lang: st.keyboard, mode: st.mode}))
+        sh:write_color("8", sh:t(st.mode == "auto" and "Switch the layout in Windows; CubeOS follows it." or "Switch the layout with Ctrl+Shift or Alt+Shift (press and release)."))
+        sh:println("")
+        names = []
+        for l in st.layouts:
+            names[len(names) + 1] = l.name .. " (" .. l.title .. ")"
+        sh:println(sh:t("Layouts: {list}", {list: table.concat(names, ", ")}))
+        return 0
+    req = nil
+    if args[1] == "set" and args[2] != nil:
+        req = {keyboard: args[2]}
+    elif args[1] == "mode" and args[2] != nil:
+        req = {mode: args[2]}
+    if req == nil:
+        sh:eprint("usage: keyboard [set LANG | mode auto|manual]")
+        return 2
+    st, why = sh.keyboard("set", req)
+    if type(st) != "table":
+        sh:eprint("keyboard: " .. sh:t(tostring(why)))
+        return 1
+    sh:println(sh:t("Keyboard: English + {lang}, mode {mode}", {lang: st.keyboard, mode: st.mode}))
+    return 0
+add("keyboard", b_keyboard)

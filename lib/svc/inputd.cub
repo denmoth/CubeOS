@@ -1,0 +1,79 @@
+# svc.inputd: служба ввода (D235). Держит настройки клавиатуры системы из /cubeos/sys/cfg/locale.conf (keyboard: второй язык,
+# keyboard_mode: auto|manual), меняет их по запросу администратора и рассылает событие cubeos_keyboard (keyboard, mode), чтобы
+# открытые терминалы и экраны сразу перешли на новую раскладку. Дальше здесь же будут общие сочетания клавиш (CDE).
+#
+# Запросы (svc.rpc): get -> {keyboard, mode, layouts: [{name, title}]}, set {keyboard?, mode?} (только администратор).
+# main(sys, args): args.view (вид CFS), args.path (файл), args.dirs (корни языковых пакетов), args.system (контекст загрузки: auth).
+
+import json5
+import input.layout as layout_mod
+import i18n
+import svc.rpc as rpc
+
+export const CONF_PATH = "/cubeos/sys/cfg/locale.conf"
+
+export def main(sys, args):
+    a = args ?? {}
+    view = a.view ?? sys.view()
+    path = a.path ?? CONF_PATH
+    state = {keyboard: "ru", mode: "auto"}
+    kernel = a.system != nil and a.system.kernel or nil
+
+    def load_conf():
+        if view != nil and view:exists(path):
+            ok, data = pcall(() => json5.parse(view:read(path)))
+            if ok and type(data) == "table":
+                state.keyboard = data.keyboard ?? state.keyboard
+                state.mode = data.keyboard_mode ?? state.mode
+    load_conf()
+
+    def layouts():
+        out = []
+        for name in layout_mod.available(a.dirs):
+            if name != "en":
+                pack = i18n.find_pack(name, a.dirs)
+                out[len(out) + 1] = {name: name, title: pack != nil and pack.title or name}
+        return out
+
+    def is_admin(sender):
+        p = kernel != nil and kernel.procs[sender] or nil
+        sub = p != nil and p.subject or nil
+        if sub == nil:
+            return true
+        for r in sub.roles ?? []:
+            if r == "admin" or r == "system":
+                return true
+        auth = a.system != nil and a.system.auth or nil
+        return auth != nil and auth:is_admin(sub.name)
+
+    handlers = {}
+    handlers.get = (q, sender) => {keyboard: state.keyboard, mode: state.mode, layouts: layouts()}
+
+    def set_(q, sender):
+        o = q ?? {}
+        if not is_admin(sender):
+            raise Error("only an administrator can change the system keyboard")
+        if o.mode != nil and o.mode != "auto" and o.mode != "manual":
+            raise Error("the mode is auto or manual")
+        if o.keyboard != nil:
+            found = false
+            for l in layouts():
+                if l.name == o.keyboard:
+                    found = true
+            if not found:
+                raise Error("no keyboard layout for " .. tostring(o.keyboard))
+        text = view:exists(path) and view:read(path) or "{}\n"
+        if o.keyboard != nil:
+            text = json5.patch(text, ["keyboard"], o.keyboard)
+            state.keyboard = o.keyboard
+        if o.mode != nil:
+            text = json5.patch(text, ["keyboard_mode"], o.mode)
+            state.mode = o.mode
+        view:write_atomic(path, text)
+        sys.broadcast("cubeos_keyboard", state.keyboard, state.mode)
+        sys.log("info", "keyboard: " .. state.keyboard .. ", " .. state.mode)
+        return {keyboard: state.keyboard, mode: state.mode}
+    handlers.set = set_
+
+    sys.register("inputd")
+    rpc.serve(sys, handlers)

@@ -692,6 +692,16 @@ export class Kernel:
             return "value", {ok: true}
         h.busy = busy
 
+        # событие всем, кто его ждёт (как событие CC): только имена cubeos_*, чтобы нельзя было подделать ввод или события CC
+        def broadcast(proc, req):
+            name = tostring(req.name)
+            if string.sub(name, 1, 7) != "cubeos_":
+                return "value", {error: "only cubeos_* events can be broadcast"}
+            args = req.args ?? []
+            k:feed(name, args[1], args[2], args[3], args[4])
+            return "value", {ok: true}
+        h.broadcast = broadcast
+
         def klog(proc, req):
             k:log(tostring(req.text), req.level ?? "info")
             return "value", {ok: true}

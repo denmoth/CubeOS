@@ -109,9 +109,12 @@ export def program(session, opts=nil):
         # учётная запись: passwd, pin, remember, status; autologin и trust_disk только после sudo
         def account(op, args=nil):
             return host_call("account", {op: op, args: args})
+        # клавиатура системы (служба inputd): get или set {keyboard, mode}
+        def keyboard(op, args=nil):
+            return host_call("keyboard", {op: op, args: args})
         cfg = view:expand("$cfg")
         env.cush_opts = {history_path: cfg .. "/cush_history", config_path: cfg .. "/cush.conf", user: session.user, host: o.host,
-            home: session.env.home, time: t.time, time_save: time_save, power: power, inputlog: inputlog, log: shell_log, notes: notes, sudo: sudo, account: account,
+            home: session.env.home, time: t.time, time_save: time_save, power: power, inputlog: inputlog, log: shell_log, notes: notes, sudo: sudo, account: account, keyboard: keyboard,
             lang_dir: [(o.assets ?? "/repo/assets") .. "/lang", "/cubeos/share/lang"], unicode: out.kind == "pixel",
             info: {display: out.kind == "pixel" and "pixel mode" or "text mode", font: out.kind == "pixel" and (font_name ?? "cube-mono-6x9") or nil}}
 
@@ -191,6 +194,10 @@ export def program(session, opts=nil):
                     why = err
                 elif req.name == "log":
                     sys.log(req.payload.level, req.payload.text)
+                elif req.name == "keyboard":
+                    res, err = rpc.call(sys, "inputd", req.payload.op, req.payload.args)
+                    ok = res
+                    why = err
                 elif req.name == "sudo" or req.name == "account":
                     ok, why = serve_account(req)
                 elif req.name == "inputlog":
@@ -214,6 +221,9 @@ export def program(session, opts=nil):
             ev, a, b, c, d, e = sys.wait_event()
             # удержание Ctrl+T (через секунду CC сам шлёт terminate; короткое нажатие терминал обрабатывает сам): программу убить без
             # вопросов, а если программы нет, перезапустить оболочку (D222)
+            if ev == "cubeos_keyboard":
+                tv:set_keyboard(a, b)
+                return "none"
             if ev == "terminate":
                 shell = env.cush_shell
                 if shell != nil and shell.fg != nil:

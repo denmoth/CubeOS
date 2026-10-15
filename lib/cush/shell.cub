@@ -99,6 +99,7 @@ export class Shell:
         # sudo(op, password) и account(op, args): права администратора и учётная запись через хозяина терминала (D226)
         self.sudo = o.sudo
         self.account = o.account
+        self.keyboard = o.keyboard
         # log(level, text): запись в журнал системы без ожидания (ошибки команд и самой оболочки), nil вне сессии
         self.log = o.log
         # хозяин терминала смотрит, есть ли программа на переднем плане (удержание Ctrl+T)

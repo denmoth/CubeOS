@@ -186,6 +186,10 @@ export const COMMANDS = {
         about: "Gets the address over HTTP and prints it or saves it. HTTP must be allowed on the server.",
         flags: [["-o file", "Save into a file"], ["-I", "Only the status and headers"]],
         examples: [["curl -o lib.lua https://example.com/lib.lua", "Download a file"]], see: ["json"]},
+    keyboard: {cat: "system", summary: "Keyboard layout of the system", usage: "keyboard [set LANG | mode auto|manual]",
+        about: "English is always there, plus one second language. In auto mode CubeOS follows the layout you switch in Windows; in manual mode you switch it in CubeOS with Ctrl+Shift or Alt+Shift. Changing it needs an administrator; open terminals switch at once.",
+        flags: [["set LANG", "The second language: ru, uk or another installed layout"], ["mode auto", "Follow Windows"], ["mode manual", "Switch inside CubeOS"]],
+        examples: [["keyboard set uk", "Ukrainian as the second layout"]], see: ["locale", "fonts"]},
     fonts: {cat: "system", summary: "Fonts of the terminal", usage: "fonts [list | check TEXT | set NAME | info NAME]",
         about: "Lists the installed fonts and what they can draw. A font is a .font file in /cubeos/share/fonts, in a language package or in your data/fonts folder; letters the main font lacks come from other fonts of the same size. Fonts only matter in the pixel terminal.",
         flags: [["list", "Installed fonts; * marks the terminal font"], ["check TEXT", "Can the terminal draw this text, which letters are missing"],
@@ -319,4 +323,5 @@ export const KEY_HELP = [
 
 # сообщения, которые приходят текстом от служб и сессии (переводятся при показе через sh:t): ключи для перевода (tools/lang_strings.py)
 export const MESSAGES = ["wrong password", "too many attempts, wait", "needs administrator rights: use sudo", "password needed",
-    "accounts are not available here", "the language is on, but not saved"]
+    "accounts are not available here", "the language is on, but not saved", "only an administrator can change the system keyboard",
+    "the mode is auto or manual", "service is not running: inputd"]
