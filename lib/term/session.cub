@@ -1,0 +1,132 @@
+# term.session: сессия с терминалом (оболочка cush) внутри процесса ядра: программа, которую запускает вход (boot) для пользователя
+#
+#   shell = (session) => session_mod.program(session, {assets: "/repo/assets"})      для boot.new({shell: ...})
+#
+# Процесс получает вид CFS пользователя (sys.view()), поэтому программы CraftOS работают поверх CFS: права, ссылки и корзина действуют
+# и для них (fs подменён на cfs.legacy_fs(view)). Ввод идёт через sys.wait_event (а не через CC напрямую), события таймеров и сети доходят
+# программам, Ctrl+T превращается в событие terminate для активной программы (оболочка прервёт программу, а не систему).
+# Служебные вещи оболочка берёт у служб: время и его сохранение (timed), выключение и перезагрузка (powerd), общий буфер обмена (clipboard);
+# если службы нет, всё работает локально. Настройки пользователя: $cfg/cush.conf, история команд $cfg/cush_history.
+#
+# opts: term (по умолчанию настоящий), backend ("auto", "pixel", "text"), assets (папка assets для шрифта), host (имя компьютера),
+#   ready(ctx) (для тестов: {vterm, env, ui, proc, out} сразу после запуска), history (строк прокрутки, 2000)
+
+import ui
+import cfs
+import term.vterm as vterm
+import term.view as view_mod
+import term.palette as palette
+import compat.env as env_mod
+import compat.proc as proc_mod
+import cush.shell as cush
+import svc.rpc as rpc
+import svc.timeclient as timeclient
+
+# события ввода идут через интерфейс (раскладка, мышь), остальные программе напрямую
+const INPUT = {key: true, key_up: true, char: true, paste: true, mouse_click: true, mouse_drag: true, mouse_up: true,
+    mouse_scroll: true, monitor_touch: true, term_resize: true, monitor_resize: true}
+
+export def program(session, opts=nil):
+    o = opts ?? {}
+
+    def main(sys, args):
+        view = sys.view()
+        open_opts = {backend: o.backend ?? "auto"}
+        if o.term != nil:
+            open_opts.term = o.term
+        if o.assets != nil:
+            open_opts.assets = o.assets
+        out = ui.open_out(open_opts)
+        u = ui.runtime.new(out, {theme: ui.theme.get("cubeos")})
+        cols, rows = out:size()
+        vt = vterm.new(cols, rows, {palette: palette.get("cubeos"), history: o.history ?? 2000})
+        tv = view_mod.new(vt, {width: "fill", height: "fill"})
+        env = env_mod.new({vterm: vt, fs: cfs.legacy_fs(view)})
+
+        t = timeclient.new(sys)
+
+        # Оболочка и программы работают в сопрограмме compat.proc, а системные вызовы ядра (sys.send, receive...) можно делать только из
+        # процесса. Поэтому вызовы служб идут «через хозяина»: сопрограмма кладёт запрос в очередь и ждёт событие cubeos_reply, а цикл
+        # хозяина (pull) выполняет запрос и отвечает ему этим событием.
+        pending = []
+        counter = {n: 0}
+        def host_call(name, payload):
+            counter.n += 1
+            id = counter.n
+            pending[len(pending) + 1] = {id: id, name: name, payload: payload}
+            while true:
+                ev, rid, a, b = os.pullEvent("cubeos_reply")
+                if rid == id:
+                    return a, b
+        def time_save(changes):
+            return host_call("time_save", changes)
+        def power(action):
+            return host_call("power", action)
+        cfg = view:expand("$cfg")
+        env.cush_opts = {history_path: cfg .. "/cush_history", config_path: cfg .. "/cush.conf", user: session.user, host: o.host,
+            home: session.env.home, time: t.time, time_save: time_save, power: power,
+            info: {display: out.kind == "pixel" and "pixel mode" or "text mode", font: out.kind == "pixel" and "Monocraft 6x9" or nil}}
+
+        died = {err: nil}
+        def on_exit(p, ok, err):
+            if not ok:
+                died.err = err
+            u.quit = true
+        def on_shutdown(p, reboot):
+            u.quit = true
+        proc = proc_mod.new(env, "cush", [], {name: "terminal", main: cush.main, on_exit: on_exit, on_shutdown: on_shutdown})
+        tv:on("event", (w, name, a, b, c) => proc:feed(name, a, b, c))
+        u:set_root(tv)
+        u:focus_widget(tv)
+        proc:start()
+
+        # общий буфер обмена: берём текущий, копируем в службу всё, что скопировано в терминале
+        clip = view_mod.clipboard
+        last = clip.text
+        current = rpc.call(sys, "clipboard", "get")
+        if type(current) == "string":
+            clip.text = current
+            last = current
+
+        def serve_pending():
+            while len(pending) > 0:
+                req = table.remove(pending, 1)
+                ok = false
+                why = nil
+                if req.name == "time_save":
+                    ok, why = t.save(req.payload)
+                elif req.name == "power":
+                    res, err = rpc.call(sys, "powerd", req.payload)
+                    ok = res != nil
+                    why = err
+                proc:feed("cubeos_reply", req.id, ok, why)
+
+        def pull():
+            serve_pending()
+            ev, a, b, c, d, e = sys.wait_event()
+            if ev == "terminate":
+                proc:feed("terminate")
+                return "none"
+            if INPUT[ev] != true:
+                if ev == "timer":
+                    if proc:owns_timer(a):
+                        proc:feed(ev, a, b, c, d, e)
+                elif ev == "alarm":
+                    if proc:owns_alarm(a):
+                        proc:feed(ev, a, b, c, d, e)
+                else:
+                    proc:feed(ev, a, b, c, d, e)
+            if clip.text != last:
+                last = clip.text
+                rpc.call(sys, "clipboard", "set", {text: last, source: "terminal"})
+            return ev, a, b, c
+
+        if o.ready != nil:
+            o.ready({vterm: vt, env: env, ui: u, proc: proc, out: out, clipboard: clip})
+        ui.runtime.run(u, {pull: pull})
+        pcall(() => out:close())
+        if out.screen != nil and out.screen.close != nil:
+            pcall(out.screen.close, out.screen)
+        if died.err != nil:
+            error("the terminal crashed: " .. tostring(died.err), 0)
+    return main

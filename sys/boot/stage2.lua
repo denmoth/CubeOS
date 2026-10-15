@@ -14,8 +14,8 @@ local B = ctx.boot_dir or "/cubeos/sys/boot/"
 local function now() return os.epoch("utc") / 1000 end
 
 -- этапы и их веса на полосе; реальные цифры лежат в boot.conf (stage_weights), замер каждой загрузки пишется в /cubeos/var/boot.timing
-local ORDER = { "libs", "fs", "kernel", "setup", "services", "login" }
-local weights = { libs = 0.30, fs = 0.10, kernel = 0.25, setup = 0.05, services = 0.25, login = 0.05 }
+local ORDER = { "libs", "fs", "kernel", "system", "shell", "setup", "services", "login" }
+local weights = { libs = 0.20, fs = 0.08, kernel = 0.15, system = 0.10, shell = 0.17, setup = 0.05, services = 0.20, login = 0.05 }
 
 local splash, rt, booted
 local function report(stage, f, text)
@@ -78,7 +78,13 @@ local function main()
   end
   load("libs", "Loading libraries", { "unicode", "sha256", "crc32", "base64", "std.str", "std.path" })
   load("fs", "Loading the filesystem", { "cfs" })
-  load("kernel", "Loading the kernel", { "kernel", "kernel.cc", "boot", "boot.console" })
+  load("kernel", "Loading the kernel", { "kernel", "kernel.cc", "boot", "boot.console", "crash", "sysfs" })
+  -- модули служб подгружаются заранее: иначе они компилировались бы в процессе init одним куском
+  load("system", "Loading system services", { "svc.logd", "svc.timed", "svc.devd", "svc.powerd", "svc.crashd", "svc.permd", "svc.notifyd",
+    "svc.clipboard", "svc.stub" })
+  if not ctx.shell then
+    load("shell", "Loading the terminal", { "ui", "term.session" })
+  end
 
   report("setup", 0, "Preparing the system")
   local cfs, boot = import("cfs"), import("boot")
@@ -97,6 +103,9 @@ local function main()
     console = ctx.console or console_mod.TermConsole(),
     mode = ctx.mode,
     import = rt.import,
+    shell = ctx.shell or function(session)
+      return import("term.session").program(session, { assets = rt.source .. "/assets" })
+    end,
     kernel = { rt = rt.cubic.rt, cubic = rt.cubic, pull = cckernel.pull },
     power = power,
     on_ready = function() ready = true end,

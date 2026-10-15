@@ -4,6 +4,9 @@ import cfs.memory as memory
 
 # правила доступа по умолчанию (формат: cfs.rules)
 export const RULES_TEXT = """[
+  {path: '/', allow: {'*': 'rl'}},
+  {path: '/cubeos', allow: {'*': 'rl'}},
+  {path: '/rom/**', allow: {'*': 'rxl'}},
   {path: '/cubeos/sys/**', allow: {system: 'rwxl', '*': 'rxl'}},
   {path: '/cubeos/sys/sec/**', allow: {system: 'rwl'}},
   {path: '/cubeos/var/**', allow: {system: 'rwxl', admin: 'rl'}},

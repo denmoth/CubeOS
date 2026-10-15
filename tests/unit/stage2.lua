@@ -35,8 +35,9 @@ local stage2 = loadfile(ROOT .. "/sys/boot/stage2.lua")
 -- 1. первая загрузка: создаём администратора, выходим, выключаем
 fresh()
 local power = {}
+local quick_shell = function(session) return function(sys, args) sys.out("hi") end end
 local con = console({ "root", "", "s" })
-local ok, res, why = pcall(stage2, { boot_dir = ROOT .. "/sys/boot/", root = root, console = con, caps = { pixel = false, color = false },
+local ok, res, why = pcall(stage2, { shell = quick_shell, boot_dir = ROOT .. "/sys/boot/", root = root, console = con, caps = { pixel = false, color = false },
   power = { shutdown = function() power[#power + 1] = "shutdown" end, reboot = function() power[#power + 1] = "reboot" end } })
 check("first boot runs to the shutdown", ok and res == nil, ok and (tostring(res) .. " " .. tostring(why)) or res)
 check("the greeter offered the first account", con:text():find("Create the first account", 1, true) ~= nil, con:text())
@@ -50,7 +51,7 @@ check("users file was created", fs.exists(root .. "/cubeos/sys/cfg/users.conf"))
 -- 2. безопасный режим из меню доходит до входа
 fresh()
 con = console({ "root", "", "s" })
-ok, res = pcall(stage2, { boot_dir = ROOT .. "/sys/boot/", root = root, console = con, mode = "safe",
+ok, res = pcall(stage2, { shell = quick_shell, boot_dir = ROOT .. "/sys/boot/", root = root, console = con, mode = "safe",
   power = { shutdown = function() end, reboot = function() end } })
 check("safe mode boots", ok and res == nil, res)
 
@@ -103,3 +104,21 @@ check("with a countdown on screen", sp2.shown[1] and sp2.shown[1]:find("Restarti
 local st = read(root2 .. "/cubeos/var/boot.state") or ""
 check("the unfinished boot stays marked", st:find("pending: true", 1, true) ~= nil or st:find('"pending": true', 1, true) ~= nil, st)
 fs.delete(root2)
+
+-- 6. вся цепочка с настоящими манифестами служб и их настройками (sys/): службы стартуют, журнал пишется, выключение штатное
+local root3 = ROOT .. "/build/s2root3"
+if fs.exists(root3) then fs.delete(root3) end
+fs.makeDir(root3)
+for _, dir in ipairs({ "/cubeos", "/cubeos/sys", "/cubeos/sys/services", "/cubeos/sys/cfg" }) do fs.makeDir(root3 .. dir) end
+for _, name in ipairs(fs.list(ROOT .. "/sys/services")) do fs.copy(ROOT .. "/sys/services/" .. name, root3 .. "/cubeos/sys/services/" .. name) end
+for _, name in ipairs(fs.list(ROOT .. "/sys/cfg")) do fs.copy(ROOT .. "/sys/cfg/" .. name, root3 .. "/cubeos/sys/cfg/" .. name) end
+local power3 = {}
+local con3 = console({ "root", "", "s" })
+local ok6, res6, why6 = pcall(stage2, { shell = quick_shell, boot_dir = ROOT .. "/sys/boot/", root = root3, console = con3,
+  power = { shutdown = function() power3[#power3 + 1] = "shutdown" end, reboot = function() end } })
+check("the full chain with the real service manifests runs to shutdown", ok6 and res6 == nil and power3[1] == "shutdown", tostring(res6) .. " " .. tostring(why6))
+local syslog = read(root3 .. "/cubeos/var/log/system.log") or ""
+check("logd wrote the system log", syslog:find("log service started", 1, true) ~= nil, syslog)
+check("devd mounted the hardware view and logged nothing bad", syslog:find("message handler failed", 1, true) == nil, syslog)
+check("no crash reports after a clean run", not fs.exists(root3 .. "/cubeos/var/crash") or #fs.list(root3 .. "/cubeos/var/crash") == 0)
+fs.delete(root3)

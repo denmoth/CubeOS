@@ -1,6 +1,6 @@
 # cush.shell: оболочка CubeOS (cush) для окружения совместимости CraftOS
 #
-#   cush.main(env, args)       главная функция процесса (compat.proc: opts.main); env.cush_opts: history_path, user, host, info, greeting
+#   cush.main(env, args)       главная функция процесса (compat.proc: opts.main); env.cush_opts: history_path, config_path ($cfg/cush.conf: aliases, motd, greeting), user, host, home, info, greeting, time, time_save, power, log_dir
 #
 # Оболочка сама раздаёт события: внутри корутины процесса она держит задачи (корутины) и редактор строки. Переднего плана ровно
 # одна задача, остальные фоновые (команда с &); ввод идёт только переднему плану, прочие события всем. Строка разбирается cush.lex:
@@ -20,6 +20,7 @@ import cush.editor as editor_mod
 import cush.builtins as builtins
 import cush.fetch as fetch
 import clock
+import json5
 import version
 import unicode
 
@@ -102,6 +103,8 @@ export class Shell:
         for k, v in DEFAULT_ALIASES:
             self.aliases[k] = v
         self.dir = ""
+        if o.home != nil and o.home != "/":
+            self.dir = string.gsub(o.home, "^/", "")
         self.path = ".:/rom/programs"
         self.jobs = []
         self.next_id = 1
@@ -117,6 +120,9 @@ export class Shell:
         self.extra.fetch = (sh, args) => fetch.run(sh)
         self.extra_help.fetch = "fetch  логотип и сведения о системе (fastfetch, neofetch)"
         self.programs_cache = nil
+        self.config = {}
+        if o.config_path != nil:
+            self:_load_config(o.config_path)
         self.maker = bios.do_file(env, "rom/modules/main/cc/require.lua")
         self.hist = hist_mod.new(env.fs, o.history_path ?? "/.cush_history", o.history_limit ?? 1000)
         let me = self
@@ -152,6 +158,23 @@ export class Shell:
         bios.print_text(self.env, va.pack(text), 1)
         term.setTextColor(old)
         term.redirect(prev)
+
+    # настройки пользователя ($cfg/cush.conf, JSON5): aliases {имя: "команда"}, motd "текст после приветствия", greeting false
+    def _load_config(self, path):
+        text = nil
+        f = self.env.fs.open(path, "r")
+        if f != nil:
+            text = f.readAll()
+            f.close()
+        if text == nil:
+            return
+        ok, conf = pcall(() => json5.parse(text))
+        if not ok or type(conf) != "table":
+            return
+        self.config = conf
+        for k, v in (conf.aliases ?? {}):
+            if type(v) == "string":
+                self.aliases[k] = v
 
     def prompt_segments(self):
         segs = []
@@ -775,13 +798,15 @@ export class Shell:
 
     def greet(self):
         o = self.opts
-        if o.greeting == false:
+        if o.greeting == false or self.config.greeting == false:
             return
         self:write_color("3", version.NAME)
         self:write_color("0", " ")
         self:write_color("5", version.VERSION)
         self:write_color("7", "   cush: help, fetch, Tab, Ctrl+R")
         self:println("")
+        if type(self.config.motd) == "string":
+            self:println(self.config.motd)
 
     def shutdown(self):
         for j in self:_live_jobs():
@@ -793,7 +818,12 @@ export class Shell:
         self.editor:begin()
         while not self.exit_requested:
             ev = va.pull_packed()
-            self:dispatch(ev)
+            # ошибка при разборе ввода (подсветка, подсказка, дополнение) не должна убивать оболочку
+            ok, err = pcall(() => self:dispatch(ev))
+            if not ok:
+                if err == "Terminated":
+                    error("Terminated", 0)
+                self:eprint("cush: " .. tostring(err))
         self:shutdown()
 
 # команда -c: выполнить строку и выйти (без редактора)

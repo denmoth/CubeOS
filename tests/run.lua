@@ -53,10 +53,9 @@ local function record(name, ok, detail)
 end
 
 local function run_case(name, label, force)
-  if IN_GAME then
-    os.queueEvent("cubic_yield")
-    os.pullEvent("cubic_yield")
-  end
+  -- между тестами отдаём управление: иначе весь прогон идёт без yield и CC (в игре и в эмуляторе) убивает его за «Too long without yielding»
+  os.queueEvent("cubic_yield")
+  os.pullEvent("cubic_yield")
   local base = ROOT .. "/tests/cases/" .. name
   local src = read(base .. ".cub")
   local want_out = read(base .. ".out")
