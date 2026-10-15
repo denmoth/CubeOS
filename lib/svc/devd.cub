@@ -1,0 +1,166 @@
+# svc.devd: служба устройств (docs/spec/services.md). Следит за периферией (peripheral, peripheral_detach), монтирует диски
+# по событиям disk и disk_eject, строит виртуальный каталог /cubeos/hardware.
+#
+# Диски: стандартный дисковод ("drive") монтируется в /cubeos/drives/floppy/<метка или disk-<id>>, другое хранилище с getMountPath
+# в /cubeos/drives/<метка или id>. Привязка к диску (ID, метка), а не к стороне дисковода. Код с носителей сам не запускается
+# (D…, docs/02-filesystem.md): запуск только по запросу с показом источника и прав (песочница, шаг 6).
+# Запросы (svc.rpc): list (устройства), drives (смонтированные диски), has {type}, mount {name}, unmount {name}.
+# main(sys, args): args.system (контекст; fsys), args.fsys, args.periph (замена глобального peripheral для тестов).
+# Помощник devd-events ждёт события CC и шлёт их службе сообщениями {event, args}.
+
+import cfs
+import sysfs
+import svc.rpc as rpc
+
+export const DRIVES = "/cubeos/drives"
+export const HARDWARE = "/cubeos/hardware"
+
+def _clean(name):
+    s = string.gsub(tostring(name), "[^%w_%-%.% ]", "_")
+    s = string.gsub(s, "^%.+", "_")
+    if s == "":
+        return "disk"
+    return s
+
+export def main(sys, args):
+    a = args ?? {}
+    periph = a.periph ?? peripheral
+    fsys = a.fsys ?? (a.system != nil and a.system.fsys or nil)
+    devices = {}
+    mounts = {}
+
+    def add_device(name):
+        ok, kind = pcall(() => periph.getType(name))
+        if not ok or kind == nil:
+            return
+        ok2, methods = pcall(() => periph.getMethods(name))
+        if not ok2 or methods == nil:
+            methods = []
+        sorted = []
+        for m in methods:
+            sorted[len(sorted) + 1] = m
+        table.sort(sorted)
+        devices[name] = {type: kind, methods: sorted}
+
+    def has_method(name, method):
+        d = devices[name]
+        if d == nil:
+            return false
+        for m in d.methods:
+            if m == method:
+                return true
+        return false
+
+    def call(name, method):
+        ok, res = pcall(() => periph.call(name, method))
+        if ok:
+            return res
+        return nil
+
+    def mount_point(name):
+        id = call(name, "getDiskID")
+        label = call(name, "getDiskLabel")
+        base = (label != nil and label != "") and _clean(label) or ("disk-" .. tostring(id ?? name))
+        root = devices[name].type == "drive" and (DRIVES .. "/floppy") or DRIVES
+        point = root .. "/" .. base
+        for other, m in mounts:
+            if m.point == point and other != name:
+                point = point .. "-" .. tostring(id ?? name)
+        return point, id, label
+
+    def mount(name):
+        if fsys == nil or devices[name] == nil or not has_method(name, "getMountPath"):
+            return false, "not a storage device"
+        if mounts[name] != nil:
+            return true
+        if call(name, "hasData") == false or call(name, "isDiskPresent") == false:
+            return false, "no data disk"
+        path = call(name, "getMountPath")
+        if path == nil:
+            return false, "the disk has no mount path"
+        point, id, label = mount_point(name)
+        ok, err = pcall(() => fsys:mount(point, cfs.host("/" .. path), {name: point}))
+        if not ok:
+            return false, tostring(err)
+        mounts[name] = {point: point, id: id, label: label, path: path, device: name}
+        sys.log("info", "mounted " .. name .. " (" .. tostring(label ?? id) .. ") at " .. point)
+        return true
+
+    def unmount(name):
+        m = mounts[name]
+        if m == nil:
+            return false, "not mounted"
+        if fsys != nil:
+            fsys:umount(m.point)
+        mounts[name] = nil
+        sys.log("info", "unmounted " .. name .. " from " .. m.point)
+        return true
+
+    def scan():
+        for name in periph.getNames():
+            add_device(name)
+            if has_method(name, "getMountPath"):
+                mount(name)
+
+    if fsys != nil:
+        fsys:umount(HARDWARE)
+        fsys:mount(HARDWARE, cfs.virtual(() => sysfs.hardware_tree(devices)))
+    scan()
+
+    def on_event(msg):
+        name = msg.args[1]
+        if msg.event == "peripheral":
+            add_device(name)
+            if has_method(name, "getMountPath"):
+                mount(name)
+        elif msg.event == "peripheral_detach":
+            unmount(name)
+            devices[name] = nil
+        elif msg.event == "disk":
+            if devices[name] == nil:
+                add_device(name)
+            mount(name)
+        elif msg.event == "disk_eject":
+            unmount(name)
+
+    handlers = {}
+    def list_devices(q, sender):
+        out = {}
+        for name, d in devices:
+            out[name] = {type: d.type, methods: d.methods}
+        return out
+    handlers.list = list_devices
+
+    def list_drives(q, sender):
+        out = {}
+        for name, m in mounts:
+            out[name] = {point: m.point, id: m.id, label: m.label}
+        return out
+    handlers.drives = list_drives
+
+    def has_type(q, sender):
+        for name, d in devices:
+            if d.type == q.type:
+                return true
+        return false
+    handlers.has = has_type
+
+    def do_mount(q, sender):
+        ok, why = mount(q.name)
+        return {ok: ok, why: why}
+    handlers.mount = do_mount
+
+    def do_unmount(q, sender):
+        ok, why = unmount(q.name)
+        return {ok: ok, why: why}
+    handlers.unmount = do_unmount
+
+    me = sys.getpid()
+    def watcher(wsys, wargs):
+        while true:
+            name, side = wsys.wait_event(["disk", "disk_eject", "peripheral", "peripheral_detach"])
+            wsys.send(me, {event: name, args: [side]})
+    sys.spawn(watcher, [], {name: "devd-events"})
+
+    sys.register("devd")
+    rpc.serve(sys, handlers, {on_message: on_event})

@@ -89,7 +89,7 @@ splash:error(text)                         # экран ошибки загру�
 | `audiod` | заглушка до шага 7 | 5 |
 | `netd` | заглушка до шага 8 | 5 |
 
-Манифест как в [spec/boot.md](spec/boot.md): `name`, `module`, `requires`, `after`, `restart`, `max_restarts`, `restart_delay`, `ready`, `timeout`, `enabled`, `safe`. Службы без `safe: true` не запускаются в безопасном режиме.
+Манифест как в [spec/boot.md](spec/boot.md): `name`, `module`, `requires`, `after`, `restart`, `max_restarts`, `restart_delay`, `ready`, `timeout`, `enabled`, `safe`. Службы с `safe: false` не запускаются в безопасном режиме (в коде и в [spec/boot.md](spec/boot.md) так; остальные работают).
 
 ### Вызовы `sys` (дополнение к таблице в [spec/kernel.md](spec/kernel.md))
 `sys.log(level, text)`, `sys.time` (часы службы времени), `sys.service(name)` (клиент службы по имени, обёртка над `send/receive`), `sys.power(action)`, `sys.hardware()`, `sys.crash(info)`. Назначение имён и сообщений сервисов определяется в `docs/spec/services.md` (написать вместе с кодом).
@@ -124,7 +124,7 @@ splash:error(text)                         # экран ошибки загру�
 - **`/cubeos/proc`**: `<pid>/{status,cmdline,user,started,focus}`, `ps` (список), `uptime`, `version`, `meminfo` (приблизительно: `collectgarbage("count")`).
 - **`/cubeos/run`**: состояния служб (`services/<имя>`: `running|failed|blocked|stopped`), PID-файлы, текущая сессия (`session/<id>`), `boot.state`, `lock`.
 - **`/cubeos/hardware`**: `peripherals/<имя>` (тип, методы), `displays`, `speakers`, `modems`, `drives`; обновляется по событиям `peripheral`/`peripheral_detach`/`monitor_resize`. Дополнение к HAL: `gfx.caps()`, `audio.caps()`, `periph.has()` (в [01-architecture.md](01-architecture.md) описаны, кода нет).
-- **Диски** по событиям `disk`/`disk_eject`: монтируются в `/cubeos/mnt/<метка или id>` (провайдер `host` на путь диска из `drive.getMountPath()`), права «не доверенное»: код с носителей сам не запускается (D…, [12-permissions-capabilities.md](12-permissions-capabilities.md)); размонтирование перед извлечением; события `mount`/`unmount` в службу уведомлений.
+- **Диски** по событиям `disk`/`disk_eject`: монтируются в `/cubeos/drives/floppy/<метка>` (стандартный дисковод) или `/cubeos/drives/<метка или id>` (по docs/02-filesystem.md; в первой версии плана было `/cubeos/mnt`) (провайдер `host` на путь диска из `drive.getMountPath()`), права «не доверенное»: код с носителей сам не запускается (D…, [12-permissions-capabilities.md](12-permissions-capabilities.md)); размонтирование перед извлечением; события `mount`/`unmount` в службу уведомлений.
 
 ## 6. Журнал
 
@@ -173,7 +173,7 @@ splash:error(text)                         # экран ошибки загру�
 2. **`lib/boot/splash.cub` (временный экран) и контракт `boot_screen`.** **Сделано (2026-10-15), снимки `tools/boot_shots.sh`, в игре не смотрели.** Готово, когда: экран рисуется в пикселях и в тексте, полоса двигается по этапам, исключение в экране не ломает загрузку. Скриншоты через CraftOS-PC.
 3. **Загрузчик (stage2) на настоящем CC:** **Сделано в коде и тестах на ПК, в игре через `game/install_dev.lua` (D211).** подгрузка модулей по одному с `yield`, `boot.new` с реальными CFS (`host` на `/`, `tmp` в памяти), службы из манифестов, замеры весов этапов, `boot.conf`.
 4. **Служба `timed`** со всем из раздела 4, команды `date` и `timedatectl`, тесты. **Сделано (2026-10-15), [spec/time.md](spec/time.md), D212; в игре не проверено.**
-5. **`logd`, `devd`, `powerd`, `crashd`** и манифесты остальных служб-заглушек; `/proc`, `/run`, `/hardware`, монтирование дисков.
+5. **`logd`, `devd`, `powerd`, `crashd`** и манифесты остальных служб-заглушек; `/proc`, `/run`, `/hardware`, монтирование дисков. **Сделано (2026-10-15), [spec/services.md](spec/services.md), D213; в игре не проверено.**
 6. **Терминал из сессии**: `cush` запускается как оболочка сессии поверх CFS, пользователь из входа, конфиг в `$cfg`, `clipboard` как служба.
 7. **Атомарная запись и журнал операций** в CFS, перевод важных файлов на неё.
 8. **Проверка всей цепочки в игре** (чеклист ниже), правка, merge-подготовка веток.
@@ -184,7 +184,7 @@ splash:error(text)                         # экран ошибки загру�
 3. Вход под администратором и гостем; неверный пароль и пауза; создание первого администратора.
 4. Терминал из сессии: `fetch`, `ls`, пайпы, `cd`, пользователь и хост в приглашении, программа CraftOS (`edit`, `lua`), фон (`&`).
 5. Время: `date`, `timedatectl`, смена зоны, `seconds: true`, источник `ingame`.
-6. Диск: вставить дискету, увидеть `/cubeos/mnt/...`, извлечь.
+6. Диск: вставить дискету, увидеть `/cubeos/drives/floppy/...`, извлечь.
 7. Выключение и перезагрузка из терминала; аварийное выключение (убить сервер), повторный старт: сообщение о «грязном» завершении.
 8. Сбой: сломать модуль службы, проверить перезапуск, экран ошибки, счётчик сбоев, безопасный режим.
 9. Журнал: `logs`, ротация.

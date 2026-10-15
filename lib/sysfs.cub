@@ -6,7 +6,7 @@
 #
 # proc: <pid>/{status,cmdline,user,started,focus}, ps, uptime, version, meminfo.
 # run: services/<имя> (running, failed, blocked, stopped...), session/<id>, boot.state.
-# hardware: peripherals/<имя>/{type,methods}, displays, speakers, modems, drives (имена по типам). Подробности docs/spec/sysfs.md
+# hardware: peripherals/<имя>/{type,methods}, displays, speakers, modems, drives (имена по типам). Подробности docs/spec/services.md
 
 import version
 

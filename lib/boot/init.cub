@@ -131,6 +131,9 @@ export class Boot:
         mgr:add_all(manifests)
         system.services = mgr
         let me = self
+        system.power = (action, psys) => me:power(action, psys)
+        if unclean:
+            k:log("unclean shutdown: the previous session did not end properly")
         system.init_pid = k:spawn((sys, args) => mgr:run_init(sys, args), [], {name: "init", subject: system_subject})
         system.login_pid = k:spawn((sys, args) => me:_login_loop(sys), [], {name: "login", subject: system_subject, ui: true})
         return system
@@ -160,7 +163,7 @@ export class Boot:
             self.console = self.console:bind(sys)
         greeter = o.greeter
         if greeter == nil and self.console != nil:
-            greeter = greeter_mod.new(self.console, system.auth, system.sessions, {title: system.conf.title})
+            greeter = greeter_mod.new(self.console, system.auth, system.sessions, {title: system.conf.title, notice: system.unclean and "The system was not shut down properly last time." or nil})
         while not system.stopping:
             session = nil
             action = nil

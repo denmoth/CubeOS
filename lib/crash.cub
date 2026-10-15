@@ -1,0 +1,63 @@
+# crash: отчёты о сбоях (docs/spec/services.md). Общая часть службы crashd и аварийного пути загрузчика (stage2), поэтому без служб и CFS:
+# запись идёт через функцию writer(путь, текст), чтение списка через lister.
+#
+#   report = crash.build({kind: "process", process: {pid, name, how}, error: "текст"}, {clock: ..., log: [строки журнала]})
+#   path = crash.write(writer, report, "/cubeos/var/crash")
+#   crash.code("module 'kernel' failed to load")   "E-1A2B3C4D": устойчивый код причины (CRC32 первой строки без чисел)
+#
+# Отчёт (JSON5): {version, time (мс UTC), time_text (ISO), kind ("process"|"boot"|"kernel"), code, error, process, log (последние строки)}.
+# Секретов в отчёте быть не должно (D196): в error попадает только текст ошибки, в log то, что уже было в журнале.
+
+import json5
+import crc32
+import std.time as stime
+import version
+
+export const CRASH_DIR = "/cubeos/var/crash"
+export const KEEP = 20
+
+# код причины: числа (адреса, номера процессов и строк) отбрасываются, чтобы одна и та же ошибка давала один код
+export def code(text):
+    first = string.match(tostring(text), "^[^\r\n]*") ?? ""
+    stable = string.gsub(first, "%d+", "#")
+    return "E-" .. string.format("%08X", crc32.crc32(stable))
+
+def _iso(ms):
+    d = stime.to_date(ms)
+    return string.format("%04d-%02d-%02dT%02d:%02d:%02dZ", d.year, d.month, d.day, d.hour, d.minute, d.second)
+
+# info: {kind, error, process}; opts: clock (мс), log (список строк, берутся последние 20)
+export def build(info, opts=nil):
+    o = opts ?? {}
+    now = (o.clock ?? (() => os.epoch("utc")))()
+    tail = []
+    lines = o.log ?? []
+    first = math.max(1, len(lines) - 19)
+    for i in range[first, len(lines)]:
+        tail[len(tail) + 1] = lines[i]
+    return {version: version.full(), time: now, time_text: _iso(now), kind: info.kind ?? "process", code: code(info.error ?? ""),
+        error: tostring(info.error ?? ""), process: info.process, log: tail}
+
+def _file_name(report):
+    d = stime.to_date(report.time)
+    who = report.process != nil and report.process.name or report.kind
+    who = string.gsub(tostring(who), "[^%w_%-]", "_")
+    return string.format("%04d%02d%02d-%02d%02d%02d-%s.json", d.year, d.month, d.day, d.hour, d.minute, d.second, who)
+
+# пишет отчёт; writer(path, text) должен сам создать каталог. Возвращает путь
+export def write(writer, report, dir=nil):
+    path = (dir ?? CRASH_DIR) .. "/" .. _file_name(report)
+    writer(path, json5.stringify(report, {json5: true, indent: 2}) .. "\n")
+    return path
+
+# имена лишних старых отчётов, которые стоит удалить (names отсортированы по имени, то есть по времени)
+export def old_reports(names, keep=nil):
+    k = keep ?? KEEP
+    out = []
+    sorted = []
+    for n in names:
+        sorted[len(sorted) + 1] = n
+    table.sort(sorted)
+    for i in range[1, len(sorted) - k]:
+        out[len(out) + 1] = sorted[i]
+    return out

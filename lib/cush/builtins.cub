@@ -664,6 +664,24 @@ def b_logs(sh, args):
     return 0
 add("logs", "logs [-f] [-n N] [-l уровень] [служба]  журнал системы или службы", b_logs)
 
+# shutdown / reboot: просьба службе питания через sh.power(action) -> ok, причина (сессия подставляет вызов powerd)
+def power_command(action):
+    def run(sh, args):
+        if sh.power == nil:
+            sh:eprint(action .. ": the power service is not available here")
+            return 1
+        ok, why = sh.power(action)
+        if not ok:
+            sh:eprint(action .. ": " .. tostring(why))
+            return 1
+        sh:println("The system is going down for " .. (action == "reboot" and "reboot" or "power off") .. ".")
+        return 0
+    return run
+add("shutdown", "shutdown  выключить компьютер штатно", power_command("shutdown"))
+add("poweroff", "poweroff  то же, что shutdown", power_command("shutdown"))
+add("reboot", "reboot  перезагрузить компьютер штатно", power_command("reboot"))
+add("restart", "restart  то же, что reboot", power_command("reboot"))
+
 def b_whoami(sh, args):
     sh:println(sh.vars.USER)
     return 0

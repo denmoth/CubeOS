@@ -74,4 +74,21 @@ run(proc, "timedatectl frobnicate")
 eq(has(vt, "usage: timedatectl"), true, "unknown subcommands print the usage")
 run(proc, "fetch")
 eq(has(vt, "Time"), true, "fetch has a time line")
+
+# питание: команды просят службу, без службы сообщают
+powered = []
+def power(action):
+    powered[len(powered) + 1] = action
+    return true, nil
+vt, proc = make()
+run(proc, "reboot")
+eq(has(vt, "power service is not available"), true, "without the service reboot says so")
+vt2 = vterm.new(70, 24, {history: 200})
+env2 = compat_env.new({vterm: vt2})
+env2.cush_opts = {history_path: HIST, greeting: false, user: "tester", host: "cube", power: power}
+proc2 = compat_proc.new(env2, "cush", [], {name: "cush", main: cush.main})
+proc2:start()
+run(proc2, "poweroff")
+run(proc2, "restart")
+eq(powered, ["shutdown", "reboot"], "poweroff and restart go through the power service")
 print("done")

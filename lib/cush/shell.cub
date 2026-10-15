@@ -89,6 +89,8 @@ export class Shell:
         # часы системы (clock.new) и сохранение настроек времени; сессия подставляет службу timed, терминал сам читает time.conf
         self.time = o.time ?? clock.new(nil)
         self.time_save = o.time_save
+        # sh.power(action) -> ok, причина: просьба службе питания (shutdown, reboot); без неё команды сообщают, что службы нет
+        self.power = o.power
         # имя компьютера в приглашении это его метка (имена с пробелами через дефис), без метки cubeos
         label = env.os.getComputerLabel()
         host = o.host

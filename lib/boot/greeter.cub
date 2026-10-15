@@ -7,7 +7,7 @@
 # придёт вместе с графической и плиточной библиотекой интерфейса.
 
 export class TextGreeter:
-    # opts: title (по умолчанию "CubeOS"), allow_guest (true), retries (3)
+    # opts: title (по умолчанию "CubeOS"), allow_guest (true), retries (3), notice (строка под заголовком, например про грязное выключение)
     def init(self, console, auth, sessions, opts=nil):
         o = opts ?? {}
         self.console = console
@@ -15,10 +15,13 @@ export class TextGreeter:
         self.sessions = sessions
         self.title = o.title ?? "CubeOS"
         self.retries = o.retries ?? 3
+        self.notice = o.notice
 
     def _header(self):
         self.console:clear()
         self.console:write_line(self.title)
+        if self.notice != nil:
+            self.console:write_line(self.notice)
         self.console:write_line("")
 
     # первая загрузка: создаём первого пользователя-администратора

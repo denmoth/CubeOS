@@ -91,7 +91,7 @@ def listener(sys, args):
     a2 = rpc.call(sys, "timed", "alarm", {at: fixed.ms + 8000, tag: "cancelled"})
     rpc.call(sys, "timed", "cancel_alarm", {id: a2})
     while not state.stop:
-        who, msg = sys.receive(1)
+        msg = rpc.next_event(sys, 1)
         if msg != nil:
             events[len(events) + 1] = msg
 k:spawn(listener, [], {name: "listener", subject: system})

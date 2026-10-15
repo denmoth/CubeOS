@@ -1,0 +1,15 @@
+# svc.stub: служба-заглушка для функций, которых ещё нет (fontd, audiod, netd): регистрируется под своим именем, чтобы зависимости
+# и проверки готовности работали, и отвечает на status и ping. Имя и пояснение берутся из args манифеста:
+#   {name: "audiod", module: "svc.stub", args: {name: "audiod", note: "audio arrives with step 7"}}
+# Запросы (svc.rpc): ping -> true, status -> {name, implemented: false, note}.
+
+import svc.rpc as rpc
+
+export def main(sys, args):
+    a = args ?? {}
+    name = a.name ?? "stub"
+    handlers = {}
+    handlers.ping = (q) => true
+    handlers.status = (q) => {name: name, implemented: false, note: a.note ?? "not implemented yet"}
+    sys.register(name)
+    rpc.serve(sys, handlers)

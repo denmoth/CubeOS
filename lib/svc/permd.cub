@@ -1,0 +1,30 @@
+# svc.permd: права и запросы разрешений (ЗАГЛУШКА до шага 6, docs/12-permissions-capabilities.md). Пока разрешает системе и
+# администраторам, остальным отказывает, и записывает отказ в журнал. Настоящая модель (манифесты, caps, диалог повышения) придёт позже.
+#
+# Запросы (svc.rpc): check {pid, cap} -> {allow, reason}. pid: чьи права проверять (по умолчанию вызывающий).
+# main(sys, args): args.system (контекст; kernel).
+
+import cfs.rules as rules
+import svc.rpc as rpc
+
+export def main(sys, args):
+    a = args ?? {}
+    kernel = a.system != nil and a.system.kernel or nil
+
+    handlers = {}
+    def check(q, sender):
+        o = q ?? {}
+        pid = o.pid ?? sender
+        if kernel == nil:
+            return {allow: false, reason: "no kernel to ask"}
+        proc = kernel:proc(pid)
+        if proc == nil:
+            return {allow: false, reason: "no such process"}
+        if rules.is_admin(proc.subject):
+            return {allow: true}
+        sys.log("warn", "denied " .. tostring(o.cap) .. " to " .. tostring(proc.name) .. " (" .. tostring(pid) .. ")")
+        return {allow: false, reason: "only the system and administrators may do this for now"}
+    handlers.check = check
+
+    sys.register("permd")
+    rpc.serve(sys, handlers)

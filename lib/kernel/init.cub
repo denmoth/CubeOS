@@ -44,6 +44,7 @@ export class Proc:
         self.deadline = nil
         self.resume_value = nil
         self.events = []
+        self.interest = nil
         self.inbox = []
         self.parent = opts.parent
         self.subject = opts.subject
@@ -327,6 +328,8 @@ export class Kernel:
         for p in snapshot:
             if p.state == "waiting" and p.wait != nil and p.wait.kind == "event" and _matches(p.wait.filter, name):
                 self:_wake(p, self:_pack(ev))
+            elif p.interest != nil and p.state != "dead" and _matches(p.interest, name):
+                self:_enqueue(p, ev)
 
     # ------------------------------------------------------------ фокус
 
@@ -479,6 +482,8 @@ export class Kernel:
         h.sleep = sleep
 
         def wait_event(proc, req):
+            # процесс, ждавший события по списку имён, не теряет такие события, пока занят (они копятся в его очереди)
+            proc.interest = req.filter
             for i, ev in proc.events:
                 if _matches(req.filter, ev.name):
                     table.remove(proc.events, i)

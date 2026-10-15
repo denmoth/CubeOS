@@ -1,4 +1,4 @@
-# svc.logd: служба журнала (docs/spec/logging.md). Принимает записи, пишет /cubeos/var/log/<источник>.log и общий system.log,
+# svc.logd: служба журнала (docs/spec/services.md). Принимает записи, пишет /cubeos/var/log/<источник>.log и общий system.log,
 # ротирует по размеру и по загрузкам, отдаёт строки на чтение. Строка: «2026-10-15T12:00:00Z info timed сообщение» (время UTC).
 #
 # Запросы (svc.rpc): log {level, source, text} (можно без ответа: sys.log), read {source, level, n}, list, rotate, set_level {level}.

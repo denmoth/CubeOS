@@ -1,0 +1,109 @@
+import t
+import kernel
+import cfs.rules as rules
+import svc.rpc as rpc
+import svc.stub as stub
+import svc.clipboard as clipboard
+import svc.notifyd as notifyd
+import svc.permd as permd
+eq = t.eq
+
+mono = {now: 1000}
+def settle(k):
+    k:run_ready()
+    for i in range[1, 6]:
+        mono.now = mono.now + 100
+        k:tick()
+        k:run_ready()
+
+system = rules.subject("system", ["system"])
+user = rules.subject("ivan", ["user"])
+k = kernel.new({clock: () => mono.now})
+k:spawn(stub.main, {name: "audiod", note: "audio arrives with step 7"}, {name: "audiod", subject: system})
+k:spawn(clipboard.main, {max: 3, max_bytes: 20, clock: () => 5}, {name: "clipboard", subject: system})
+k:spawn(notifyd.main, {max: 2, clock: () => 7}, {name: "notifyd", subject: system})
+k:spawn(permd.main, {system: {kernel: k}}, {name: "permd", subject: system})
+settle(k)
+eq([k.services["audiod"] != nil, k.services["clipboard"] != nil, k.services["notifyd"] != nil, k.services["permd"] != nil], [true, true, true, true], "all services register")
+
+got = {}
+def client(sys, args):
+    got.ping = rpc.call(sys, "audiod", "ping")
+    got.status = rpc.call(sys, "audiod", "status")
+    # буфер обмена
+    rpc.call(sys, "clipboard", "set", {text: "one", source: "term"})
+    rpc.call(sys, "clipboard", "set", {text: "one"})
+    rpc.call(sys, "clipboard", "set", {text: "two"})
+    rpc.call(sys, "clipboard", "set", {text: "three"})
+    rpc.call(sys, "clipboard", "set", {text: "four"})
+    got.get = rpc.call(sys, "clipboard", "get")
+    got.hist = rpc.call(sys, "clipboard", "history")
+    got.hist1 = rpc.call(sys, "clipboard", "history", {n: 1})
+    r, err = rpc.call(sys, "clipboard", "set", {text: "this text is much longer than twenty bytes"})
+    got.long = err
+    r, err = rpc.call(sys, "clipboard", "set", {})
+    got.notext = err
+    rpc.call(sys, "clipboard", "clear")
+    got.empty = rpc.call(sys, "clipboard", "get")
+    got.empty_hist = rpc.call(sys, "clipboard", "history")
+    got.done = true
+k:spawn(client, [], {name: "client", subject: system})
+settle(k)
+eq(got.done, true, "the client finished")
+eq([got.ping, got.status.name, got.status.implemented, got.status.note], [true, "audiod", false, "audio arrives with step 7"], "a stub answers ping and status")
+eq(got.get, "four", "get returns the newest text")
+eq(len(got.hist), 3, "the history is limited")
+eq([got.hist[1].text, got.hist[2].text, got.hist[3].text], ["four", "three", "two"], "newest first, oldest dropped")
+eq(len(got.hist1), 1, "history takes n")
+eq(string.find(got.long, "too long", 1, true) != nil, true, "a long text is refused")
+eq(string.find(got.notext, "set needs text", 1, true) != nil, true, "set without text is refused")
+eq([got.empty, len(got.empty_hist)], [nil, 0], "clear empties the clipboard")
+
+# уведомления
+n = {}
+def notifier(sys, args):
+    rpc.call(sys, "notifyd", "subscribe")
+    n.id1 = rpc.call(sys, "notifyd", "post", {title: "Disk", text: "mounted", kind: "info", source: "devd"})
+    n.id2 = rpc.call(sys, "notifyd", "post", {title: "Oops", kind: "bogus"})
+    n.id3 = rpc.call(sys, "notifyd", "post", {title: "Third"})
+    r, err = rpc.call(sys, "notifyd", "post", {})
+    n.bad = err
+    n.list = rpc.call(sys, "notifyd", "list")
+    rpc.call(sys, "notifyd", "read", {id: n.id2})
+    n.unread = rpc.call(sys, "notifyd", "list", {unread: true})
+    n.dismissed = rpc.call(sys, "notifyd", "dismiss", {id: n.id2})
+    n.missing = rpc.call(sys, "notifyd", "dismiss", {id: 99})
+    n.after = rpc.call(sys, "notifyd", "list")
+    msg = rpc.next_event(sys, 0.01)
+    n.event = msg
+    rpc.call(sys, "notifyd", "clear")
+    n.cleared = rpc.call(sys, "notifyd", "list")
+    n.done = true
+k:spawn(notifier, [], {name: "notifier", subject: system})
+settle(k)
+eq(n.done, true, "the notifier finished")
+eq([n.id1, n.id2, n.id3], [1, 2, 3], "ids grow")
+eq(string.find(n.bad, "post needs a title", 1, true) != nil, true, "post without a title is refused")
+eq(len(n.list), 2, "the queue is limited and drops the oldest")
+eq([n.list[1].title, n.list[2].title], ["Oops", "Third"], "in the order they came")
+eq(n.list[1].kind, "info", "an unknown kind becomes info")
+eq(len(n.unread), 1, "unread skips the read ones")
+eq([n.dismissed, n.missing], [true, false], "dismiss tells if the id existed")
+eq(len(n.after), 1, "a dismissed notification is gone")
+eq(n.event.event, "notification", "subscribers get events")
+eq(len(n.cleared), 0, "clear removes everything")
+
+# права: заглушка пускает систему и администраторов
+p = {}
+def asker(sys, args):
+    p.self_user = rpc.call(sys, "permd", "check", {cap: "fs.write"})
+    p.missing = rpc.call(sys, "permd", "check", {pid: 9999})
+def admin_asker(sys, args):
+    p.admin = rpc.call(sys, "permd", "check", {cap: "fs.write"})
+k:spawn(asker, [], {name: "asker", subject: user})
+k:spawn(admin_asker, [], {name: "admin-asker", subject: rules.subject("root", ["admin"])})
+settle(k)
+eq(p.self_user.allow, false, "a plain user is refused for now")
+eq(p.admin.allow, true, "an administrator is allowed")
+eq(p.missing.allow, false, "an unknown process is refused")
+print("done")

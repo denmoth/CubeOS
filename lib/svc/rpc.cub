@@ -3,14 +3,35 @@
 # Служба:
 #   rpc.serve(sys, {now: (args, from) => ..., set: (args, from) => ...}, {tick: () => ..., timeout: () => секунды})
 #     читает сообщения {op, args, from, id}, вызывает handlers[op](args, from), отвечает {id, result} или {id, error}.
-#     tick() вызывается после каждого сообщения и по таймауту; timeout() задаёт, сколько ждать сообщение (nil: без ограничения).
+#     tick() вызывается после каждого сообщения и по таймауту; timeout() задаёт, сколько ждать сообщение (nil: без ограничения);
+#     on_message(msg) получает сообщения без op (события от своих помощников).
 # Клиент (из процесса ядра):
 #   result, err = rpc.call(sys, "timed", "get_conf", nil, 2)       err: текст, если службы нет, она не ответила или ответила ошибкой
 #
 # Сообщения службы своим подписчикам (события) это просто sys.send(pid, {event: "minute", ...}): подписчик читает их своим receive.
-# Ответы и события различаются полем id и event; call() пропускает чужие события, пока ждёт свой ответ.
+# Ответы и события различаются полем id и event; пока call() ждёт свой ответ, пришедшие события откладываются, и их читает
+# rpc.next_event(sys, timeout) (вместо sys.receive): так события не теряются между вызовами.
 
-const state = {next_id: 0}
+const state = {next_id: 0, stash: {}}
+const STASH_LIMIT = 100
+
+# события и чужие сообщения, пришедшие, пока процесс ждал ответ в call(): их отдаёт next_event (до 100 на процесс, старые вытесняются)
+def _stash(pid, msg):
+    list = state.stash[pid]
+    if list == nil:
+        list = []
+        state.stash[pid] = list
+    list[len(list) + 1] = msg
+    if len(list) > STASH_LIMIT:
+        table.remove(list, 1)
+
+# следующее сообщение для процесса: сначала отложенные в call(), потом sys.receive(timeout); возвращает сообщение или nil
+export def next_event(sys, timeout=nil):
+    list = state.stash[sys.getpid()]
+    if list != nil and len(list) > 0:
+        return table.remove(list, 1)
+    who, msg = sys.receive(timeout)
+    return msg
 
 export def call(sys, service, op, args=nil, timeout=2):
     pid = sys.lookup(service)
@@ -27,7 +48,8 @@ export def call(sys, service, op, args=nil, timeout=2):
             if msg.error != nil:
                 return nil, msg.error
             return msg.result
-        # чужое сообщение (событие): пропускаем
+        if msg != nil:
+            _stash(sys.getpid(), msg)
 
 def reply(sys, msg, result, err):
     if msg.sender != nil and msg.id != nil:
@@ -39,7 +61,11 @@ export def serve(sys, handlers, opts=nil):
         wait = nil
         if o.timeout != nil:
             wait = o.timeout()
-        _who, msg = sys.receive(wait)
+        msg = next_event(sys, wait)
+        if msg != nil and type(msg) == "table" and msg.op == nil and o.on_message != nil:
+            ok, err = pcall(o.on_message, msg)
+            if not ok:
+                sys.log("error", "message handler failed: " .. tostring(err))
         if msg != nil and type(msg) == "table" and msg.op != nil:
             h = handlers[msg.op]
             if h == nil:

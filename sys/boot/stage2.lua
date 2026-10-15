@@ -17,7 +17,7 @@ local function now() return os.epoch("utc") / 1000 end
 local ORDER = { "libs", "fs", "kernel", "setup", "services", "login" }
 local weights = { libs = 0.30, fs = 0.10, kernel = 0.25, setup = 0.05, services = 0.25, login = 0.05 }
 
-local splash
+local splash, rt, booted
 local function report(stage, f, text)
   if not splash then return end
   local sum, before = 0, 0
@@ -45,7 +45,7 @@ local function main()
   term.setCursorPos(1, 1)
   term.write("Starting CubeOS...")
 
-  local rt = dofile(B .. "runtime.lua")
+  rt = dofile(B .. "runtime.lua")
   local import = rt.import
 
   -- минимум для экрана, потом он показывается и дальше полоса ведёт загрузку
@@ -102,6 +102,8 @@ local function main()
     on_ready = function() ready = true end,
   })
   system = b:start()
+  booted = true
+  if ctx.hooks and ctx.hooks.after_start then ctx.hooks.after_start(system) end
   mark("setup")
   if system.mode == "recovery" then
     splash:close()
@@ -139,9 +141,45 @@ end
 
 local ok, res, why = xpcall(main, function(e) return tostring(e) end)
 if ok then return res, why end
+
+-- сбой загрузки: отчёт в /cubeos/var/crash, экран ошибки с кодом причины и отсчётом. Клавиша открывает восстановление;
+-- по истечении времени: перезагрузка, если загрузка уже начата (счётчик неудач в boot.state доведёт до безопасного режима и
+-- восстановления), иначе восстановление (до начала загрузки счёт вести нечем, перезагрузка зациклилась бы)
+local code = "E-????????"
+local report_path
+pcall(function()
+  local crash = rt.import("crash")
+  local lines = {}
+  local r = crash.build({ kind = "boot", error = res }, { log = lines })
+  code = r.code
+  report_path = crash.write(function(path, text)
+    local full = (ctx.root or "") .. path
+    fs.makeDir(fs.getDir(full))
+    local f = fs.open(full, "w")
+    f.write(text)
+    f.close()
+  end, r)
+end)
+local delay = ctx.crash_delay or 10
+local text = res .. "\n\nReason code " .. code .. (report_path and ("\nReport: " .. report_path) or "")
 if splash then
-  splash:error(res .. "\n\nPress any key to open recovery.")
-  repeat local e = os.pullEventRaw() until e == "key"
-  splash:close()
+  local pressed = false
+  local left = delay
+  while true do
+    pcall(function()
+      splash:error(text .. "\n\n" .. (booted and ("Restarting in " .. left .. " s. ") or "") .. "Press any key to open recovery.")
+    end)
+    if left <= 0 then break end
+    local timer = os.startTimer(1)
+    while true do
+      local e, a = os.pullEventRaw()
+      if e == "key" then pressed = true break end
+      if e == "timer" and a == timer then break end
+    end
+    if pressed then break end
+    left = left - 1
+  end
+  pcall(function() splash:close() end)
+  if not pressed and booted then return "reboot" end
 end
 return "recovery", res

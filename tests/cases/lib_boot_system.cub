@@ -1,0 +1,136 @@
+import t
+import cfs
+import boot
+import boot.console as console_mod
+import svc.rpc as rpc
+import svc.logd as logd
+import svc.timed as timed
+import svc.devd as devd
+import svc.powerd as powerd
+import svc.crashd as crashd
+import svc.permd as permd
+import svc.notifyd as notifyd
+import svc.clipboard as clipboard
+import svc.stub as stub
+eq = t.eq
+
+# Загрузка с настоящими манифестами из sys/services и настоящими службами: всё поднимается, питание, журнал, сбои, виртуальные каталоги.
+
+clock = {now: 1000}
+def now():
+    return clock.now
+
+modules = {"svc.logd": logd, "svc.timed": timed, "svc.devd": devd, "svc.powerd": powerd, "svc.crashd": crashd, "svc.permd": permd,
+    "svc.notifyd": notifyd, "svc.clipboard": clipboard, "svc.stub": stub}
+def importer(path):
+    return modules[path]
+
+def read(path):
+    f = fs.open(path, "r")
+    text = f.readAll()
+    f.close()
+    return text
+
+def build_fs():
+    let fsys = cfs.new({clock: now})
+    fsys:mount("/", cfs.memory({now: now}))
+    fsys:mount("/cubeos/tmp", cfs.tmp(65536, now))
+    cfs.install_defaults(fsys)
+    fsys:mkdir(nil, "/cubeos/sys/services", {parents: true})
+    fsys:mkdir(nil, "/cubeos/sys/cfg", {parents: true})
+    fsys:mkdir(nil, "/cubeos/var", {parents: true})
+    for name in fs.list("/repo/sys/services"):
+        fsys:write_file(nil, "/cubeos/sys/services/" .. name, read("/repo/sys/services/" .. name))
+    fsys:write_file(nil, "/cubeos/sys/cfg/boot.conf", "{rounds: 2}")
+    return fsys
+
+power = {calls: []}
+def power_off():
+    power.calls[len(power.calls) + 1] = "shutdown"
+def power_restart():
+    power.calls[len(power.calls) + 1] = "reboot"
+
+def mk_boot(fsys, con, extra=nil):
+    o = extra ?? {}
+    o.fsys = fsys
+    o.console = con
+    o.clock = now
+    o.import = importer
+    o.power = {shutdown: power_off, reboot: power_restart}
+    o.kernel = {clock: now}
+    return boot.new(o)
+
+# CraftOS-PC убивает код, который 7 секунд не отдаёт управление: тест большой, поэтому иногда отдаём
+def breathe():
+    os.queueEvent("test_breathe")
+    os.pullEvent("test_breathe")
+
+def settle(system, steps=200):
+    for i in range[1, steps]:
+        if i % 5 == 0:
+            breathe()
+        system.kernel:run_ready()
+        clock.now = clock.now + 100
+        system.kernel:tick()
+        if system.power_action != nil:
+            break
+    system.kernel:run_ready()
+
+# ---------------------------------------------------------------- всё поднимается
+breathe()
+fsys = build_fs()
+system = mk_boot(fsys, nil):start()
+settle(system, 60)
+names = ["logd", "timed", "devd", "powerd", "crashd", "permd", "notifyd", "clipboard", "fontd", "audiod", "netd"]
+bad = []
+for name in names:
+    if system.services:state(name) != "running":
+        bad[len(bad) + 1] = name .. "=" .. tostring(system.services:state(name))
+eq(bad, [], "every system service is running")
+eq(fsys:read_file(nil, "/cubeos/run/services/logd"), "running\n", "/cubeos/run shows the service states")
+eq(string.find(fsys:read_file(nil, "/cubeos/proc/ps"), "logd", 1, true) != nil, true, "/cubeos/proc/ps lists the processes")
+eq(string.find(fsys:read_file(nil, "/cubeos/run/boot.state"), "mode: normal", 1, true) != nil, true, "/cubeos/run/boot.state shows the mode")
+eq(string.find(fsys:read_file(nil, "/cubeos/proc/version"), "CubeOS", 1, true) != nil, true, "/cubeos/proc/version")
+eq(fsys:exists(nil, "/cubeos/hardware/peripherals"), true, "devd mounted /cubeos/hardware")
+eq(string.find(fsys:read_file(nil, "/cubeos/var/log/system.log"), "log service started", 1, true) != nil, true, "logd wrote its first line")
+
+# журнал и сбои работают вместе со службами
+def talker(sys, args):
+    sys.log("info", "hello from the talker")
+def crasher(sys, args):
+    error("kaboom", 0)
+system.kernel:spawn(talker, [], {name: "talker", subject: system.subject})
+system.kernel:spawn(crasher, [], {name: "crasher", subject: system.subject})
+settle(system, 40)
+eq(string.find(fsys:read_file(nil, "/cubeos/var/log/talker.log"), "hello from the talker", 1, true) != nil, true, "sys.log reaches the per-process log")
+found = false
+for e in fsys:list(nil, "/cubeos/var/crash"):
+    if string.find(e.name, "crasher", 1, true) != nil:
+        found = true
+eq(found, true, "crashd wrote a report for the crashed process")
+
+# питание: просьба к powerd завершает всё штатно
+got = {}
+def asker(sys, args):
+    got.res = rpc.call(sys, "powerd", "reboot")
+    got.status = rpc.call(sys, "powerd", "status")
+system.kernel:spawn(asker, [], {name: "asker", subject: system.subject})
+settle(system, 60)
+eq(got.res, {ok: true, pending: "reboot"}, "powerd accepts the request")
+eq(power.calls, ["reboot"], "the reboot hook is called")
+eq(system.state.data.clean, true, "the boot is marked as ended cleanly")
+eq(system.services:state("logd"), "stopped", "services are stopped before the power action")
+
+# ---------------------------------------------------------------- грязное выключение
+breathe()
+fsys = build_fs()
+first = mk_boot(fsys, nil):start()
+settle(first, 60)
+eq(first.unclean, false, "a fresh system is not unclean")
+con = console_mod.ScriptedConsole(["s"])
+second = mk_boot(fsys, con):start()
+settle(second, 60)
+eq(second.unclean, true, "a boot after a run that never shut down is unclean")
+eq(string.find(fsys:read_file(nil, "/cubeos/run/boot.state"), "unclean: true", 1, true) != nil, true, "/cubeos/run/boot.state says so")
+eq(string.find(con:text(), "not shut down properly", 1, true) != nil, true, "the login screen warns the user")
+print("done")

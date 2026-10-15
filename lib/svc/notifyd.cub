@@ -1,0 +1,77 @@
+# svc.notifyd: уведомления (очередь, события). Центр уведомлений CDE и оболочка читают отсюда.
+#
+# Запросы (svc.rpc): post {title, text, kind ("info"|"warn"|"error"), source} -> id (можно без ответа),
+#   list {unread} -> уведомления от старых к новым, dismiss {id}, read {id} (пометить прочитанным), clear,
+#   subscribe / unsubscribe (подписчик получает {event: "notification", item}).
+# До 100 уведомлений, старые вытесняются. main(sys, args): args.max, args.clock.
+
+import svc.rpc as rpc
+
+export def main(sys, args):
+    a = args ?? {}
+    max_items = a.max ?? 100
+    clock = a.clock ?? (() => os.epoch("utc"))
+    items = []
+    subs = {}
+    next_id = 0
+
+    handlers = {}
+    def post(q, sender):
+        if q == nil or q.title == nil:
+            raise Error("post needs a title")
+        next_id += 1
+        kind = q.kind ?? "info"
+        if kind != "info" and kind != "warn" and kind != "error":
+            kind = "info"
+        item = {id: next_id, title: tostring(q.title), text: q.text != nil and tostring(q.text) or "", kind: kind, source: q.source,
+            time: clock(), read: false}
+        items[len(items) + 1] = item
+        while len(items) > max_items:
+            table.remove(items, 1)
+        for pid, flag in subs:
+            if not sys.send(pid, {event: "notification", item: item}):
+                subs[pid] = nil
+        return item.id
+    handlers.post = post
+
+    def list_items(q, sender):
+        out = []
+        for item in items:
+            if not ((q ?? {}).unread == true and item.read):
+                out[len(out) + 1] = item
+        return out
+    handlers.list = list_items
+
+    def dismiss(q, sender):
+        for i, item in items:
+            if item.id == q.id:
+                table.remove(items, i)
+                return true
+        return false
+    handlers.dismiss = dismiss
+
+    def mark_read(q, sender):
+        for item in items:
+            if item.id == q.id:
+                item.read = true
+                return true
+        return false
+    handlers.read = mark_read
+
+    def clear(q, sender):
+        items = []
+        return true
+    handlers.clear = clear
+
+    def subscribe(q, sender):
+        subs[sender] = true
+        return true
+    handlers.subscribe = subscribe
+
+    def unsubscribe(q, sender):
+        subs[sender] = nil
+        return true
+    handlers.unsubscribe = unsubscribe
+
+    sys.register("notifyd")
+    rpc.serve(sys, handlers)

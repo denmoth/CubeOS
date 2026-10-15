@@ -1,0 +1,87 @@
+import t
+import kernel
+import cfs
+import cfs.rules as rules
+import std.time as stime
+import svc.crashd as crashd
+import svc.rpc as rpc
+import json5
+eq = t.eq
+
+mono = {now: 1000}
+wall = {ms: stime.from_date(2026, 10, 15, 12, 0, 0)}
+def settle(k):
+    k:run_ready()
+    for i in range[1, 8]:
+        mono.now = mono.now + 100
+        wall.ms = wall.ms + 1000
+        k:tick()
+        k:run_ready()
+
+system = rules.subject("system", ["system"])
+fsys = cfs.new({})
+fsys:mount("/", cfs.memory())
+view = cfs.view(fsys, system, {})
+k = kernel.new({clock: () => mono.now})
+k:log("kernel line before the crash")
+pid = k:spawn(crashd.main, {view: view, system: {kernel: k}, clock: () => wall.ms, keep: 2}, {name: "crashd", subject: system, view: view})
+settle(k)
+eq(k.services["crashd"], pid, "the service registers itself")
+
+# упавший процесс получает отчёт
+def bad(sys, args):
+    error("boom in the app", 0)
+k:spawn(bad, [], {name: "badapp", subject: system})
+settle(k)
+names = []
+for e in fsys:list(nil, "/cubeos/var/crash"):
+    names[len(names) + 1] = e.name
+eq(len(names), 1, "a crashed process gets a report")
+eq(string.find(names[1], "badapp", 1, true) != nil, true, "named after the process")
+rep = json5.parse(fsys:read_file(nil, "/cubeos/var/crash/" .. names[1]))
+eq([rep.kind, rep.process.name, rep.process.how], ["process", "badapp", "crashed"], "the report describes the process")
+eq(string.find(rep.error, "boom in the app", 1, true) != nil, true, "and carries the error text")
+has_log = false
+for line in rep.log:
+    if string.find(line, "kernel line before the crash", 1, true) != nil:
+        has_log = true
+eq(has_log, true, "the last kernel log lines are included")
+
+# нормальный выход и kill отчётов не создают
+def fine(sys, args):
+    sys.sleep(0.05)
+k:spawn(fine, [], {name: "fine", subject: system})
+settle(k)
+eq(len(fsys:list(nil, "/cubeos/var/crash")), 1, "a clean exit leaves no report")
+
+# запросы: ручной отчёт, список, чтение, удаление, ограничение числа
+got = {}
+def client(sys, args):
+    got.path = rpc.call(sys, "crashd", "report", {kind: "kernel", error: "manual error"})
+    r, err = rpc.call(sys, "crashd", "report", {})
+    got.bad = err
+    got.list = rpc.call(sys, "crashd", "list")
+    got.read = rpc.call(sys, "crashd", "read", {name: got.list[1]})
+    got.done = true
+k:spawn(client, [], {name: "client", subject: system})
+settle(k)
+eq(got.done, true, "the client finished")
+eq(string.find(got.path, "-kernel.json", 1, true) != nil, true, "a manual report is named after its kind")
+eq(string.find(got.bad, "report needs error", 1, true) != nil, true, "a report without an error is refused")
+eq(len(got.list), 2, "list shows the reports")
+eq(string.find(got.read, "{", 1, true) != nil, true, "read returns the file text")
+
+def another(sys, args):
+    error("second crash", 0)
+k:spawn(another, [], {name: "another", subject: system})
+k:spawn(another, [], {name: "third", subject: system})
+settle(k)
+eq(len(fsys:list(nil, "/cubeos/var/crash")), 2, "only keep reports are stored")
+
+def cleaner(sys, args):
+    got.cleared = rpc.call(sys, "crashd", "clear")
+k:spawn(cleaner, [], {name: "cleaner", subject: system})
+settle(k)
+eq(got.cleared, 2, "clear removes every report")
+eq(len(fsys:list(nil, "/cubeos/var/crash")), 0, "and the directory is empty")
+print("done")

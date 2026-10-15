@@ -1,0 +1,46 @@
+# svc.clipboard: общий буфер обмена с историей (терминал и CDE пользуются им вместо своих буферов).
+#
+# Запросы (svc.rpc): set {text, source} (кладёт текст, одинаковый подряд не дублируется), get -> текст или nil,
+#   history {n} -> список {text, source, time} от новых к старым, clear.
+# Хранится в памяти (не на диске), до 50 записей, одна запись не длиннее 65536 байт. main(sys, args): args.max, args.max_bytes, args.clock.
+
+import svc.rpc as rpc
+
+export def main(sys, args):
+    a = args ?? {}
+    max_items = a.max ?? 50
+    max_bytes = a.max_bytes ?? 65536
+    clock = a.clock ?? (() => os.epoch("utc"))
+    items = []
+
+    handlers = {}
+    def set_text(q, sender):
+        if q == nil or type(q.text) != "string":
+            raise Error("set needs text")
+        if len(q.text) > max_bytes:
+            raise Error("the text is too long (" .. max_bytes .. " bytes at most)")
+        if len(items) > 0 and items[1].text == q.text:
+            return true
+        table.insert(items, 1, {text: q.text, source: q.source, time: clock()})
+        while len(items) > max_items:
+            table.remove(items)
+        return true
+    handlers.set = set_text
+
+    handlers.get = (q) => items[1] != nil and items[1].text or nil
+
+    def history(q, sender):
+        n = (q ?? {}).n ?? max_items
+        out = []
+        for i in range[1, math.min(n, len(items))]:
+            out[i] = items[i]
+        return out
+    handlers.history = history
+
+    def clear(q, sender):
+        items = []
+        return true
+    handlers.clear = clear
+
+    sys.register("clipboard")
+    rpc.serve(sys, handlers)

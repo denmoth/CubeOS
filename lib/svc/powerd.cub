@@ -1,0 +1,35 @@
+# svc.powerd: служба питания (docs/spec/boot.md). Принимает просьбу выключить или перезагрузить и запускает штатное завершение:
+# сессии закрываются, службы получают просьбу завершиться (3 с, затем принудительно), загрузка помечается законченной,
+# после этого вызывается power.shutdown или power.reboot (os.shutdown / os.reboot).
+#
+# Запросы (svc.rpc): shutdown, reboot (ответ сразу: завершение идёт в отдельном процессе «power», который переживает остановку служб),
+#   status {mode, pending}. Права: пока просить может любой процесс (проверка придёт с permd, шаг 6).
+# main(sys, args): args.system (контекст загрузки; system.power(action, sys) задаёт Boot).
+
+import svc.rpc as rpc
+
+export def main(sys, args):
+    a = args ?? {}
+    system = a.system
+    state = {pending: nil}
+
+    def request(action):
+        if system == nil or system.power == nil:
+            raise Error("power control is not available")
+        if state.pending != nil:
+            return {ok: true, pending: state.pending}
+        state.pending = action
+        sys.log("info", "power: " .. action .. " requested")
+        sys.spawn((s, x) => system.power(action, s), [], {name: "power", detached: true})
+        return {ok: true, pending: action}
+
+    handlers = {}
+    handlers.shutdown = (q) => request("shutdown")
+    handlers.reboot = (q) => request("reboot")
+
+    def status(q, sender):
+        return {mode: system != nil and system.mode or nil, pending: state.pending}
+    handlers.status = status
+
+    sys.register("powerd")
+    rpc.serve(sys, handlers)

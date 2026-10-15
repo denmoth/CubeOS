@@ -1,0 +1,137 @@
+import t
+import kernel
+import cfs
+import cfs.rules as rules
+import svc.devd as devd
+import svc.rpc as rpc
+eq = t.eq
+
+BASE = "/repo/build/disk-test"
+if fs.exists(BASE):
+    fs.delete(BASE)
+fs.makeDir(BASE)
+fs.makeDir(BASE .. "/7")
+f = fs.open(BASE .. "/7/readme.txt", "w")
+f.write("hello from the floppy")
+f.close()
+fs.makeDir(BASE .. "/8")
+
+mono = {now: 1000}
+def settle(k):
+    k:run_ready()
+    for i in range[1, 6]:
+        mono.now = mono.now + 50
+        k:tick()
+        k:run_ready()
+
+# ---------------------------------------------------------------- подставная периферия
+fake = {names: ["monitor_0", "drive_0"], disk: {present: false, path: nil, id: nil, label: nil}}
+types = {monitor_0: "monitor", drive_0: "drive", speaker_0: "speaker"}
+methods = {monitor_0: ["getSize", "setTextScale"], drive_0: ["isDiskPresent", "hasData", "getMountPath", "getDiskID", "getDiskLabel"],
+    speaker_0: ["playNote"]}
+def get_type(n):
+    return types[n]
+def get_methods(n):
+    return methods[n]
+def get_names():
+    return fake.names
+def call(n, m):
+    d = fake.disk
+    if m == "isDiskPresent":
+        return d.present
+    if m == "hasData":
+        return d.present
+    if m == "getMountPath":
+        return d.path
+    if m == "getDiskID":
+        return d.id
+    if m == "getDiskLabel":
+        return d.label
+    error("no such method " .. m)
+periph = {getNames: get_names, getType: get_type, getMethods: get_methods, call: call}
+
+system = rules.subject("system", ["system"])
+fsys = cfs.new({})
+fsys:mount("/", cfs.memory())
+view = cfs.view(fsys, system, {})
+k = kernel.new({clock: () => mono.now})
+pid = k:spawn(devd.main, {fsys: fsys, periph: periph}, {name: "devd", subject: system, view: view})
+settle(k)
+eq(k.services["devd"], pid, "the service registers itself")
+
+# ---------------------------------------------------------------- /cubeos/hardware
+eq(fsys:read_file(nil, "/cubeos/hardware/peripherals/monitor_0/type"), "monitor\n", "peripherals show the type")
+eq(fsys:read_file(nil, "/cubeos/hardware/peripherals/monitor_0/methods"), "getSize\nsetTextScale\n", "and the sorted methods")
+eq(fsys:exists(nil, "/cubeos/hardware/displays/monitor_0"), true, "monitors are listed under displays")
+eq(fsys:exists(nil, "/cubeos/hardware/drives/drive_0"), true, "drives are listed under drives")
+eq(fsys:exists(nil, "/cubeos/hardware/speakers/speaker_0"), false, "no speaker yet")
+
+# ---------------------------------------------------------------- диск вставили и вынули
+fake.disk = {present: true, path: "repo/build/disk-test/7", id: 7, label: "Work"}
+k:feed("disk", "drive_0")
+settle(k)
+eq(fsys:read_file(nil, "/cubeos/drives/floppy/Work/readme.txt"), "hello from the floppy", "a floppy is mounted by its label")
+got = {}
+def client(sys, args):
+    got.drives = rpc.call(sys, "devd", "drives")
+    got.list = rpc.call(sys, "devd", "list")
+    got.has_drive = rpc.call(sys, "devd", "has", {type: "drive"})
+    got.has_speaker = rpc.call(sys, "devd", "has", {type: "speaker"})
+    got.done = true
+k:spawn(client, [], {name: "client", subject: system})
+settle(k)
+eq(got.drives.drive_0.point, "/cubeos/drives/floppy/Work", "drives lists the mount point")
+eq([got.drives.drive_0.id, got.drives.drive_0.label], [7, "Work"], "with the disk ID and label")
+eq(got.list.drive_0.type, "drive", "list shows devices")
+eq([got.has_drive, got.has_speaker], [true, false], "has asks about a device type")
+
+k:feed("disk_eject", "drive_0")
+fake.disk = {present: false}
+settle(k)
+ok, err = pcall(() => fsys:read_file(nil, "/cubeos/drives/floppy/Work/readme.txt"))
+eq(ok, false, "an ejected floppy is unmounted")
+
+# диск без метки: имя по ID
+fake.disk = {present: true, path: "repo/build/disk-test/8", id: 8, label: nil}
+k:feed("disk", "drive_0")
+settle(k)
+eq(fsys:exists(nil, "/cubeos/drives/floppy/disk-8"), true, "an unlabeled disk is named by its ID")
+k:feed("disk_eject", "drive_0")
+settle(k)
+
+# дисковод без диска или со звуковым диском не монтируется
+fake.disk = {present: false}
+k:feed("disk", "drive_0")
+settle(k)
+got = {}
+def client2(sys, args):
+    got.drives = rpc.call(sys, "devd", "drives")
+    got.mount = rpc.call(sys, "devd", "mount", {name: "drive_0"})
+    got.mount_monitor = rpc.call(sys, "devd", "mount", {name: "monitor_0"})
+    got.unmount = rpc.call(sys, "devd", "unmount", {name: "drive_0"})
+k:spawn(client2, [], {name: "client2", subject: system})
+settle(k)
+eq(got.drives, {}, "an empty drive has nothing mounted")
+eq([got.mount.ok, got.mount.why], [false, "no data disk"], "mount reports the missing disk")
+eq([got.mount_monitor.ok, got.mount_monitor.why], [false, "not a storage device"], "and refuses non-storage devices")
+eq([got.unmount.ok, got.unmount.why], [false, "not mounted"], "unmount of a free drive is refused")
+
+# ---------------------------------------------------------------- периферия подключили и отключили
+fake.names = ["monitor_0", "drive_0", "speaker_0"]
+k:feed("peripheral", "speaker_0")
+settle(k)
+eq(fsys:exists(nil, "/cubeos/hardware/speakers/speaker_0"), true, "an attached speaker appears")
+k:feed("peripheral_detach", "speaker_0")
+settle(k)
+eq(fsys:exists(nil, "/cubeos/hardware/speakers/speaker_0"), false, "a detached speaker disappears")
+
+# ---------------------------------------------------------------- диск уже стоит при запуске службы
+k:kill(pid, "kill")
+settle(k)
+fake.disk = {present: true, path: "repo/build/disk-test/7", id: 7, label: "Work"}
+fake.names = ["monitor_0", "drive_0"]
+pid2 = k:spawn(devd.main, {fsys: fsys, periph: periph}, {name: "devd", subject: system, view: view})
+settle(k)
+eq(fsys:read_file(nil, "/cubeos/drives/floppy/Work/readme.txt"), "hello from the floppy", "a disk present at start is mounted by the first scan")
+fs.delete(BASE)
+print("done")

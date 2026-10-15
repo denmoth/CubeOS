@@ -1,0 +1,83 @@
+# svc.crashd: служба отчётов о сбоях (docs/spec/services.md). Следит за завершением процессов (событие process_exit), для упавших
+# (how == "crashed") пишет отчёт /cubeos/var/crash/<время>-<имя>.json (последние строки журнала ядра внутри) и хранит не больше 20.
+#
+# Запросы (svc.rpc): report {kind, error, process} (ручной отчёт), list, read {name}, clear.
+# main(sys, args): args.system (контекст; kernel), args.view, args.dir, args.clock, args.keep.
+# Сбои самой загрузки (до запуска служб) обрабатывает stage2 через ту же библиотеку crash.
+
+import crash
+import svc.rpc as rpc
+
+export def main(sys, args):
+    a = args ?? {}
+    view = a.view ?? sys.view()
+    dir = a.dir ?? crash.CRASH_DIR
+    kernel = a.system != nil and a.system.kernel or nil
+    keep = a.keep ?? crash.KEEP
+    clock = a.clock ?? (() => os.epoch("utc"))
+
+    def writer(path, text):
+        view:mkdir(dir, {parents: true})
+        view:write(path, text)
+
+    def prune():
+        names = []
+        for e in view:list(dir):
+            names[len(names) + 1] = e.name
+        for n in crash.old_reports(names, keep):
+            view:remove(dir .. "/" .. n)
+
+    def save(info):
+        lines = kernel != nil and kernel.log_lines or []
+        report = crash.build(info, {clock: clock, log: lines})
+        path = crash.write(writer, report, dir)
+        pcall(prune)
+        sys.log("error", "crash report " .. report.code .. " written to " .. path)
+        return path
+
+    handlers = {}
+    def report_now(q, sender):
+        if q == nil or q.error == nil:
+            raise Error("report needs error")
+        return save({kind: q.kind ?? "process", error: q.error, process: q.process})
+    handlers.report = report_now
+
+    def list_reports(q, sender):
+        names = []
+        if view:exists(dir):
+            for e in view:list(dir):
+                names[len(names) + 1] = e.name
+        table.sort(names)
+        return names
+    handlers.list = list_reports
+
+    def read_report(q, sender):
+        name = string.gsub(tostring(q.name), "[^%w_%-%.]", "_")
+        return view:read(dir .. "/" .. name)
+    handlers.read = read_report
+
+    def clear_all(q, sender):
+        n = 0
+        if view:exists(dir):
+            for e in view:list(dir):
+                view:remove(dir .. "/" .. e.name)
+                n += 1
+        return n
+    handlers.clear = clear_all
+
+    me = sys.getpid()
+    def watcher(wsys, wargs):
+        while true:
+            ev, pid, how = wsys.wait_event(["process_exit"])
+            if how == "crashed":
+                wsys.send(me, {event: "crashed", pid: pid})
+    sys.spawn(watcher, [], {name: "crashd-events"})
+
+    def on_event(msg):
+        if msg.event == "crashed" and kernel != nil:
+            info = kernel:exit_info(msg.pid)
+            if info != nil and info.name != "crashd" and info.name != "crashd-events":
+                save({kind: "process", error: info.err, process: {pid: info.pid, name: info.name, how: info.how, cpu_ms: info.cpu_ms}})
+
+    sys.register("crashd")
+    rpc.serve(sys, handlers, {on_message: on_event})

@@ -45,7 +45,7 @@
 ### Карта `lib/`
 
 - `std/` (str, list, dict, path, time, fmt), `semver`, `json`, `json5` (разбор, запись, точечная правка), `crc32`, `sha256` (HMAC, PBKDF2), `base64`, `base85`, `lzfast`, `deflate`, `compress`, `collections`, `argparse`, `textwrap`, `event`, `url`, `rand`, `unicode` (UTF-8: `chars`, `sub`, `length`, `codepoints`), `log`, `history` (undo/redo, не история команд), `vec`, `font`, `pixelbuf`, `version` (имя и версия ОС).
-- `cfs/`: файловая система CFS (пути, права, ссылки, корзина, провайдеры host/memory/tmp, виды `view`, замещённый `fs`, legacy-слой). Спецификация `docs/spec/cfs.md`.
+- `cfs/`: файловая система CFS (пути, права, ссылки, корзина, провайдеры host/memory/tmp/virtual, виды `view`, замещённый `fs`, legacy-слой). Спецификация `docs/spec/cfs.md`.
 - `kernel/`: ядро (`init.cub` процессы-корутины, планировщик, события, IPC, службы, «не отвечает»; `sys.cub` вызовы для программ; `cc.cub` источник событий CC). `docs/spec/kernel.md`.
 - `boot/`: загрузка (`init`, `state` журнал загрузок и режимы, `auth` пользователи PBKDF2, `session`, `services`, `greeter`, `console`). `docs/spec/boot.md`.
 - `cgl/`: графика (surface, color, quant, graphics, teletext, mirror, anim, cimg, fx, g3d). `docs/spec/cgl.md`.
@@ -53,7 +53,7 @@
 - `term/`: `chars` (байты CC, UTF-8 клетки, `decode/encode/length/sub`), `vterm` (виртуальный терминал, полный API `term`, прокрутка назад, `all_lines`, `row_at`), `window`, `view` (виджет ui: прокрутка, выделение, буфер, раскладки), `app` (программа «Терминал» для ui.shell), `palette` (палитры).
 - `compat/`: слой совместимости CraftOS: `bios` (write, print, read с `env.stdin`, sleep, loadfile, os.run, loadAPI), `env` (окружение с ROM-API, `os.version` = «CubeOS 0.3.0»), `proc` (legacy-процесс, `opts.main` вместо файла), `vararg.lua` (помощники для `...`, которых нет в Cubic).
 - `cush/`: оболочка (`lex`, `shell` с задачами и пайпами, `editor`, `hist`, `builtins`, `fetch`).
-- `clock.cub` (время: зоны, форматы, игровое время), `svc/` (службы: `rpc`, `timed`, `timeclient`; манифесты в `sys/services/`), `logo.cub` (логотип блоками телетекста). `docs/spec/time.md`.
+- `clock.cub` (время: зоны, форматы, игровое время; `docs/spec/time.md`), `svc/` (службы `logd`, `timed`, `devd`, `powerd`, `crashd`, `permd`, `notifyd`, `clipboard`, `stub`, а также `rpc` и `timeclient`; манифесты в `sys/services/`; `docs/spec/services.md`), `crash.cub` (отчёты о сбоях), `sysfs.cub` (деревья `/proc`, `/run`, `/hardware`), `logo.cub` (логотип блоками телетекста).
 - `input/layout.cub`: раскладки EN, RU, UK (замена клавиш по месту, Ctrl+Shift или Alt+Shift).
 
 ## 4. Команды
