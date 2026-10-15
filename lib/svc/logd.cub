@@ -87,14 +87,14 @@ export def main(sys, args):
             rotate_file(path)
         view:append(path, line)
 
-    def write(level, source, text):
+    def write(level, source, text, at=nil):
         r = rank(level) ?? 2
         if r < min_rank:
             return false
-        line = format_line(clock(), LEVELS[r], source, text)
+        line = format_line(at ?? clock(), LEVELS[r], source, text)
         name = _name(source)
         ok, err = pcall(() => append(dir .. "/system.log", line))
-        if name != "system":
+        if name != "system" and name != "boot":
             pcall(() => append(dir .. "/" .. name .. ".log", line))
         return ok
 
@@ -103,11 +103,17 @@ export def main(sys, args):
         if conf.rotate_boots:
             pcall(() => rotate_file(dir .. "/system.log"))
         write("info", "logd", "log service started, level " .. conf.level)
+        # журнал загрузки (stage2, пока logd не было) и записи ядра с их уровнями: с уровнем info в system.log попадают запуск и сбои служб,
+        # смены фокуса, сессии, потерянный ввод; с debug ещё и каждый процесс
+        boot_lines = a.system != nil and a.system.bootlog or nil
+        if boot_lines != nil:
+            for rec in boot_lines:
+                write(rec.level, "boot", rec.text, rec.ms)
         if kernel != nil and conf.kernel:
-            for line in kernel.log_lines:
-                write("debug", "kernel", line)
-            def push(text):
-                pending[len(pending) + 1] = {level: "debug", source: "kernel", text: text}
+            for rec in kernel.records:
+                write(rec.level, "kernel", rec.text)
+            def push(text, level):
+                pending[len(pending) + 1] = {level: level ?? "debug", source: "kernel", text: text}
             kernel.log_fn = push
 
     def flush():

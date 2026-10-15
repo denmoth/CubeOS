@@ -107,7 +107,7 @@ export def log(level, text):
     if pid != nil:
         _call({op: "send", to: pid, msg: {op: "log", args: {level: level, source: name, text: tostring(text)}}})
     else:
-        _call({op: "klog", text: "[" .. level .. "] " .. name .. ": " .. tostring(text)})
+        _call({op: "klog", level: level, text: "[" .. level .. "] " .. name .. ": " .. tostring(text)})
 
 # журнал операций: изменения из нескольких файлов «всё или ничего» (cfs.journal). dir: где лежат журналы; для системных процессов
 # /cubeos/var/journal (по умолчанию), обычная программа должна выбрать свой каталог, например "$data/journal".

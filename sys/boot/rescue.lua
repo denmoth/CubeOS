@@ -17,6 +17,24 @@ term.setCursorPos(1, 1)
 print(arg.gate and "CubeOS: access to CraftOS" or "CubeOS recovery")
 if arg.reason then print("Reason: " .. tostring(arg.reason)) end
 
+-- хвост журнала загрузки: что происходило перед сбоем (читается без пароля: там нет секретов)
+do
+  local f = fs.open("/cubeos/var/log/boot.log", "r")
+  if f then
+    local lines = {}
+    while true do
+      local l = f.readLine()
+      if not l then break end
+      lines[#lines + 1] = l
+    end
+    f.close()
+    local w = term.getSize()
+    print("")
+    print("Last lines of /cubeos/var/log/boot.log:")
+    for i = math.max(1, #lines - 9), #lines do print(lines[i]:sub(1, w)) end
+  end
+end
+
 local function unlocked()
   if not fs.exists(USERS) then return true end                -- ещё нет учётных записей
   local f = loadfile(B .. "runtime.lua")

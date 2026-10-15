@@ -86,18 +86,27 @@ export class PixelSplash:
         palette = color_mod.default_palette()
         for c in COLORS:
             palette:set(c[1], c[2], c[3], c[4])
+        # все свои цвета (основные, ступени фона и подписи) готовятся ДО открытия экрана: палитра уходит в терминал при открытии,
+        # цвета, добавленные позже, в игре остались бы стандартными (радуга вместо фона)
+        bg_ramp = _ramp(palette, 212, C_BG1, C_BG2, 24)
+        self.fade_ramp = _ramp(palette, 236, C_BG2, C_TEXT, 8)
         self.screen = cgl.open({term: self.term, backend: "graphics", palette: palette})
+        # на всякий случай отправляем свои цвета ещё раз явно
+        custom = []
+        for n in range[200, 243]:
+            r, g, b = palette:get(n)
+            custom[len(custom) + 1] = [n, r, g, b]
+        self.screen:set_colors(custom)
         self.palette = palette
         self.w = self.screen.w
         self.h = self.screen.h
         self:_layout()
         self.bg = surface_mod.new(self.w, self.h, C_BG1)
-        self.bg:fill_gradient(0, 0, self.w, self.h, _ramp(palette, 212, C_BG1, C_BG2, 24), "v")
+        self.bg:fill_gradient(0, 0, self.w, self.h, bg_ramp, "v")
         self.plain = self.bg:copy()
         f = self.font
         tw = surface_mod.measure(f, self.title, 0, self.title_scale)
         self.bg:text(f, math.floor((self.w - tw) / 2), self.title_y, self.title, C_TEXT, {scale: self.title_scale})
-        self.fade_ramp = _ramp(palette, 236, C_BG2, C_TEXT, 8)
         self.last = self.clock()
         self.screen.surface:restore(self.bg, 0, 0, self.w, self.h)
         self:_frame(0)

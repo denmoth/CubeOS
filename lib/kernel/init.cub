@@ -94,6 +94,10 @@ export class Kernel:
         self.last_tick = self.clock()
         self.running = false
         self.log_lines = []
+        self.records = []
+        self.record_count = 0
+        self.input_seen = false
+        self.input_dropped = 0
         self.stdout_lines = {}
         self.handlers = {}
         self:_install_handlers()
@@ -103,12 +107,27 @@ export class Kernel:
 
     # ------------------------------------------------------------ журнал
 
-    def log(self, text):
+    # журнал ядра: level debug (по умолчанию), info, warn, error, crit. log_lines (последние 200 строк текстом) и records (последние 1000
+    # записей {level, text, ms}; всего записано record_count) нужны logd, экрану загрузки и отчётам о сбоях; log_fn(text, level) вызывается сразу
+    def log(self, text, level="debug"):
         self.log_lines[len(self.log_lines) + 1] = text
         if len(self.log_lines) > 200:
             table.remove(self.log_lines, 1)
+        self.records[len(self.records) + 1] = {level: level, text: text, ms: self.clock()}
+        self.record_count += 1
+        if len(self.records) > 1000:
+            table.remove(self.records, 1)
         if self.log_fn != nil:
-            self.log_fn(text)
+            self.log_fn(text, level)
+
+    # записи, появившиеся после номера since (0: с начала, что ещё хранится); возвращает список и новый номер
+    def records_since(self, since):
+        first = self.record_count - len(self.records)
+        out = []
+        for i, r in self.records:
+            if first + i > since:
+                out[len(out) + 1] = r
+        return out, self.record_count
 
     # ------------------------------------------------------------ процессы
 
@@ -151,6 +170,7 @@ export class Kernel:
         self.ready[len(self.ready) + 1] = proc
         if proc.ui:
             self.focus_pid = pid
+            self:log("focus -> " .. pid .. " " .. proc.name, "info")
         self:log("spawn " .. pid .. " " .. proc.name)
         return pid
 
@@ -181,7 +201,12 @@ export class Kernel:
         if len(self.exit_order) > MAX_EXITED:
             old = table.remove(self.exit_order, 1)
             self.exited[old] = nil
-        self:log("exit " .. proc.pid .. " " .. proc.name .. " (" .. how .. ")" .. (err != nil and (": " .. tostring(err)) or ""))
+        level = "debug"
+        if how == "crashed":
+            level = "error"
+        elif how == "killed":
+            level = "warn"
+        self:log("exit " .. proc.pid .. " " .. proc.name .. " (" .. how .. ")" .. (err != nil and (": " .. tostring(err)) or ""), level)
         # службы, блокировки, фокус
         for name, pid in self.services:
             if pid == proc.pid:
@@ -320,7 +345,14 @@ export class Kernel:
         if INPUT_EVENTS[name]:
             target = self.focus_pid != nil and self.procs[self.focus_pid] or nil
             if target != nil:
+                if not self.input_seen:
+                    self.input_seen = true
+                    self:log("first input event " .. name .. " goes to " .. target.pid .. " " .. target.name .. " (" .. target.state .. ")", "info")
                 self:_enqueue(target, ev)
+            else:
+                self.input_dropped += 1
+                if self.input_dropped == 1 or self.input_dropped % 100 == 0:
+                    self:log("input event " .. name .. " dropped: no process has the focus (" .. self.input_dropped .. " so far)", "warn")
             return
         snapshot = []
         for pid, p in self.procs:
@@ -337,6 +369,7 @@ export class Kernel:
         if self.procs[pid] == nil:
             return false
         self.focus_pid = pid
+        self:log("focus -> " .. pid .. " " .. self.procs[pid].name, "info")
         return true
 
     # переключает фокус на следующую программу с интерфейсом
@@ -354,6 +387,7 @@ export class Kernel:
             if pid == self.focus_pid and list_[i + 1] != nil:
                 pick = list_[i + 1]
         self.focus_pid = pick
+        self:log("focus -> " .. pick .. " " .. self.procs[pick].name, "info")
         return pick
 
     # ------------------------------------------------------------ время и наблюдение
@@ -378,7 +412,7 @@ export class Kernel:
             for pid, p in self.procs:
                 for ev in p.events:
                     ev.at += gap
-            self:log("lag detected: " .. gap .. " ms between ticks")
+            self:log("lag detected: " .. gap .. " ms between ticks", "warn")
         due = []
         for pid, p in self.procs:
             if p.state == "waiting" and p.deadline != nil and p.deadline <= now:
@@ -400,7 +434,7 @@ export class Kernel:
             first = p.events[1]
             if first != nil and now - first.at >= self.hung_ms and now >= p.snooze_until and not p.hung:
                 p.hung = true
-                self:log("not responding: " .. pid .. " " .. p.name)
+                self:log("not responding: " .. pid .. " " .. p.name, "warn")
                 if self.on_hung != nil:
                     self.on_hung(p)
             elif first == nil and p.hung:
@@ -595,7 +629,7 @@ export class Kernel:
         h.view = view
 
         def klog(proc, req):
-            k:log(tostring(req.text))
+            k:log(tostring(req.text), req.level ?? "info")
             return "value", {ok: true}
         h.klog = klog
 

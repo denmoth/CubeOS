@@ -232,7 +232,9 @@ end
 do
   check("startup is short", select(2, SRC.startup:gsub("\n", "")) < 20)
   check("startup uses raw events", SRC.startup:find("os.pullEvent = os.pullEventRaw", 1, true) ~= nil)
-  check("stage1 is small", #SRC.stage1 < 6000, #SRC.stage1)
+  -- размер кода без комментариев (русские комментарии в байтах тяжёлые): этап 1 остаётся небольшим
+  local code = SRC.stage1:gsub("%-%-[^\n]*", ""):gsub("\n%s*\n", "\n")
+  check("stage1 is small", #code < 5500, #code)
 end
 
 -- 14. runtime.recovery_login с настоящими CFS и Auth (временный корень данных)

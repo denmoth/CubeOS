@@ -119,7 +119,7 @@ export class Boot:
         auth = auth_mod.new(fsys, auth_opts)
         auth:load()
         system = {mode: mode, reason: reason, state: sys_state, conf: conf, release: release, auth: auth, fsys: fsys,
-            console: self.console, unclean: unclean, recovered: recovered, boot_ms: (o.clock ?? (() => os.epoch("utc")))()}
+            console: self.console, unclean: unclean, recovered: recovered, bootlog: o.bootlog, boot_ms: (o.clock ?? (() => os.epoch("utc")))()}
         self.system = system
         if mode == "recovery":
             self:_say("Recovery mode: " .. tostring(reason))
@@ -133,7 +133,7 @@ export class Boot:
         k = kernel.new(kernel_opts)
         system.kernel = k
         if recovered.restored + recovered.cleaned + recovered.replayed + recovered.dropped > 0:
-            k:log("file recovery: " .. recovered.restored .. " restored, " .. recovered.cleaned .. " cleaned, " .. recovered.replayed .. " transactions replayed, " .. recovered.dropped .. " dropped")
+            k:log("file recovery: " .. recovered.restored .. " restored, " .. recovered.cleaned .. " cleaned, " .. recovered.replayed .. " transactions replayed, " .. recovered.dropped .. " dropped", "warn")
         self:_mount_virtual(system)
         sessions = session_mod.new(fsys, auth, {kernel: k, clock: o.clock, elevate_ms: conf.elevate_ms, lang: conf.lang, de: conf.de})
         system.sessions = sessions
@@ -141,7 +141,7 @@ export class Boot:
         system.subject = system_subject
         manifests, problems = services_mod.load_manifests(fsys, o.services_dir)
         for p in problems:
-            k:log("service manifest: " .. p)
+            k:log("service manifest: " .. p, "warn")
         if mode == "safe":
             kept = []
             for m in manifests:
@@ -154,7 +154,7 @@ export class Boot:
         let me = self
         system.power = (action, psys) => me:power(action, psys)
         if unclean:
-            k:log("unclean shutdown: the previous session did not end properly")
+            k:log("unclean shutdown: the previous session did not end properly", "warn")
         system.init_pid = k:spawn((sys, args) => mgr:run_init(sys, args), [], {name: "init", subject: system_subject})
         system.login_pid = k:spawn((sys, args) => me:_login_loop(sys), [], {name: "login", subject: system_subject, ui: true})
         return system
@@ -178,6 +178,7 @@ export class Boot:
         o = self.opts
         sys.wait(system.init_pid)
         system.state:mark_ok()
+        sys.log("info", "services started, the boot reached the login screen")
         if o.on_ready != nil:
             o.on_ready(system)
         if self.console != nil and self.console.bind != nil:

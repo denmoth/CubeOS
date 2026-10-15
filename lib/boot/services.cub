@@ -112,7 +112,10 @@ export class ServiceManager:
     def _say(self, text):
         if self.log != nil:
             self.log(text)
-        self.kernel:log(text)
+        level = "info"
+        if string.find(text, "failed", 1, true) != nil or string.find(text, "blocked", 1, true) != nil or string.find(text, "problem", 1, true) != nil:
+            level = "warn"
+        self.kernel:log(text, level)
 
     def add(self, manifest):
         m = normalize(manifest)

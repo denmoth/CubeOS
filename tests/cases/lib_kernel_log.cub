@@ -1,0 +1,89 @@
+import t
+import kernel
+import cfs.rules as rules
+eq = t.eq
+
+mono = {now: 1000}
+def tick(k, ms):
+    mono.now = mono.now + ms
+    k:tick()
+    k:run_ready()
+
+def levels_of(k, since_text):
+    out = []
+    for r in k.records:
+        if string.find(r.text, since_text, 1, true) != nil:
+            out[len(out) + 1] = r.level
+    return out
+
+system = rules.subject("system", ["system"])
+k = kernel.new({clock: () => mono.now})
+
+# записи с уровнями и номерами
+k:log("plain")
+k:log("careful", "warn")
+eq([k.records[1].level, k.records[2].level, k.record_count], ["debug", "warn", 2], "log keeps the level, debug by default")
+list, n = k:records_since(0)
+eq([len(list), n], [2, 2], "records_since 0 returns everything")
+k:log("third", "info")
+list, n = k:records_since(n)
+eq([len(list), list[1].text, n], [1, "third", 3], "and then only what is new")
+heard = []
+def hear(text, level):
+    heard[len(heard) + 1] = level .. ":" .. text
+k.log_fn = hear
+k:log("loud", "error")
+eq(heard, ["error:loud"], "log_fn gets the text and the level")
+k.log_fn = nil
+for i in range[1, 1100]:
+    k:log("bulk " .. i)
+eq([len(k.records), k.record_count], [1000, 1104], "records are limited to 1000, the counter keeps counting")
+list, n = k:records_since(1100)
+eq(len(list), 4, "the counter still tells what is new after trimming")
+
+# процессы: уровень зависит от того, как они закончились
+k = kernel.new({clock: () => mono.now})
+def fine(sys, args):
+    nil
+def boom(sys, args):
+    error("kaboom", 0)
+def sleeper(sys, args):
+    sys.sleep(100)
+k:spawn(fine, [], {name: "fine", subject: system})
+k:spawn(boom, [], {name: "boom", subject: system})
+sp = k:spawn(sleeper, [], {name: "sleeper", subject: system})
+k:run_ready()
+k:kill(sp, "kill")
+eq(levels_of(k, "exit 1 fine"), ["debug"], "a normal exit is debug")
+eq(levels_of(k, "exit 2 boom"), ["error"], "a crash is an error")
+eq(levels_of(k, "exit 3 sleeper"), ["warn"], "a kill is a warning")
+
+# фокус и ввод
+k = kernel.new({clock: () => mono.now})
+k:feed("char", "a")
+k:feed("char", "b")
+eq(levels_of(k, "dropped: no process has the focus"), ["warn"], "input with nobody focused is reported once at first")
+def ui_prog(sys, args):
+    sys.wait_event(["char"])
+    sys.wait_event(["char"])
+pid = k:spawn(ui_prog, [], {name: "terminal", subject: system, ui: true})
+eq(levels_of(k, "focus -> " .. pid .. " terminal"), ["info"], "a new interface process takes the focus and it is logged")
+k:run_ready()
+k:feed("char", "x")
+k:feed("char", "y")
+k:run_ready()
+eq(len(levels_of(k, "first input event char goes to " .. pid .. " terminal")), 1, "the first delivered input event is logged once, with its receiver")
+other = k:spawn(sleeper, [], {name: "other", subject: system})
+k:set_focus(other)
+eq(len(levels_of(k, "focus -> " .. other .. " other")), 1, "an explicit focus change is logged")
+
+# sys.log без logd идёт в журнал ядра с уровнем
+k = kernel.new({clock: () => mono.now})
+def talker(sys, args):
+    sys.log("warn", "careful now")
+    sys.log("info", "fyi")
+k:spawn(talker, [], {name: "talker", subject: system})
+k:run_ready()
+eq(levels_of(k, "talker: careful now"), ["warn"], "sys.log keeps its level in the kernel log")
+eq(levels_of(k, "talker: fyi"), ["info"], "info too")
+print("done")

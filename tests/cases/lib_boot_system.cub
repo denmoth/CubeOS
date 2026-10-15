@@ -93,6 +93,7 @@ eq(string.find(fsys:read_file(nil, "/cubeos/run/boot.state"), "mode: normal", 1,
 eq(string.find(fsys:read_file(nil, "/cubeos/proc/version"), "CubeOS", 1, true) != nil, true, "/cubeos/proc/version")
 eq(fsys:exists(nil, "/cubeos/hardware/peripherals"), true, "devd mounted /cubeos/hardware")
 eq(string.find(fsys:read_file(nil, "/cubeos/var/log/system.log"), "log service started", 1, true) != nil, true, "logd wrote its first line")
+eq(string.find(fsys:read_file(nil, "/cubeos/var/log/system.log"), "boot reached the login screen", 1, true) != nil, true, "the boot milestone is in the system log at the default level")
 
 # журнал и сбои работают вместе со службами
 def talker(sys, args):

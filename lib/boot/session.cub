@@ -113,6 +113,8 @@ export class SessionManager:
         s = Session(id, rec, profile, subject, view, {now: self.clock(), lang: self.lang, de: self.de})
         s.admin_capable = self.auth:is_admin(rec.name)
         self.sessions[id] = s
+        if self.kernel != nil:
+            self.kernel:log("session " .. id .. " opened for " .. rec.name .. (rec.temp and " (guest)" or ""), "info")
         self.order[len(self.order) + 1] = id
         self.active_id = id
         if self.on_open != nil:
@@ -145,6 +147,7 @@ export class SessionManager:
         if s == nil:
             return false
         if self.kernel != nil:
+            self.kernel:log("session " .. id .. " closed for " .. tostring(s.user), "info")
             for pid in self:_pids_copy(s):
                 self.kernel:kill(pid, "kill")
         self.sessions[id] = nil

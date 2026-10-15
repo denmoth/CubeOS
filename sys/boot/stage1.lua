@@ -94,6 +94,10 @@ local function rescue(arg)
 end
 
 local function run(conf)
+  -- чистый экран перед всем остальным: от прошлой программы или загрузки на экране не должно остаться ни символа
+  if term.isColor() then term.setBackgroundColor(colors.black) term.setTextColor(colors.white) end
+  term.clear()
+  term.setCursorPos(1, 1)
   local caps = { pixel = type(term.setGraphicsMode) == "function", color = term.isColor() }
   local mode = opt(conf, "menu", "key")                      -- "key" (F2 открывает меню), "always", "off"
   local window = (tonumber(opt(conf, "key_window_ms", 1000)) or 1000) / 1000

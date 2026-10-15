@@ -134,4 +134,16 @@ for line in mono.log:
         last_bar = line
 eq(last_bar, "[" .. string.rep("#", 8) .. string.rep("-", 24) .. "]", "monochrome bar uses characters")
 m:error("something failed")
+# свои цвета (фон, подпись) попадают в терминал при открытии, а не позже: иначе в игре они были бы стандартными
+sent = {}
+def record_palette(i, r, g, b):
+    sent[i] = [r, g, b]
+pt = fake({pixel: true})
+pt.setPaletteColor = record_palette
+ps = splash.new({caps: {pixel: true}, term: pt, clock: tick_clock, assets: "/repo/assets"})
+ps:open()
+eq(sent[200] != nil and sent[212] != nil and sent[235] != nil and sent[236] != nil and sent[243] != nil, true, "the background and label ramps are sent to the terminal")
+eq([math.floor(sent[212][1] * 255 + 0.5), math.floor(sent[212][3] * 255 + 0.5)], [10, 24], "the first background step is the dark navy, not a default color")
+eq(sent[235][1] > sent[212][1], true, "the ramp gets lighter")
+ps:close()
 print("done")

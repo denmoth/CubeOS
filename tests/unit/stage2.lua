@@ -47,6 +47,11 @@ check("boot state is clean after the cycle", state:find("pending: false", 1, tru
 local timing = read(root .. "/cubeos/var/boot.timing") or ""
 check("timing of the stages is recorded", timing:find("libs", 1, true) ~= nil and timing:find("total", 1, true) ~= nil, timing)
 check("users file was created", fs.exists(root .. "/cubeos/sys/cfg/users.conf"))
+local blog = read(root .. "/cubeos/var/log/boot.log") or ""
+check("boot.log is written from the start", blog:find("stage 2 started", 1, true) ~= nil, blog)
+check("boot.log has the stages with timings", blog:find("Loading the kernel:", 1, true) ~= nil and blog:find(" modules in ", 1, true) ~= nil, blog)
+check("boot.log says how the boot ended", blog:find("boot finished in", 1, true) ~= nil and blog:find("kernel stopped normally", 1, true) ~= nil, blog)
+check("boot.log lines have a time, a level and the source", blog:match("^%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%dZ info boot ") ~= nil, blog:sub(1, 80))
 
 -- 2. безопасный режим из меню доходит до входа
 fresh()
