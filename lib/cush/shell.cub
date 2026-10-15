@@ -21,6 +21,7 @@ import cush.builtins as builtins
 import cush.fetch as fetch
 import cush.help as help_mod
 import cush.tools as tools_mod
+import cush.tools2 as tools2_mod
 import i18n
 import clock
 import json5

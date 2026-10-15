@@ -108,6 +108,36 @@ msgstr "Положить файл в буфер терминала"
 msgid "Copies the file, or what comes through a pipe, so Ctrl+Shift+V pastes it. CC cannot put text into the Windows clipboard."
 msgstr "Копирует файл или то, что пришло по пайпу, чтобы Ctrl+Shift+V вставил. Класть текст в буфер Windows CC не умеет."
 
+msgid "Pack files and folders into a .cbx archive"
+msgstr "Упаковать файлы и папки в архив .cbx"
+
+msgid "Puts the files and folders (with everything inside) into one compressed .cbx file. The fast method is the default: the strong one packs smaller but is slow in CC."
+msgstr "Кладёт файлы и папки (со всем содержимым) в один сжатый файл .cbx. По умолчанию быстрое сжатие: сильное жмёт меньше, но в CC медленное."
+
+msgid "Unpack a .cbx archive"
+msgstr "Распаковать архив .cbx"
+
+msgid "Puts the files from the archive into the folder (the current one by default). Existing files are kept unless you add -f."
+msgstr "Кладёт файлы из архива в папку (по умолчанию текущую). Существующие файлы остаются, если не добавить -f."
+
+msgid "Compare two text files"
+msgstr "Сравнить два текстовых файла"
+
+msgid "Prints the lines that differ: '-' only in the first file, '+' only in the second, with line numbers."
+msgstr "Печатает различающиеся строки: '-' только в первом файле, '+' только во втором, с номерами строк."
+
+msgid "Show the bytes of a file"
+msgstr "Показать байты файла"
+
+msgid "Every byte in hex, 16 per line, with the text next to them."
+msgstr "Каждый байт в шестнадцатеричном виде, по 16 в строке, рядом текст."
+
+msgid "Checksum of files"
+msgstr "Контрольная сумма файлов"
+
+msgid "The SHA-256 hash of each file: equal hashes mean equal files. Without files it hashes a pipe."
+msgstr "Хэш SHA-256 каждого файла: одинаковые хэши значат одинаковые файлы. Без файлов считает пайп."
+
 msgid "Print words"
 msgstr "Напечатать слова"
 
@@ -186,6 +216,18 @@ msgstr "Калькулятор"
 msgid "Counts an expression: + - * / % and ^ (power), brackets, sqrt abs floor ceil round min max sin cos tan log exp, pi and e."
 msgstr "Считает выражение: + - * / % и ^ (степень), скобки, sqrt abs floor ceil round min max sin cos tan log exp, pi и e."
 
+msgid "Encode or decode Base64"
+msgstr "Закодировать или раскодировать Base64"
+
+msgid "Turns any file into plain text letters and back, for sending through chat or pastebin."
+msgstr "Превращает любой файл в обычные буквы и обратно, чтобы передать через чат или pastebin."
+
+msgid "Check and pretty-print JSON or JSON5"
+msgstr "Проверить и красиво показать JSON или JSON5"
+
+msgid "Reads a JSON or JSON5 file (or a pipe) and prints it neatly, or says the line and column of the mistake."
+msgstr "Читает JSON или JSON5 (файл или пайп) и печатает аккуратно, либо говорит строку и столбец ошибки."
+
 msgid "System information with the logo"
 msgstr "Сведения о системе с логотипом"
 
@@ -227,6 +269,24 @@ msgstr "Имя и версия системы"
 
 msgid "Prints the system name."
 msgstr "Печатает имя системы."
+
+msgid "Processes, live"
+msgstr "Процессы вживую"
+
+msgid "The process list, refreshed every second (or every N seconds). q quits."
+msgstr "Список процессов, обновляется каждую секунду (или каждые N секунд). q выход."
+
+msgid "Run a command again and again"
+msgstr "Повторять команду"
+
+msgid "Clears the screen and runs the command every 2 seconds (or as set), so you can watch it change. q quits."
+msgstr "Очищает экран и запускает команду каждые 2 секунды (или как задано), чтобы видеть изменения. q выход."
+
+msgid "Download a web page or file"
+msgstr "Скачать страницу или файл"
+
+msgid "Gets the address over HTTP and prints it or saves it. HTTP must be allowed on the server."
+msgstr "Получает адрес по HTTP и печатает или сохраняет. HTTP должен быть разрешён на сервере."
 
 msgid "Your user name"
 msgstr "Ваше имя пользователя"
@@ -564,6 +624,36 @@ msgstr "Скопировать файл"
 msgid "Copy a list"
 msgstr "Скопировать список"
 
+msgid "Strong compression (smaller, slower)"
+msgstr "Сильное сжатие (меньше, медленнее)"
+
+msgid "Pack your documents"
+msgstr "Упаковать документы"
+
+msgid "Only list what is inside"
+msgstr "Только показать содержимое"
+
+msgid "Replace files that already exist"
+msgstr "Заменять уже существующие файлы"
+
+msgid "What is inside"
+msgstr "Что внутри"
+
+msgid "Unpack into the folder restore"
+msgstr "Распаковать в папку restore"
+
+msgid "What changed"
+msgstr "Что изменилось"
+
+msgid "Only the first N bytes"
+msgstr "Только первые N байт"
+
+msgid "The first 64 bytes"
+msgstr "Первые 64 байта"
+
+msgid "Are two files the same"
+msgstr "Одинаковы ли два файла"
+
 msgid "Do not end with a new line"
 msgstr "Не переводить строку в конце"
 
@@ -660,6 +750,18 @@ msgstr "20"
 msgid "3.14"
 msgstr "3.14"
 
+msgid "Decode back (with an out file for binary data)"
+msgstr "Раскодировать обратно (для двоичных данных с файлом вывода)"
+
+msgid "As text"
+msgstr "Как текст"
+
+msgid "On one line"
+msgstr "В одну строку"
+
+msgid "Check a settings file"
+msgstr "Проверить файл настроек"
+
 msgid "Keep watching and print new lines as they come (Ctrl+C stops)"
 msgstr "Следить и печатать новые строки по мере появления (Ctrl+C стоп)"
 
@@ -698,6 +800,24 @@ msgstr "Ещё показать, что умеет каждое устройст
 
 msgid "Everything: version, CC version and computer number"
 msgstr "Всё: версия, версия CC и номер компьютера"
+
+msgid "Refresh every N seconds"
+msgstr "Обновлять каждые N секунд"
+
+msgid "How often"
+msgstr "Как часто"
+
+msgid "Watch a folder"
+msgstr "Следить за папкой"
+
+msgid "Save into a file"
+msgstr "Сохранить в файл"
+
+msgid "Only the status and headers"
+msgstr "Только статус и заголовки"
+
+msgid "Download a file"
+msgstr "Скачать файл"
 
 msgid "Use this language from now on (saved in your settings)"
 msgstr "Использовать этот язык дальше (сохраняется в настройках)"

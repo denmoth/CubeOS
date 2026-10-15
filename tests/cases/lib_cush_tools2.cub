@@ -1,0 +1,136 @@
+import t
+import term.vterm as vterm
+import compat.env as compat_env
+import compat.proc as compat_proc
+import cush.shell as cush
+import box
+eq = t.eq
+
+# Команды: diff hexdump sha256sum base64 json box unbox watch top curl (curl на подставном http, без сети).
+
+HIST = "/repo/build/cush_tools2_history"
+DIR = "/repo/build/tools2_test"
+for p in [HIST, DIR]:
+    if fs.exists(p):
+        fs.delete(p)
+fs.makeDir(DIR .. "/pack/sub")
+def put(path, text):
+    f = fs.open(DIR .. "/" .. path, "w")
+    f.write(text)
+    f.close()
+def get(path):
+    f = fs.open(DIR .. "/" .. path, "r")
+    text = f.readAll()
+    f.close()
+    return text
+put("old.txt", "one\ntwo\nthree\n")
+put("new.txt", "one\n2\nthree\nfour\n")
+put("abc.txt", "abc")
+put("conf.json5", "{a: 1, // comment\n b: [true, 'x']}")
+put("bad.json", "{\"a\": }")
+put("pack/a.lua", "print('a')\n")
+put("pack/sub/b.txt", string.rep("hello ", 200))
+
+vt = vterm.new(70, 19, {history: 2000})
+env = compat_env.new({vterm: vt})
+env.cush_opts = {history_path: HIST, greeting: false, user: "tester", host: "cube"}
+fake = {asked: nil}
+env.http = {}
+def fake_get(url, headers, binary):
+    fake.asked = url
+    res = {}
+    res.getResponseCode = () => 200
+    res.getResponseHeaders = () => {"Content-Type": "text/plain"}
+    res.readAll = () => "downloaded body"
+    res.close = () => nil
+    return res
+env.http.get = fake_get
+proc = compat_proc.new(env, "cush", [], {name: "cush", main: cush.main})
+proc:start()
+
+def run(text):
+    for i in range[1, string.len(text)]:
+        proc:feed("char", string.sub(text, i, i))
+    proc:feed("key", keys.enter, false)
+    proc:feed("key_up", keys.enter)
+
+def all_text():
+    return table.concat(vt:all_lines(), "\n")
+def has(text):
+    return string.find(all_text(), text, 1, true) != nil
+def fresh():
+    run("clear")
+    vt.hist = []
+
+run("cd " .. DIR)
+fresh()
+run("diff old.txt new.txt")
+eq(has("-2 two"), true, "diff: a removed line")
+eq(has("+2 2"), true, "an added line")
+eq(has("+4 four"), true, "and one more at the end")
+fresh()
+run("diff old.txt old.txt")
+eq(has("The files are the same."), true, "same files")
+fresh()
+run("hexdump abc.txt")
+eq(has("00000000  61 62 63"), true, "hexdump shows bytes")
+eq(has("abc"), true, "and the text")
+fresh()
+run("sha256sum abc.txt")
+eq(has("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), true, "sha256sum of abc")
+fresh()
+run("base64 abc.txt")
+eq(has("YWJj"), true, "base64 encodes")
+run("echo YWJj | base64 -d")
+eq(has("\nabc"), true, "and decodes")
+fresh()
+run("json conf.json5")
+eq(has("\"a\": 1"), true, "json prints JSON5 as neat JSON")
+eq(has("\"x\""), true, "with every value")
+run("json bad.json")
+eq(has("json:"), true, "a broken file is reported")
+fresh()
+
+# box и unbox: туда и обратно, список, существующие файлы не трогаются без -f
+run("box test pack")
+eq(has("Packed 2 files"), true, "box packs the folder")
+eq(fs.exists(DIR .. "/test.cbx"), true, "into test.cbx")
+fresh()
+run("unbox -l test.cbx")
+eq(has("pack/sub/b.txt"), true, "unbox -l lists the files")
+fs.makeDir(DIR .. "/out")
+run("unbox test.cbx out")
+eq(get("out/pack/sub/b.txt"), string.rep("hello ", 200), "unbox restores the files exactly")
+put("out/pack/a.lua", "changed")
+fresh()
+run("unbox test.cbx out")
+eq(get("out/pack/a.lua"), "changed", "existing files are kept")
+eq(has("use -f to replace"), true, "and the user is told")
+run("unbox -f test.cbx out")
+eq(get("out/pack/a.lua"), "print('a')\n", "-f replaces them")
+bad = box.pack(fs, "", [DIR .. "/abc.txt"])
+bad = string.gsub(bad, "abc%.txt", "../xx.t")
+ok, err = pcall(() => box.extract(bad, fs, DIR .. "/out"))
+eq(ok == false and string.find(tostring(err), "unsafe path", 1, true) != nil, true, "an archive cannot write outside the folder")
+
+# curl на подставном http
+fresh()
+run("curl -o page.txt https://example.com/page")
+eq(fake.asked, "https://example.com/page", "curl asks the address")
+eq(get("page.txt"), "downloaded body", "and saves the body")
+run("curl -I https://example.com/")
+eq(has("HTTP 200"), true, "curl -I shows the status")
+
+# watch: один круг, q выходит; top без /cubeos/proc сообщает
+fresh()
+run("watch -n 1 echo tick")
+eq(has("tick"), true, "watch runs the command")
+proc:feed("char", "q")
+run("echo after watch")
+eq(has("after watch"), true, "q leaves watch")
+run("top")
+eq(has("not available"), true, "top without the process list says so")
+
+fs.delete(DIR)
+fs.delete(HIST)
+print("done")

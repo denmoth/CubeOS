@@ -108,6 +108,36 @@ msgstr "Покласти файл у буфер термінала"
 msgid "Copies the file, or what comes through a pipe, so Ctrl+Shift+V pastes it. CC cannot put text into the Windows clipboard."
 msgstr "Копіює файл або те, що прийшло через пайп, щоб Ctrl+Shift+V вставив. Класти текст у буфер Windows CC не вміє."
 
+msgid "Pack files and folders into a .cbx archive"
+msgstr "Упакувати файли й теки в архів .cbx"
+
+msgid "Puts the files and folders (with everything inside) into one compressed .cbx file. The fast method is the default: the strong one packs smaller but is slow in CC."
+msgstr "Кладе файли й теки (з усім вмістом) в один стиснутий файл .cbx. Типово швидке стиснення: сильне стискає менше, але в CC повільне."
+
+msgid "Unpack a .cbx archive"
+msgstr "Розпакувати архів .cbx"
+
+msgid "Puts the files from the archive into the folder (the current one by default). Existing files are kept unless you add -f."
+msgstr "Кладе файли з архіву в теку (типово поточну). Наявні файли лишаються, якщо не додати -f."
+
+msgid "Compare two text files"
+msgstr "Порівняти два текстові файли"
+
+msgid "Prints the lines that differ: '-' only in the first file, '+' only in the second, with line numbers."
+msgstr "Друкує відмінні рядки: '-' лише в першому файлі, '+' лише в другому, з номерами рядків."
+
+msgid "Show the bytes of a file"
+msgstr "Показати байти файлу"
+
+msgid "Every byte in hex, 16 per line, with the text next to them."
+msgstr "Кожен байт у шістнадцятковому вигляді, по 16 у рядку, поруч текст."
+
+msgid "Checksum of files"
+msgstr "Контрольна сума файлів"
+
+msgid "The SHA-256 hash of each file: equal hashes mean equal files. Without files it hashes a pipe."
+msgstr "Хеш SHA-256 кожного файлу: однакові хеші означають однакові файли. Без файлів рахує пайп."
+
 msgid "Print words"
 msgstr "Надрукувати слова"
 
@@ -186,6 +216,18 @@ msgstr "Калькулятор"
 msgid "Counts an expression: + - * / % and ^ (power), brackets, sqrt abs floor ceil round min max sin cos tan log exp, pi and e."
 msgstr "Рахує вираз: + - * / % і ^ (степінь), дужки, sqrt abs floor ceil round min max sin cos tan log exp, pi та e."
 
+msgid "Encode or decode Base64"
+msgstr "Закодувати або розкодувати Base64"
+
+msgid "Turns any file into plain text letters and back, for sending through chat or pastebin."
+msgstr "Перетворює будь-який файл на звичайні літери й назад, щоб передати через чат або pastebin."
+
+msgid "Check and pretty-print JSON or JSON5"
+msgstr "Перевірити й гарно показати JSON або JSON5"
+
+msgid "Reads a JSON or JSON5 file (or a pipe) and prints it neatly, or says the line and column of the mistake."
+msgstr "Читає JSON або JSON5 (файл чи пайп) і друкує акуратно, або каже рядок і стовпець помилки."
+
 msgid "System information with the logo"
 msgstr "Відомості про систему з логотипом"
 
@@ -227,6 +269,24 @@ msgstr "Ім'я та версія системи"
 
 msgid "Prints the system name."
 msgstr "Друкує ім'я системи."
+
+msgid "Processes, live"
+msgstr "Процеси наживо"
+
+msgid "The process list, refreshed every second (or every N seconds). q quits."
+msgstr "Список процесів, оновлюється щосекунди (або кожні N секунд). q вихід."
+
+msgid "Run a command again and again"
+msgstr "Повторювати команду"
+
+msgid "Clears the screen and runs the command every 2 seconds (or as set), so you can watch it change. q quits."
+msgstr "Очищає екран і запускає команду кожні 2 секунди (або як задано), щоб бачити зміни. q вихід."
+
+msgid "Download a web page or file"
+msgstr "Завантажити сторінку або файл"
+
+msgid "Gets the address over HTTP and prints it or saves it. HTTP must be allowed on the server."
+msgstr "Отримує адресу через HTTP і друкує або зберігає. HTTP має бути дозволений на сервері."
 
 msgid "Your user name"
 msgstr "Ваше ім'я користувача"
@@ -564,6 +624,36 @@ msgstr "Скопіювати файл"
 msgid "Copy a list"
 msgstr "Скопіювати список"
 
+msgid "Strong compression (smaller, slower)"
+msgstr "Сильне стиснення (менше, повільніше)"
+
+msgid "Pack your documents"
+msgstr "Упакувати документи"
+
+msgid "Only list what is inside"
+msgstr "Лише показати вміст"
+
+msgid "Replace files that already exist"
+msgstr "Замінювати вже наявні файли"
+
+msgid "What is inside"
+msgstr "Що всередині"
+
+msgid "Unpack into the folder restore"
+msgstr "Розпакувати в теку restore"
+
+msgid "What changed"
+msgstr "Що змінилося"
+
+msgid "Only the first N bytes"
+msgstr "Лише перші N байтів"
+
+msgid "The first 64 bytes"
+msgstr "Перші 64 байти"
+
+msgid "Are two files the same"
+msgstr "Чи однакові два файли"
+
 msgid "Do not end with a new line"
 msgstr "Не переводити рядок у кінці"
 
@@ -660,6 +750,18 @@ msgstr "20"
 msgid "3.14"
 msgstr "3.14"
 
+msgid "Decode back (with an out file for binary data)"
+msgstr "Розкодувати назад (для двійкових даних із файлом виводу)"
+
+msgid "As text"
+msgstr "Як текст"
+
+msgid "On one line"
+msgstr "В один рядок"
+
+msgid "Check a settings file"
+msgstr "Перевірити файл налаштувань"
+
 msgid "Keep watching and print new lines as they come (Ctrl+C stops)"
 msgstr "Стежити й друкувати нові рядки, щойно з'являються (Ctrl+C стоп)"
 
@@ -698,6 +800,24 @@ msgstr "Ще показати, що вміє кожен пристрій (мет
 
 msgid "Everything: version, CC version and computer number"
 msgstr "Усе: версія, версія CC і номер комп'ютера"
+
+msgid "Refresh every N seconds"
+msgstr "Оновлювати кожні N секунд"
+
+msgid "How often"
+msgstr "Як часто"
+
+msgid "Watch a folder"
+msgstr "Стежити за текою"
+
+msgid "Save into a file"
+msgstr "Зберегти у файл"
+
+msgid "Only the status and headers"
+msgstr "Лише статус і заголовки"
+
+msgid "Download a file"
+msgstr "Завантажити файл"
 
 msgid "Use this language from now on (saved in your settings)"
 msgstr "Використовувати цю мову далі (зберігається в налаштуваннях)"

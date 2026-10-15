@@ -1,0 +1,111 @@
+# box: архив .cbx, первая версия (команды box и unbox). Папки и файлы одним файлом, каждый файл сжат отдельно (lib/compress.cub).
+# В шаге 3 (stew, .cpk) архив переедет в общий контейнер с оглавлением (docs/03-file-formats.md); unbox будет читать и эту версию.
+#
+# Формат CBX1: "CBX1", число записей (4 байта LE), затем записи: длина пути (2 байта LE), путь (UTF-8, через /, относительный),
+# тип (1 байт: 0 файл, 1 папка), длина блока (4 байта LE), блок compress (только у файлов).
+#
+#   data = box.pack(fsys, base, names, {mode: "fast", on_file: fn})   fsys: CraftOS-подобный fs; base: папка; names: что положить
+#   entries = box.contents(data)                                       [{path, dir, size (исходный), packed}]
+#   box.extract(data, fsys, dest, {overwrite: false, on_file: fn})     -> число файлов; существующие файлы не трогаются без overwrite
+
+import compress
+
+export const MAGIC = "CBX1"
+
+def _le(n, bytes):
+    out = []
+    for i in range[1, bytes]:
+        out[i] = string.char(n % 256)
+        n = math.floor(n / 256)
+    return table.concat(out)
+
+def _rd(data, pos, bytes):
+    n = 0
+    mul = 1
+    for i in range[0, bytes - 1]:
+        n += string.byte(data, pos + i) * mul
+        mul *= 256
+    return n
+
+export def pack(fsys, base, names, opts=nil):
+    o = opts ?? {}
+    parts = []
+    count = {n: 0}
+    def add(rel, isdir, block):
+        parts[len(parts) + 1] = _le(len(rel), 2) .. rel .. string.char(isdir and 1 or 0) .. _le(len(block), 4) .. block
+        count.n += 1
+    def walk(full, rel):
+        if fsys.isDir(full):
+            add(rel, true, "")
+            names_ = fsys.list(full)
+            table.sort(names_)
+            for nm in names_:
+                walk(fsys.combine(full, nm), rel .. "/" .. nm)
+        else:
+            h = fsys.open(full, "rb")
+            if h == nil:
+                error("cannot read " .. rel, 0)
+            data = h.readAll() ?? ""
+            h.close()
+            add(rel, false, compress.compress(data, o.mode ?? "fast"))
+            if o.on_file != nil:
+                o.on_file(rel, len(data))
+    for nm in names:
+        full = fsys.combine(base, nm)
+        if not fsys.exists(full):
+            error(nm .. ": no such file or folder", 0)
+        walk(full, fsys.getName(full))
+    return MAGIC .. _le(count.n, 4) .. table.concat(parts)
+
+def _entries(data):
+    if string.sub(data, 1, 4) != MAGIC:
+        error("not a .cbx archive (or a newer version)", 0)
+    n = _rd(data, 5, 4)
+    pos = 9
+    out = []
+    for i in range[1, n]:
+        plen = _rd(data, pos, 2)
+        path = string.sub(data, pos + 2, pos + 1 + plen)
+        kind = string.byte(data, pos + 2 + plen)
+        blen = _rd(data, pos + 3 + plen, 4)
+        start = pos + 7 + plen
+        out[len(out) + 1] = {path: path, dir: kind == 1, block_start: start, block_len: blen}
+        pos = start + blen
+    return out
+
+export def contents(data):
+    out = []
+    for e in _entries(data):
+        size = 0
+        if not e.dir:
+            size = compress.original_size(string.sub(data, e.block_start, e.block_start + e.block_len - 1))
+        out[len(out) + 1] = {path: e.path, dir: e.dir, size: size, packed: e.block_len}
+    return out
+
+# пути только внутрь dest: «..» и абсолютные пути из архива отвергаются
+def _safe(path):
+    if string.sub(path, 1, 1) == "/" or string.find("/" .. path .. "/", "/../", 1, true) != nil:
+        error("unsafe path in the archive: " .. path, 0)
+    return path
+
+export def extract(data, fsys, dest, opts=nil):
+    o = opts ?? {}
+    files = 0
+    for e in _entries(data):
+        target = fsys.combine(dest, _safe(e.path))
+        if e.dir:
+            fsys.makeDir(target)
+        elif fsys.exists(target) and not o.overwrite:
+            if o.on_skip != nil:
+                o.on_skip(e.path)
+        else:
+            body = compress.decompress(string.sub(data, e.block_start, e.block_start + e.block_len - 1))
+            h = fsys.open(target, "wb")
+            if h == nil:
+                error("cannot write " .. e.path, 0)
+            h.write(body)
+            h.close()
+            files += 1
+            if o.on_file != nil:
+                o.on_file(e.path, len(body))
+    return files

@@ -1,0 +1,389 @@
+# cush.tools2: ещё встроенные команды: top watch diff hexdump sha256sum base64 json box unbox curl.
+# Регистрируются в cush.builtins.table_of при импорте; описания в реестре cush.commands.
+
+import cush.builtins as builtins
+import sha256
+import base64
+import json5
+import box
+
+flags_of = builtins.flags_of
+read_lines = builtins.read_lines
+input_lines = builtins.input_lines
+
+def add(name, fn):
+    builtins.table_of[name] = fn
+
+# отдать управление на долгой работе (CC убивает код, который 7 секунд не отдаёт управление): своё событие через очередь программы,
+# без таймера, поэтому работает и там, где таймеры не доходят
+def breathe(sh):
+    sh.env.os.queueEvent("cush_breathe")
+    os.pullEvent("cush_breathe")
+
+# весь файл (в двоичном режиме) или nil и сообщение
+def read_all(sh, name, path):
+    p = sh:resolve(path)
+    if not sh.env.fs.exists(p) or sh.env.fs.isDir(p):
+        sh:eprint(name .. ": " .. path .. ": no such file")
+        return nil
+    h = sh.env.fs.open(p, "rb")
+    if h == nil:
+        sh:eprint(name .. ": " .. path .. ": cannot read")
+        return nil
+    data = h.readAll() ?? ""
+    h.close()
+    return data
+
+def write_all(sh, name, path, data):
+    h = sh.env.fs.open(sh:resolve(path), "wb")
+    if h == nil:
+        sh:eprint(name .. ": " .. path .. ": cannot write")
+        return false
+    h.write(data)
+    h.close()
+    return true
+
+# стандартный ввод (пайп) целиком
+def stdin_text(sh, name):
+    st = sh.env.stdin
+    if st == nil:
+        sh:eprint(name .. ": no input (give a file or use a pipe)")
+        return nil
+    out = []
+    while st.lines[st.pos] != nil:
+        out[len(out) + 1] = st.lines[st.pos]
+        st.pos += 1
+    return table.concat(out, "\n")
+
+# ------------------------------------------------------------ top и watch
+
+# ждать секунд или клавишу; true, если нажали q
+def wait_or_quit(seconds):
+    timer = os.startTimer(seconds)
+    while true:
+        ev, a = os.pullEvent()
+        if ev == "timer" and a == timer:
+            return false
+        if ev == "char" and (a == "q" or a == "Q"):
+            return true
+
+def b_top(sh, args):
+    flags, n, rest = flags_of(args, true)
+    delay = n ?? 1
+    while true:
+        sh.env.term.clear()
+        sh.env.term.setCursorPos(1, 1)
+        sh:write_color("3", "top: every " .. delay .. " s, q quits    " .. sh.time:time_text())
+        sh:println("")
+        lines = read_lines(sh, "/cubeos/proc/ps")
+        if lines == nil:
+            sh:eprint("top: the process list is not available here")
+            return 1
+        up = read_lines(sh, "/cubeos/proc/uptime")
+        if up != nil and up[1] != nil:
+            sh:write_color("8", "uptime " .. up[1] .. " s")
+            sh:println("")
+        for i, l in lines:
+            if i == 1:
+                sh:write_color("5", l)
+                sh:println("")
+            else:
+                sh:println(l)
+        if wait_or_quit(delay):
+            return 0
+add("top", b_top)
+
+def b_watch(sh, args):
+    delay = 2
+    rest = []
+    i = 1
+    while i <= len(args):
+        if args[i] == "-n" and args[i + 1] != nil:
+            delay = tonumber(args[i + 1]) ?? 2
+            i += 2
+        else:
+            for k in range[i, len(args)]:
+                rest[len(rest) + 1] = args[k]
+            break
+    if len(rest) == 0:
+        sh:eprint("usage: watch [-n SECONDS] command [args...]")
+        return 2
+    while true:
+        sh.env.term.clear()
+        sh.env.term.setCursorPos(1, 1)
+        sh:write_color("8", "every " .. delay .. " s: " .. table.concat(rest, " ") .. "    q quits")
+        sh:println("")
+        sh:run_command(rest)
+        if wait_or_quit(delay):
+            return 0
+add("watch", b_watch)
+
+# ------------------------------------------------------------ сравнение и байты
+
+# построчная разница (LCS): «- строка» есть только в первом, «+ строка» только во втором
+def b_diff(sh, args):
+    if len(args) < 2:
+        sh:eprint("usage: diff file1 file2")
+        return 2
+    a = read_lines(sh, args[1])
+    b = read_lines(sh, args[2])
+    if a == nil or b == nil:
+        sh:eprint("diff: cannot read " .. (a == nil and args[1] or args[2]))
+        return 2
+    if len(a) * len(b) > 4000000:
+        sh:eprint("diff: the files are too long to compare here")
+        return 2
+    n = len(a)
+    m = len(b)
+    # таблица длин общих подпоследовательностей с конца
+    lcs = []
+    for i in range[1, n + 1]:
+        row = []
+        for j in range[1, m + 1]:
+            row[j] = 0
+        lcs[i] = row
+    for i in range[n, 1] step -1:
+        for j in range[m, 1] step -1:
+            if a[i] == b[j]:
+                lcs[i][j] = lcs[i + 1][j + 1] + 1
+            else:
+                lcs[i][j] = math.max(lcs[i + 1][j], lcs[i][j + 1])
+        if i % 50 == 0:
+            breathe(sh)
+    i = 1
+    j = 1
+    changed = false
+    while i <= n or j <= m:
+        if i <= n and j <= m and a[i] == b[j]:
+            i += 1
+            j += 1
+        elif j <= m and (i > n or lcs[i][j + 1] >= lcs[i + 1][j]):
+            sh:write_color("5", "+" .. j .. " " .. b[j])
+            sh:println("")
+            changed = true
+            j += 1
+        else:
+            sh:write_color("e", "-" .. i .. " " .. a[i])
+            sh:println("")
+            changed = true
+            i += 1
+    if not changed:
+        sh:println("The files are the same.")
+    return changed and 1 or 0
+add("diff", b_diff)
+
+def b_hexdump(sh, args):
+    flags, limit, rest = flags_of(args, true)
+    data = nil
+    if rest[1] != nil:
+        data = read_all(sh, "hexdump", rest[1])
+    else:
+        data = stdin_text(sh, "hexdump")
+    if data == nil:
+        return 1
+    total = limit != nil and math.min(limit, len(data)) or len(data)
+    off = 0
+    while off < total:
+        hex = []
+        txt = []
+        for k in range[1, 16]:
+            if off + k <= total:
+                b = string.byte(data, off + k)
+                hex[k] = string.format("%02x", b)
+                txt[k] = (b >= 32 and b < 127) and string.char(b) or "."
+            else:
+                hex[k] = "  "
+                txt[k] = " "
+        sh:write_color("8", string.format("%08x  ", off))
+        sh:write_color("0", table.concat(hex, " ", 1, 8) .. "  " .. table.concat(hex, " ", 9, 16) .. "  ")
+        sh:write_color("3", table.concat(txt))
+        sh:println("")
+        off += 16
+        if off % 4096 == 0:
+            breathe(sh)
+    return 0
+add("hexdump", b_hexdump)
+
+def b_sha256sum(sh, args):
+    if len(args) == 0:
+        text = stdin_text(sh, "sha256sum")
+        if text == nil:
+            return 1
+        sh:println(sha256.hex(text) .. "  -")
+        return 0
+    status = 0
+    for f in args:
+        data = read_all(sh, "sha256sum", f)
+        if data == nil:
+            status = 1
+        else:
+            sh:println(sha256.hex(data) .. "  " .. f)
+    return status
+add("sha256sum", b_sha256sum)
+
+def b_base64(sh, args):
+    flags, n, rest = flags_of(args)
+    data = nil
+    if rest[1] != nil:
+        data = read_all(sh, "base64", rest[1])
+    else:
+        data = stdin_text(sh, "base64")
+    if data == nil:
+        return 1
+    if flags.d:
+        ok, out = pcall(() => base64.decode(string.gsub(data, "%s+", "")))
+        if not ok:
+            sh:eprint("base64: not valid base64")
+            return 1
+        if rest[2] != nil:
+            return write_all(sh, "base64", rest[2], out) and 0 or 1
+        sh:println(out)
+        return 0
+    enc = base64.encode(data)
+    i = 1
+    while i <= len(enc):
+        sh:println(string.sub(enc, i, i + 63))
+        i += 64
+    return 0
+add("base64", b_base64)
+
+# json [-c] [файл]: разобрать JSON или JSON5 и показать красиво (или одной строкой); ошибка показывает строку и столбец
+def b_json(sh, args):
+    flags, n, rest = flags_of(args)
+    text = nil
+    if rest[1] != nil:
+        text = read_all(sh, "json", rest[1])
+    else:
+        text = stdin_text(sh, "json")
+    if text == nil:
+        return 1
+    ok, value = pcall(() => json5.parse(text))
+    if not ok:
+        sh:eprint("json: " .. tostring(type(value) == "table" and value.message or value))
+        return 1
+    out = json5.stringify(value, {indent: flags.c and 0 or 2, json5: false})
+    for l in string.gmatch(out .. "\n", "([^\n]*)\n"):
+        sh:println(l)
+    return 0
+add("json", b_json)
+
+# ------------------------------------------------------------ архивы .cbx
+
+def kb(n):
+    return n < 1024 and (n .. " B") or string.format("%.1f KB", n / 1024)
+
+# box [-9] архив.cbx путь...: упаковать файлы и папки
+def b_box(sh, args):
+    flags, n, rest = flags_of(args)
+    strong = flags["9"]
+    if len(rest) < 2:
+        sh:eprint("usage: box [-9] archive.cbx path...")
+        return 2
+    target = rest[1]
+    if string.match(target, "%.cbx$") == nil:
+        target = target .. ".cbx"
+    names = []
+    for i in range[2, len(rest)]:
+        names[len(names) + 1] = sh:resolve(rest[i])
+    count = {files: 0, bytes: 0}
+    def each(rel, size):
+        count.files += 1
+        count.bytes += size
+        breathe(sh)
+    ok, data = pcall(() => box.pack(sh.env.fs, "", names, {mode: strong and "strong" or "fast", on_file: each}))
+    if not ok:
+        sh:eprint("box: " .. tostring(data))
+        return 1
+    if not write_all(sh, "box", target, data):
+        return 1
+    sh:println("Packed " .. count.files .. " files (" .. kb(count.bytes) .. ") into " .. target .. " (" .. kb(len(data)) .. ")")
+    return 0
+add("box", b_box)
+
+# unbox [-l] [-f] архив.cbx [папка]: распаковать (-l только список, -f заменять существующие)
+def b_unbox(sh, args):
+    flags, n, rest = flags_of(args)
+    if rest[1] == nil:
+        sh:eprint("usage: unbox [-l] [-f] archive.cbx [folder]")
+        return 2
+    data = read_all(sh, "unbox", rest[1])
+    if data == nil:
+        return 1
+    if flags.l:
+        ok, list_ = pcall(() => box.contents(data))
+        if not ok:
+            sh:eprint("unbox: " .. tostring(list_))
+            return 1
+        for e in list_:
+            if e.dir:
+                sh:write_color("3", e.path .. "/")
+                sh:println("")
+            else:
+                sh:println(string.format("%10s  ", kb(e.size)) .. e.path)
+        return 0
+    dest = sh:resolve(rest[2] ?? "")
+    skipped = []
+    def skip(path):
+        skipped[len(skipped) + 1] = path
+    def each(path, size):
+        breathe(sh)
+    ok, files = pcall(() => box.extract(data, sh.env.fs, dest, {overwrite: flags.f == true, on_skip: skip, on_file: each}))
+    if not ok:
+        sh:eprint("unbox: " .. tostring(files))
+        return 1
+    sh:println("Unpacked " .. files .. " files into /" .. dest)
+    if len(skipped) > 0:
+        sh:write_color("4", len(skipped) .. " already existed and were kept (use -f to replace): " .. table.concat(skipped, ", "))
+        sh:println("")
+    return 0
+add("unbox", b_unbox)
+
+# ------------------------------------------------------------ сеть
+
+# curl [-o файл] [-I] URL: скачать страницу или файл (нужен HTTP в настройках сервера)
+def b_curl(sh, args):
+    out = nil
+    head = false
+    url = nil
+    i = 1
+    while i <= len(args):
+        if args[i] == "-o" and args[i + 1] != nil:
+            out = args[i + 1]
+            i += 2
+        elif args[i] == "-I":
+            head = true
+            i += 1
+        else:
+            url = args[i]
+            i += 1
+    if url == nil:
+        sh:eprint("usage: curl [-o file] [-I] URL")
+        return 2
+    h = sh.env.http
+    if h == nil:
+        sh:eprint("curl: HTTP is turned off on this server")
+        return 1
+    res, err, bad = h.get(url, nil, true)
+    if res == nil and bad != nil:
+        res = bad
+    if res == nil:
+        sh:eprint("curl: " .. tostring(err))
+        return 1
+    code = res.getResponseCode()
+    if head:
+        sh:println("HTTP " .. tostring(code))
+        for k, v in (res.getResponseHeaders() ?? {}):
+            sh:println(k .. ": " .. tostring(v))
+        res.close()
+        return code < 400 and 0 or 1
+    body = res.readAll() ?? ""
+    res.close()
+    if out != nil:
+        if not write_all(sh, "curl", out, body):
+            return 1
+        sh:println("Saved " .. kb(len(body)) .. " to " .. out .. " (HTTP " .. tostring(code) .. ")")
+    else:
+        for l in string.gmatch(body .. "\n", "([^\n]*)\n"):
+            sh:println(l)
+    return code < 400 and 0 or 1
+add("curl", b_curl)
