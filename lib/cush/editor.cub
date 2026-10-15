@@ -66,6 +66,7 @@ export class Editor:
         self.paste_rest = nil
         self.hist_index = nil
         self.search = nil
+        self.pick = nil
         self.drawn_rows = 1
         self.tab_count = 0
         self.active = true
@@ -167,6 +168,21 @@ export class Editor:
         if self.anchor != nil and self.anchor != self.pos:
             sel_lo = math.min(self.anchor, self.pos)
             sel_hi = math.max(self.anchor, self.pos)
+        if self.pick != nil:
+            # история буфера (Alt+V): один фрагмент в строке, переводы строк как « | »
+            item = self.pick.items[self.pick.index] ?? ""
+            label = "(clipboard " .. self.pick.index .. "/" .. len(self.pick.items) .. ", Up/Down, Enter pastes) "
+            shown = string.gsub(item, "[\r\n]+", " | ")
+            term.setCursorPos(1, self.sy)
+            term.clearLine()
+            term.setTextColor(_color("9"))
+            term.write(label)
+            term.setTextColor(_color("0"))
+            term.write(unicode.sub(shown, 1, math.max(1, w - chars.length(label))))
+            term.setCursorPos(math.min(w, chars.length(label) + 1), self.sy)
+            term.setTextColor(old_fg)
+            term.setBackgroundColor(old_bg)
+            return
         if self.search != nil:
             label = "(search) `" .. self.search.query .. "': "
             term.setCursorPos(1, self.sy)
@@ -244,7 +260,7 @@ export class Editor:
         part = []
         for i in range[lo + 1, hi]:
             part[len(part) + 1] = self.line[i]
-        view_mod.clipboard.text = table.concat(part)
+        view_mod.copy_text(table.concat(part))
         return true
 
     def _delete_range(self, lo, hi):
@@ -517,6 +533,15 @@ export class Editor:
         ctrl = self.mods.ctrl
         if self.search != nil:
             return self:_search_key(code)
+        if self.pick != nil:
+            return self:_pick_key(code)
+        if self.mods.alt and code == keys.v:
+            # Alt+V: история внутреннего буфера (D237)
+            items = view_mod.clipboard.history
+            if len(items) > 0:
+                self.pick = {items: items, index: 1}
+                self:redraw()
+            return nil
         undoing = ctrl and (code == keys.z or code == keys.y)
         before = self:_snapshot()
         # Enter возвращает два значения ("line", текст): оба отдаются дальше
@@ -635,6 +660,23 @@ export class Editor:
     def _delete_forward(self):
         if not self:_delete_selection() and self.pos < len(self.line):
             self:_delete_range(self.pos + 1, self.pos + 1)
+
+    def _pick_key(self, code):
+        p = self.pick
+        if code == keys.up:
+            p.index = math.min(len(p.items), p.index + 1)
+        elif code == keys.down:
+            p.index = math.max(1, p.index - 1)
+        elif code == keys.enter or code == keys.numPadEnter:
+            text = p.items[p.index]
+            self.pick = nil
+            # вставка как из буфера: многострочный фрагмент ждёт Enter (как вставка из Windows)
+            self:feed("paste", text)
+            return nil
+        elif code != keys.leftAlt and code != keys.rightAlt:
+            self.pick = nil
+        self:redraw()
+        return nil
 
     def _search_key(self, code):
         s = self.search

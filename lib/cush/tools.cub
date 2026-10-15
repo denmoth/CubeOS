@@ -558,7 +558,7 @@ def b_clip(sh, args):
     lines = input_lines(sh, "clip", args)
     if lines == nil:
         return 1
-    view_mod.clipboard.text = table.concat(lines, "\n")
+    view_mod.copy_text(table.concat(lines, "\n"))
     sh:println(len(lines) .. " line" .. (len(lines) != 1 and "s" or "") .. " copied; Ctrl+Shift+V pastes")
     return 0
 add("clip", b_clip)

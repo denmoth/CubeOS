@@ -870,6 +870,9 @@ msgstr "вставити з Windows (усі рядки з модом MothPaste; 
 msgid "copy / paste"
 msgstr "копіювати / вставити"
 
+msgid "clipboard history: Up / Down choose, Enter pastes"
+msgstr "історія буфера: Вгору / Вниз вибрати, Enter вставити"
+
 msgid "select the whole line / cut the selection"
 msgstr "виділити весь рядок / вирізати виділене"
 

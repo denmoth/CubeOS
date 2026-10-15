@@ -260,6 +260,7 @@ export const KEY_HELP = [
     ["Ctrl+C", "copy the selection, or stop the program / reset the line"],
     ["Ctrl+V", "paste from Windows (all lines with the MothPaste mod; Enter runs them)"],
     ["Ctrl+Shift+C / V", "copy / paste"],
+    ["Alt+V", "clipboard history: Up / Down choose, Enter pastes"],
     ["Ctrl+A / X", "select the whole line / cut the selection"],
     ["Ctrl+Z / Y", "undo / redo in the line"],
     ["Ctrl+Backspace", "delete a word (Ctrl+Delete: the word to the right)"],

@@ -130,7 +130,7 @@ export def program(session, opts=nil):
         last = clip.text
         current = rpc.call(sys, "clipboard", "get")
         if type(current) == "string":
-            clip.text = current
+            view_mod.copy_text(current)
             last = current
 
         def serve_account(req):

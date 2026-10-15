@@ -17,8 +17,22 @@ import term.chars as chars
 import input.layout as layout_mod
 import unicode
 
-# буфер обмена терминала: общий для всех окон
-export const clipboard = {text: ""}
+# буфер обмена терминала: общий для всех окон; history: последние скопированные фрагменты (новые первыми, Alt+V), до 20
+export const clipboard = {text: "", history: []}
+
+# скопировать во внутренний буфер и в историю (повтор поднимается наверх)
+export def copy_text(text):
+    if text == nil or text == "":
+        return
+    clipboard.text = text
+    h = clipboard.history
+    for i, t in h:
+        if t == text:
+            table.remove(h, i)
+            break
+    table.insert(h, 1, text)
+    while len(h) > 20:
+        table.remove(h)
 
 const SCROLL_STEP = 3
 
@@ -141,7 +155,7 @@ export class TermView(widget.Widget):
     def copy_selection(self):
         text = self:selection_text()
         if text != "":
-            clipboard.text = text
+            copy_text(text)
         return text != ""
 
     def paste(self):
