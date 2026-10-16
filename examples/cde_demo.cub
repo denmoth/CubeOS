@@ -6,6 +6,7 @@ import cde
 import cgl.g3d as g3d
 import kernel
 import kernel.cc as cc
+import cdk.gallery as gallery
 
 const app = cde.app
 
@@ -147,6 +148,7 @@ export def build(opts=nil):
         wm:launch(notes_app, {name: "notes"}, ["Notes " .. n.count])
     wm:hotkey("alt+enter", more)
     wm:hotkey("ctrl+alt+t", () => wm:next_theme())
+    wm:hotkey("ctrl+alt+k", () => wm:launch(gallery.main, {name: "gallery"}))
     return wm
 
 export def main(opts=nil):

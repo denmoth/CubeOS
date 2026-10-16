@@ -25,6 +25,11 @@
   btn_close: "#f7768e",
   btn_min: "#e0af68",
   btn_max: "#9ece6a",
+  // элементы cdk: фон кнопок и полей, подсветка, текст на акцентном цвете, выделение текста
+  ctrl_bg: "#292e42",
+  ctrl_hi: "#3b4261",
+  accent_text: "#16161e",
+  sel: "#2e3c64",
   window: {
     buttons: "right",              // "left" или "right"
     order: ["min", "max", "close"],

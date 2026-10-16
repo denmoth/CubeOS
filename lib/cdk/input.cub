@@ -1,0 +1,321 @@
+# cdk.input: поле ввода одной строки со схемой Windows (D223)
+#
+#   field = input.text_input({placeholder: "Имя", width: 120, on_change: (text) => ..., on_submit: (text) => ...})
+#   field = input.text_input({password: true})        вместо букв точки
+#   field:set_text("..."), field.text
+#
+# Клавиши: ←/→ (с Ctrl по словам), Home/End, Shift с ними выделяет, Ctrl+A всё, Backspace/Delete (с Ctrl слово), Ctrl+C/X/V
+# (буфер обмена cdk, общий для окон; системный буфер появится вместе со службой clipboard в CDE), Ctrl+Z/Y отмена и возврат,
+# Enter on_submit. Мышь: клик ставит курсор, перетаскивание выделяет. Буквы второго языка (кириллица) приходят от cdk.ui уже
+# переведёнными по раскладке.
+
+import cdk.widget as widget
+import unicode
+
+# общий буфер обмена всех окон cdk (пока нет системного)
+export const clipboard = {text: ""}
+
+def _chars(text):
+    out = []
+    for cp in unicode.codepoints(text):
+        out[len(out) + 1] = unicode.char(cp)
+    return out
+
+def _is_word(ch):
+    return ch != " " and ch != "\t" and string.find(".,;:!?/\\-()[]{}\"'", ch, 1, true) == nil
+
+export class TextInput(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "input"
+        self.chars = _chars(o.text ?? "")
+        self.text = o.text ?? ""
+        self.placeholder = o.placeholder ?? ""
+        self.password = o.password ?? false
+        self.on_change = o.on_change
+        self.on_submit = o.on_submit
+        self.cursor = len(self.chars)
+        self.anchor = nil
+        self.scroll = 0
+        self.focusable = true
+        self.caret = true
+        self.undo = []
+        self.redo = []
+        self.blink = nil
+        self.dragging = false
+
+    def measure(self, st):
+        return 100, st.line + 2
+
+    def _attach(self, ui):
+        super._attach(self, ui)
+        if self.blink == nil:
+            let me = self
+            self.blink = ui:every(0.5, () => me:_blink())
+
+    def _blink(self):
+        if self.focused:
+            self.caret = not self.caret
+            self:invalidate()
+
+    # ------------------------------------------------------------ текст
+
+    def set_text(self, text):
+        self.chars = _chars(text)
+        self.cursor = len(self.chars)
+        self.anchor = nil
+        self:_changed(false)
+
+    def _changed(self, notify=true):
+        self.text = table.concat(self.chars)
+        self.caret = true
+        self:invalidate()
+        if notify and self.on_change != nil:
+            self.on_change(self.text, self)
+
+    def _save(self):
+        self.undo[len(self.undo) + 1] = {text: table.concat(self.chars), cursor: self.cursor}
+        if len(self.undo) > 50:
+            table.remove(self.undo, 1)
+        self.redo = []
+
+    def _restore(self, from_list, to_list):
+        snap = table.remove(from_list)
+        if snap == nil:
+            return
+        to_list[len(to_list) + 1] = {text: table.concat(self.chars), cursor: self.cursor}
+        self.chars = _chars(snap.text)
+        self.cursor = math.min(snap.cursor, len(self.chars))
+        self.anchor = nil
+        self:_changed()
+
+    def has_selection(self):
+        return self.anchor != nil and self.anchor != self.cursor
+
+    def _sel(self):
+        a = math.min(self.anchor, self.cursor)
+        b = math.max(self.anchor, self.cursor)
+        return a, b
+
+    def selected_text(self):
+        if not self:has_selection():
+            return ""
+        a, b = self:_sel()
+        out = []
+        for i in range[a + 1, b]:
+            out[len(out) + 1] = self.chars[i]
+        return table.concat(out)
+
+    def _delete_selection(self):
+        a, b = self:_sel()
+        for i in range[a + 1, b]:
+            table.remove(self.chars, a + 1)
+        self.cursor = a
+        self.anchor = nil
+
+    def insert(self, text):
+        self:_save()
+        if self:has_selection():
+            self:_delete_selection()
+        self.anchor = nil
+        for ch in _chars(text):
+            if ch != "\n" and ch != "\r":
+                table.insert(self.chars, self.cursor + 1, ch)
+                self.cursor += 1
+        self:_changed()
+
+    # граница слова слева (dir -1) или справа (dir 1) от позиции
+    def _word(self, pos, dir):
+        n = len(self.chars)
+        p = pos
+        if dir < 0:
+            while p > 0 and not _is_word(self.chars[p]):
+                p -= 1
+            while p > 0 and _is_word(self.chars[p]):
+                p -= 1
+        else:
+            while p < n and not _is_word(self.chars[p + 1]):
+                p += 1
+            while p < n and _is_word(self.chars[p + 1]):
+                p += 1
+        return p
+
+    def _move(self, pos, shift):
+        if shift:
+            if self.anchor == nil:
+                self.anchor = self.cursor
+        else:
+            self.anchor = nil
+        self.cursor = math.max(0, math.min(len(self.chars), pos))
+        self.caret = true
+        self:invalidate()
+
+    # ------------------------------------------------------------ события
+
+    def _key(self, ev):
+        k = ev.key
+        n = len(self.chars)
+        if ev.ctrl and not ev.alt:
+            if k == keys.a:
+                self.anchor = 0
+                self.cursor = n
+                self:invalidate()
+                return true
+            if k == keys.c:
+                if self:has_selection() and not self.password:
+                    clipboard.text = self:selected_text()
+                return true
+            if k == keys.x:
+                if self:has_selection() and not self.password:
+                    clipboard.text = self:selected_text()
+                    self:_save()
+                    self:_delete_selection()
+                    self:_changed()
+                return true
+            if k == keys.v:
+                if clipboard.text != "":
+                    self:insert(clipboard.text)
+                return true
+            if k == keys.z:
+                self:_restore(self.undo, self.redo)
+                return true
+            if k == keys.y:
+                self:_restore(self.redo, self.undo)
+                return true
+        if k == keys.left:
+            if self:has_selection() and not ev.shift:
+                a, b = self:_sel()
+                self:_move(a, false)
+            else:
+                self:_move(ev.ctrl and self:_word(self.cursor, -1) or self.cursor - 1, ev.shift)
+            return true
+        if k == keys.right:
+            if self:has_selection() and not ev.shift:
+                a, b = self:_sel()
+                self:_move(b, false)
+            else:
+                self:_move(ev.ctrl and self:_word(self.cursor, 1) or self.cursor + 1, ev.shift)
+            return true
+        if k == keys.home:
+            self:_move(0, ev.shift)
+            return true
+        if k == keys["end"]:
+            self:_move(n, ev.shift)
+            return true
+        if k == keys.backspace:
+            if self:has_selection():
+                self:_save()
+                self:_delete_selection()
+                self:_changed()
+            elif self.cursor > 0:
+                self:_save()
+                to = ev.ctrl and self:_word(self.cursor, -1) or self.cursor - 1
+                for i in range[to + 1, self.cursor]:
+                    table.remove(self.chars, to + 1)
+                self.cursor = to
+                self:_changed()
+            return true
+        if k == keys.delete:
+            if self:has_selection():
+                self:_save()
+                self:_delete_selection()
+                self:_changed()
+            elif self.cursor < n:
+                self:_save()
+                to = ev.ctrl and self:_word(self.cursor, 1) or self.cursor + 1
+                for i in range[self.cursor + 1, to]:
+                    table.remove(self.chars, self.cursor + 1)
+                self:_changed()
+            return true
+        if k == keys.enter or k == keys.numPadEnter:
+            if self.on_submit != nil:
+                self.on_submit(self.text, self)
+            return true
+        return false
+
+    # позиция символа под точкой x
+    def _pos_at(self, st, px):
+        rel = px - (self.x + 4) + self.scroll * st.fw
+        return math.max(0, math.min(len(self.chars), math.floor(rel / st.fw + 0.5)))
+
+    def handle(self, ev):
+        if not self.enabled:
+            return false
+        st = self.ui.style
+        if ev.name == "down":
+            self.dragging = true
+            self:_move(self:_pos_at(st, ev.x), ev.shift)
+            if not ev.shift:
+                self.anchor = self.cursor
+            return true
+        if ev.name == "drag" and self.dragging:
+            if self.anchor == nil:
+                self.anchor = self.cursor
+            self.cursor = self:_pos_at(st, ev.x)
+            self:invalidate()
+            return true
+        if ev.name == "up":
+            self.dragging = false
+            if self.anchor == self.cursor:
+                self.anchor = nil
+            return true
+        if ev.name == "char":
+            self:insert(ev.char)
+            return true
+        if ev.name == "paste":
+            self:insert(ev.text)
+            return true
+        if ev.name == "key":
+            return self:_key(ev)
+        if ev.name == "focus" or ev.name == "blur":
+            self.caret = true
+            if ev.name == "blur":
+                self.anchor = nil
+            self:invalidate()
+            return true
+        return false
+
+    # ------------------------------------------------------------ рисование
+
+    def draw(self, s, st):
+        x = self.x
+        y = self.y
+        w = self.w
+        h = self.h
+        st:round_fill(s, x, y, w, h, st.well)
+        st:round_line(s, x, y, w, h, self.focused and st.accent or st.border)
+        if self.focused:
+            # подчёркивание акцентом снизу, как в полях Windows 11
+            s:hline(x + 2, y + h - 1, w - 4, st.accent)
+            s:hline(x + 2, y + h - 2, w - 4, st.accent)
+        visible = math.max(1, math.floor((w - 8) / st.fw))
+        # курсор всегда в видимой части
+        if self.cursor < self.scroll:
+            self.scroll = self.cursor
+        if self.cursor > self.scroll + visible:
+            self.scroll = self.cursor - visible
+        self.scroll = math.max(0, math.min(self.scroll, math.max(0, len(self.chars) - visible)))
+        tx = x + 4
+        ty = y + math.floor((h - st.fh) / 2)
+        s:push_clip(x + 2, y + 1, w - 4, h - 2)
+        if len(self.chars) == 0 and not self.focused:
+            s:text(st.font, tx, ty, self.placeholder, st.dim)
+        else:
+            if self:has_selection():
+                a, b = self:_sel()
+                sx = tx + (a - self.scroll) * st.fw
+                s:fill_rect(sx, ty - 1, (b - a) * st.fw, st.fh + 2, st.sel)
+            parts = []
+            for i in range[self.scroll + 1, math.min(len(self.chars), self.scroll + visible + 1)]:
+                parts[len(parts) + 1] = self.password and "*" or self.chars[i]
+            s:text(st.font, tx, ty, table.concat(parts), st.text)
+            if len(self.chars) == 0:
+                s:text(st.font, tx, ty, self.placeholder, st.dim)
+            if self.focused and self.caret:
+                cx = tx + (self.cursor - self.scroll) * st.fw - 1
+                s:vline(cx, ty - 1, st.fh + 2, st.accent)
+        s:pop_clip()
+
+export def text_input(opts=nil):
+    return TextInput(opts)

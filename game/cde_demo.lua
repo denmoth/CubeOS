@@ -1,7 +1,8 @@
 -- Демонстрация рабочего стола CDE (шаг 1) в настоящем CC с CC: Graphics. На компьютере: /repo/game/cde_demo.lua [theme=tokyo-night|dark|light]
 -- Три окна-процесса ядра: Cube (пиксели), Notes (текст, можно печатать), Clock. Мышь: тянуть заголовок, края и углы, двойной
 -- клик по заголовку, кнопки _ □ ×. Клавиши: Alt+←/→ окна, Alt+↑ развернуть, Alt+↓ вернуть или свернуть, Alt+Shift+←/→ половинки,
--- Ctrl+T закрыть окно (удержание: принудительно), Alt+D рабочий стол, Alt+Enter новое окно заметок. Выход: Ctrl+Alt+Q.
+-- Ctrl+T закрыть окно (удержание: принудительно), Alt+D рабочий стол, Alt+Enter новое окно заметок, Ctrl+Alt+T тема,
+-- Ctrl+Alt+K витрина cdk, F11 полный экран. Выход: Ctrl+Alt+Q.
 local ROOT = "/repo"
 if not term.setGraphicsMode then
   printError("CDE needs CC: Graphics (term.setGraphicsMode)")
@@ -23,6 +24,7 @@ preload({
   "unicode", "font", "pixelbuf", "compress", "cgl.color", "cgl.surface", "cgl.quant", "cgl.graphics", "cgl.teletext", "cgl.mirror",
   "cgl.anim", "cgl", "cgl.g3d", "ui.cells", "cfs.rules", "kernel.sys", "kernel", "kernel.cc",
   "cde.theme", "cde.window", "cde.wallpaper", "cde.compositor", "cde.wm", "cde.app", "cde",
+  "input.layout", "cdk.style", "cdk.icons", "cdk.widget", "cdk.controls", "cdk.input", "cdk.ui", "cdk", "cdk.gallery",
 })
 local demo = loader.import("cde_demo")
 

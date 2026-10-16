@@ -1,0 +1,339 @@
+import t
+import kernel
+import cde
+import cdk
+eq = t.eq
+
+def make_term():
+    api = {}
+    def get_size(px):
+        if px:
+            return 306, 171
+        return 51, 19
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setGraphicsMode", "setFrozen", "setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "drawPixels"]:
+        api[name] = nothing
+    return api
+
+def breathe():
+    os.queueEvent("t_breathe")
+    os.pullEvent("t_breathe")
+
+# сцена: свой менеджер окон и ядро, одно окно cdk; build(ui) возвращает корень
+def scene(build, opts=nil):
+    clock = {now: 1000}
+    def now():
+        return clock.now
+    wm = cde.wm.new({term: make_term(), assets: "/repo/assets", clock: now})
+    k = kernel.new({clock: now})
+    holder = {}
+    def main(sys, ctx):
+        app_ui = cdk.open(sys, ctx, opts ?? {title: "T", w: 200, h: 130, x: 20, y: 10})
+        app_ui:set_root(build(app_ui))
+        ctx.args[1](app_ui)
+        app_ui:run()
+    def got(u):
+        holder.ui = u
+    wm:launch(main, {name: "cdk"}, [got])
+    def desk(sys, args):
+        wm:run(sys)
+    k:spawn(desk, [], {name: "cde", ui: true})
+    s = {wm: wm, k: k, clock: clock, holder: holder}
+    def settle(n=8):
+        k:feed("cubeos_cde")
+        for i in range[1, n]:
+            clock.now = clock.now + 20
+            k:tick()
+            k:run_ready()
+    def sx(w):
+        return wm.windows[1]:content_x() + w.x
+    def sy(w):
+        return wm.windows[1]:content_y() + w.y
+    def click_at(px, py):
+        k:feed("mouse_click", 1, px, py)
+        k:feed("mouse_up", 1, px, py)
+        settle()
+    def click(w):
+        click_at(sx(w) + math.floor(w.w / 2), sy(w) + math.floor(w.h / 2))
+    def press(code):
+        k:feed("key", code, false)
+        k:feed("key_up", code)
+        settle()
+    def chord(mod, code):
+        k:feed("key", mod, false)
+        k:feed("key", code, false)
+        k:feed("key_up", code)
+        k:feed("key_up", mod)
+        settle()
+    def typed(text):
+        for i in range[1, len(text)]:
+            k:feed("char", string.sub(text, i, i))
+        settle()
+    s.settle = settle
+    s.sx = sx
+    s.sy = sy
+    s.click_at = click_at
+    s.click = click
+    s.press = press
+    s.chord = chord
+    s.typed = typed
+    settle()
+    breathe()
+    s.ui = holder.ui
+    s.win = wm.windows[1]
+    return s
+
+def box(w, h, grow=0):
+    return cdk.spacer({width: w, height: h, grow: grow})
+
+# ---------------------------------------------------------------- раскладка
+a1 = box(20, 10)
+b1 = box(30, 12)
+c1 = box(10, 0, 1)
+col = cdk.column({padding: 5, gap: 3}, [a1, b1, c1])
+sc = scene((ui) => col)
+cv = sc.ui.win.canvas
+eq([col.x, col.y, col.w, col.h], [0, 0, cv.w, cv.h], "root fills the canvas")
+eq([a1.x, a1.y, a1.w, a1.h], [5, 5, cv.w - 10, 10], "column: padding, stretch")
+eq([b1.x, b1.y, b1.w, b1.h], [5, 18, cv.w - 10, 12], "column: gap")
+eq([c1.x, c1.y, c1.w, c1.h], [5, 33, cv.w - 10, cv.h - 38], "column: grow takes the free space")
+breathe()
+
+ra = box(20, 10)
+rb = box(30, 20)
+row1 = cdk.row({height: 30, padding: 2, gap: 4, align: "center", justify: "end"}, [ra, rb])
+qa = box(20, 10)
+qb = box(30, 20)
+row2 = cdk.row({height: 30, gap: 4, justify: "center"}, [qa, qb])
+ga = box(20, 10)
+gs = cdk.spacer()
+gb = box(10, 10)
+row3 = cdk.row({height: 30, gap: 2}, [ga, gs, gb])
+g1 = box(10, 8)
+g2 = box(10, 12)
+g3 = box(10, 8)
+g4 = box(10, 8)
+grid = cdk.grid(2, {gap: 2, padding: 1}, [g1, g2, g3, g4])
+root2 = cdk.column({gap: 0}, [row1, row2, row3, grid])
+sc = scene((ui) => root2)
+W = sc.ui.win.canvas.w
+eq([row1.y, row2.y, row3.y, grid.y], [0, 30, 60, 90], "rows stacked")
+eq([ra.x, ra.y, ra.h], [W - 56, 10, 10], "justify end, align center (x, y)")
+eq([rb.x, rb.y, rb.h], [W - 32, 5, 20], "justify end, align center, second child")
+eq([qa.x, qb.x, qa.y, qa.h], [math.floor((W - 54) / 2), math.floor((W - 54) / 2) + 24, 30, 30], "justify center, align stretch")
+eq([ga.x, gs.x, gs.w, gb.x, gb.w], [0, 22, W - 34, W - 10, 10], "spacer with grow takes the rest of the row")
+gcw = math.floor((W - 2 - 2) / 2)
+eq([g1.x, g1.y, g1.w, g1.h], [1, 91, gcw, 12], "grid cell 1")
+eq([g2.x, g2.y, g2.w], [1 + gcw + 2, 91, gcw], "grid cell 2")
+eq([g3.x, g3.y, g3.w, g3.h], [1, 91 + 14, gcw, 8], "grid second row")
+eq([g4.x, g4.y], [1 + gcw + 2, 105], "grid cell 4")
+breathe()
+
+# ---------------------------------------------------------------- фокус и кнопка
+clicks = []
+fb = cdk.button("One", {on_click: (b) => table.insert(clicks, "one")})
+fl = cdk.label("text")
+fc = cdk.checkbox("Two")
+fi = cdk.text_input({width: 100})
+fs = cdk.switch("Three")
+froot = cdk.column({padding: 4, gap: 4, align: "start"}, [fb, fl, fc, fi, fs])
+sc = scene((ui) => froot)
+ui = sc.ui
+eq(ui.focus, nil, "nothing focused at the start")
+sc.press(keys.tab)
+eq(ui.focus == fb, true, "Tab focuses the first")
+sc.press(keys.tab)
+eq(ui.focus == fc, true, "Tab skips the label")
+sc.press(keys.tab)
+sc.press(keys.tab)
+eq(ui.focus == fs, true, "Tab goes in tree order")
+sc.press(keys.tab)
+eq(ui.focus == fb, true, "Tab wraps")
+sc.chord(keys.leftShift, keys.tab)
+eq(ui.focus == fs, true, "Shift+Tab wraps backwards")
+sc.chord(keys.leftShift, keys.tab)
+eq(ui.focus == fi, true, "Shift+Tab goes back")
+sc.click(fc)
+eq([ui.focus == fc, fc.checked], [true, true], "click focuses the widget")
+sc.click(fi)
+eq(ui.focus == fi, true, "click focuses the input")
+breathe()
+
+# кнопка
+sc.click(fb)
+eq(len(clicks), 1, "button: down and up inside clicks once")
+sc.k:feed("mouse_click", 1, sc.sx(fb) + 3, sc.sy(fb) + 3)
+sc.k:feed("mouse_up", 1, sc.sx(fb) + fb.w + 30, sc.sy(fb) + 3)
+sc.settle()
+eq([len(clicks), fb.pressed], [1, false], "button: up outside does not click")
+sc.k:feed("mouse_click", 1, sc.sx(fb) + 3, sc.sy(fb) + 3)
+sc.k:feed("mouse_drag", 1, sc.sx(fb) + fb.w + 30, sc.sy(fb) + 3)
+sc.settle()
+eq(fb.pressed, false, "button: dragging out releases the look")
+sc.k:feed("mouse_up", 1, sc.sx(fb) + fb.w + 30, sc.sy(fb) + 3)
+sc.settle()
+eq(len(clicks), 1, "button: drag out and up does not click")
+sc.press(keys.enter)
+eq(len(clicks), 2, "Enter clicks the focused button")
+sc.press(keys.space)
+eq(len(clicks), 3, "Space clicks the focused button")
+sc.click(fs)
+sc.press(keys.enter)
+eq(len(clicks), 3, "Enter on another focused widget does not click the button")
+breathe()
+
+# ---------------------------------------------------------------- флажок и переключатель
+cb_log = []
+sw_log = []
+cbx = cdk.checkbox("Check", {on_change: (v) => table.insert(cb_log, v)})
+swx = cdk.switch("Switch", {on: true, on_change: (v) => table.insert(sw_log, v)})
+sc = scene((ui) => cdk.column({padding: 4, gap: 4, align: "start"}, [cbx, swx]))
+sc.click(cbx)
+eq([cbx.checked, cb_log], [true, [true]], "checkbox: click checks")
+sc.click(cbx)
+eq([cbx.checked, cb_log], [false, [true, false]], "checkbox: click unchecks")
+sc.press(keys.space)
+eq([cbx.checked, len(cb_log)], [true, 3], "checkbox: Space toggles when focused")
+sc.click(swx)
+eq([swx.on, sw_log], [false, [false]], "switch: click turns off")
+sc.press(keys.space)
+eq([swx.on, sw_log], [true, [false, true]], "switch: Space toggles when focused")
+breathe()
+
+# ---------------------------------------------------------------- ползунок
+sl_log = []
+sld = cdk.slider({min: 0, max: 95, step: 5, value: 20, width: 104, on_change: (v) => table.insert(sl_log, v)})
+sc = scene((ui) => cdk.column({padding: 4, align: "start"}, [sld]))
+eq([sld.w, sld.value], [104, 20], "slider: size and start value")
+x0 = sc.sx(sld) + 4
+y0 = sc.sy(sld) + 3
+sc.k:feed("mouse_click", 1, x0 + 50, y0)
+sc.settle()
+eq(sld.value, 50, "slider: click sets the value proportionally")
+sc.k:feed("mouse_drag", 1, x0 + 52, y0)
+sc.settle()
+eq(sld.value, 50, "slider: snaps to step (down)")
+sc.k:feed("mouse_drag", 1, x0 + 53, y0)
+sc.settle()
+eq(sld.value, 55, "slider: snaps to step (up)")
+sc.k:feed("mouse_drag", 1, x0 + 300, y0)
+sc.settle()
+eq(sld.value, 95, "slider: clamps to max")
+sc.k:feed("mouse_drag", 1, x0 - 40, y0)
+sc.settle()
+eq(sld.value, 0, "slider: clamps to min")
+sc.k:feed("mouse_up", 1, x0 - 40, y0)
+sc.settle()
+eq(sl_log, [50, 55, 95, 0], "slider: on_change gets each new value once")
+sc.press(keys.right)
+sc.press(keys.right)
+eq(sld.value, 10, "slider: Right adds the step")
+sc.press(keys.left)
+eq(sld.value, 5, "slider: Left subtracts the step")
+sc.press(keys.left)
+sc.press(keys.left)
+eq(sld.value, 0, "slider: keys clamp at min")
+eq(sl_log[len(sl_log)], 0, "slider: on_change after keys")
+breathe()
+
+# ---------------------------------------------------------------- поле ввода
+submitted = []
+inp = cdk.text_input({width: 150, on_submit: (tx) => table.insert(submitted, tx)})
+pwd = cdk.text_input({width: 150, password: true})
+sc = scene((ui) => cdk.column({padding: 4, gap: 4, align: "start"}, [inp, pwd]))
+sc.click(inp)
+sc.typed("hello world")
+eq(inp.text, "hello world", "input: typing inserts")
+sc.press(keys.backspace)
+eq(inp.text, "hello worl", "input: Backspace")
+sc.press(keys.home)
+sc.press(keys.delete)
+eq(inp.text, "ello worl", "input: Home, Delete")
+sc.press(keys["end"])
+eq(inp.cursor, 9, "input: End")
+sc.chord(keys.leftCtrl, keys.backspace)
+eq(inp.text, "ello ", "input: Ctrl+Backspace deletes a word")
+sc.k:feed("key", keys.leftShift, false)
+sc.press(keys.left)
+sc.press(keys.left)
+sc.k:feed("key_up", keys.leftShift)
+sc.settle()
+eq(inp:selected_text(), "o ", "input: Shift+Left selects")
+sc.typed("X")
+eq(inp.text, "ellX", "input: typing replaces the selection")
+sc.chord(keys.leftCtrl, keys.a)
+sc.typed("abc")
+eq(inp.text, "abc", "input: Ctrl+A then typing replaces all")
+sc.chord(keys.leftCtrl, keys.a)
+sc.chord(keys.leftCtrl, keys.c)
+eq(cdk.input.clipboard.text, "abc", "input: Ctrl+C copies")
+eq(inp.text, "abc", "input: Ctrl+C keeps the text")
+sc.press(keys["end"])
+sc.chord(keys.leftCtrl, keys.v)
+eq(inp.text, "abcabc", "input: Ctrl+V pastes")
+sc.chord(keys.leftCtrl, keys.a)
+sc.chord(keys.leftCtrl, keys.x)
+eq([inp.text, cdk.input.clipboard.text], ["", "abcabc"], "input: Ctrl+X cuts")
+sc.chord(keys.leftCtrl, keys.v)
+eq(inp.text, "abcabc", "input: paste after cut")
+sc.chord(keys.leftCtrl, keys.z)
+eq(inp.text, "", "input: Ctrl+Z undoes")
+sc.chord(keys.leftCtrl, keys.y)
+eq(inp.text, "abcabc", "input: Ctrl+Y redoes")
+sc.press(keys.enter)
+eq(submitted, ["abcabc"], "input: Enter calls on_submit")
+breathe()
+
+sc.click(pwd)
+sc.typed("secret")
+eq(pwd.text, "secret", "password: typing works")
+sc.chord(keys.leftCtrl, keys.a)
+sc.chord(keys.leftCtrl, keys.c)
+eq(cdk.input.clipboard.text, "abcabc", "password: Ctrl+C does not copy")
+sc.chord(keys.leftCtrl, keys.x)
+eq([pwd.text, cdk.input.clipboard.text], ["secret", "abcabc"], "password: Ctrl+X does not cut")
+breathe()
+
+# кириллица: клавиша без символа, буква по раскладке
+ru = cdk.text_input({width: 150})
+sc = scene((ui) => cdk.column({padding: 4, align: "start"}, [ru]), {title: "T", w: 200, h: 130, x: 20, y: 10, keyboard: "ru"})
+eq(sc.ui.kbd:base_char(keys.q, false) != nil, true, "ru layout loads")
+sc.click(ru)
+sc.press(keys.q)
+sc.k:feed("cubeos_cde")
+for i in range[1, 14]:
+    sc.clock.now = sc.clock.now + 20
+    sc.k:tick()
+    sc.k:run_ready()
+eq(ru.text, "й", "Cyrillic: a key without a char gives the letter of the second layout")
+sc.typed("a")
+eq(ru.text, "йa", "a char event passes as is")
+breathe()
+
+# ---------------------------------------------------------------- частичная перерисовка и тема
+tg = cdk.checkbox("Toggle")
+other = cdk.label("static")
+sc = scene((ui) => cdk.column({padding: 4, gap: 4, align: "start"}, [tg, other]))
+ui = sc.ui
+eq(ui.stats.full >= 1, true, "first draw is full")
+full0 = ui.stats.full
+red0 = ui.stats.redraws
+lay0 = ui.stats.layouts
+sc.click(tg)
+eq(tg.checked, true, "checkbox toggled")
+eq(ui.stats.redraws > red0, true, "toggle redraws only the widget")
+eq(ui.stats.full, full0, "toggle does not redraw everything")
+eq(ui.stats.layouts, lay0, "toggle does not relayout")
+sc.wm:hotkey("ctrl+alt+y", () => sc.wm:set_theme("light"))
+sc.k:feed("key", keys.leftCtrl, false)
+sc.k:feed("key", keys.leftAlt, false)
+sc.k:feed("key", keys.y, false)
+sc.k:feed("key_up", keys.leftAlt)
+sc.k:feed("key_up", keys.leftCtrl)
+sc.settle()
+eq(sc.wm.theme.name, "light", "theme switched")
+eq(ui.stats.layouts > lay0, true, "theme switch relayouts")
+eq(ui.stats.full > full0, true, "theme switch redraws everything")
+print("done")

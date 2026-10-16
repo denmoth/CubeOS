@@ -1,0 +1,435 @@
+# cdk.controls: простые элементы cdk, нарисованные пикселями со шрифтом
+#
+#   controls.label("Заголовок", {variant: "title"})            variant: normal, title (крупно), dim, accent, danger; align; color
+#   controls.button("OK", {variant: "primary", icon: "check", on_click: fn})   variant: normal, primary, flat, danger
+#   controls.icon("folder", {color, color2})
+#   controls.checkbox("Звук", {checked: true, on_change: (v) => ...})
+#   controls.switch("Wi-Fi", {on: true, on_change: fn})
+#   controls.slider({min: 0, max: 100, value: 30, step: 1, on_change: fn, width: 100})
+#   controls.progress({value: 0.4})  или {indeterminate: true}
+#   controls.separator()
+
+import cdk.widget as widget
+import cdk.icons as icons
+import unicode
+
+def _text_y(self, st, scale=1):
+    return self.y + math.floor((self.h - st.fh * scale) / 2)
+
+# ------------------------------------------------------------ надпись
+
+export class Label(widget.Widget):
+    def init(self, text, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "label"
+        self.text = tostring(text)
+        self.variant = o.variant ?? "normal"
+        self.scale = o.scale ?? (self.variant == "title" and 2 or 1)
+        self.align = o.align ?? "left"
+        self.color = o.color
+
+    def set_text(self, text):
+        text = tostring(text)
+        if text != self.text:
+            old = unicode.length(self.text)
+            self.text = text
+            if unicode.length(text) != old:
+                self:relayout()
+            self:invalidate()
+
+    def measure(self, st):
+        return st:text_w(self.text, self.scale), st.fh * self.scale + (self.scale > 1 and 2 or 0)
+
+    def _color(self, st):
+        if self.color != nil:
+            return self.color
+        if self.variant == "dim":
+            return st.dim
+        if self.variant == "accent":
+            return st.accent
+        if self.variant == "danger":
+            return st.danger
+        return st.text
+
+    def draw(self, s, st):
+        tw = st:text_w(self.text, self.scale)
+        x = self.x
+        if self.align == "center":
+            x = self.x + math.floor((self.w - tw) / 2)
+        elif self.align == "right":
+            x = self.x + self.w - tw
+        text = self.text
+        if tw > self.w and self.w > 0:
+            keep = math.max(0, math.floor(self.w / (st.fw * self.scale)) - 2)
+            text = unicode.sub(self.text, 1, keep) .. ".."
+        opts = nil
+        if self.scale > 1:
+            opts = {scale: self.scale, shadow: {color: st:darker(st.bg), dx: 1, dy: 1}}
+        s:text(st.font, x, _text_y(self, st, self.scale), text, self:_color(st), opts)
+
+export def label(text, opts=nil):
+    return Label(text, opts)
+
+# ------------------------------------------------------------ значок
+
+export class Icon(widget.Widget):
+    def init(self, name, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "icon"
+        self.name = name
+        self.color = o.color
+        self.color2 = o.color2
+
+    def measure(self, st):
+        return 9, 9
+
+    def draw(self, s, st):
+        c = self.color ?? st.text
+        icons.draw(s, self.name, self.x + math.floor((self.w - 9) / 2), self.y + math.floor((self.h - 9) / 2), c, self.color2 ?? st:darker(c))
+
+export def icon(name, opts=nil):
+    return Icon(name, opts)
+
+# ------------------------------------------------------------ кнопка
+
+export class Button(widget.Widget):
+    def init(self, text, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "button"
+        self.text = text ?? ""
+        self.variant = o.variant ?? "normal"
+        self.icon = o.icon
+        self.on_click = o.on_click
+        self.focusable = true
+        self.pressed = false
+
+    def measure(self, st):
+        w = st:text_w(self.text) + 12
+        if self.icon != nil:
+            w += self.text == "" and 3 or 12
+        return w, st.line + 2
+
+    def _colors(self, st):
+        if not self.enabled:
+            return st.ctrl, nil, nil, st.dim
+        if self.variant == "primary":
+            if self.pressed:
+                return st.accent_lo, nil, nil, st.on_accent
+            return st.accent, st.accent_hi, st.accent_lo, st.on_accent
+        if self.variant == "danger":
+            if self.pressed:
+                return st:darker(st.danger), nil, nil, st.on_accent
+            return st.danger, nil, st:darker(st.danger), st.on_accent
+        if self.variant == "flat":
+            if self.pressed:
+                return st.hi, nil, nil, st.text
+            return nil, nil, nil, st.text
+        if self.pressed:
+            return st.ctrl_lo, nil, nil, st.text
+        return st.ctrl, st.hi, st.ctrl_lo, st.text
+
+    def draw(self, s, st):
+        base, hi, shade, fg = self:_colors(st)
+        if base != nil:
+            st:plate(s, self.x, self.y, self.w, self.h, base, {hi: hi, shade: shade})
+        off = self.pressed and 1 or 0
+        tw = st:text_w(self.text)
+        content = tw
+        if self.icon != nil:
+            content += self.text == "" and 9 or 12
+        x = self.x + math.floor((self.w - content) / 2)
+        ty = _text_y(self, st) + off
+        if self.icon != nil:
+            icons.draw(s, self.icon, x, self.y + math.floor((self.h - 9) / 2) + off, fg, st:darker(fg))
+            x += 12
+        if self.text != "":
+            s:text(st.font, x, ty, self.text, fg)
+        if self.focused:
+            st:ring(s, self.x, self.y, self.w, self.h)
+
+    def click(self):
+        if self.enabled and self.on_click != nil:
+            self.on_click(self)
+
+    def handle(self, ev):
+        if not self.enabled:
+            return false
+        if ev.name == "down":
+            self.pressed = true
+            self:invalidate()
+            return true
+        if ev.name == "up":
+            was = self.pressed
+            self.pressed = false
+            self:invalidate()
+            if was and self:contains(ev.x, ev.y):
+                self:click()
+            return true
+        if ev.name == "drag":
+            inside = self:contains(ev.x, ev.y)
+            if inside != self.pressed:
+                self.pressed = inside
+                self:invalidate()
+            return true
+        if ev.name == "key" and (ev.key == keys.enter or ev.key == keys.space):
+            self.pressed = true
+            self:invalidate()
+            let me = self
+            self.ui:after(0.12, () => me:_release())
+            self:click()
+            return true
+        return false
+
+    def _release(self):
+        self.pressed = false
+        self:invalidate()
+
+export def button(text, opts=nil):
+    return Button(text, opts)
+
+# ------------------------------------------------------------ флажок
+
+export class Checkbox(widget.Widget):
+    def init(self, text, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "checkbox"
+        self.text = text ?? ""
+        self.checked = o.checked ?? false
+        self.on_change = o.on_change
+        self.focusable = true
+
+    def measure(self, st):
+        return 9 + (self.text != "" and (5 + st:text_w(self.text)) or 0), st.line
+
+    def set(self, v):
+        if v != self.checked:
+            self.checked = v
+            self:invalidate()
+            if self.on_change != nil:
+                self.on_change(v, self)
+
+    def draw(self, s, st):
+        by = self.y + math.floor((self.h - 9) / 2)
+        if self.checked:
+            st:round_fill(s, self.x, by, 9, 9, self.enabled and st.accent or st.dim, 2)
+            icons.draw(s, "check", self.x, by, st.on_accent)
+        else:
+            st:round_fill(s, self.x, by, 9, 9, st.well, 2)
+            st:round_line(s, self.x, by, 9, 9, st.dim, 2)
+        if self.text != "":
+            s:text(st.font, self.x + 14, _text_y(self, st), self.text, self.enabled and st.text or st.dim)
+        if self.focused:
+            st:round_line(s, self.x - 1, by - 1, 11, 11, st.accent, 3)
+
+    def handle(self, ev):
+        if not self.enabled:
+            return false
+        if ev.name == "click" or (ev.name == "key" and (ev.key == keys.space or ev.key == keys.enter)):
+            self:set(not self.checked)
+            return true
+        return ev.name == "down" or ev.name == "up"
+
+export def checkbox(text, opts=nil):
+    return Checkbox(text, opts)
+
+# ------------------------------------------------------------ переключатель
+
+export class Switch(widget.Widget):
+    def init(self, text, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "switch"
+        self.text = text ?? ""
+        self.on = o.on ?? false
+        self.on_change = o.on_change
+        self.focusable = true
+
+    def measure(self, st):
+        return 19 + (self.text != "" and (5 + st:text_w(self.text)) or 0), st.line
+
+    def set(self, v):
+        if v != self.on:
+            self.on = v
+            self:invalidate()
+            if self.on_change != nil:
+                self.on_change(v, self)
+
+    def draw(self, s, st):
+        ty = self.y + math.floor((self.h - 10) / 2)
+        track = self.on and (self.enabled and st.accent or st.dim) or st.track
+        st:round_fill(s, self.x, ty, 19, 10, track, 4)
+        if not self.on:
+            st:round_line(s, self.x, ty, 19, 10, st.border, 4)
+        kx = self.on and (self.x + 14) or (self.x + 4)
+        s:circle(kx, ty + 4, 3, self.on and 0 or st.dim, true)
+        s:fill_rect(kx - 3, ty + 4, 7, 2, self.on and 0 or st.dim)
+        s:circle(kx, ty + 5, 3, self.on and 0 or st.dim, true)
+        if self.text != "":
+            s:text(st.font, self.x + 24, _text_y(self, st), self.text, self.enabled and st.text or st.dim)
+        if self.focused:
+            st:round_line(s, self.x - 1, ty - 1, 21, 12, st.accent, 4)
+
+    def handle(self, ev):
+        if not self.enabled:
+            return false
+        if ev.name == "click" or (ev.name == "key" and (ev.key == keys.space or ev.key == keys.enter)):
+            self:set(not self.on)
+            return true
+        return ev.name == "down" or ev.name == "up"
+
+export def switch(text, opts=nil):
+    return Switch(text, opts)
+
+# ------------------------------------------------------------ ползунок
+
+export class Slider(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "slider"
+        self.min = o.min ?? 0
+        self.max = o.max ?? 100
+        self.step = o.step ?? 1
+        self.value = o.value ?? self.min
+        self.on_change = o.on_change
+        self.focusable = true
+        self.dragging = false
+
+    def measure(self, st):
+        return 80, st.line
+
+    def fraction(self):
+        span = self.max - self.min
+        if span <= 0:
+            return 0
+        return (self.value - self.min) / span
+
+    def set(self, v):
+        v = math.max(self.min, math.min(self.max, v))
+        if self.step > 0:
+            v = self.min + math.floor((v - self.min) / self.step + 0.5) * self.step
+        if v != self.value:
+            self.value = v
+            self:invalidate()
+            if self.on_change != nil:
+                self.on_change(v, self)
+
+    def _from_x(self, px):
+        f = (px - self.x - 4) / math.max(1, self.w - 9)
+        self:set(self.min + f * (self.max - self.min))
+
+    def draw(self, s, st):
+        cy = self.y + math.floor(self.h / 2)
+        x0 = self.x + 4
+        span = math.max(1, self.w - 9)
+        kx = x0 + math.floor(span * self:fraction() + 0.5)
+        st:round_fill(s, x0, cy - 1, span + 1, 3, st.track, 1)
+        if kx > x0:
+            st:round_fill(s, x0, cy - 1, kx - x0 + 1, 3, self.enabled and st.accent or st.dim, 1)
+        s:circle(kx, cy, 4, self.focused and st.accent or st.border, true)
+        s:circle(kx, cy, 3, 0, true)
+
+    def handle(self, ev):
+        if not self.enabled:
+            return false
+        if ev.name == "down":
+            self.dragging = true
+            self:_from_x(ev.x)
+            return true
+        if ev.name == "drag" and self.dragging:
+            self:_from_x(ev.x)
+            return true
+        if ev.name == "up":
+            self.dragging = false
+            return true
+        if ev.name == "scroll":
+            self:set(self.value - ev.dir * self.step)
+            return true
+        if ev.name == "key":
+            if ev.key == keys.left or ev.key == keys.down:
+                self:set(self.value - self.step)
+                return true
+            if ev.key == keys.right or ev.key == keys.up:
+                self:set(self.value + self.step)
+                return true
+            if ev.key == keys.home:
+                self:set(self.min)
+                return true
+            if ev.key == keys["end"]:
+                self:set(self.max)
+                return true
+        return false
+
+export def slider(opts=nil):
+    return Slider(opts)
+
+# ------------------------------------------------------------ полоса загрузки
+
+export class Progress(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "progress"
+        self.value = o.value ?? 0
+        self.indeterminate = o.indeterminate ?? false
+        self.phase = 0
+        self.timer = nil
+
+    def measure(self, st):
+        return 80, 7
+
+    def set(self, v):
+        v = math.max(0, math.min(1, v))
+        if v != self.value:
+            self.value = v
+            self:invalidate()
+
+    def _attach(self, ui):
+        super._attach(self, ui)
+        if self.indeterminate and self.timer == nil:
+            let me = self
+            self.timer = ui:every(0.05, () => me:_step())
+
+    def _step(self):
+        self.phase = (self.phase + 0.04) % 1.4
+        self:invalidate()
+
+    def draw(self, s, st):
+        y = self.y + math.floor((self.h - 5) / 2)
+        st:round_fill(s, self.x, y, self.w, 5, st.track, 2)
+        if self.indeterminate:
+            seg = math.max(6, math.floor(self.w * 0.3))
+            start = math.floor((self.phase - 0.4) * self.w)
+            a = math.max(self.x, self.x + start)
+            b = math.min(self.x + self.w, self.x + start + seg)
+            if b - a >= 2:
+                st:round_fill(s, a, y, b - a, 5, st.accent, 2)
+                s:hline(a + 2, y, math.max(0, b - a - 4), st.accent_hi)
+            return
+        fw = math.floor(self.w * self.value + 0.5)
+        if fw >= 2:
+            st:round_fill(s, self.x, y, fw, 5, st.accent, 2)
+            s:hline(self.x + 2, y, math.max(0, fw - 4), st.accent_hi)
+
+export def progress(opts=nil):
+    return Progress(opts)
+
+# ------------------------------------------------------------ разделитель
+
+export class Separator(widget.Widget):
+    def init(self, opts=nil):
+        super.init(self, opts)
+        self.kind = "separator"
+
+    def measure(self, st):
+        return 1, 3
+
+    def draw(self, s, st):
+        s:hline(self.x, self.y + math.floor(self.h / 2), self.w, st.border)
+
+export def separator(opts=nil):
+    return Separator(opts)

@@ -1,0 +1,42 @@
+# cdk: Cube Desktop Kit, элементы интерфейса рабочего стола CDE, нарисованные пикселями со шрифтом (docs/19-cde.md, шаг 2.3)
+#
+#   import cdk
+#   def main(sys, ctx):
+#       ui = cdk.open(sys, ctx, {title: "Пример", w: 180, h: 100})
+#       name = cdk.text_input({placeholder: "Name"})
+#       ui:set_root(cdk.column({padding: 6}, [cdk.label("Hello", {variant: "title"}), name,
+#           cdk.row({}, [cdk.spacer(), cdk.button("OK", {variant: "primary", on_click: () => ui:close()})])]))
+#       ui:run()
+#
+# Части: cdk.ui (среда в окне), cdk.widget (дерево, ряд, столбец, сетка, карточка, распорка), cdk.controls (надпись, кнопка, значок,
+# флажок, переключатель, ползунок, полоса загрузки, разделитель), cdk.input (поле ввода), cdk.icons (значки), cdk.style (вид из темы).
+
+import cdk.ui as ui_mod
+import cdk.widget as widget_mod
+import cdk.controls as controls_mod
+import cdk.input as input_mod
+import cdk.icons as icons_mod
+import cdk.style as style_mod
+
+export const ui = ui_mod
+export const widget = widget_mod
+export const controls = controls_mod
+export const input = input_mod
+export const icons = icons_mod
+export const style = style_mod
+
+export const open = ui_mod.open
+export const row = widget_mod.row
+export const column = widget_mod.column
+export const card = widget_mod.card
+export const grid = widget_mod.grid
+export const spacer = widget_mod.spacer
+export const label = controls_mod.label
+export const button = controls_mod.button
+export const icon = controls_mod.icon
+export const checkbox = controls_mod.checkbox
+export const switch = controls_mod.switch
+export const slider = controls_mod.slider
+export const progress = controls_mod.progress
+export const separator = controls_mod.separator
+export const text_input = input_mod.text_input

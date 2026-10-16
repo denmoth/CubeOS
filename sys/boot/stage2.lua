@@ -181,7 +181,8 @@ local function main()
   if not ctx.shell then
     if want_cde then
       load("shell", "Loading the desktop", { "ui", "term.session", "cde.theme", "cde.window", "cde.wallpaper", "cde.compositor",
-        "cde.wm", "cde.app", "cde.winout", "cde.terminal", "cde.session" })
+        "cde.wm", "cde.app", "cde.winout", "cde.terminal", "cdk.style", "cdk.icons", "cdk.widget", "cdk.controls", "cdk.input", "cdk.ui",
+        "cdk", "cdk.gallery", "cde.session" })
     else
       load("shell", "Loading the terminal", { "ui", "term.session" })
     end

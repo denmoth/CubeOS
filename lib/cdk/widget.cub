@@ -1,0 +1,365 @@
+# cdk.widget: дерево элементов cdk и раскладки (ряд, столбец, сетка, карточка, распорка)
+#
+#   box = widget.column({gap: 4, padding: 6}, [widget.label("Привет"), widget.row({}, [a, b])])
+#   child.grow = 1                    забирает свободное место по главной оси (несколько: пропорционально)
+#
+# Элемент: прямоугольник x, y, w, h (в пикселях холста окна), дети, флаги visible и focusable. Методы, которые переопределяют:
+#   measure(st) -> w, h               желаемый размер (st: cdk.style)
+#   layout_children()                 разложить детей внутри своего прямоугольника
+#   draw(s, st)                       нарисовать себя (детей рисует draw_tree); фон под элементом уже залит
+#   handle(ev) -> true                событие (ev.name: "click", "down", "drag", "up", "scroll", "key", "char", "focus", "blur"; ev.x, ev.y
+#                                     в координатах холста, ev.key, ev.char, ev.ctrl, ev.shift, ev.alt); false передаёт событие родителю
+#   bg() -> цвет или nil              свой фон (nil: фон родителя)
+# Свойства из opts у всех: grow, width, height (точный размер), min_w, min_h, max_w, visible, id.
+
+import cde.theme as theme
+
+export class Widget:
+    def init(self, opts=nil):
+        o = opts ?? {}
+        self.x = 0
+        self.y = 0
+        self.w = 0
+        self.h = 0
+        self.children = []
+        self.parent = nil
+        self.ui = nil
+        self.grow = o.grow ?? 0
+        self.width = o.width
+        self.height = o.height
+        self.min_w = o.min_w ?? 0
+        self.min_h = o.min_h ?? 0
+        self.max_w = o.max_w
+        self.visible = o.visible ?? true
+        self.focusable = false
+        self.focused = false
+        self.enabled = o.enabled ?? true
+        self.id = o.id
+        self.kind = "widget"
+
+    # ------------------------------------------------------------ дерево
+
+    def add(self, child):
+        child.parent = self
+        self.children[len(self.children) + 1] = child
+        if self.ui != nil:
+            child:_attach(self.ui)
+        self:relayout()
+        return child
+
+    def remove(self, child):
+        for i, c in self.children:
+            if c == child:
+                table.remove(self.children, i)
+                child.parent = nil
+                if self.ui != nil:
+                    self.ui:_forget(child)
+                self:relayout()
+                return true
+        return false
+
+    def clear_children(self):
+        for c in self.children:
+            c.parent = nil
+            if self.ui != nil:
+                self.ui:_forget(c)
+        self.children = []
+        self:relayout()
+
+    def _attach(self, ui):
+        self.ui = ui
+        for c in self.children:
+            c:_attach(ui)
+
+    def find(self, id):
+        if self.id == id:
+            return self
+        for c in self.children:
+            hit = c:find(id)
+            if hit != nil:
+                return hit
+        return nil
+
+    def set_visible(self, on):
+        if self.visible != on:
+            self.visible = on
+            self:relayout()
+
+    # перерисовать этот элемент
+    def invalidate(self):
+        if self.ui != nil:
+            self.ui:redraw(self)
+
+    # размеры поменялись: разложить окно заново
+    def relayout(self):
+        if self.ui != nil:
+            self.ui:relayout()
+
+    # ------------------------------------------------------------ размеры и раскладка
+
+    def measure(self, st):
+        return 0, 0
+
+    # желаемый размер с учётом width, height, min_*, max_w
+    def pref(self, st):
+        w, h = self:measure(st)
+        if self.width != nil:
+            w = self.width
+        if self.height != nil:
+            h = self.height
+        w = math.max(w, self.min_w)
+        h = math.max(h, self.min_h)
+        if self.max_w != nil:
+            w = math.min(w, self.max_w)
+        return w, h
+
+    def layout(self, x, y, w, h):
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+        self:layout_children()
+
+    def layout_children(self):
+        pass
+
+    # ------------------------------------------------------------ рисование и события
+
+    def bg(self):
+        return nil
+
+    def draw(self, s, st):
+        pass
+
+    def draw_tree(self, s, st):
+        self:draw(s, st)
+        for c in self.children:
+            if c.visible and c.w > 0 and c.h > 0:
+                # пиксель запаса: кольцо фокуса рисуется вокруг элемента
+                s:push_clip(c.x - 1, c.y - 1, c.w + 2, c.h + 2)
+                c:draw_tree(s, st)
+                s:pop_clip()
+
+    def contains(self, px, py):
+        return px >= self.x and px < self.x + self.w and py >= self.y and py < self.y + self.h
+
+    # самый глубокий видимый элемент под точкой
+    def hit(self, px, py):
+        if not self.visible or not self:contains(px, py):
+            return nil
+        for i in range[len(self.children), 1] step -1:
+            got = self.children[i]:hit(px, py)
+            if got != nil:
+                return got
+        return self
+
+    def handle(self, ev):
+        return false
+
+# ------------------------------------------------------------ контейнеры
+
+# ряд или столбец: gap (промежуток), padding (отступ внутри), align (поперёк: "start", "center", "end", "stretch"),
+# justify (вдоль: "start", "center", "end", "between"), bg (свой фон), radius, border (цвет контура), card (true: карточка с фоном элемента)
+export class Box(Widget):
+    def init(self, dir, opts=nil, children=nil):
+        super.init(self, opts)
+        o = opts ?? {}
+        self.kind = "box"
+        self.dir = dir
+        self.gap = o.gap
+        self.padding = o.padding ?? 0
+        self.align = o.align ?? "stretch"
+        self.justify = o.justify ?? "start"
+        self.fill = o.bg
+        self.card = o.card ?? false
+        self.border = o.border
+        self.radius = o.radius
+        for c in children ?? []:
+            self:add(c)
+
+    def _gap(self, st):
+        return self.gap ?? st.gap
+
+    def _pad(self, st):
+        if self.card and self.padding == 0:
+            return st.pad
+        return self.padding
+
+    def bg(self):
+        if self.card:
+            return self.fill ?? theme.CTRL_BG
+        return self.fill
+
+    def _shown(self):
+        out = []
+        for c in self.children:
+            if c.visible:
+                out[len(out) + 1] = c
+        return out
+
+    def measure(self, st):
+        kids = self:_shown()
+        pad = self:_pad(st)
+        gap = self:_gap(st)
+        main = 0
+        cross = 0
+        for i, c in kids:
+            cw, ch = c:pref(st)
+            if self.dir == "row":
+                main += cw
+                cross = math.max(cross, ch)
+            else:
+                main += ch
+                cross = math.max(cross, cw)
+        if len(kids) > 1:
+            main += gap * (len(kids) - 1)
+        if self.dir == "row":
+            return main + pad * 2, cross + pad * 2
+        return cross + pad * 2, main + pad * 2
+
+    def layout_children(self):
+        st = self.ui != nil and self.ui.style or nil
+        if st == nil:
+            return
+        kids = self:_shown()
+        n = len(kids)
+        if n == 0:
+            return
+        pad = self:_pad(st)
+        gap = self:_gap(st)
+        horiz = self.dir == "row"
+        inner_main = (horiz and self.w or self.h) - pad * 2
+        inner_cross = (horiz and self.h or self.w) - pad * 2
+        sizes = []
+        total = 0
+        grow_sum = 0
+        for i, c in kids:
+            cw, ch = c:pref(st)
+            sizes[i] = [cw, ch]
+            total += horiz and cw or ch
+            grow_sum += c.grow
+        total += gap * (n - 1)
+        extra = inner_main - total
+        pos = pad
+        between = gap
+        if grow_sum == 0 and extra > 0:
+            if self.justify == "center":
+                pos += math.floor(extra / 2)
+            elif self.justify == "end":
+                pos += extra
+            elif self.justify == "between" and n > 1:
+                between = gap + extra / (n - 1)
+        given = 0
+        for i, c in kids:
+            main_size = horiz and sizes[i][1] or sizes[i][2]
+            cross_size = horiz and sizes[i][2] or sizes[i][1]
+            if grow_sum > 0 and c.grow > 0:
+                add = extra > 0 and math.floor(extra * c.grow / grow_sum) or 0
+                given += add
+                main_size += add
+            if grow_sum > 0 and extra < 0 and c.grow > 0:
+                main_size = math.max(0, main_size + math.floor(extra * c.grow / grow_sum))
+            cs = cross_size
+            off = 0
+            if self.align == "stretch":
+                cs = inner_cross
+            else:
+                cs = math.min(cross_size, inner_cross)
+                if self.align == "center":
+                    off = math.floor((inner_cross - cs) / 2)
+                elif self.align == "end":
+                    off = inner_cross - cs
+            p = math.floor(pos + 0.5)
+            if horiz:
+                c:layout(self.x + p, self.y + pad + off, main_size, cs)
+            else:
+                c:layout(self.x + pad + off, self.y + p, cs, main_size)
+            pos += main_size + between
+
+    def draw(self, s, st):
+        f = self:bg()
+        if self.card or self.radius != nil:
+            if f != nil:
+                # углы карточки: фон под ней (родителя) уже залит, рисуем скруглённую плашку
+                st:round_fill(s, self.x, self.y, self.w, self.h, f, self.radius)
+            if self.border != nil:
+                st:round_line(s, self.x, self.y, self.w, self.h, self.border, self.radius)
+        elif f != nil:
+            s:fill_rect(self.x, self.y, self.w, self.h, f)
+
+export def row(opts=nil, children=nil):
+    return Box("row", opts, children)
+
+export def column(opts=nil, children=nil):
+    return Box("column", opts, children)
+
+# карточка: столбец с фоном элемента, скруглением и отступом
+export def card(opts=nil, children=nil):
+    o = opts ?? {}
+    o.card = true
+    return Box(o.dir ?? "column", o, children)
+
+# распорка: забирает свободное место
+export class Spacer(Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "spacer"
+        if o.grow == nil:
+            self.grow = 1
+        self.size = o.size ?? 0
+
+    def measure(self, st):
+        return self.size, self.size
+
+export def spacer(opts=nil):
+    return Spacer(opts)
+
+# сетка: cols столбцов одинаковой ширины, строки по самому высокому элементу
+export class Grid(Widget):
+    def init(self, cols, opts=nil, children=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "grid"
+        self.cols = math.max(1, cols)
+        self.gap = o.gap
+        self.padding = o.padding ?? 0
+        for c in children ?? []:
+            self:add(c)
+
+    def _rows(self, st):
+        heights = []
+        widest = 0
+        for i, c in self.children:
+            cw, ch = c:pref(st)
+            r = math.floor((i - 1) / self.cols) + 1
+            heights[r] = math.max(heights[r] ?? 0, ch)
+            widest = math.max(widest, cw)
+        return heights, widest
+
+    def measure(self, st):
+        gap = self.gap ?? st.gap
+        heights, widest = self:_rows(st)
+        h = 0
+        for hh in heights:
+            h += hh
+        h += gap * math.max(0, len(heights) - 1)
+        return widest * self.cols + gap * (self.cols - 1) + self.padding * 2, h + self.padding * 2
+
+    def layout_children(self):
+        st = self.ui != nil and self.ui.style or nil
+        if st == nil:
+            return
+        gap = self.gap ?? st.gap
+        heights, widest = self:_rows(st)
+        cw = math.floor((self.w - self.padding * 2 - gap * (self.cols - 1)) / self.cols)
+        y = self.y + self.padding
+        for i, c in self.children:
+            r = math.floor((i - 1) / self.cols) + 1
+            col = (i - 1) % self.cols
+            if col == 0 and r > 1:
+                y += heights[r - 1] + gap
+            c:layout(self.x + self.padding + col * (cw + gap), y, cw, heights[r])
+
+export def grid(cols, opts=nil, children=nil):
+    return Grid(cols, opts, children)

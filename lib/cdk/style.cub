@@ -1,0 +1,115 @@
+# cdk.style: вид элементов из темы рабочего стола (цвета палитры, скругление, отступы) и общие приёмы рисования
+#
+#   st = style.new(wm)          wm: оконный менеджер CDE (тема, палитра, шрифт)
+#   st:rebuild()                после смены темы (событие win_theme)
+#   st:plate(s, x, y, w, h, c, {hi, shade})     скруглённая плашка с полоской света сверху и тенью снизу (объём без градиента)
+#   st:ring(s, x, y, w, h)      кольцо фокуса вокруг элемента
+#
+# Тема может задать раздел cdk: {radius: 0..4, padding, gap}; иначе скругление как у окон (не меньше 2), отступ 4, промежуток 4.
+
+import cde.theme as theme
+import unicode
+
+def _clamp(v, lo, hi):
+    return math.max(lo, math.min(hi, v))
+
+export class Style:
+    def init(self, wm):
+        self.wm = wm
+        self:rebuild()
+
+    def rebuild(self):
+        wm = self.wm
+        th = wm.theme
+        c = th.cdk ?? {}
+        self.font = wm.font
+        self.fw = wm.font.width
+        self.fh = wm.font.height
+        self.radius = _clamp(math.floor(tonumber(c.radius) ?? math.max(2, th.window.radius ?? 2)), 0, 4)
+        self.pad = math.floor(tonumber(c.padding) ?? 4)
+        self.gap = math.floor(tonumber(c.gap) ?? 4)
+        # высота строки элемента: шрифт и по 2 пикселя сверху и снизу
+        self.line = self.fh + 4
+        self.bg = theme.WIN_BG
+        self.text = theme.TITLE_TEXT
+        self.dim = theme.TITLE_DIM
+        self.accent = theme.ACCENT
+        self.on_accent = theme.ACCENT_TEXT
+        self.ctrl = theme.CTRL_BG
+        self.hi = theme.CTRL_HI
+        self.sel = theme.SEL
+        self.border = theme.BORDER_INACTIVE
+        self.danger = theme.CLOSE
+        self.ok = theme.BTN_MAX
+        self.warn = theme.BTN_MIN
+        pal = wm.palette
+        # светлее и темнее цвета по палитре экрана: полоска света и тень на плашках
+        self.dark = theme.dim_map(pal, 0.85)
+        self.dark_theme = th.dark != false
+        ar, ag, ab = pal:get(theme.ACCENT)
+        self.accent_hi = pal:nearest(math.min(255, ar + 40), math.min(255, ag + 40), math.min(255, ab + 40))
+        self.accent_lo = self.dark[theme.ACCENT]
+        self.ctrl_lo = self.dark[theme.CTRL_BG]
+        # дорожка ползунка и полосы загрузки: на тёмной теме светлее фона, на светлой темнее
+        self.track = self.dark_theme and theme.CTRL_HI or self.ctrl_lo
+        # пустой флажок и поле ввода: «утопленные» в фон
+        self.well = self.dark_theme and self.dark[theme.CTRL_BG] or theme.WIN_BG
+
+    def darker(self, c):
+        return self.dark[c] ?? c
+
+    # скруглённая залитая плашка
+    def round_fill(self, s, x, y, w, h, c, r=nil):
+        rr = math.min(r ?? self.radius, math.floor(math.min(w, h) / 2))
+        if rr <= 0:
+            s:fill_rect(x, y, w, h, c)
+            return
+        for i in range[0, rr - 1]:
+            inset = theme.corner_inset(math.min(rr, 4), i)
+            s:hline(x + inset, y + i, w - inset * 2, c)
+            s:hline(x + inset, y + h - 1 - i, w - inset * 2, c)
+        s:fill_rect(x, y + rr, w, h - rr * 2, c)
+
+    # контур скруглённого прямоугольника 1 пиксель
+    def round_line(self, s, x, y, w, h, c, r=nil):
+        rr = math.min(r ?? self.radius, math.floor(math.min(w, h) / 2), 4)
+        if rr <= 0:
+            s:rect(x, y, w, h, c)
+            return
+        s:hline(x + rr, y, w - rr * 2, c)
+        s:hline(x + rr, y + h - 1, w - rr * 2, c)
+        s:vline(x, y + rr, h - rr * 2, c)
+        s:vline(x + w - 1, y + rr, h - rr * 2, c)
+        prev = rr
+        for i in range[0, rr - 1]:
+            inset = theme.corner_inset(rr, i)
+            last = math.max(inset, prev - 1)
+            for dx in range[inset, last]:
+                s:set(x + dx, y + i, c)
+                s:set(x + w - 1 - dx, y + i, c)
+                s:set(x + dx, y + h - 1 - i, c)
+                s:set(x + w - 1 - dx, y + h - 1 - i, c)
+            prev = inset
+
+    # плашка с объёмом: светлая полоска сверху, тень снизу (o.hi, o.shade: цвета; false убирает)
+    def plate(self, s, x, y, w, h, c, o=nil):
+        opts = o ?? {}
+        self:round_fill(s, x, y, w, h, c)
+        rr = math.min(self.radius, math.floor(math.min(w, h) / 2))
+        hi = opts.hi
+        if hi != false and hi != nil:
+            s:hline(x + rr + 1, y, math.max(0, w - (rr + 1) * 2), hi)
+        shade = opts.shade
+        if shade != false and shade != nil:
+            s:hline(x + rr + 1, y + h - 1, math.max(0, w - (rr + 1) * 2), shade)
+
+    # кольцо фокуса: контур акцентного цвета на 1 пиксель снаружи элемента
+    def ring(self, s, x, y, w, h):
+        self:round_line(s, x - 1, y - 1, w + 2, h + 2, self.accent, self.radius + 1)
+
+    # текст: ширина в пикселях
+    def text_w(self, text, scale=1):
+        return unicode.length(text) * self.fw * scale
+
+export def new(wm):
+    return Style(wm)

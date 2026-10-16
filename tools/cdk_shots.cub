@@ -1,0 +1,119 @@
+# Снимки витрины cdk без игры: окно cdk.gallery на рабочем столе CDE (подставной CC: Graphics, настоящее ядро) во всех темах,
+# до и после действий мышью и клавиатурой. Кадры build/ui_cdk_*.ppm. Запуск: tools/cdk_shots.sh (он же делает PNG).
+
+import kernel
+import cde
+import cdk.gallery as gallery
+
+def make_term(cols, rows):
+    api = {}
+    def get_size(px):
+        if px:
+            return cols * 6, rows * 9
+        return cols, rows
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "setGraphicsMode", "drawPixels", "setFrozen"]:
+        api[name] = nothing
+    return api
+
+def dump(wm, name):
+    s = wm.screen.surface
+    pal = wm.screen.palette
+    f = fs.open("/repo/build/" .. name .. ".ppm", "wb")
+    f.write("P6\n" .. s.w .. " " .. s.h .. "\n255\n")
+    for y in range[0, s.h - 1]:
+        parts = []
+        for x in range[0, s.w - 1]:
+            v = s.px[y * s.w + x + 1]
+            r, g, b = pal:get(v < 0 and 0 or v)
+            parts[x + 1] = string.char(r, g, b)
+        f.write(table.concat(parts))
+    f.close()
+    os.queueEvent("shot")
+    os.pullEvent("shot")
+
+clock = {now: 1000}
+def now():
+    return clock.now
+
+def shoot(cols, rows, tag, theme_name):
+    wm = cde.wm.new({term: make_term(cols, rows), assets: "/repo/assets", clock: now, theme: theme_name})
+    k = kernel.new({clock: now})
+    got = {}
+    wm:launch(gallery.main, {name: "gallery"}, [(u) => rawset(got, "ui", u)])
+    def desk(sys, args):
+        wm:run(sys)
+    k:spawn(desk, [], {name: "cde", ui: true})
+    def run(n):
+        for i in range[1, n]:
+            clock.now = clock.now + 50
+            k:tick()
+            k:run_ready()
+        os.queueEvent("shot")
+        os.pullEvent("shot")
+    run(10)
+    dump(wm, "ui_cdk_" .. tag .. "_1")
+    ui = got.ui
+    win = wm.windows[1]
+    # координаты элемента на экране (логические пиксели; масштаб 1 на экране компьютера)
+    def at(w, dx=nil, dy=nil):
+        k2 = wm.scale
+        return (win:content_x() + w.x + (dx ?? math.floor(w.w / 2))) * k2, (win:content_y() + w.y + (dy ?? math.floor(w.h / 2))) * k2
+    def click(w, dx=nil, dy=nil):
+        x, y = at(w, dx, dy)
+        k:feed("mouse_click", 1, x, y)
+        k:feed("mouse_up", 1, x, y)
+        run(2)
+    # поле поиска: набрать, выделить слово Shift+Ctrl+←
+    field = nil
+    boxes = []
+    switches = []
+    sliders = []
+    buttons = []
+    def walk(w):
+        if w.kind == "input":
+            field = w
+        elif w.kind == "checkbox":
+            boxes[len(boxes) + 1] = w
+        elif w.kind == "switch":
+            switches[len(switches) + 1] = w
+        elif w.kind == "slider":
+            sliders[len(sliders) + 1] = w
+        elif w.kind == "button":
+            buttons[len(buttons) + 1] = w
+        for c in w.children:
+            walk(c)
+    walk(ui.root)
+    click(field)
+    for ch in ["n", "o", "t", "e", "s", " ", "a", "p", "p"]:
+        k:feed("char", ch)
+    run(2)
+    k:feed("key", keys.leftShift, false)
+    k:feed("key", keys.leftCtrl, false)
+    k:feed("key", keys.left, false)
+    k:feed("key_up", keys.leftCtrl)
+    k:feed("key_up", keys.leftShift)
+    run(2)
+    click(boxes[2], 4)
+    click(switches[2], 9)
+    sx, sy = at(sliders[1], 4)
+    k:feed("mouse_click", 1, sx, sy)
+    k:feed("mouse_drag", 1, sx + math.floor(sliders[1].w * 0.85) * wm.scale, sy)
+    k:feed("mouse_up", 1, sx + math.floor(sliders[1].w * 0.85) * wm.scale, sy)
+    run(2)
+    # фокус на кнопке Save (Tab с конца) и нажатие
+    bx, by = at(buttons[len(buttons)])
+    k:feed("mouse_click", 1, bx, by)
+    run(1)
+    dump(wm, "ui_cdk_" .. tag .. "_2_pressed")
+    k:feed("mouse_up", 1, bx, by)
+    run(4)
+    dump(wm, "ui_cdk_" .. tag .. "_3_after")
+
+shoot(51, 19, "tokyo", "tokyo-night")
+shoot(51, 19, "dark", "dark")
+shoot(51, 19, "light", "light")
+shoot(51, 19, "nord", "nord")
+shoot(164, 81, "monitor", "tokyo-night")

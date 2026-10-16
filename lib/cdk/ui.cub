@@ -1,0 +1,353 @@
+# cdk.ui: среда элементов cdk в окне CDE: события, фокус, мышь, таймеры, раскладка клавиатуры, перерисовка изменённого
+#
+#   def main(sys, ctx):
+#       ui = cdk.open(sys, ctx, {title: "Настройки", w: 200, h: 140})
+#       ui:set_root(cdk.column({padding: 6}, [cdk.label("Привет"), cdk.button("OK", {on_click: () => ui:close()})]))
+#       ui:run()
+#
+# Окно пиксельное (cde.app.open), элементы рисуются в его холст. Перерисовка: после раскладки весь холст, дальше только элементы,
+# которые попросили (widget:invalidate): прямоугольник элемента заливается фоном родителя и рисуется заново. Фокус: Tab и Shift+Tab
+# по кругу, клик по элементу с focusable. Мышь: элемент под нажатием захватывает перетаскивание и отпускание. Таймеры: ui:after,
+# ui:every (по часам ядра). Буквы второго языка (кириллица в Windows) переводятся по раскладке системы, как в терминале (D235).
+
+import cde.app as app
+import cdk.style as style_mod
+import input.layout as layout_mod
+import json5
+
+export class UI:
+    def init(self, sys, win, opts=nil):
+        o = opts ?? {}
+        self.sys = sys
+        self.win = win
+        self.style = style_mod.new(win.wm)
+        self.root = nil
+        self.focus = nil
+        self.capture = nil
+        self.dirty = []
+        self.layout_dirty = true
+        self.timers = []
+        self.mods = {ctrl: false, shift: false, alt: false}
+        self.quit = false
+        self.on_close = o.on_close
+        self.on_key = o.on_key
+        self.pending = nil
+        self.stats = {layouts: 0, redraws: 0, full: 0}
+        self.kbd = layout_mod.new(nil, nil, {mode: "auto", keyboard: o.keyboard ?? self:_keyboard(), dirs: o.layout_dirs})
+
+    def _keyboard(self):
+        ok, kb = pcall(() => json5.parse(self:_read("/cubeos/sys/cfg/locale.conf") ?? "{}").keyboard)
+        if ok and type(kb) == "string":
+            return kb
+        return "ru"
+
+    def _read(self, path):
+        v = self.sys.view()
+        if v != nil and v:exists(path):
+            return v:read(path)
+        return nil
+
+    # ------------------------------------------------------------ дерево
+
+    def set_root(self, w):
+        self.root = w
+        w:_attach(self)
+        self:relayout()
+
+    def relayout(self):
+        self.layout_dirty = true
+
+    def redraw(self, w):
+        for d in self.dirty:
+            if d == w:
+                return
+        self.dirty[len(self.dirty) + 1] = w
+
+    def _forget(self, w):
+        if self.focus == w:
+            self.focus = nil
+        if self.capture == w:
+            self.capture = nil
+
+    def now(self):
+        return self.sys.now() / 1000
+
+    # ------------------------------------------------------------ таймеры
+
+    def after(self, seconds, fn):
+        t = {at: self:now() + seconds, fn: fn}
+        self.timers[len(self.timers) + 1] = t
+        return t
+
+    def every(self, seconds, fn):
+        t = {at: self:now() + seconds, every: seconds, fn: fn}
+        self.timers[len(self.timers) + 1] = t
+        return t
+
+    def cancel(self, t):
+        for i, x in self.timers:
+            if x == t:
+                table.remove(self.timers, i)
+                return
+
+    def _timeout(self):
+        best = nil
+        for t in self.timers:
+            if best == nil or t.at < best:
+                best = t.at
+        if best == nil:
+            return nil
+        return math.max(0, best - self:now())
+
+    def _run_timers(self):
+        now = self:now()
+        due = []
+        for t in self.timers:
+            if t.at <= now:
+                due[len(due) + 1] = t
+        for t in due:
+            if t.every != nil:
+                t.at = now + t.every
+            else:
+                self:cancel(t)
+            t.fn()
+
+    # ------------------------------------------------------------ фокус
+
+    def _chain(self, w, out):
+        if not w.visible:
+            return
+        if w.focusable and w.enabled:
+            out[len(out) + 1] = w
+        for c in w.children:
+            self:_chain(c, out)
+
+    def set_focus(self, w):
+        if self.focus == w:
+            return
+        old = self.focus
+        self.focus = w
+        if old != nil:
+            old.focused = false
+            old:handle({name: "blur"})
+            old:invalidate()
+        if w != nil:
+            w.focused = true
+            w:handle({name: "focus"})
+            w:invalidate()
+
+    def focus_next(self, dir=1):
+        chain = []
+        if self.root != nil:
+            self:_chain(self.root, chain)
+        if len(chain) == 0:
+            return
+        pos = 0
+        for i, w in chain:
+            if w == self.focus:
+                pos = i
+        nxt = pos + dir
+        if pos == 0:
+            nxt = dir > 0 and 1 or len(chain)
+        if nxt < 1:
+            nxt = len(chain)
+        if nxt > len(chain):
+            nxt = 1
+        self:set_focus(chain[nxt])
+
+    # ------------------------------------------------------------ события
+
+    def _ev(self, name):
+        return {name: name, ctrl: self.mods.ctrl, shift: self.mods.shift, alt: self.mods.alt}
+
+    # событие элементу и дальше родителям, пока кто-то не возьмёт
+    def _bubble(self, w, ev):
+        while w != nil:
+            if w:handle(ev):
+                return w
+            w = w.parent
+        return nil
+
+    def _mod(self, code, down):
+        if code == keys.leftCtrl or code == keys.rightCtrl:
+            self.mods.ctrl = down
+        elif code == keys.leftShift or code == keys.rightShift:
+            self.mods.shift = down
+        elif code == keys.leftAlt or code == keys.rightAlt:
+            self.mods.alt = down
+
+    def _char(self, ch):
+        self.pending = nil
+        ev = self:_ev("char")
+        ev.char = ch
+        if self.focus != nil:
+            self:_bubble(self.focus, ev)
+
+    # символ клавиши не пришёл: Windows печатает не латиницу, буква второго языка по месту клавиши
+    def _no_char(self, tok):
+        if self.pending != tok:
+            return
+        self.pending = nil
+        ch = self.kbd:missing(tok.code, tok.shift)
+        if ch != nil:
+            self:_char(ch)
+
+    def dispatch(self, name, a, b, c):
+        if name == "mouse_click" or name == "mouse_drag" or name == "mouse_up" or name == "mouse_scroll":
+            kind = name == "mouse_click" and "down" or (name == "mouse_drag" and "drag" or (name == "mouse_up" and "up" or "scroll"))
+            ev = self:_ev(kind)
+            ev.x = b
+            ev.y = c
+            ev.button = a
+            ev.dir = a
+            if kind == "down":
+                target = self.root != nil and self.root:hit(b, c) or nil
+                f = target
+                while f != nil and not (f.focusable and f.enabled):
+                    f = f.parent
+                if f != nil:
+                    self:set_focus(f)
+                self.capture = target
+                self.down_at = target
+                if target != nil:
+                    self:_bubble(target, ev)
+            elif kind == "scroll":
+                target = self.root != nil and self.root:hit(b, c) or nil
+                if target != nil:
+                    self:_bubble(target, ev)
+            else:
+                target = self.capture
+                if target != nil:
+                    got = self:_bubble(target, ev)
+                if kind == "up":
+                    # клик: нажали и отпустили над тем же элементом
+                    over = self.root != nil and self.root:hit(b, c) or nil
+                    if self.down_at != nil and over != nil and (over == self.down_at or self:_inside(over, self.down_at)):
+                        click = self:_ev("click")
+                        click.x = b
+                        click.y = c
+                        self:_bubble(self.down_at, click)
+                    self.capture = nil
+                    self.down_at = nil
+            return
+        if name == "key":
+            self:_mod(a, true)
+            if a == keys.tab and not self.mods.ctrl and not self.mods.alt:
+                self:focus_next(self.mods.shift and -1 or 1)
+                return
+            ev = self:_ev("key")
+            ev.key = a
+            ev.held = b
+            took = nil
+            if self.focus != nil:
+                took = self:_bubble(self.focus, ev)
+            if took == nil and self.on_key != nil:
+                self.on_key(ev)
+            if not self.mods.ctrl and not self.mods.alt and self.kbd:base_char(a, self.mods.shift) != nil:
+                let me = self
+                tok = {code: a, shift: self.mods.shift}
+                self.pending = tok
+                self:after(0.1, () => me:_no_char(tok))
+            return
+        if name == "key_up":
+            self:_mod(a, false)
+            return
+        if name == "char":
+            self:_char(self.kbd:translate(a))
+            return
+        if name == "paste":
+            ev = self:_ev("paste")
+            ev.text = a
+            if self.focus != nil:
+                self:_bubble(self.focus, ev)
+
+    def _inside(self, w, parent):
+        while w != nil:
+            if w == parent:
+                return true
+            w = w.parent
+        return false
+
+    # ------------------------------------------------------------ рисование
+
+    def _bg_of(self, w):
+        p = w.parent
+        while p != nil:
+            c = p:bg()
+            if c != nil:
+                return c
+            p = p.parent
+        return self.style.bg
+
+    def _shown(self, w):
+        while w != nil:
+            if not w.visible:
+                return false
+            if w == self.root:
+                return true
+            w = w.parent
+        return false
+
+    def flush(self):
+        if self.root == nil:
+            return
+        cv = self.win.canvas
+        st = self.style
+        if self.layout_dirty:
+            self.layout_dirty = false
+            self.stats.layouts += 1
+            self.root:layout(0, 0, cv.w, cv.h)
+            self.dirty = []
+            cv:clear(self.root:bg() ?? st.bg)
+            self.root:draw_tree(cv, st)
+            self.stats.full += 1
+            self.win:present()
+            return
+        if len(self.dirty) == 0:
+            return
+        list = self.dirty
+        self.dirty = []
+        for w in list:
+            if self:_shown(w) and w.w > 0 and w.h > 0:
+                # кольцо фокуса выходит на пиксель за элемент: перерисовывается с запасом
+                cv:push_clip(w.x - 1, w.y - 1, w.w + 2, w.h + 2)
+                cv:fill_rect(w.x - 1, w.y - 1, w.w + 2, w.h + 2, self:_bg_of(w))
+                if w.parent != nil:
+                    w.parent:draw(cv, st)
+                w:draw_tree(cv, st)
+                cv:pop_clip()
+                self.stats.redraws += 1
+        self.win:present()
+
+    # ------------------------------------------------------------ цикл
+
+    def close(self):
+        self.quit = true
+
+    def run(self):
+        self:flush()
+        while not self.quit:
+            ev = table.pack(self.win:wait_event(self:_timeout()))
+            name = ev[1]
+            if name == "win_close":
+                if self.on_close == nil or self.on_close() != false:
+                    self.quit = true
+            elif name == "win_resize":
+                self:relayout()
+            elif name == "win_theme":
+                self.style:rebuild()
+                self:relayout()
+            elif name == "win_blur":
+                self.mods = {ctrl: false, shift: false, alt: false}
+            elif name != nil:
+                self:dispatch(name, ev[2], ev[3], ev[4])
+            self:_run_timers()
+            self:flush()
+        self.win:close()
+
+# окно с элементами: opts как у cde.app.open (title, w, h, x, y, resizable, decorations...) и on_close, on_key, keyboard
+export def open(sys, ctx, opts=nil):
+    o = opts ?? {}
+    o.kind = "pixel"
+    win = app.open(sys, ctx, o)
+    return UI(sys, win, o)

@@ -9,10 +9,10 @@
 #   0..15     16 цветов CC в тонах темы (белый, оранжевый, ... чёрный): текстовые окна и программы, рисующие цветами CC
 #   16..31    16 серых от почти чёрного до почти белого
 #   32..211   общие цвета: 12 оттенков x 3 насыщенности x 5 яркостей (в том числе тёмные тона, которых нет в кубе 6x6x6)
-#   212..215  свободные места для приложений (win:alloc_colors), вместе с 248..255
+#   212..215  цвета элементов cdk: фон элемента, подсветка, текст на акценте, выделение
 #   216..223  обои (8 ступеней)
 #   224..231  градиент заголовка активного окна (8 ступеней)
-#   232..247  цвета интерфейса (роли ниже), 248..255 свободные места для приложений (анимации палитрой)
+#   232..247  цвета интерфейса (роли ниже), 248..255 свободные места для приложений (win:alloc_colors, анимации палитрой)
 #
 # Файл темы (assets/themes/*.theme, свои в $cfg/themes):
 #   {name, display, dark, text: [16 цветов CC], desk: [ступени обоев], title_active: "#hex" или [цвета градиента], роли...,
@@ -47,7 +47,12 @@ export const SPARE0 = 248
 export const GRAY0 = 16
 export const GENERAL0 = 32
 # свободные места палитры, которые приложения берут себе (win:alloc_colors) и меняют на ходу (анимации палитрой)
-export const POOL = [212, 213, 214, 215, 248, 249, 250, 251, 252, 253, 254, 255]
+export const POOL = [248, 249, 250, 251, 252, 253, 254, 255]
+# цвета элементов cdk
+export const CTRL_BG = 212
+export const CTRL_HI = 213
+export const ACCENT_TEXT = 214
+export const SEL = 215
 
 const HUES = 12
 const SATS = [0.35, 0.65, 1]
@@ -55,6 +60,7 @@ const VALS = [0.22, 0.4, 0.58, 0.77, 0.96]
 
 const ROLES = ["win_bg", "title_inactive", "title_text", "title_dim", "border_active", "border_inactive", "close", "button_down",
     "accent", "preview", "desk_line", "desk_glow", "btn_close", "btn_min", "btn_max"]
+const CTRL_ROLES = ["ctrl_bg", "ctrl_hi", "accent_text", "sel"]
 
 const WINDOW_DEFAULTS = {buttons: "right", order: ["min", "max", "close"], style: "win", radius: 2, border: true, title_height: 12,
     title_align: "left", shadow: 2, shadow_strength: 0.55}
@@ -71,6 +77,7 @@ const BUILTIN = {
     win_bg: "#1a1b26", title_inactive: "#1c1e2b", title_text: "#c0caf5", title_dim: "#565f89",
     border_active: "#7aa2f7", border_inactive: "#2f344d", close: "#f7768e", button_down: "#3b4261", accent: "#7aa2f7",
     preview: "#bb9af7", desk_line: "#3d4670", desk_glow: "#7aa2f7", btn_close: "#f7768e", btn_min: "#e0af68", btn_max: "#9ece6a",
+    ctrl_bg: "#292e42", ctrl_hi: "#3b4261", accent_text: "#16161e", sel: "#2e3c64",
     window: WINDOW_DEFAULTS
 }
 
@@ -192,6 +199,8 @@ export def palette(th):
     p:set(TITLE_ACTIVE, mid[1], mid[2], mid[3])
     for i, role in ROLES:
         _set_hex(p, WIN_BG + i - 1, th[role])
+    for i, role in CTRL_ROLES:
+        _set_hex(p, CTRL_BG + i - 1, th[role])
     for i in POOL:
         _set_hex(p, i, th.win_bg)
     return p

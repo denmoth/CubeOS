@@ -22,6 +22,11 @@
   btn_close: "#ff5f57",
   btn_min: "#febc2e",
   btn_max: "#28c840",
+  // элементы cdk: фон кнопок и полей, подсветка, текст на акцентном цвете, выделение текста
+  ctrl_bg: "#ececf0",
+  ctrl_hi: "#ffffff",
+  accent_text: "#ffffff",
+  sel: "#cfe0fb",
   window: {buttons: "left", order: ["close", "min", "max"], style: "mac", radius: 4, border: true, title_height: 13,
            title_align: "center", shadow: 3, shadow_strength: 0.75},
 }

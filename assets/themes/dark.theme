@@ -22,6 +22,11 @@
   btn_close: "#da4453",
   btn_min: "#fdbc4b",
   btn_max: "#27ae60",
+  // элементы cdk: фон кнопок и полей, подсветка, текст на акцентном цвете, выделение текста
+  ctrl_bg: "#31363b",
+  ctrl_hi: "#4d5257",
+  accent_text: "#fcfcfc",
+  sel: "#1d4f6b",
   window: {buttons: "right", order: ["min", "max", "close"], style: "kde", radius: 3, border: true, title_height: 13,
            title_align: "center", shadow: 3, shadow_strength: 0.5},
 }

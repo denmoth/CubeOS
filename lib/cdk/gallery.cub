@@ -1,0 +1,34 @@
+# cdk.gallery: витрина cdk (шаг 2.3), все простые элементы в одном окне. Открывается в сессии CDE (Ctrl+Alt+K), в демо
+# рабочего стола и снимками tools/cdk_shots.sh.
+
+import cdk
+
+export def main(sys, ctx):
+    ui = cdk.open(sys, ctx, {title: "Desktop Kit", w: 250, h: 154})
+    status = cdk.label("Ready", {variant: "dim"})
+    def say(text):
+        status:set_text(text)
+    search = cdk.text_input({placeholder: "Search apps and files", grow: 1, on_submit: (t) => say("Search: " .. t)})
+    volume = cdk.slider({value: 60, grow: 1, on_change: (v) => say("Volume " .. v .. "%")})
+    root = cdk.column({padding: 6, gap: 4}, [
+        cdk.row({align: "center", gap: 5}, [cdk.icon("cube", {color: ui.style.accent}), cdk.label("Desktop Kit", {variant: "title"}),
+            cdk.spacer(), status]),
+        cdk.row({gap: 4}, [cdk.icon("search", {color: ui.style.dim}), search, cdk.button("Go", {variant: "primary"})]),
+        cdk.card({dir: "row", gap: 10}, [
+            cdk.column({gap: 1}, [cdk.checkbox("Sound", {checked: true, on_change: (v) => say(v and "Sound on" or "Sound off")}),
+                cdk.checkbox("Notifications")]),
+            cdk.column({gap: 1}, [cdk.switch("Wi-Fi", {on: true}), cdk.switch("Bluetooth")]),
+            cdk.spacer(),
+            cdk.column({gap: 3, align: "end"}, [cdk.icon("wifi", {color: ui.style.ok}), cdk.icon("volume")])]),
+        cdk.row({align: "center", gap: 6}, [cdk.label("Volume", {variant: "dim"}), volume]),
+        cdk.progress({value: 0.62}),
+        cdk.progress({indeterminate: true}),
+        cdk.spacer(),
+        cdk.row({gap: 4}, [cdk.button("", {icon: "gear", variant: "flat"}), cdk.spacer(), cdk.button("Cancel"),
+            cdk.button("Delete", {variant: "danger", icon: "trash"}), cdk.button("Save", {variant: "primary", icon: "check",
+            on_click: () => say("Saved")})])])
+    ui:set_root(root)
+    # для снимков и тестов: ctx.args[1](ui) получает среду окна
+    if ctx.args[1] != nil:
+        ctx.args[1](ui)
+    ui:run()
