@@ -89,6 +89,9 @@ export class Window:
         # значок на панели задач (имя из cde.icons; иначе буква названия) и показывать ли окно на панели
         self.icon = o.icon
         self.taskbar = o.taskbar != false
+        # layer: "desktop" виджет рабочего стола (под всеми окнами, не в Alt+Стрелках и не сворачивается Alt+D); widget: имя виджета
+        self.layer = o.layer
+        self.widget = o.widget
         self.fx_hidden = false
         self.drag_areas = []
         self.requests = []

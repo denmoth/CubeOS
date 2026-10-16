@@ -59,7 +59,7 @@ def term_ready(c):
 def wm_ready(w):
     captured.wm = w
 def shell_for(session):
-    return cde_session.program(session, {term: fake_term(), assets: "/repo/assets", host: "cubebox", ready: wm_ready,
+    return cde_session.program(session, {widgets: [], term: fake_term(), assets: "/repo/assets", host: "cubebox", ready: wm_ready,
         terminal_ready: term_ready})
 
 def screen():

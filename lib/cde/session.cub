@@ -8,7 +8,7 @@
 # (панель задач cde.panel; «Пуск» с меню на шаге 3.2). Ctrl+Alt+P панель сверху или снизу, Ctrl+Alt+L кнопки окон слева или по центру.
 # Настройки пользователя $cfg/cde.conf (JSON5): theme (имя темы), scale ("auto" или 1..4); тема и масштаб, выбранные сочетаниями,
 # сохраняются туда же; panel ({position, align, height, clock}, cde.panel); wallpaper (имя обоев или {name, mode}, Ctrl+Alt+W следующие, cde.wallpaper); animations ({enabled, speed, windows, glow, widgets}, cde.fx), Ctrl+Alt+A включает и выключает анимации.
-# opts: term, assets, theme, host, ready(wm) (для тестов), terminal_ready(ctx) (для тестов: ready терминала)
+# opts: term, assets, theme, widgets (список виджетов вместо conf.widgets), host, ready(wm) (для тестов), terminal_ready(ctx) (для тестов: ready терминала)
 
 import cde.wm as wm_mod
 import cde.terminal as terminal
@@ -16,6 +16,7 @@ import cdk.gallery as gallery
 import cde.apps as apps_mod
 import cde.startmenu as startmenu
 import cde.tray as tray_mod
+import cde.widgets as widgets_mod
 import cde.theme as theme_mod
 import cde.wallpaper as wallpaper_mod
 import clock as clock_mod
@@ -51,6 +52,7 @@ export def program(session, opts=nil):
             if not okw:
                 sys.log("warn", "desktop: cannot save " .. key .. ": " .. tostring(err))
         # часы панели: настройки времени системы (time.conf), без файла UTC
+        clock_obj = {}
         def make_time():
             text = nil
             if view != nil:
@@ -58,6 +60,7 @@ export def program(session, opts=nil):
                 if okr and type(t) == "string":
                     text = t
             c = clock_mod.from_text(text ?? "{}")
+            clock_obj.c = c
             return () => c:time_text()
         panel_conf = {}
         for k, v in (type(conf.panel) == "table" and conf.panel or {}):
@@ -166,6 +169,10 @@ export def program(session, opts=nil):
                 w:set_wallpaper(name)
                 save("wallpaper", name)
             return run
+        def run_widget(id):
+            def run(w):
+                toggle_widget(id)
+            return run
         def command(id, name, icon, words, run):
             return {id: id, name: name, icon: icon, kind: "action", keywords: words, run: run}
         def commands():
@@ -197,6 +204,73 @@ export def program(session, opts=nil):
         wm.on_start = toggle_menu
         tray_mod.new(wm):install()
         wm:hotkey("ctrl+space", toggle_menu)
+        # виджеты рабочего стола: conf.widgets = [{id, x, y}], без настройки только часы справа сверху
+        wlist = []
+        wsrc = o.widgets ?? conf.widgets
+        if type(wsrc) == "table":
+            for e in wsrc:
+                wlist[len(wlist) + 1] = {id: e.id, x: e.x, y: e.y}
+        else:
+            wlist[1] = {id: "clock"}
+        def save_widgets():
+            save("widgets", wlist)
+        def widget_entry(id):
+            for e in wlist:
+                if e.id == id:
+                    return e
+            return nil
+        # место по умолчанию: столбиком у правого края под уже стоящими
+        def default_spot(spec):
+            y = wm.area.y + 8
+            for e in wlist:
+                other = widgets_mod.find(e.id)
+                if other != nil and e.id != spec.id and e.x != nil and e.x > wm.W - 140:
+                    y = math.max(y, e.y + other.h + 6)
+            return wm.W - spec.w - 8, y
+        def start_widget(e):
+            spec = widgets_mod.find(e.id)
+            if spec == nil:
+                return
+            if e.x == nil:
+                e.x, e.y = default_spot(spec)
+            wm:launch(spec.main, {name: "widget " .. e.id}, [{x: e.x, y: e.y, time: clock_obj.c, spec: spec}])
+        def widget_win(id):
+            for w in wm.windows:
+                if w.widget == id and not w.closed:
+                    return w
+            return nil
+        def toggle_widget(id):
+            e = widget_entry(id)
+            if e != nil:
+                w = widget_win(id)
+                if w != nil:
+                    wm:request_close(w)
+                for i, x in wlist:
+                    if x.id == id:
+                        table.remove(wlist, i)
+                        break
+            else:
+                e = {id: id}
+                wlist[len(wlist) + 1] = e
+                start_widget(e)
+            save_widgets()
+        def widget_moved(win):
+            e = widget_entry(win.widget)
+            if e != nil:
+                e.x = win.x
+                e.y = win.y
+                save_widgets()
+        wm.on_widget_moved = widget_moved
+        def widget_commands():
+            out = []
+            for spec in widgets_mod.CATALOG:
+                on = widget_entry(spec.id) != nil
+                out[len(out) + 1] = command("widget:" .. spec.id, (on and "Remove widget: " or "Add widget: ") .. spec.name, "star",
+                    ["desktop", "widgets", "виджеты", "рабочий стол"], run_widget(spec.id))
+            return out
+        reg:provider(widget_commands)
+        for e in wlist:
+            start_widget(e)
         wm:hotkey("ctrl+alt+l", panel_align)
         wm:hotkey("ctrl+alt+k", () => wm:launch(gallery.main, {name: "gallery"}))
         wm:hotkey("ctrl+alt+equals", () => zoom(1))

@@ -7,7 +7,7 @@ ROOT_WIN=$(cygpath -w "$REPO")
 cp "$REPO/tools/panel_shots.cub" "$REPO/tests/cases/lib_dbg_pshots.cub"
 : > "$REPO/tests/cases/lib_dbg_pshots.loader"
 cp "$REPO/examples/cde_demo.cub" "$REPO/tests/modules/cde_demo.cub"
-rm -f "$REPO/build/panel_shots_term_only"
+rm -f "$REPO/build/panel_shots_term_only"; [ "${ONLY:-}" = "widgets" ] && : > "$REPO/build/only_widgets" || rm -f "$REPO/build/only_widgets"
 [ "${1:-}" = "term" ] && : > "$REPO/build/panel_shots_term_only"
 rm -f "$REPO"/build/ui_panel_*.ppm "$REPO"/build/ui_panel_*.png
 timeout 300 "$EMU/CraftOS-PC_console.exe" --headless -d "$EMU/data" --mount-rw "/repo=$ROOT_WIN" \

@@ -6,6 +6,8 @@ import cde_demo as demo
 import cde.apps as apps_mod
 import cde.startmenu as startmenu
 import cde.tray as tray_mod
+import cde.widgets as widgets_mod
+import clock as clock_mod
 import svc.rpc as rpc
 
 def make_term(cols, rows):
@@ -178,13 +180,37 @@ def wp_shoot(name, tag):
         settle(k, 4)
         dump(wm, "ui_panel_wp_" .. name .. "_b")
 
-for n in ["wave", "nyan", "matrix", "vaporwave", "creeper", "sus"]:
-    wp_shoot(n, "x")
-tray_shoot("tokyo", "tokyo-night")
-tray_shoot("light", "light")
-menu_shoot(51, 19, "tokyo", "tokyo-night")
-menu_shoot(51, 19, "light", "light")
-shoot(51, 19, "tokyo", "tokyo-night", {time_text: () => "14:32"})
-shoot(51, 19, "light", "light", {time_text: () => "09:05"})
-shoot(51, 19, "nord", "nord", {time_text: () => "23:59"})
-shoot(164, 81, "monitor", "dark", {time_text: () => "14:32"})
+def widget_shoot(theme_name, tag):
+    wm = demo.build({term: make_term(51, 19), assets: "/repo/assets", clock: now, theme: theme_name,
+        panel: {time_text: () => "14:32"}, background: "sunset", animations: {enabled: false}})
+    tc = clock_mod.new({tz: "Europe/Kyiv"})
+    xs = {clock: 198, calendar: 204, system: 198}
+    ys = {clock: 6, calendar: 62, system: 6}
+    k = kernel.new({clock: now})
+    # два столбика: часы и монитор слева, календарь справа
+    spots = [["clock", 8, 6], ["system", 8, 62], ["calendar", 190, 6]]
+    for sp in spots:
+        spec = widgets_mod.find(sp[1])
+        wm:launch(spec.main, {name: "widget " .. sp[1]}, [{x: sp[2], y: sp[3], time: tc, spec: spec}])
+    def desk(sys, args):
+        wm:run(sys)
+    k:spawn(desk, [], {name: "cde", ui: true})
+    settle(k, 12)
+    wm:toggle_desktop()
+    settle(k, 8)
+    dump(wm, "ui_panel_widgets_" .. tag)
+
+if fs.exists("/repo/build/only_widgets"):
+    widget_shoot("tokyo-night", "tokyo")
+    widget_shoot("light", "light")
+else:
+    for n in ["wave", "nyan", "matrix", "vaporwave", "creeper", "sus"]:
+        wp_shoot(n, "x")
+    tray_shoot("tokyo", "tokyo-night")
+    tray_shoot("light", "light")
+    menu_shoot(51, 19, "tokyo", "tokyo-night")
+    menu_shoot(51, 19, "light", "light")
+    shoot(51, 19, "tokyo", "tokyo-night", {time_text: () => "14:32"})
+    shoot(51, 19, "light", "light", {time_text: () => "09:05"})
+    shoot(51, 19, "nord", "nord", {time_text: () => "23:59"})
+    shoot(164, 81, "monitor", "dark", {time_text: () => "14:32"})

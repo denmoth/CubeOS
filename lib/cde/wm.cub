@@ -111,6 +111,7 @@ export class WM:
         self.sys = nil
         self.pid = nil
         self.on_start = o.on_start
+        self.on_widget_moved = nil
         self.running = false
         self.waiting = false
         self.wake_sent = false
@@ -417,7 +418,7 @@ export class WM:
         if not win.placed:
             win.x, win.y = self:_smart_spot(win.w, win.h)
         win.canvas:clean()
-        self.windows[len(self.windows) + 1] = win
+        self:_stack(win)
         self.comp:damage_window(win)
         self:_set_focus(win)
         self.fx:open(win)
@@ -461,17 +462,27 @@ export class WM:
     def _topmost(self):
         for i in range[len(self.windows), 1] step -1:
             w = self.windows[i]
-            # окно, которое сейчас проявляется или возвращается из свёрнутого (fx_hidden), тоже на экране
-            if w:visible_raw() and not w.closed:
+            # окно, которое сейчас проявляется или возвращается из свёрнутого (fx_hidden), тоже на экране; виджеты фокус не получают
+            if w:visible_raw() and not w.closed and w.layer == nil:
                 return w
         return nil
+
+    # место окна в порядке слоёв: обычные окна сверху, виджеты рабочего стола (layer: "desktop") под ними
+    def _stack(self, win):
+        pos = len(self.windows) + 1
+        if win.layer != nil:
+            pos = 1
+            for i, w in self.windows:
+                if w.layer != nil:
+                    pos = i + 1
+        table.insert(self.windows, pos, win)
 
     def _raise(self, win):
         for i, w in self.windows:
             if w == win:
-                if i != len(self.windows):
-                    table.remove(self.windows, i)
-                    self.windows[len(self.windows) + 1] = win
+                table.remove(self.windows, i)
+                self:_stack(win)
+                if self.windows[i] != win:
                     self.comp:damage_window(win)
                 return
 
@@ -518,7 +529,7 @@ export class WM:
     def cycle(self, dir):
         list = []
         for w in self.windows:
-            if not w.closed:
+            if not w.closed and w.layer == nil:
                 list[len(list) + 1] = w
         if len(list) == 0:
             return
@@ -636,7 +647,7 @@ export class WM:
             return
         self.hidden = []
         for w in self.windows:
-            if w:visible():
+            if w:visible() and w.layer == nil:
                 self.hidden[len(self.hidden) + 1] = w
                 snap = self.anim.enabled and self.fx:snapshot(w) or nil
                 w.minimized = true
@@ -932,6 +943,8 @@ export class WM:
             self.comp:set_preview(nil)
             if d.snap != nil:
                 self:set_state(win, d.snap)
+            if win.layer != nil and d.moved and self.on_widget_moved != nil:
+                self.on_widget_moved(win)
         elif d.kind == "content":
             lx, ly = self:_local(win, px, py)
             self:_post(win, "mouse_up", btn, lx, ly)

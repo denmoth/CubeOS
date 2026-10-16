@@ -1,0 +1,190 @@
+# cde.widgets: виджеты рабочего стола (шаг 3.5): часы, календарь, монитор системы
+#
+#   spec = widgets.find("clock")                {id, name, w, h, main}
+#   wm:launch(spec.main, {name: "widget clock"}, [{x: 200, y: 8, time: clock, spec: spec}])
+#
+# Виджет это обычный процесс с безрамочным пиксельным окном слоя «рабочий стол» (layer: "desktop", cde.wm): он лежит под всеми
+# окнами, не листается Alt+стрелками, не сворачивается Alt+D, на панели задач его нет. Тянуть можно за любое место виджета; новое
+# место сообщает менеджер (wm.on_widget_moved). Закрыть виджет: wm:request_close(окно) (команда «Remove widget» в «Пуске»).
+# Данные: time (часы системы, lib/clock), список процессов ядра, место на диске. Окно перерисовывается раз в секунду или две и только
+# если поменялся текст; цвета из темы, поэтому виджет меняется вместе с ней.
+# Свой виджет: {id, name, w, h, main(sys, ctx)}; widgets.run(sys, ctx, draw, period) делает всю обвязку, draw(cv, win, env) рисует
+# и возвращает ключ того, что нарисовано (если ключ не изменился, окно не обновляется).
+
+import cde.app as app
+import cde.theme as theme
+import cgl.surface as surface_mod
+
+export const CLOCK = {id: "clock", name: "Clock", w: 104, h: 52}
+export const CALENDAR = {id: "calendar", name: "Calendar", w: 110, h: 90}
+export const SYSTEM = {id: "system", name: "System monitor", w: 104, h: 56}
+
+def _pad(n, w=2):
+    s = tostring(math.floor(n))
+    while string.len(s) < w:
+        s = "0" .. s
+    return s
+
+# рамка и фон виджета в стиле темы
+def _plate(cv, w, h):
+    cv:clear(theme.WIN_BG)
+    cv:rect(0, 0, w, h, theme.BORDER_INACTIVE)
+    cv:hline(1, 1, w - 2, theme.CTRL_HI)
+
+# обвязка: окно, перерисовка по таймеру и при смене темы, закрытие
+export def run(sys, ctx, spec, draw, period):
+    env = ctx.args[1] ?? {}
+    win = app.open(sys, ctx, {title: spec.name, kind: "pixel", w: spec.w, h: spec.h, x: env.x, y: env.y, decorations: false,
+        resizable: false, taskbar: false, layer: "desktop", widget: spec.id})
+    win:set_drag_areas([[0, 0, spec.w, spec.h]])
+    env.font = ctx.wm.font
+    last = nil
+    while true:
+        key = draw(win.canvas, win, env)
+        if key != last:
+            last = key
+            win:present()
+        ev = table.pack(win:wait_event(period))
+        if ev[1] == "win_close":
+            break
+        if ev[1] == "win_theme":
+            last = nil
+    win:close()
+
+# ------------------------------------------------------------ часы
+
+def _clock_draw(cv, win, env):
+    c = env.time
+    f = env.font
+    parts = c != nil and c:parts() or {hour: 0, min: 0, sec: 0}
+    text = c != nil and c:time_text() or "--:--"
+    date = c != nil and c:format("%a %e %b") or ""
+    sec = parts.sec ?? 0
+    key = text .. "|" .. date .. "|" .. math.floor(sec / 2)
+    _plate(cv, CLOCK.w, CLOCK.h)
+    scale = string.len(text) * f.width * 2 <= CLOCK.w - 8 and 2 or 1
+    tw = string.len(text) * f.width * scale
+    cv:text(f, math.floor((CLOCK.w - tw) / 2), 6, text, theme.TITLE_TEXT, {scale: scale, shadow: {color: theme.CTRL_BG, dx: 1, dy: 1}})
+    dw = surface_mod.measure(f, date)
+    cv:text(f, math.floor((CLOCK.w - dw) / 2), 6 + f.height * scale + 3, date, theme.TITLE_DIM)
+    # секунды полоской градиента акцента
+    bw = CLOCK.w - 16
+    cv:fill_rect(8, CLOCK.h - 8, bw, 3, theme.CTRL_BG)
+    steps = math.floor(bw * sec / 60)
+    if steps > 0:
+        cv:fill_gradient(8, CLOCK.h - 8, steps, 3, [theme.TITLE_ACTIVE, theme.ACCENT], "h", {dither: true})
+    return key
+
+export def clock_main(sys, ctx):
+    run(sys, ctx, CLOCK, _clock_draw, 1)
+
+# ------------------------------------------------------------ календарь
+
+const DAYS = {en: ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"], ru: ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"],
+    uk: ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]}
+const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+def _leap(y):
+    return (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+
+def _days_in(y, m):
+    if m == 2 and _leap(y):
+        return 29
+    return MONTH_DAYS[m]
+
+# день недели даты: 0 воскресенье ... 6 суббота
+def _dow(y, d, m):
+    t = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4]
+    if m < 3:
+        y -= 1
+    return (y + y // 4 - y // 100 + y // 400 + t[m] + d) % 7
+
+def _calendar_draw(cv, win, env):
+    c = env.time
+    f = env.font
+    parts = c != nil and c:parts() or {year: 2026, month: 1, day: 1}
+    title = c != nil and c:format("%B %Y") or ""
+    key = title .. "|" .. parts.day
+    _plate(cv, CALENDAR.w, CALENDAR.h)
+    tw = surface_mod.measure(f, title)
+    cv:text(f, math.floor((CALENDAR.w - tw) / 2), 5, title, theme.ACCENT)
+    conf = c != nil and c.conf or {}
+    monday = conf.week_start != "sunday"
+    names = DAYS[conf.locale ?? "en"] ?? DAYS.en
+    for i in range[0, 6]:
+        label = monday and names[i + 1] or (i == 0 and names[7] or names[i])
+        cv:text(f, 7 + i * 14, 17, label, theme.TITLE_DIM, {})
+    first = _dow(parts.year, 1, parts.month)
+    col = monday and (first + 6) % 7 or first
+    row = 0
+    for d in range[1, _days_in(parts.year, parts.month)]:
+        x = 7 + col * 14
+        y = 29 + row * 10
+        if d == parts.day:
+            cv:round_rect(x - 1, y - 1, 14, 10, 2, theme.ACCENT, true)
+            cv:text(f, x + (d < 10 and 3 or 0), y, tostring(d), theme.ACCENT_TEXT)
+        else:
+            weekend = (monday and col >= 5) or (not monday and (col == 0 or col == 6))
+            cv:text(f, x + (d < 10 and 3 or 0), y, tostring(d), weekend and theme.TITLE_DIM or theme.TITLE_TEXT)
+        col += 1
+        if col == 7:
+            col = 0
+            row += 1
+    return key
+
+export def calendar_main(sys, ctx):
+    run(sys, ctx, CALENDAR, _calendar_draw, 30)
+
+# ------------------------------------------------------------ монитор системы
+
+def _bar(cv, x, y, w, frac):
+    cv:fill_rect(x, y, w, 3, theme.CTRL_BG)
+    n = math.floor(w * math.max(0, math.min(1, frac)))
+    if n > 0:
+        cv:fill_gradient(x, y, n, 3, [theme.TITLE_ACTIVE, theme.ACCENT], "h", {dither: true})
+
+def _system_draw(cv, win, env):
+    f = env.font
+    procs = 0
+    ok, list = pcall(env.sys.ps)
+    if ok and list != nil:
+        procs = len(list)
+    free = 0
+    cap = 1
+    okd, fr = pcall(fs.getFreeSpace, "/")
+    okc, cp = pcall(fs.getCapacity, "/")
+    if okd and okc and type(fr) == "number" and type(cp) == "number" and cp > 0 and fr >= 0:
+        free = fr
+        cap = cp
+    up = math.floor(os.clock())
+    uptime = _pad(up // 3600) .. ":" .. _pad((up // 60) % 60) .. ":" .. _pad(up % 60)
+    key = procs .. "|" .. uptime .. "|" .. free
+    _plate(cv, SYSTEM.w, SYSTEM.h)
+    cv:text(f, 6, 5, "Processes", theme.TITLE_DIM)
+    value = tostring(procs)
+    cv:text(f, SYSTEM.w - 6 - surface_mod.measure(f, value), 5, value, theme.TITLE_TEXT)
+    cv:text(f, 6, 18, "Disk", theme.TITLE_DIM)
+    used = cap > 1 and (cap - free) / cap or 0
+    pct = math.floor(used * 100) .. "%"
+    cv:text(f, SYSTEM.w - 6 - surface_mod.measure(f, pct), 18, pct, theme.TITLE_TEXT)
+    _bar(cv, 6, 29, SYSTEM.w - 12, used)
+    cv:text(f, 6, 38, "Uptime", theme.TITLE_DIM)
+    cv:text(f, SYSTEM.w - 6 - surface_mod.measure(f, uptime), 38, uptime, theme.TITLE_TEXT)
+    return key
+
+export def system_main(sys, ctx):
+    ctx.args[1] = ctx.args[1] ?? {}
+    ctx.args[1].sys = sys
+    run(sys, ctx, SYSTEM, _system_draw, 2)
+
+export const CATALOG = [
+    {id: "clock", name: "Clock", w: CLOCK.w, h: CLOCK.h, main: clock_main},
+    {id: "calendar", name: "Calendar", w: CALENDAR.w, h: CALENDAR.h, main: calendar_main},
+    {id: "system", name: "System monitor", w: SYSTEM.w, h: SYSTEM.h, main: system_main}
+]
+
+export def find(id):
+    for w in CATALOG:
+        if w.id == id:
+            return w
+    return nil
