@@ -31,7 +31,7 @@ export const OS_RELEASE = "/cubeos/sys/cfg/os-release.conf"
 # каталоги, где при старте чинятся прерванные атомарные записи (.tmp, .old)
 const RECOVER_DIRS = ["/cubeos/sys/cfg", "/cubeos/sys/sec", "/cubeos/var"]
 
-const DEFAULTS = {autologin: nil, lang: "ru", de: "tui", elevate_ms: 300000, rounds: 1000, title: "CubeOS"}
+const DEFAULTS = {autologin: nil, lang: "ru", de: "cde", elevate_ms: 300000, rounds: 1000, title: "CubeOS"}
 
 def _read_conf(fsys, path):
     if not fsys:exists(nil, path):

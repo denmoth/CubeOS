@@ -32,6 +32,7 @@ end
 
 local ITEMS = {
   { "CubeOS", "boot" },
+  { "CubeOS (terminal)", "terminal" },
   { "CubeOS (safe mode)", "safe" },
   { "CubeOS (input log)", "inputlog" },
   { "Recovery", "recovery" },
@@ -164,7 +165,7 @@ local function run(conf)
   local fn, err = loadfile(path)
   if not fn then return rescue({ reason = "cannot load the boot loader: " .. tostring(err) }) end
   local ctx = { caps = caps, mode = choice == "safe" and "safe" or nil, menu = want_menu, boot_dir = B, conf_path = CONF,
-    notes = notes, input_log = choice == "inputlog" }
+    notes = notes, input_log = choice == "inputlog", terminal = choice == "terminal" }
   local ok, res, why = pcall(fn, ctx)
   if not ok then return rescue({ reason = tostring(res) }) end
   if res == "recovery" then return rescue({ reason = why or "requested by the boot loader" }) end

@@ -43,7 +43,7 @@ export class Session:
         self.elevated_until = 0
         self.created = opts.now
         self.env = {user: profile, display: record.display ?? record.name, home: "/cubeos/users/" .. profile .. "/home",
-            lang: opts.lang ?? "ru", de: opts.de ?? "tui"}
+            lang: opts.lang ?? "ru", de: opts.de ?? "cde"}
         self.pids = []
         self.aliases = nil
 
