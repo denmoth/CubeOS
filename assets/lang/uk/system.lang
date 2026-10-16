@@ -315,8 +315,8 @@ msgstr "Отримує адресу через HTTP і друкує або зб�
 msgid "Lock the terminal"
 msgstr "Заблокувати термінал"
 
-msgid "Hides the terminal behind a lock screen until you enter your PIN (or your password: Tab switches). Programs keep running; Ctrl+T does nothing while locked."
-msgstr "Ховає термінал за екраном блокування, доки ви не введете PIN (або пароль: Tab перемикає). Програми працюють далі; поки заблоковано, Ctrl+T нічого не робить."
+msgid "Locks the terminal: the login screen comes up with your name, and your PIN (p: the password) or your password unlocks it. Programs in the terminal wait until then; nothing typed there is logged."
+msgstr "Блокує термінал: з'являється екран входу з вашим ім'ям, зняти блокування можна PIN (p: пароль) або паролем. Програми термінала доти чекають; нічого з уведеного там не пишеться в журнал."
 
 msgid "Network: other computers, shared folders"
 msgstr "Мережа: інші комп'ютери, спільні теки"
@@ -915,8 +915,14 @@ msgstr "Лише статус і заголовки"
 msgid "Download a file"
 msgstr "Завантажити файл"
 
+msgid "Lock by itself after so many minutes without input (off: never)"
+msgstr "Блокуватися самому після стількох хвилин без введення (off: ніколи)"
+
 msgid "Lock now"
 msgstr "Заблокувати зараз"
+
+msgid "Lock after 10 idle minutes"
+msgstr "Блокування після 10 хвилин бездіяльності"
 
 msgid "Name, modems, shared and mounted folders (the default)"
 msgstr "Ім'я, модеми, спільні та підключені теки (типово)"
@@ -1314,26 +1320,8 @@ msgstr "цей комп'ютер не сполучений з вами"
 msgid "locking is not available here"
 msgstr "блокування тут недоступне"
 
-msgid "Locked"
-msgstr "Заблоковано"
-
-msgid "Enter your PIN (Tab: the password instead)"
-msgstr "Введіть PIN (Tab: замість нього пароль)"
-
-msgid "Enter your password (Tab: the PIN instead)"
-msgstr "Введіть пароль (Tab: замість нього PIN)"
-
-msgid "Wrong password"
-msgstr "Неправильний пароль"
-
-msgid "Wrong PIN: {n} tries left"
-msgstr "Неправильний PIN: залишилось спроб {n}"
-
-msgid "Too many wrong PINs: use the password"
-msgstr "Забагато неправильних PIN: введіть пароль"
-
-msgid "Too many attempts: wait {n} s"
-msgstr "Забагато спроб: зачекайте {n} с"
+msgid "the minutes are a number from 1 to 1440 or off"
+msgstr "хвилини це число від 1 до 1440 або off"
 
 msgid "shared folders work only over a wired modem"
 msgstr "спільні теки працюють лише через дротовий модем"
@@ -1496,6 +1484,12 @@ msgstr "Перемикайте розкладку Ctrl+Shift або Alt+Shift (�
 
 msgid "Layouts: {list}"
 msgstr "Розкладки: {list}"
+
+msgid "The terminal locks after {n} minutes without input."
+msgstr "Термінал блокується після {n} хв без введення."
+
+msgid "Automatic locking is off."
+msgstr "Автоблокування вимкнено."
 
 msgid "not a folder"
 msgstr "не тека"

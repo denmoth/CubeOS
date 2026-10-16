@@ -23,6 +23,8 @@ import compat.proc as proc_mod
 import cush.shell as cush
 import svc.rpc as rpc
 import svc.timeclient as timeclient
+import boot.console as console_mod
+import boot.greeter as greeter_mod
 
 # события ввода идут через интерфейс (раскладка, мышь), остальные программе напрямую
 const INPUT = {key: true, key_up: true, char: true, paste: true, mouse_click: true, mouse_drag: true, mouse_up: true,
@@ -105,8 +107,8 @@ export def program(session, opts=nil):
         def inputlog(on):
             return host_call("inputlog", on)
         # заблокировать терминал (команда lock): экран с PIN или паролем
-        def lock():
-            return host_call("lock", nil)
+        def lock(args=nil):
+            return host_call("lock", args)
         # sudo (D226): status, elevate (пароль или nil: без пароля после входа по паролю), fs (файлы с правами администратора), forget
         def sudo(op, password=nil):
             return host_call("sudo", {op: op, password: password})
@@ -150,44 +152,33 @@ export def program(session, opts=nil):
             start_shell()
         tv:on("event", (w, name, a, b, c) => cur.proc:feed(name, a, b, c))
 
-        # ------------------------------------------------ блокировка (lock, D226): вместо терминала экран с PIN или паролем;
-        # программы работают дальше, но их вывод и ввод не видны; журнал ввода не пишет то, что вводится
-        locked = {on: false, method: "password", field: nil, hint: nil, msg: nil}
+        # ------------------------------------------------ блокировка (lock, D226): экран входа с этим пользователем, PIN или пароль;
+        # программы терминала ждут (их события не теряются), журнал ввода не пишет то, что вводится
+        locked = {on: false, after: 0, last_input: sys.now()}
+        # автоблокировка: cush.conf lock_after (минут без ввода, 0 выключено)
+        lock_conf = view:expand("$cfg") .. "/cush.conf"
+        def read_lock_after():
+            if view:exists(lock_conf):
+                data = json5.parse(view:read(lock_conf))
+                if type(data) == "table" and tonumber(data.lock_after) != nil:
+                    locked.after = tonumber(data.lock_after)
+        pcall(read_lock_after)
         def tr(text, vars=nil):
             shell = env.cush_shell
             if shell != nil:
                 return shell:t(text, vars)
             return text
-        def lock_hint():
-            if locked.hint == nil:
-                return
-            pin = locked.method == "pin"
-            locked.hint.text = tr(pin and "Enter your PIN (Tab: the password instead)" or "Enter your password (Tab: the PIN instead)")
-            locked.hint:invalidate()
-            locked.field:set_text("")
-        def try_unlock(value):
-            mgr = session.manager
-            ok, why, extra = mgr:unlock(session.id, value, locked.method)
-            locked.field:set_text("")
-            if ok:
-                locked.on = false
-                locked.field = nil
-                u:set_root(tv)
-                u:focus_widget(tv)
-                tv:invalidate()
-                sys.log("info", "terminal unlocked (" .. locked.method .. ")")
-                return
-            text = tr("Wrong password")
-            if why == "bad pin":
-                text = tr("Wrong PIN: {n} tries left", {n: extra ?? 0})
-            elif why == "pin locked":
-                text = tr("Too many wrong PINs: use the password")
-                locked.method = "password"
-                lock_hint()
-            elif why == "locked":
-                text = tr("Too many attempts: wait {n} s", {n: extra ?? 0})
-            locked.msg.text = text
-            locked.msg:invalidate()
+        def set_lock_after(minutes):
+            m = tonumber(minutes) ?? 0
+            if m < 0 or m > 1440:
+                return false, "the minutes are a number from 1 to 1440 or off"
+            if session.manager == nil:
+                return false, "locking is not available here"
+            locked.after = m
+            locked.last_input = sys.now()
+            text = view:exists(lock_conf) and view:read(lock_conf) or "{}\n"
+            view:write_atomic(lock_conf, json5.patch(text, ["lock_after"], m))
+            return {after: m}
         def lock_screen():
             mgr = session.manager
             if mgr == nil or session.id == nil:
@@ -196,19 +187,21 @@ export def program(session, opts=nil):
                 return true
             mgr:lock(session.id)
             locked.on = true
-            locked.method = mgr:unlock_method(session.id)
-            field = ui.input({password: true, width: 24})
-            locked.field = field
-            locked.hint = ui.label("", {align: "center", fg: ui.theme.MUTED})
-            locked.msg = ui.label("", {align: "center", fg: ui.theme.ERR})
-            field:on("submit", (w, value) => try_unlock(value))
-            box = ui.vbox([ui.spacer(), ui.label(tr("Locked"), {align: "center", fg: ui.theme.BRIGHT}),
-                ui.label(tostring(session.display ?? session.user ?? ""), {align: "center"}), ui.spacer(1), field, locked.hint, locked.msg,
-                ui.spacer()], {align: "center", width: "fill", height: "fill"})
-            lock_hint()
-            u:set_root(box)
-            u:focus_widget(field)
             sys.log("info", "terminal locked")
+            # экран входа поверх терминала: вывод терминала закрывается, ввод идёт экрану входа; события программ копятся (keep)
+            pcall(() => out:suspend())
+            con = console_mod.TermConsole(sys, {keep: true, layout_dirs: [(o.assets ?? "/repo/assets") .. "/lang", "/cubeos/share/lang"]})
+            g = greeter_mod.new(con, mgr.auth, mgr, {title: "CubeOS", busy: (r) => sys.busy(r)})
+            okg, err = pcall(() => g:unlock(session))
+            if not okg:
+                sys.log("error", "lock screen failed: " .. tostring(err))
+                return false, tostring(err)
+            pcall(() => out:resume())
+            u:resize()
+            tv:invalidate()
+            locked.on = false
+            locked.last_input = sys.now()
+            sys.log("info", "terminal unlocked")
             return true
         u:set_root(tv)
         u:focus_widget(tv)
@@ -281,7 +274,12 @@ export def program(session, opts=nil):
                 elif req.name == "sudo" or req.name == "account":
                     ok, why = serve_account(req)
                 elif req.name == "lock":
-                    ok, why = lock_screen()
+                    if type(req.payload) == "table" and req.payload.after != nil:
+                        ok, why = set_lock_after(req.payload.after)
+                    elif type(req.payload) == "table" and req.payload.query:
+                        ok = {after: locked.after}
+                    else:
+                        ok, why = lock_screen()
                 elif req.name == "inputlog":
                     res, err = rpc.call(sys, "logd", "input", req.payload != nil and {on: req.payload} or {})
                     ok = res
@@ -299,23 +297,22 @@ export def program(session, opts=nil):
 
         def pull():
             serve_pending()
-            if locked.on and locked.field != nil:
-                u:focus_widget(locked.field)
             sync_secret()
-            ev, a, b, c, d, e = sys.wait_event()
+            wait = nil
+            if locked.after > 0 and not locked.on and session.manager != nil:
+                wait = math.max(0.5, (locked.last_input + locked.after * 60000 - sys.now()) / 1000)
+            ev, a, b, c, d, e = sys.wait_event(nil, wait)
+            if ev == nil:
+                if locked.after > 0 and not locked.on and sys.now() - locked.last_input >= locked.after * 60000:
+                    lock_screen()
+                return "none"
+            if INPUT[ev] == true:
+                locked.last_input = sys.now()
             # удержание Ctrl+T (через секунду CC сам шлёт terminate; короткое нажатие терминал обрабатывает сам): программу убить без
             # вопросов, а если программы нет, перезапустить оболочку (D222)
             if ev == "cubeos_keyboard":
                 tv:set_keyboard(a, b)
                 return "none"
-            # заблокировано: Ctrl+T ничего не прерывает, Tab меняет PIN на пароль и обратно
-            if locked.on:
-                if ev == "terminate":
-                    return "none"
-                if ev == "key" and a == keys.tab:
-                    locked.method = locked.method == "pin" and "password" or "pin"
-                    lock_hint()
-                    return "none"
             if ev == "terminate":
                 shell = env.cush_shell
                 if shell != nil and shell.fg != nil:

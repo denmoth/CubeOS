@@ -106,6 +106,15 @@ export class PixelOut:
             self.screen:close()
             self.opened = false
 
+    # на время отдать экран (экран блокировки): обычный текстовый режим; resume возвращает пиксели и рисует кадр заново
+    def suspend(self):
+        self:close()
+
+    def resume(self):
+        self.screen.display:open()
+        self:open()
+        self:invalidate()
+
     def invalidate(self):
         self.prev_cp = nil
         self.screen:invalidate()

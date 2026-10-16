@@ -99,7 +99,7 @@ export class TermConsole:
                 ev = nxt[1]
                 a = nxt[2]
             else:
-                ev, a = sys.wait_event(["char", "key", "key_up", "paste"])
+                ev, a = sys.wait_event(["char", "key", "key_up", "paste", "terminate"], nil, self.opts.keep == true)
             if ev == "char" and type(a) == "string":
                 put(lay:translate(a))
             elif ev == "paste" and type(a) == "string":
@@ -122,7 +122,7 @@ export class TermConsole:
                             term.setCursorPos(x - 1, y)
                 elif lay:base_char(a, shift.on) != nil:
                     # символ этой клавиши должен прийти следом; не пришёл за 0.1 с: буква второго языка по месту клавиши
-                    ev2, b2 = sys.wait_event(["char", "key", "key_up", "paste"], 0.1)
+                    ev2, b2 = sys.wait_event(["char", "key", "key_up", "paste", "terminate"], 0.1, self.opts.keep == true)
                     if ev2 == "char":
                         pending[len(pending) + 1] = [ev2, b2]
                     else:

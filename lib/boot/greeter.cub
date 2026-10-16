@@ -169,5 +169,43 @@ export class TextGreeter:
             c:write_line("Wrong password.")
         return nil
 
+    # блокировка (D226, команда lock): тот же экран входа с уже выбранным пользователем; снимается PIN (p: пароль) или паролем.
+    # Возвращает true, когда разблокировано (до этого спрашивает снова)
+    def unlock(self, s):
+        c = self.console
+        mgr = self.sessions
+        note = nil
+        while true:
+            self:_header()
+            c:write_line("Locked: " .. tostring(s.display ?? s.user))
+            c:write_line("")
+            if note != nil:
+                c:write_line(note)
+                c:write_line("")
+            method = mgr:unlock_method(s.id)
+            secret = nil
+            if method == "pin":
+                secret = c:read_line("PIN for " .. tostring(s.display) .. " (p: use the password): ", true)
+                if secret != nil and string.lower(secret) == "p":
+                    method = "password"
+                    secret = nil
+            if method == "password":
+                secret = c:read_line("Password for " .. tostring(s.display) .. ": ", true)
+            if secret != nil:
+                if self.busy != nil:
+                    self.busy(method == "pin" and "checking the PIN" or "checking the password")
+                ok, why, extra = mgr:unlock(s.id, secret, method)
+                if self.busy != nil:
+                    self.busy(nil)
+                if ok:
+                    return true
+                note = "Wrong password."
+                if why == "bad pin":
+                    note = "Wrong PIN." .. (extra != nil and (" Tries left: " .. extra) or "")
+                elif why == "pin locked":
+                    note = "Too many wrong PINs. Unlock with your password."
+                elif why == "locked":
+                    note = "Too many attempts. Wait " .. tostring(extra) .. " s."
+
 export def new(console, auth, sessions, opts=nil):
     return TextGreeter(console, auth, sessions, opts)

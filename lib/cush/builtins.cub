@@ -1096,6 +1096,19 @@ def b_lock(sh, args):
     if sh.lock == nil:
         sh:eprint("lock: " .. sh:t("not available here"))
         return 1
+    if args[1] == "after":
+        req = {query: true}
+        if args[2] != nil:
+            req = {after: args[2] == "off" and 0 or tonumber(args[2]) ?? -1}
+        res, why = sh.lock(req)
+        if type(res) != "table":
+            sh:eprint("lock: " .. sh:t(tostring(why)))
+            return 1
+        if res.after > 0:
+            sh:println(sh:t("The terminal locks after {n} minutes without input.", {n: res.after}))
+        else:
+            sh:println(sh:t("Automatic locking is off."))
+        return 0
     ok, why = sh.lock()
     if not ok:
         sh:eprint("lock: " .. sh:t(tostring(why)))

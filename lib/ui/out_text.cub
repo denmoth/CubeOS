@@ -77,6 +77,14 @@ export class TextOut:
             theme_mod.apply(th, (i, r, g, b) => me.term.setPaletteColor(2 ** i, r, g, b))
         self.prev_cp = nil
 
+    # на время отдать экран (экран блокировки); resume рисует кадр заново
+    def suspend(self):
+        self:close()
+
+    def resume(self):
+        self:open()
+        self:invalidate()
+
     def close(self):
         if self.opened:
             if self.term.setPaletteColor != nil:

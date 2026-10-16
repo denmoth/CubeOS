@@ -26,7 +26,7 @@ fake = make_sys([["char", "a"], ["char", "b"], ["key", keys.backspace], ["char",
 bound = base:bind(fake)
 eq(bound.sys == fake, true, "bind returns a console for the process")
 eq(bound:read_line("Name: "), "ac", "typing with backspace")
-eq(fake.asked[1], ["char", "key", "key_up", "paste"], "only input events are awaited")
+eq(fake.asked[1], ["char", "key", "key_up", "paste", "terminate"], "only input events are awaited (and Ctrl+T, which the login screen swallows)")
 
 fake = make_sys([["paste", "secret"], ["key", keys.enter]])
 eq(console_mod.TermConsole(fake):read_line("Password: ", true), "secret", "paste works and hidden input is returned as typed")

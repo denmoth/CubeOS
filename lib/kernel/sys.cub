@@ -31,8 +31,9 @@ export def sleep(seconds=0):
     _call({op: "sleep", ms: seconds * 1000})
 
 # ждёт события; filter: список имён (nil любое), timeout: секунды (nil без ограничения). Возвращает имя и аргументы
-export def wait_event(filter=nil, timeout=nil):
-    res = _call({op: "wait_event", filter: filter, timeout_ms: timeout != nil and timeout * 1000 or nil})
+# keep: короткое ожидание посреди работы (экран блокировки поверх терминала): другие события процесса не теряются, а копятся
+export def wait_event(filter=nil, timeout=nil, keep=false):
+    res = _call({op: "wait_event", filter: filter, timeout_ms: timeout != nil and timeout * 1000 or nil, keep: keep == true})
     if res == nil:
         return nil
     return unpack(res)
