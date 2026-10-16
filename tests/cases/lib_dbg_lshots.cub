@@ -1,0 +1,76 @@
+# Снимки экрана входа CDE без игры (cde.login на подставном терминале CC: Graphics): build/ui_login_*.ppm. Запуск: tools/login_shots.sh
+
+import cgl
+import font as font_lib
+import cde.theme as theme
+import cde.login as login_mod
+import cde.greeter as greeter
+
+def make_term(cols, rows):
+    api = {}
+    def get_size(px):
+        if px:
+            return cols * 6, rows * 9
+        return cols, rows
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "setGraphicsMode", "drawPixels", "setFrozen"]:
+        api[name] = nothing
+    return api
+
+def dump(g, name):
+    s = g.surface
+    pal = g.palette
+    f = fs.open("/repo/build/" .. name .. ".ppm", "wb")
+    f.write("P6\n" .. s.w .. " " .. s.h .. "\n255\n")
+    for y in range[0, s.h - 1]:
+        parts = []
+        for x in range[0, s.w - 1]:
+            v = s.px[y * s.w + x + 1]
+            r, gg, b = pal:get(v < 0 and 0 or v)
+            parts[x + 1] = string.char(r, gg, b)
+        f.write(table.concat(parts))
+    f.close()
+    os.queueEvent("shot")
+    os.pullEvent("shot")
+
+def shoot(cols, rows, tag, users, fixed):
+    g = cgl.open({term: make_term(cols, rows), backend: "graphics", palette: theme.palette(theme.get())})
+    host = {surface: g.surface, font: font_lib.default("/repo/assets"), palette: g.palette, slots: greeter.slot_list(),
+        set_colors: (list) => g:set_colors(list), present: () => g:present()}
+    def verify(u, secret, flags):
+        if secret == "1234":
+            return {ok: true, value: "session"}
+        return {ok: false, message: "Wrong PIN or password. PIN tries left: 2"}
+    scr = login_mod.new(host, {users: users, index: 1, fixed: fixed, title: fixed and "Locked" or "CubeOS 0.3.0", verify: verify,
+        hint_for: (u) => "PIN or password", time_text: () => "14:32", date_text: () => "Sat 17 Oct", key_floppy: true, power: not fixed})
+    t = 0
+    def run(secs):
+        n = math.floor(secs / 0.05)
+        for i in range[1, n]:
+            t += 0.05
+            scr:tick(t)
+    run(1.0)
+    dump(g, "ui_login_" .. tag .. "_1")
+    for ch in ["1", "2", "3"]:
+        scr:event("char", ch)
+    run(0.4)
+    dump(g, "ui_login_" .. tag .. "_2_typing")
+    scr:event("char", "9")
+    scr:event("key", keys.enter)
+    run(0.12)
+    dump(g, "ui_login_" .. tag .. "_3_wrong")
+    run(1.0)
+    for ch in ["1", "2", "3", "4"]:
+        scr:event("char", ch)
+    scr:event("key", keys.enter)
+    run(0.45)
+    dump(g, "ui_login_" .. tag .. "_4_ok")
+    run(1.0)
+    print("result " .. tostring(scr.result != nil and scr.result.value))
+
+users = [{name: "denmoth", display: "Denmoth"}, {name: "alex", display: "Alex"}, {name: "kate", display: "Kate"}, {name: "guest", display: "Guest", guest: true}]
+shoot(51, 19, "small", users, false)
+shoot(51, 19, "locked", [users[1]], true)
+shoot(164, 81, "monitor", users, false)

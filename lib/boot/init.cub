@@ -185,6 +185,9 @@ export class Boot:
         if self.console != nil and self.console.bind != nil:
             self.console = self.console:bind(sys)
         greeter = o.greeter
+        # make_greeter(system, sys, console): экран входа, которому нужна система (графический, cde.greeter)
+        if greeter == nil and o.make_greeter != nil:
+            greeter = o.make_greeter(system, sys, self.console)
         if greeter == nil and self.console != nil:
             greeter = greeter_mod.new(self.console, system.auth, system.sessions, {title: system.conf.title, notice: system.unclean and "The system was not shut down properly last time." or nil,
                 busy: (reason) => sys.busy(reason)})

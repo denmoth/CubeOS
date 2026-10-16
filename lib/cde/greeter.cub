@@ -1,0 +1,245 @@
+# cde.greeter: графический экран входа при загрузке (шаг 4). Тот же контракт, что у boot.greeter.TextGreeter (login, unlock,
+# first_run), но экран рисует cde.login: куб, аватары, поле PIN или пароля, часы, кнопки питания.
+#
+#   g = greeter.new(console, auth, sessions, {sys: sys, term: term, assets: "/repo/assets", title: "CubeOS", notice: "...",
+#                                             busy: (текст) => ..., cde: true})
+#   result = g:login()         сессия, или {action: "shutdown" | "reboot"}, или nil
+#
+# Нет пикселей (обычный терминал) или экран не открылся: всё делает текстовый экран входа. Первый запуск (создание
+# администратора) пока тоже текстовый. После входа графический режим остаётся открытым, если дальше стартует рабочий стол
+# (opts.cde и сессия не de: "tui"), чтобы между экраном входа и рабочим столом не мигал текст; иначе закрывается.
+# Ввод идёт как в TermConsole: события через sys.wait_event, скрытие от журнала ввода sys.secret_input, раскладка из locale.conf.
+
+import cgl
+import font as font_lib
+import clock as clock_mod
+import json5
+import boot.greeter as text_mod
+import cde.theme as theme
+import cde.login as login_mod
+import input.layout as layout_mod
+
+const EVENTS = ["char", "key", "key_up", "paste", "mouse_click", "monitor_touch", "terminate"]
+
+def _read(path):
+    if not fs.exists(path):
+        return nil
+    f = fs.open(path, "r")
+    if f == nil:
+        return nil
+    text = f.readAll()
+    f.close()
+    return text
+
+# места палитры для анимации экрана: ступени обоев темы и запас приложений (здесь они все свободны)
+export def slot_list():
+    out = []
+    for i in range[0, theme.DESK_N - 1]:
+        out[len(out) + 1] = theme.DESK0 + i
+    for s in theme.POOL:
+        out[len(out) + 1] = s
+    return out
+
+# часы системы для экрана: time.conf, без файла UTC
+export def make_clock(path=nil):
+    ok, c = pcall(() => clock_mod.from_text(_read(path ?? "/cubeos/sys/cfg/time.conf") ?? "{}"))
+    return ok and c or nil
+
+export class GfxGreeter:
+    def init(self, console, auth, sessions, opts=nil):
+        o = opts ?? {}
+        self.console = console
+        self.auth = auth
+        self.sessions = sessions
+        self.o = o
+        self.sys = o.sys
+        self.term = o.term ?? term
+        self.title = o.title ?? "CubeOS"
+        self.busy = o.busy
+        self.text = text_mod.new(console, auth, sessions, o)
+        self.gscreen = nil
+        self.clock = make_clock()
+        self.failed = false
+
+    # ------------------------------------------------------------ экран
+
+    def _can(self):
+        return not self.failed and self.sys != nil and type(self.term.setGraphicsMode) == "function"
+
+    def _layout(self):
+        conf = {}
+        raw = _read("/cubeos/sys/cfg/locale.conf")
+        if raw != nil:
+            ok, data = pcall(() => json5.parse(raw))
+            if ok and type(data) == "table":
+                conf = data
+        return layout_mod.new(nil, nil, {mode: "auto", keyboard: conf.keyboard ?? "ru", dirs: self.o.layout_dirs})
+
+    def _close(self):
+        if self.gscreen != nil:
+            pcall(() => self.gscreen:close())
+            self.gscreen = nil
+
+    # показывает экран и ведёт его до результата; opts как у cde.login. nil, если экран не удалось открыть
+    def _show(self, opts):
+        th = theme.get()
+        self:_close()
+        ok, gscreen = pcall(cgl.open, {term: self.term, backend: "graphics", palette: theme.palette(th)})
+        if not ok or gscreen == nil:
+            self.failed = true
+            return nil
+        self.gscreen = gscreen
+        font = font_lib.default(self.o.assets ?? "/repo/assets")
+        host = {surface: gscreen.surface, font: font, palette: gscreen.palette, slots: slot_list(),
+            set_colors: (list) => gscreen:set_colors(list), present: () => gscreen:present()}
+        c = self.clock
+        opts.layout = self:_layout()
+        opts.time_text = () => c != nil and c:time_text() or ""
+        opts.date_text = () => c != nil and c:format("%a %e %b") or ""
+        scr = login_mod.new(host, opts)
+        sys = self.sys
+        if sys.secret_input != nil:
+            sys.secret_input(true)
+        t0 = os.epoch("utc")
+        okrun, err = pcall(() => self:_loop(scr, gscreen, t0))
+        if sys.secret_input != nil:
+            sys.secret_input(false)
+        if not okrun:
+            self.failed = true
+            sys.log("error", "graphical login failed: " .. tostring(err))
+            self:_close()
+            return nil
+        return scr.result
+
+    def _loop(self, scr, gscreen, t0):
+        sys = self.sys
+        while scr.result == nil:
+            ev = table.pack(sys.wait_event(EVENTS, 0.05))
+            name = ev[1]
+            if name == "mouse_click" or name == "monitor_touch":
+                px, py = gscreen:to_pixel(ev[3], ev[4])
+                scr:event("click", px, py)
+            elif name != nil:
+                scr:event(name, ev[2], ev[3], ev[4], ev[5])
+            scr:tick((os.epoch("utc") - t0) / 1000)
+
+    # ------------------------------------------------------------ проверка
+
+    def _busy(self, text):
+        if self.busy != nil:
+            self.busy(text)
+
+    # один вызов проверки для экрана: {ok, value} или {ok: false, message, wait}
+    def _verify(self, user, secret, flags):
+        a = self.auth
+        mgr = self.sessions
+        rec = a:user(user.name)
+        if rec == nil:
+            return {ok: false, message: "No such user"}
+        if flags.key:
+            r, why = mgr:key_login()
+            if r == nil:
+                return {ok: false, message: self.text:_key_problem(why)}
+            if r.mode == "key":
+                s = mgr:open(r.user, nil, true, "key")
+                return s != nil and {ok: true, value: s} or {ok: false, message: "Cannot sign in with the key"}
+            return {ok: false, message: "Key floppy accepted. Now your PIN or password.", keep_key: true}
+        # «не спрашивать X минут после входа» (D227)
+        if secret == "" and mgr.remembered != nil and mgr:remembered(rec.name):
+            s = mgr:open(rec.name, nil, true, "remember")
+            if s != nil:
+                return {ok: true, value: s}
+        has_pin = a.has_pin != nil and a:has_pin(rec.name)
+        self:_busy("checking the PIN or password")
+        s = nil
+        why = nil
+        left = nil
+        wait = nil
+        if has_pin:
+            s, why, left, wait = mgr:open_secret(rec.name, secret, flags.key_ok == true)
+        elif a.shadow[rec.name] == nil:
+            s, why = mgr:open(rec.name, "")
+        else:
+            s, why, wait = mgr:open(rec.name, secret)
+        self:_busy(nil)
+        if s != nil:
+            return {ok: true, value: s}
+        if why == "locked":
+            return {ok: false, message: "Too many attempts. Wait", wait: wait ?? 5}
+        if has_pin:
+            return {ok: false, message: self.text:_wrong(why, left, wait)}
+        return {ok: false, message: "Wrong password."}
+
+    # подсказка в пустом поле для пользователя
+    def _hint(self, user):
+        a = self.auth
+        mgr = self.sessions
+        if mgr.remembered != nil and mgr:remembered(user.name):
+            return "Press Enter"
+        if a.has_pin != nil and a:has_pin(user.name):
+            return "PIN or password"
+        if a.shadow[user.name] == nil:
+            return "Press Enter"
+        return "Password"
+
+    # ------------------------------------------------------------ контракт TextGreeter
+
+    def login(self):
+        if not self:_can() or not self.auth:has_users():
+            return self.text:login()
+        users = []
+        for u in self.auth:list():
+            users[len(users) + 1] = {name: u.name, display: u.display ?? u.name, guest: u.temp == true}
+        let me = self
+        opts = {users: users, index: 1, title: self.title, verify: (u, s, f) => me:_verify(u, s, f), hint_for: (u) => me:_hint(u),
+            key_floppy: self.auth.has_disk_keys != nil and self.auth:has_disk_keys(), note: self.o.notice}
+        result = self:_show(opts)
+        if result == nil:
+            self:_close()
+            return self.text:login()
+        if result.action != nil:
+            self:_close()
+            return result
+        s = result.value
+        # дальше рабочий стол: графический режим остаётся (без мигания текста), иначе закрываем
+        tui = s != nil and s.env != nil and s.env.de == "tui"
+        if not self.o.cde or tui:
+            self:_close()
+        return s
+
+    def first_run(self):
+        self:_close()
+        return self.text:first_run()
+
+    # блокировка текстовых сессий: тот же экран с выбранным пользователем
+    def unlock(self, s):
+        if not self:_can():
+            return self.text:unlock(s)
+        mgr = self.sessions
+        user = {name: s.user, display: s.display ?? s.user}
+        let me = self
+        def verify(u, secret, flags):
+            if flags.key:
+                r, why = mgr:key_login(s.user)
+                if r != nil and r.mode == "key":
+                    return mgr:unlock_key(s.id) and {ok: true, value: true} or {ok: false, message: "Cannot unlock with the key"}
+                if r != nil:
+                    return {ok: false, message: "Key floppy accepted. Now your PIN or password.", keep_key: true}
+                return {ok: false, message: me.text:_key_problem(why)}
+            me:_busy("checking the PIN or password")
+            ok, why, extra = mgr:unlock(s.id, secret, nil, flags.key_ok == true)
+            me:_busy(nil)
+            if ok:
+                return {ok: true, value: true}
+            if why == "locked":
+                return {ok: false, message: "Too many attempts. Wait", wait: extra ?? 5}
+            return {ok: false, message: "Wrong PIN or password."}
+        result = self:_show({users: [user], index: 1, fixed: true, title: "Locked", verify: verify,
+            hint_for: (u) => "PIN or password", key_floppy: self.auth.has_disk_keys != nil and self.auth:has_disk_keys(), power: false})
+        self:_close()
+        if result == nil:
+            return self.text:unlock(s)
+        return true
+
+export def new(console, auth, sessions, opts=nil):
+    return GfxGreeter(console, auth, sessions, opts)

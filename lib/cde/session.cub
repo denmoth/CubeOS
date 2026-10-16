@@ -5,7 +5,7 @@
 # Процесс сессии становится оконным менеджером (держит фокус ввода ядра), приложения запускаются его потомками с правами и видом CFS
 # пользователя. Первым открывается терминал. Alt+Enter новый терминал, Ctrl+Alt+T следующая тема (пока нет настроек), F11 полный
 # экран, Ctrl+Alt+= и Ctrl+Alt+- крупнее и мельче (масштаб), Ctrl+Alt+K витрина элементов cdk, Ctrl+Alt+Q выход из сессии
-# (панель задач cde.panel; «Пуск» с меню на шаге 3.2). Ctrl+Alt+P панель сверху или снизу, Ctrl+Alt+L кнопки окон слева или по центру.
+# (панель задач cde.panel; «Пуск» с меню на шаге 3.2). Ctrl+Alt+P панель сверху или снизу, Ctrl+Alt+O кнопки окон слева или по центру, Ctrl+Alt+L блокировка экрана.
 # Настройки пользователя $cfg/cde.conf (JSON5): theme (имя темы), scale ("auto" или 1..4); тема и масштаб, выбранные сочетаниями,
 # сохраняются туда же; panel ({position, align, height, clock}, cde.panel); wallpaper (имя обоев или {name, mode}, Ctrl+Alt+W следующие, cde.wallpaper); animations ({enabled, speed, windows, glow, widgets}, cde.fx), Ctrl+Alt+A включает и выключает анимации.
 # opts: term, assets, theme, widgets (список виджетов вместо conf.widgets), host, ready(wm) (для тестов), terminal_ready(ctx) (для тестов: ready терминала)
@@ -17,6 +17,7 @@ import cde.apps as apps_mod
 import cde.startmenu as startmenu
 import cde.tray as tray_mod
 import cde.widgets as widgets_mod
+import cde.lock as lock_mod
 import cde.theme as theme_mod
 import cde.wallpaper as wallpaper_mod
 import clock as clock_mod
@@ -198,7 +199,13 @@ export def program(session, opts=nil):
             out[len(out) + 1] = logout_entry()
             return out
         reg:provider(commands)
-        menu_opts = {user: tostring(session.user ?? "user"), footer: [{text: "Log out", icon: "close", run: (w) => w:stop()}]}
+        # блокировка экрана: Ctrl+Alt+L, «Пуск» (команда и кнопка внизу)
+        def lock_screen():
+            lock_mod.start(wm, session, {time: clock_obj.c})
+        wm:hotkey("ctrl+alt+l", lock_screen)
+        reg:add({id: "lock", name: "Lock screen", icon: "lock", kind: "action", keywords: ["lock", "secure", "заблокировать", "блокировка"],
+            run: (w) => lock_screen()})
+        menu_opts = {user: tostring(session.user ?? "user"), footer: [{text: "Lock", icon: "lock", run: (w) => lock_screen()}, {text: "Log out", icon: "close", run: (w) => w:stop()}]}
         def toggle_menu():
             startmenu.toggle(wm, reg, menu_opts)
         wm.on_start = toggle_menu
@@ -271,7 +278,7 @@ export def program(session, opts=nil):
         reg:provider(widget_commands)
         for e in wlist:
             start_widget(e)
-        wm:hotkey("ctrl+alt+l", panel_align)
+        wm:hotkey("ctrl+alt+o", panel_align)
         wm:hotkey("ctrl+alt+k", () => wm:launch(gallery.main, {name: "gallery"}))
         wm:hotkey("ctrl+alt+equals", () => zoom(1))
         wm:hotkey("ctrl+alt+minus", () => zoom(-1))

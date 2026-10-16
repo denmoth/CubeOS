@@ -1,0 +1,134 @@
+import t
+import kernel
+import cde
+import cde.login as login_mod
+import cde.lock as lock_mod
+import cde.greeter as greeter
+import cgl
+import font as font_lib
+import cde.theme as theme
+eq = t.eq
+
+def make_term():
+    api = {}
+    def get_size(px):
+        if px:
+            return 306, 171
+        return 51, 19
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "setGraphicsMode", "drawPixels", "setFrozen"]:
+        api[name] = nothing
+    return api
+
+def breathe():
+    os.queueEvent("t_breathe")
+    os.pullEvent("t_breathe")
+
+# ---------------------------------------------------------------- экран входа без окон
+g = cgl.open({term: make_term(), backend: "graphics", palette: theme.palette(theme.get())})
+host = {surface: g.surface, font: font_lib.default("/repo/assets"), palette: g.palette, slots: greeter.slot_list(),
+    set_colors: (list) => g:set_colors(list), present: () => g:present()}
+calls = []
+def verify(u, secret, flags):
+    calls[len(calls) + 1] = u.name .. ":" .. secret .. ":" .. tostring(flags.key)
+    if secret == "1234":
+        return {ok: true, value: "s"}
+    return {ok: false, message: "Wrong", wait: secret == "bad" and 3 or nil}
+users = [{name: "a", display: "Anna"}, {name: "b", display: "Boris"}]
+scr = login_mod.new(host, {users: users, verify: verify, hint_for: (u) => "PIN or password", time_text: () => "10:00", date_text: () => "Sat"})
+now = 0
+def run(secs):
+    for i in range[1, math.floor(secs / 0.05)]:
+        now += 0.05
+        scr:tick(now)
+eq([scr.index, scr.unit], [1, 1], "starts on the first user")
+scr:event("key", keys.right)
+eq(scr.index, 2, "Right selects the next user")
+scr:event("key", keys.left)
+for ch in ["1", "2", "x"]:
+    scr:event("char", ch)
+eq(len(scr.secret), 3, "typing fills the field")
+scr:event("key", keys.backspace)
+eq(len(scr.secret), 2, "Backspace removes a character")
+scr:event("key", 256)
+eq(len(scr.secret), 0, "Esc clears the field")
+for ch in ["b", "a", "d"]:
+    scr:event("char", ch)
+scr:event("key", keys.enter)
+eq([calls[1], scr.message, scr.mode], ["a:bad:false", "Wrong", "idle"], "a wrong secret shows the message and stays")
+eq(scr.wait_until != nil, true, "a wait is counted down")
+run(1.0)
+eq(string.find(scr.message, "Wrong", 1, true) != nil, true, "the countdown keeps the message")
+run(3.5)
+eq(scr.wait_until, nil, "the wait ends")
+for ch in ["1", "2", "3", "4"]:
+    scr:event("char", ch)
+scr:event("key", keys.enter)
+eq(scr.mode, "ok", "the right secret starts the welcome")
+run(1.2)
+eq(scr.result != nil and scr.result.value, "s", "the result carries the verified value")
+# кнопка питания
+scr2 = login_mod.new(host, {users: users, verify: verify})
+pr = scr2.power_rects[2]
+scr2:event("click", pr.x + 2, pr.y + 2)
+eq(scr2.result.action, "shutdown", "the power button asks to shut down")
+
+# ---------------------------------------------------------------- блокировка рабочего стола
+clock = {now: 1000}
+def tnow():
+    return clock.now
+unlocked = {id: nil}
+mgr = {auth: {has_pin: (me, n) => false}, lock: (me, id) => nil, unlock: (me, id, secret, m, k) => secret == "pw", unlock_key: (me, id) => true}
+session = {user: "u", display: "Una", id: 7, manager: mgr}
+wm = cde.wm.new({animations: {enabled: false}, term: make_term(), assets: "/repo/assets", clock: tnow, panel: {time_text: () => "10:00"}})
+count = {n: 0}
+wm:hotkey("alt+enter", () => rawset(count, "n", count.n + 1))
+k = kernel.new({clock: tnow})
+breathe()
+def other(sys, ctx):
+    win = cde.app.open(sys, ctx, {title: "Other", kind: "pixel", w: 60, h: 40, x: 20, y: 20})
+    win:present()
+    while true:
+        ev = table.pack(win:wait_event())
+        if ev[1] == "win_close":
+            break
+    win:close()
+wm:launch(other, {name: "other"})
+def desk(sys, args):
+    wm:run(sys)
+k:spawn(desk, [], {name: "cde", ui: true})
+def settle(n=10):
+    k:feed("cubeos_cde")
+    for i in range[1, n]:
+        clock.now = clock.now + 20
+        k:tick()
+        k:run_ready()
+settle()
+eq(lock_mod.start(wm, session, {}), true, "lock.start succeeds")
+settle(20)
+eq([wm.locked, wm.lock_win != nil and wm.lock_win.state, wm.focused == wm.lock_win], [true, "full", true], "the lock window is full screen and has the focus")
+eq(wm.panel.hidden, true, "the panel is hidden under the lock")
+k:feed("key", keys.leftAlt, false)
+k:feed("key", keys.enter, false)
+k:feed("key_up", keys.leftAlt)
+settle()
+eq(count.n, 0, "hotkeys do not work while locked")
+for ch in ["n", "o"]:
+    k:feed("char", ch)
+k:feed("key", keys.enter, false)
+settle(20)
+eq(wm.locked, true, "a wrong password keeps the lock")
+for ch in ["p", "w"]:
+    k:feed("char", ch)
+k:feed("key", keys.enter, false)
+settle(100)
+eq([wm.locked, wm.lock_win == nil], [false, true], "the right password unlocks")
+eq(wm.focused != nil and wm.focused.title, "Other", "the focus goes back to the desktop")
+k:feed("key", keys.leftAlt, false)
+k:feed("key", keys.enter, false)
+k:feed("key_up", keys.leftAlt)
+settle()
+eq(count.n, 1, "hotkeys work again")
+print("done")

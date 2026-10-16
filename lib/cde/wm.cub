@@ -112,6 +112,9 @@ export class WM:
         self.pid = nil
         self.on_start = o.on_start
         self.on_widget_moved = nil
+        # блокировка экрана (cde.lock): ни сочетаний, ни «Пуска», ввод только окну блокировки
+        self.locked = false
+        self.lock_win = nil
         self.running = false
         self.waiting = false
         self.wake_sent = false
@@ -222,6 +225,19 @@ export class WM:
         for slot in list:
             self.owned[slot] = win
         for slot in extra:
+            list[len(list) + 1] = slot
+        return list
+
+    # до n мест палитры, сколько есть свободных (ступени обоев, потом запас); список может быть и короче n
+    def _alloc_upto(self, win, n):
+        list = []
+        for i in range[0, theme.DESK_N - 1]:
+            if len(list) < n and self.owned[theme.DESK0 + i] == nil:
+                list[len(list) + 1] = theme.DESK0 + i
+                self.owned[theme.DESK0 + i] = win
+        while len(list) < n and len(self.pool_free) > 0:
+            slot = table.remove(self.pool_free, 1)
+            self.owned[slot] = win
             list[len(list) + 1] = slot
         return list
 
@@ -420,7 +436,12 @@ export class WM:
         win.canvas:clean()
         self:_stack(win)
         self.comp:damage_window(win)
-        self:_set_focus(win)
+        # под блокировкой новое окно встаёт под экран блокировки и фокус не получает
+        if self.locked and self.lock_win != nil and win != self.lock_win:
+            self:_raise(self.lock_win)
+            self:_set_focus(self.lock_win)
+        else:
+            self:_set_focus(win)
         self.fx:open(win)
 
     # место для нового окна (как «умная» расстановка KDE): из точек сетки выбирается та, где окно меньше всего закрывает видимые
@@ -760,6 +781,11 @@ export class WM:
 
     def _key(self, code, held):
         self.swallow_char = nil
+        if self.locked:
+            if self:_is_mod(code):
+                self.mods[code] = true
+            self:_post(self.focused, "key", code, held == true)
+            return
         if self:_is_mod(code):
             if code == keys.leftAlt and not held:
                 self.alt_tap = true
@@ -784,7 +810,7 @@ export class WM:
         self.mods[code] = nil
         self.alt_tap = false
         self:_post(self.focused, "key_up", code)
-        if was_tap and self.on_start != nil:
+        if was_tap and self.on_start != nil and not self.locked:
             self.on_start()
 
     # ------------------------------------------------------------ мышь
@@ -992,6 +1018,8 @@ export class WM:
                 self:_post(self.focused, "char", ev[2])
         elif name == "paste":
             self:_post(self.focused, "paste", ev[2])
+        elif name == "terminate" and self.locked:
+            pass
         elif name == "terminate":
             # удержание Ctrl+T: CC сам шлёт terminate; окно в фокусе закрывается без вопросов (D222)
             self:force_close(self.focused)

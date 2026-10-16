@@ -1,0 +1,104 @@
+# cde.lock: блокировка рабочего стола (шаг 4). Тот же экран, что при входе (cde.login), но поверх рабочего стола: безрамочное окно на
+# весь экран, пока менеджер окон не пускает к остальным окнам ни мышь, ни клавиши (wm.locked: сочетания, «Пуск» и Ctrl+T
+# выключены). Приложения за ним продолжают работать. Снимается PIN или паролем (как команда lock в терминале, D226), ключ-дискета:
+# Enter на пустом поле.
+#
+#   lock.start(wm, session, {time: часы системы})        из процесса менеджера (сочетание, команда в «Пуске»)
+#
+# Сессия закрыта или без менеджера сессий (тесты): блокировки нет, start возвращает false.
+
+import cde.app as app
+import cde.login as login_mod
+import input.layout as layout_mod
+import json5
+
+def _read(path):
+    if not fs.exists(path):
+        return nil
+    f = fs.open(path, "r")
+    if f == nil:
+        return nil
+    text = f.readAll()
+    f.close()
+    return text
+
+def main(sys, ctx):
+    wm = ctx.wm
+    session = ctx.args[1]
+    o = ctx.args[2] ?? {}
+    mgr = session.manager
+    owner = {}
+    win = app.open(sys, ctx, {title: "Locked", kind: "pixel", w: wm.W, h: wm.H, x: 0, y: 0, decorations: false, resizable: false,
+        taskbar: false})
+    wm.lock_win = win
+    win:request("full")
+    # места палитры для анимации: ступени обоев и запас, сколько свободно (под экраном блокировки обои не видны)
+    slots = wm:_alloc_upto(owner, 16)
+    if len(slots) < 2:
+        slots = [220, 221]
+    host = {surface: win.canvas, font: wm.font, palette: wm.palette, slots: slots, set_colors: (list) => wm:_set_colors(owner, list),
+        present: () => win:present()}
+    c = o.time
+    user = {name: session.user, display: session.display ?? session.user}
+    has_pin = mgr.auth.has_pin != nil and mgr.auth:has_pin(session.user)
+    key_ok = {on: false}
+    def verify(u, secret, flags):
+        if flags.key:
+            r, why = mgr:key_login(session.user)
+            if r != nil and r.mode == "key":
+                return mgr:unlock_key(session.id) and {ok: true, value: true} or {ok: false, message: "Cannot unlock with the key"}
+            if r != nil:
+                return {ok: false, message: "Key floppy accepted. Now your PIN or password.", keep_key: true}
+            if why == "copied":
+                return {ok: false, message: "This key floppy is an old copy: it does not work."}
+            return {ok: false, message: "No key floppy for this account in a drive."}
+        sys.busy("checking the PIN or password")
+        ok, why, extra = mgr:unlock(session.id, secret, nil, flags.key_ok == true)
+        sys.busy(nil)
+        if ok:
+            return {ok: true, value: true}
+        if why == "locked":
+            return {ok: false, message: "Too many attempts. Wait", wait: extra ?? 5}
+        return {ok: false, message: has_pin and "Wrong PIN or password." or "Wrong password."}
+    conf = {}
+    raw = _read("/cubeos/sys/cfg/locale.conf")
+    if raw != nil:
+        okc, data = pcall(() => json5.parse(raw))
+        if okc and type(data) == "table":
+            conf = data
+    lay = layout_mod.new(nil, nil, {mode: "auto", keyboard: conf.keyboard ?? "ru"})
+    scr = login_mod.new(host, {users: [user], index: 1, fixed: true, title: "Locked", verify: verify, power: false, layout: lay,
+        hint_for: (u) => "PIN or password", key_floppy: mgr.auth.has_disk_keys != nil and mgr.auth:has_disk_keys(),
+        time_text: () => c != nil and c:time_text() or "", date_text: () => c != nil and c:format("%a %e %b") or ""})
+    start = wm.clock()
+    if sys.secret_input != nil:
+        sys.secret_input(true)
+    while scr.result == nil and not win.closed:
+        ev = table.pack(win:wait_event(0.05))
+        name = ev[1]
+        if name == "mouse_click":
+            scr:event("click", ev[3], ev[4])
+        elif name == "win_resize":
+            pass
+        elif name != nil and name != "win_close":
+            scr:event(name, ev[2], ev[3], ev[4], ev[5])
+        scr:tick((wm.clock() - start) / 1000)
+    if sys.secret_input != nil:
+        sys.secret_input(false)
+    wm.locked = false
+    wm.lock_win = nil
+    wm:defer(() => wm:_free_colors(owner))
+    win:close()
+
+# блокировать: вызывать в процессе менеджера
+export def start(wm, session, opts=nil):
+    if wm.locked or session == nil or session.manager == nil or session.id == nil:
+        return false
+    session.manager:lock(session.id)
+    wm.locked = true
+    # меню «Пуск» и окошки значков закрываются: за блокировкой им делать нечего
+    for w in wm.windows:
+        if w == wm.start_win or (wm.tray_pop != nil and w == wm.tray_pop.win):
+            wm:request_close(w)
+    wm:launch(main, {name: "lock"}, [session, opts])
+    return true

@@ -38,6 +38,11 @@ export class GraphicsDisplay:
 
     # включает графический режим и переносит палитру в терминал
     def open(self):
+        # экран заморожен, пока меняются режим и палитра, и буфер кадра очищается: иначе остатки прошлого экрана (например кадр
+        # экрана загрузки) на секунду показываются в новой палитре радужными цветами
+        froze = self.frozen and self.term.setFrozen != nil
+        if froze:
+            pcall(self.term.setFrozen, true)
         self.term.setGraphicsMode(self.mode)
         self.w, self.h = self.term.getSize(true)
         self:sync_palette()
@@ -45,6 +50,18 @@ export class GraphicsDisplay:
         self.rows = nil
         self.use_strings = self.mode == 2 and self.want_strings != false and self:_probe()
         self.opened = true
+        if self.mode == 2 and self.term.drawPixels != nil:
+            pcall(() => self:_blank())
+        if froze:
+            pcall(self.term.setFrozen, false)
+
+    # весь буфер кадра одним цветом (чёрным): после этого первый настоящий кадр заменяет его целиком
+    def _blank(self):
+        line = string.rep(string.char(self.clear_color), self.w)
+        rows = []
+        for y in range[1, self.h]:
+            rows[y] = line
+        self.term.drawPixels(0, 0, rows)
 
     def sync_palette(self):
         if self.mode == 2:

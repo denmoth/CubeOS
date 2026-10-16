@@ -339,16 +339,17 @@ export class PixelSplash:
         start = self.clock()
         while true:
             el = self.clock() - start
-            if el >= 1.1:
+            if el >= 1.0:
                 break
-            if el > 0.3:
+            if el > 0.25:
                 self.shown = 1
+            # короткий мягкий блик, когда волна дошла до конца (раньше куб на секунду заливался белым и не был виден), потом затухание
             fl = 0
-            if el > 0.3 and el < 0.75:
-                p = (el - 0.3) / 0.45
-                fl = p < 0.25 and p / 0.25 or (1 - (p - 0.25) / 0.75)
-            self.flash = _clamp(fl, 0, 1) * 0.75
-            self.dark = _clamp((el - 0.7) / 0.4, 0, 1)
+            if el > 0.3 and el < 0.6:
+                p = (el - 0.3) / 0.3
+                fl = p < 0.4 and p / 0.4 or (1 - (p - 0.4) / 0.6)
+            self.flash = _clamp(fl, 0, 1) * 0.3
+            self.dark = _clamp((el - 0.62) / 0.38, 0, 1)
             self.last = self.clock() - FRAME_STEP
             self:tick()
             if pause != nil:

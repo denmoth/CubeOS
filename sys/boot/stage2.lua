@@ -180,7 +180,7 @@ local function main()
   end)
   if not ctx.shell then
     if want_cde then
-      load("shell", "Loading the desktop", { "ui", "term.session", "cde.theme", "cde.window", "cde.wallpaper", "cde.icons", "cde.panel", "cde.apps", "cde.startmenu", "cde.tray", "cde.widgets", "cde.compositor",
+      load("shell", "Loading the desktop", { "ui", "term.session", "cde.theme", "cde.window", "cde.wallpaper", "cde.icons", "cde.panel", "cde.apps", "cde.startmenu", "cde.tray", "cde.widgets", "cde.login", "cde.greeter", "cde.compositor",
         "cde.wm", "cde.app", "cde.winout", "cde.terminal", "cdk.style", "cdk.icons", "cdk.widget", "cdk.controls", "cdk.input", "cdk.ui",
         "cdk", "cdk.gallery", "cde.session" })
     else
@@ -218,6 +218,12 @@ local function main()
       end
       return import("term.session").program(session, { assets = rt.source .. "/assets" })
     end,
+    -- графический экран входа (куб, аватары, поле PIN или пароля) вместо текстового, если дальше рабочий стол
+    make_greeter = want_cde and not ctx.console and function(sys_, ksys, console)
+      return import("cde.greeter").new(console, sys_.auth, sys_.sessions, { sys = ksys, term = term, assets = rt.source .. "/assets",
+        title = sys_.conf.title, notice = sys_.unclean and "The system was not shut down properly last time." or nil,
+        busy = function(reason) ksys.busy(reason) end, cde = true })
+    end or nil,
     kernel = { rt = rt.cubic.rt, cubic = rt.cubic, pull = cckernel.pull },
     power = power,
     bootlog = bootlog,
