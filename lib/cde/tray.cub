@@ -1,0 +1,300 @@
+# cde.tray: область уведомлений панели задач (шаг 3.3): раскладка, звук, сеть. У каждого значка окошко над панелью.
+#
+#   tray = tray.new(wm)
+#   tray.install()                  значки в панель (wm.panel.tray) и процесс, который раз в 3 секунды спрашивает службы
+#
+# Данные берутся у служб (audiod: status, volume, note; netd: status, peers, scan; inputd: get, set) через svc.rpc из отдельного
+# процесса «tray»: менеджер окон сам ждать ответа служб не может. Ответ приходит менеджеру через wm:defer, значки перерисовываются
+# только когда данные поменялись. Службы нет (компьютер без звука или сети): значок тусклый, окошко это объясняет.
+#
+# Значки: раскладка (код второго языка клавиатуры: акцентом, если раскладка переключается в CubeOS, тускло, если следует за Windows),
+# звук (громкость, колесо мыши над значком меняет её на 5), сеть (тускло: нет модема; обычный: есть модем; акцентом: есть
+# сопряжённые компьютеры). Окошко: рамка без заголовка, закрывается потерей фокуса, Esc и повторным нажатием на значок.
+
+import cdk
+import cde.icons as icons
+import cde.theme as theme
+import svc.rpc as rpc
+import unicode
+
+const POLL = 3
+const WHEEL_STEP = 5
+
+# запрос к службе: результат или nil, ошибка
+def _ask(sys, service, op, args=nil, timeout=1.5):
+    res, err = rpc.call(sys, service, op, args, timeout)
+    if err != nil:
+        return nil, err
+    return res
+
+# всё, что нужно значкам, одним проходом (из процесса ядра)
+export def poll(sys):
+    return {audio: _ask(sys, "audiod", "status"), net: _ask(sys, "netd", "status"), kb: _ask(sys, "inputd", "get")}
+
+# ------------------------------------------------------------ окошко над значком
+
+def _popup(sys, ctx):
+    wm = ctx.wm
+    tray = ctx.args[1]
+    key = ctx.args[2]
+    spec = ctx.args[3]
+    ax = ctx.args[4]
+    a = wm.area
+    w = spec.w
+    h = math.min(spec.h, a.h - 6)
+    x = math.max(a.x + 2, math.min(ax - math.floor(w / 2), wm.W - w - 2))
+    top = wm.panel != nil and wm.panel.position == "top"
+    y = top and a.y + 2 or a.y + a.h - h - 2
+    ui = cdk.open(sys, ctx, {title: key, w: w, h: h, x: x, y: y, decorations: false, resizable: false, taskbar: false})
+    st = ui.style
+    mine = {key: key, win: ui.win}
+    wm.tray_pop = mine
+    if wm.panel != nil:
+        wm.panel.popup_key = key
+    def on_key(ev):
+        if ev.key == 256 or ev.key == 1:
+            ui:close()
+    def on_blur():
+        ui:close()
+    ui.on_key = on_key
+    ui.on_blur = on_blur
+    ui:set_root(cdk.column({padding: 5, gap: 4, bg: st.bg, border: st.border, radius: st.radius}, spec.build(ui, st, sys, tray)))
+    ui:focus_next(1)
+    ui:run()
+    if wm.tray_pop == mine:
+        wm.tray_pop = nil
+        if wm.panel != nil:
+            wm.panel.popup_key = nil
+
+# ------------------------------------------------------------ окошки
+
+def _title_row(st, icon, text):
+    return cdk.row({align: "center", gap: 4}, [cdk.icon(icon, {color: st.accent}), cdk.label(text, {variant: "accent"})])
+
+def _sound_spec():
+    def build(ui, st, sys, tray):
+        audio = tray.data.audio
+        vol = audio != nil and math.floor(audio.volume ?? 0) or 0
+        if audio == nil:
+            return [_title_row(st, "volume", "Sound"), cdk.label("The sound service is not running.", {variant: "dim"})]
+        percent = cdk.label(vol .. "%", {variant: "dim"})
+        state = {before: vol > 0 and vol or 60}
+        slider = nil
+        def apply(v):
+            v = math.floor(v + 0.5)
+            res = _ask(sys, "audiod", "volume", {value: v})
+            if res != nil:
+                percent:set_text(math.floor(res) .. "%")
+                tray:patch("audio", {volume: res, muted: false})
+        def on_change(v):
+            if v > 0:
+                state.before = v
+            apply(v)
+        slider = cdk.slider({value: vol, grow: 1, on_change: on_change})
+        def mute(b):
+            if slider.value > 0:
+                state.before = slider.value
+                slider.value = 0
+                apply(0)
+            else:
+                slider.value = state.before
+                apply(state.before)
+            slider:invalidate()
+        def test(b):
+            _ask(sys, "audiod", "note", {instrument: "harp", pitch: 12, volume: 1})
+        speakers = audio.speakers != nil and len(audio.speakers) or 0
+        return [_title_row(st, "volume", "Sound"),
+            cdk.row({align: "center", gap: 5}, [slider, percent]),
+            cdk.row({gap: 4}, [cdk.button("Mute", {icon: "minus", variant: "flat", on_click: mute}),
+                cdk.button("Test", {icon: "play", variant: "flat", on_click: test}), cdk.spacer()]),
+            cdk.label(speakers > 0 and (speakers .. " speaker" .. (speakers > 1 and "s" or "")) or "No speakers connected", {variant: "dim"})]
+    return {w: 132, h: 84, build: build}
+
+def _net_spec():
+    def build(ui, st, sys, tray):
+        net = tray.data.net
+        if net == nil:
+            return [_title_row(st, "wifi", "Network"), cdk.label("The network service is not running.", {variant: "dim"})]
+        wired = 0
+        wireless = 0
+        for m in net.modems ?? []:
+            if m.wired:
+                wired += 1
+            else:
+                wireless += 1
+        link = (wired > 0 and "Wired modem" or (wireless > 0 and "Wireless modem" or "No modem"))
+        peers = _ask(sys, "netd", "peers") ?? []
+        def items_of(list):
+            out = []
+            for p in list:
+                out[len(out) + 1] = {text: tostring(p.name ?? p.id), icon: p.paired and "lock" or "user", detail: p.wired and "wired" or "air"}
+            if len(out) == 0:
+                out[1] = {text: "No computers seen yet", color: st.dim}
+            return out
+        list = cdk.list_view({grow: 1, items: items_of(peers)})
+        status = cdk.label((net.paired ?? 0) .. " paired", {variant: "dim"})
+        def scan(b):
+            status:set_text("Scanning...")
+            ui:flush()
+            found = _ask(sys, "netd", "scan", {seconds: 1}, 6)
+            list:set_items(items_of(found ?? []))
+            status:set_text((net.paired ?? 0) .. " paired, " .. len(found ?? []) .. " found")
+        return [_title_row(st, "wifi", tostring(net.name ?? "Network")),
+            cdk.label(link, {variant: wired + wireless > 0 and "normal" or "danger"}),
+            list,
+            cdk.row({align: "center", gap: 4}, [cdk.button("Scan", {icon: "search", variant: "flat", on_click: scan}), cdk.spacer(), status])]
+    return {w: 146, h: 124, build: build}
+
+def _layout_spec():
+    def build(ui, st, sys, tray):
+        kb = tray.data.kb
+        if kb == nil:
+            return [_title_row(st, "user", "Keyboard"), cdk.label("The input service is not running.", {variant: "dim"})]
+        note = cdk.label("Second language", {variant: "dim"})
+        items = []
+        for l in kb.layouts ?? []:
+            items[len(items) + 1] = {text: l.title ?? l.name, icon: kb.keyboard == l.name and "check" or nil, set: {keyboard: l.name}}
+        items[len(items) + 1] = {text: "Follow Windows", icon: kb.mode == "auto" and "check" or nil, set: {mode: "auto"}}
+        items[len(items) + 1] = {text: "Switch in CubeOS", icon: kb.mode == "manual" and "check" or nil, set: {mode: "manual"}}
+        def pick(i, it):
+            if it.set == nil:
+                return
+            res, err = _ask(sys, "inputd", "set", it.set)
+            if err != nil:
+                note:set_text(tostring(err))
+                return
+            tray:patch("kb", {keyboard: res.keyboard, mode: res.mode, layouts: kb.layouts})
+            ui:close()
+        list = cdk.list_view({grow: 1, items: items, on_activate: pick})
+        return [_title_row(st, "user", "Keyboard"), note, list]
+    return {w: 140, h: 112, build: build}
+
+# ------------------------------------------------------------ значки
+
+def _slot(p, s, key, x, y, w, h):
+    if p.pressed == key or p.popup_key == key:
+        s:round_rect(x, y, w, h, 2, p.col.down, true)
+
+export class Tray:
+    def init(self, wm):
+        self.wm = wm
+        self.data = {}
+        self.items = []
+        self.running = false
+
+    # значки в панель и процесс опроса служб
+    def install(self):
+        wm = self.wm
+        if wm.panel == nil:
+            return
+        let me = self
+        def draw_layout(p, s, x, y, w, h):
+            me:_draw_layout(p, s, x, y, w, h)
+        def draw_sound(p, s, x, y, w, h):
+            me:_draw_sound(p, s, x, y, w, h)
+        def draw_net(p, s, x, y, w, h):
+            me:_draw_net(p, s, x, y, w, h)
+        def click_layout(p, b):
+            me:open("tray:layout", _layout_spec(), p)
+        def click_sound(p, b):
+            me:open("tray:sound", _sound_spec(), p)
+        def click_net(p, b):
+            me:open("tray:net", _net_spec(), p)
+        def wheel(p, dir):
+            me:nudge(dir < 0 and WHEEL_STEP or -WHEEL_STEP)
+        self.items = [{key: "tray:layout", w: 19, draw: draw_layout, click: click_layout, state: ""},
+            {key: "tray:sound", w: 13, draw: draw_sound, click: click_sound, scroll: wheel, state: ""},
+            {key: "tray:net", w: 13, draw: draw_net, click: click_net, state: ""}]
+        wm.panel.tray = self.items
+        self.running = true
+        wm:launch(_poller, {name: "tray"}, [self])
+
+    # новые данные от служб (в процессе менеджера)
+    def set(self, data):
+        self.data = data
+        self:_states()
+
+    # поменять одну часть данных (окошко только что изменило громкость или раскладку)
+    def patch(self, name, value):
+        let me = self
+        def apply():
+            me.data[name] = value
+            me:_states()
+        self.wm:defer(apply)
+
+    def _states(self):
+        d = self.data
+        a = d.audio
+        self.items[1].state = d.kb != nil and (tostring(d.kb.keyboard) .. tostring(d.kb.mode)) or "-"
+        self.items[2].state = a != nil and (tostring(a.volume) .. tostring(a.muted)) or "-"
+        n = d.net
+        self.items[3].state = n != nil and (len(n.modems ?? []) .. "," .. tostring(n.paired)) or "-"
+
+    # окошко значка: повторное нажатие закрывает
+    def open(self, key, spec, panel):
+        wm = self.wm
+        cur = wm.tray_pop
+        if cur != nil and not cur.win.closed:
+            wm:request_close(cur.win)
+            if cur.key == key:
+                return
+        it = nil
+        for x in panel.items:
+            if x.key == key:
+                it = x
+        ax = it != nil and it.x + math.floor(it.w / 2) or wm.W - 20
+        wm:launch(_popup, {name: "tray-popup"}, [self, key, spec, ax])
+
+    # громкость колесом: отдельный короткий процесс (менеджер ждать службу не может)
+    def nudge(self, delta):
+        let me = self
+        a = self.data.audio
+        if a == nil:
+            return
+        target = math.max(0, math.min(100, math.floor(a.volume ?? 0) + delta))
+        def run(sys, ctx):
+            res = _ask(sys, "audiod", "volume", {value: target})
+            if res != nil:
+                me:patch("audio", {volume: res, muted: false, speakers: a.speakers, playing: a.playing})
+        self.wm:launch(run, {name: "tray-volume"})
+
+    def _draw_layout(self, p, s, x, y, w, h):
+        _slot(p, s, "tray:layout", x, y, w, h)
+        kb = self.data.kb
+        f = p.wm.font
+        code = kb != nil and unicode.upper(tostring(kb.keyboard)) or "EN"
+        c = (kb != nil and kb.mode == "manual") and p.col.accent or p.col.dim
+        if kb == nil:
+            c = p.col.dim
+        tw = string.len(code) * f.width
+        s:text(f, x + math.floor((w - tw) / 2), y + math.floor((h - f.height) / 2), code, c)
+
+    def _draw_sound(self, p, s, x, y, w, h):
+        _slot(p, s, "tray:sound", x, y, w, h)
+        a = self.data.audio
+        off = a == nil or (a.volume ?? 0) <= 0 or a.muted == true
+        c = a == nil and p.col.dim or p.col.text
+        ix = x + math.floor((w - 9) / 2)
+        iy = y + math.floor((h - 9) / 2)
+        icons.draw(s, "volume", ix, iy, off and p.col.dim or c, off and p.col.dim or c)
+        if off:
+            s:line(ix + 1, iy + 8, ix + 8, iy + 1, theme.CLOSE)
+
+    def _draw_net(self, p, s, x, y, w, h):
+        _slot(p, s, "tray:net", x, y, w, h)
+        n = self.data.net
+        c = p.col.dim
+        if n != nil and len(n.modems ?? []) > 0:
+            c = (n.paired ?? 0) > 0 and p.col.accent or p.col.text
+        icons.draw(s, "wifi", x + math.floor((w - 9) / 2), y + math.floor((h - 9) / 2), c, c)
+
+def _poller(sys, ctx):
+    wm = ctx.wm
+    tray = ctx.args[1]
+    while wm.running and tray.running:
+        let data = poll(sys)
+        wm:defer(() => tray:set(data))
+        sys.wait_event(["cubeos_tray"], POLL)
+
+export def new(wm):
+    return Tray(wm)

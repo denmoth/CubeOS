@@ -908,7 +908,11 @@ export class WM:
     def _scroll(self, dir, px, py):
         win, part, extra = self:hit(px, py)
         if part == "panel":
-            self:cycle(dir > 0 and 1 or -1)
+            it = self.panel:item_at(px, py)
+            if it != nil and it.kind == "tray" and it.tray.scroll != nil:
+                it.tray.scroll(self.panel, dir)
+            else:
+                self:cycle(dir > 0 and 1 or -1)
             return
         if win != nil and part == "content":
             lx, ly = self:_local(win, px, py)

@@ -15,6 +15,7 @@ import cde.terminal as terminal
 import cdk.gallery as gallery
 import cde.apps as apps_mod
 import cde.startmenu as startmenu
+import cde.tray as tray_mod
 import cde.theme as theme_mod
 import clock as clock_mod
 import json5
@@ -157,6 +158,7 @@ export def program(session, opts=nil):
         def toggle_menu():
             startmenu.toggle(wm, reg, menu_opts)
         wm.on_start = toggle_menu
+        tray_mod.new(wm):install()
         wm:hotkey("ctrl+space", toggle_menu)
         wm:hotkey("ctrl+alt+l", panel_align)
         wm:hotkey("ctrl+alt+k", () => wm:launch(gallery.main, {name: "gallery"}))

@@ -5,6 +5,8 @@ import kernel
 import cde_demo as demo
 import cde.apps as apps_mod
 import cde.startmenu as startmenu
+import cde.tray as tray_mod
+import svc.rpc as rpc
 
 def make_term(cols, rows):
     api = {}
@@ -117,6 +119,51 @@ def menu_shoot(cols, rows, tag, theme_name):
     settle(k, 10)
     dump(wm, "ui_panel_" .. tag .. "_menu_search")
 
+def service(name, handlers):
+    def run(sys, a):
+        sys.register(name)
+        rpc.serve(sys, handlers)
+    return run
+
+def tray_shoot(tag, theme_name):
+    audio = {volume: 65, muted: false, speakers: ["speaker_0", "speaker_1"], playing: false}
+    net = {name: "cube-1", modems: [{side: "back", wired: true}], paired: 1}
+    kb = {keyboard: "ru", mode: "manual", layouts: [{name: "ru", title: "Russian"}, {name: "uk", title: "Ukrainian"}]}
+    ah = {}
+    ah.status = (q, f) => audio
+    ah.volume = (q, f) => audio.volume
+    nh = {}
+    nh.status = (q, f) => net
+    nh.peers = (q, f) => [{id: 2, name: "cube-2", paired: true, wired: true}, {id: 3, name: "farm-3", paired: false, wired: true}]
+    kh = {}
+    kh.get = (q, f) => kb
+    wm = demo.build({term: make_term(51, 19), assets: "/repo/assets", clock: now, theme: theme_name,
+        panel: {time_text: () => "14:32"}, animations: {enabled: false}})
+    k = kernel.new({clock: now})
+    k:spawn(service("audiod", ah), [], {name: "audiod"})
+    k:spawn(service("netd", nh), [], {name: "netd"})
+    k:spawn(service("inputd", kh), [], {name: "inputd"})
+    tray = tray_mod.new(wm)
+    tray:install()
+    def desk(sys, args):
+        wm:run(sys)
+    k:spawn(desk, [], {name: "cde", ui: true})
+    settle(k, 30)
+    dump(wm, "ui_panel_" .. tag .. "_tray")
+    for key in ["sound", "net", "layout"]:
+        for it in wm.panel.items:
+            if it.key == "tray:" .. key:
+                px = it.x + 3
+                py = wm.panel.rect.y + it.y + 3
+                k:feed("mouse_click", 1, px, py)
+                k:feed("mouse_up", 1, px, py)
+                settle(k, 20)
+                dump(wm, "ui_panel_" .. tag .. "_tray_" .. key)
+                k:feed("key", 256, false)
+                settle(k, 10)
+
+tray_shoot("tokyo", "tokyo-night")
+tray_shoot("light", "light")
 menu_shoot(51, 19, "tokyo", "tokyo-night")
 menu_shoot(51, 19, "light", "light")
 shoot(51, 19, "tokyo", "tokyo-night", {time_text: () => "14:32"})

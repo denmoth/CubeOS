@@ -1,0 +1,148 @@
+import t
+import kernel
+import cde
+import cde.tray as tray_mod
+import svc.rpc as rpc
+eq = t.eq
+
+def make_term():
+    api = {}
+    def get_size(px):
+        if px:
+            return 306, 171
+        return 51, 19
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "setGraphicsMode", "drawPixels", "setFrozen"]:
+        api[name] = nothing
+    return api
+
+def breathe():
+    os.queueEvent("t_breathe")
+    os.pullEvent("t_breathe")
+
+clock = {now: 1000}
+def now():
+    return clock.now
+
+# подставные службы: те же запросы, что у настоящих
+audio = {volume: 40, muted: false, speakers: ["speaker_0"], playing: false, notes: 0}
+net = {name: "cube-1", modems: [{side: "back", wired: true}], paired: 1}
+kb = {keyboard: "ru", mode: "auto", layouts: [{name: "ru", title: "Russian"}, {name: "uk", title: "Ukrainian"}]}
+
+def service(name, handlers):
+    def run(sys, a):
+        sys.register(name)
+        rpc.serve(sys, handlers)
+    return run
+
+audio_h = {}
+audio_h.status = (q, f) => {volume: audio.volume, muted: audio.muted, speakers: audio.speakers, playing: false}
+def set_volume(q, f):
+    if q != nil and q.value != nil:
+        audio.volume = q.value
+    return audio.volume
+audio_h.volume = set_volume
+audio_h.note = (q, f) => rawset(audio, "notes", audio.notes + 1)
+net_h = {}
+net_h.status = (q, f) => net
+net_h.peers = (q, f) => [{id: 2, name: "cube-2", paired: true, wired: true}]
+net_h.scan = (q, f) => [{id: 2, name: "cube-2", paired: true, wired: true}, {id: 3, name: "cube-3", paired: false, wired: true}]
+kb_h = {}
+kb_h.get = (q, f) => kb
+def set_kb(q, f):
+    if q.keyboard != nil:
+        kb.keyboard = q.keyboard
+    if q.mode != nil:
+        kb.mode = q.mode
+    return {keyboard: kb.keyboard, mode: kb.mode}
+kb_h.set = set_kb
+
+wm = cde.wm.new({animations: {enabled: false}, term: make_term(), assets: "/repo/assets", clock: now, panel: {time_text: () => "10:00"}})
+k = kernel.new({clock: now})
+breathe()
+k:spawn(service("audiod", audio_h), [], {name: "audiod"})
+k:spawn(service("netd", net_h), [], {name: "netd"})
+k:spawn(service("inputd", kb_h), [], {name: "inputd"})
+tray = tray_mod.new(wm)
+tray:install()
+def desk(sys, args):
+    wm:run(sys)
+k:spawn(desk, [], {name: "cde", ui: true})
+def settle(n=14):
+    k:feed("cubeos_cde")
+    for i in range[1, n]:
+        clock.now = clock.now + 20
+        k:tick()
+        k:run_ready()
+settle(30)
+p = wm.panel
+
+eq(len(p.items), 6, "panel: start, desktop strip, clock and three tray icons")
+eq([tray.data.audio != nil and tray.data.audio.volume, tray.data.net != nil and tray.data.net.name, tray.data.kb != nil and tray.data.kb.keyboard],
+    [40, "cube-1", "ru"], "the poller reads the three services")
+def item(key):
+    for it in p.items:
+        if it.key == key:
+            return it
+    return nil
+isound = item("tray:sound")
+ilayout = item("tray:layout")
+inet = item("tray:net")
+eq(ilayout.x > inet.x and ilayout.x + ilayout.w <= item("clock").x, true, "icons sit left of the clock, layout nearest")
+
+def click(it):
+    px = it.x + 3
+    py = p.rect.y + it.y + 3
+    k:feed("mouse_click", 1, px, py)
+    k:feed("mouse_up", 1, px, py)
+    settle()
+
+# ---------------------------------------------------------------- звук
+click(isound)
+pop = wm.tray_pop
+eq(pop != nil and pop.key, "tray:sound", "the sound icon opens its popup")
+eq(p.popup_key, "tray:sound", "and shows pressed")
+eq(pop.win.y + pop.win.h <= p.rect.y, true, "the popup stands above the panel")
+click(isound)
+settle()
+eq(wm.tray_pop == nil, true, "a second click closes it")
+
+# колесо над значком звука
+k:feed("mouse_scroll", -1, isound.x + 3, p.rect.y + isound.y + 3)
+settle(30)
+eq(audio.volume, 45, "the wheel over the sound icon raises the volume by 5")
+eq(tray.data.audio.volume, 45, "and the icon data follows")
+
+# ---------------------------------------------------------------- раскладка
+click(ilayout)
+pop = wm.tray_pop
+eq(pop != nil and pop.key, "tray:layout", "the layout icon opens its popup")
+k:feed("key", keys.down, false)
+settle()
+k:feed("key", keys.enter, false)
+settle(30)
+eq(kb.keyboard, "uk", "choosing a layout sets the system keyboard")
+eq(tray.data.kb.keyboard, "uk", "the icon follows")
+eq(wm.tray_pop == nil, true, "the popup closes after the choice")
+
+# ---------------------------------------------------------------- сеть
+click(inet)
+pop = wm.tray_pop
+eq(pop != nil and pop.key, "tray:net", "the network icon opens its popup")
+k:feed("key", 256, false)
+settle()
+eq(wm.tray_pop == nil, true, "Esc closes the popup")
+
+# ---------------------------------------------------------------- панель рисует значки
+sx = ilayout.x + 2
+found = false
+for yy in range[p.rect.y + ilayout.y, p.rect.y + ilayout.y + ilayout.h - 1]:
+    for xx in range[ilayout.x, ilayout.x + ilayout.w - 1]:
+        v = wm.comp.s:get(xx, yy)
+        if v == p.col.dim:
+            found = true
+eq(found, true, "the layout code is drawn in the panel")
+
+print("done")
