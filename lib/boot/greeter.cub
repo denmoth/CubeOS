@@ -47,8 +47,28 @@ export class TextGreeter:
             return "Wrong PIN or password. Too many wrong PINs: now only the password works."
         return "Wrong PIN or password." .. (left != nil and (" PIN tries left: " .. left) or "")
 
+    def _key_problem(self, why):
+        if why == "copied":
+            return "This key floppy is an old copy: it does not work, and its owner will be told."
+        if why == "bad key" or why == "unknown key":
+            return "This floppy is not a key for this computer."
+        return "No key floppy in a drive attached to this computer."
+
+    # вход ключом-дискетой: режим key входит сразу, key+pin спрашивает PIN или пароль
+    def _key_login(self):
+        c = self.console
+        r, why = self.sessions:key_login()
+        if r == nil:
+            c:write_line(self:_key_problem(why))
+            return nil
+        if r.mode == "key":
+            return self.sessions:open(r.user, nil, true, "key")
+        rec = self.auth:user(r.user)
+        c:write_line("Key floppy accepted.")
+        return self:_secret_login(rec, true)
+
     # одно поле: PIN или пароль
-    def _secret_login(self, rec):
+    def _secret_login(self, rec, key_ok=false):
         c = self.console
         for attempt in range[1, self.retries]:
             secret = c:read_line(self:_secret_prompt(rec), true)
@@ -56,7 +76,7 @@ export class TextGreeter:
                 return nil
             if self.busy != nil:
                 self.busy("checking the PIN or password")
-            s, why, left, wait = self.sessions:open_secret(rec.name, secret)
+            s, why, left, wait = self.sessions:open_secret(rec.name, secret, key_ok)
             if self.busy != nil:
                 self.busy(nil)
             if s != nil:
@@ -150,12 +170,16 @@ export class TextGreeter:
             # отображаемое имя и, если оно другое, имя учётной записи (обычный терминал CC не рисует кириллицу)
             shown = u.display != u.name and (u.display .. " (" .. u.name .. ")") or u.name
             c:write_line("  " .. i .. ". " .. shown .. (u.temp and " (guest)" or ""))
+        if self.auth.has_disk_keys != nil and self.auth:has_disk_keys():
+            c:write_line("  Enter: sign in with the key floppy in a drive")
         c:write_line("  s. Shut down")
         c:write_line("  r. Restart")
         c:write_line("")
         choice = c:read_line("User (number or name): ")
         if choice == nil:
             return nil
+        if choice == "" and self.auth.has_disk_keys != nil and self.auth:has_disk_keys():
+            return self:_key_login()
         lowered = string.lower(choice)
         if lowered == "s" or lowered == "shutdown":
             return {action: "shutdown"}
@@ -206,6 +230,7 @@ export class TextGreeter:
         mgr = self.sessions
         rec = self.auth:user(s.user) ?? {name: s.user, display: s.display}
         has_pin = self.auth.has_pin != nil and self.auth:has_pin(s.user)
+        key_ok = false
         note = nil
         while true:
             self:_header()
@@ -216,10 +241,22 @@ export class TextGreeter:
                 c:write_line("")
             prompt = has_pin and self:_secret_prompt({name: s.user, display: s.display ?? s.user}) or ("Password for " .. tostring(s.display) .. ": ")
             secret = c:read_line(prompt, true)
+            # пустая строка: ключ-дискета этого пользователя (если она есть в дисководе)
+            if secret == "" and not key_ok and mgr.key_login != nil:
+                r, kwhy = mgr:key_login(s.user)
+                if r != nil and r.mode == "key":
+                    return mgr:unlock_key(s.id)
+                if r != nil:
+                    key_ok = true
+                    note = "Key floppy accepted. Now your PIN or password."
+                    secret = nil
+                elif kwhy == "copied":
+                    note = self:_key_problem(kwhy)
+                    secret = nil
             if secret != nil:
                 if self.busy != nil:
                     self.busy("checking the PIN or password")
-                ok, why, extra = mgr:unlock(s.id, secret)
+                ok, why, extra = mgr:unlock(s.id, secret, nil, key_ok)
                 if self.busy != nil:
                     self.busy(nil)
                 if ok:

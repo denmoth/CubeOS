@@ -943,6 +943,50 @@ def b_pin(sh, args):
     sh:println(sub == "set" and sh:t("PIN set. Next time you sign in with it.") or sh:t("PIN removed."))
     return 0
 
+# key [list | add [--pin] | remove ID]: ключ-дискета (D248)
+def b_key(sh, args):
+    if not account_or_fail(sh, "key"):
+        return 1
+    sub = args[1] ?? "list"
+    if sub == "list":
+        list, why = sh.account("key_list")
+        if type(list) != "table":
+            sh:eprint("key: " .. sh:t(tostring(why)))
+            return 1
+        if len(list) == 0:
+            sh:println(sh:t("No key floppies. Insert a floppy into a drive attached to this computer and run key add."))
+        for k in list:
+            sh:println("#" .. tostring(k.id) .. "  " .. tostring(k.label ?? "") .. "  " .. (k.mode == "key+pin" and sh:t("with the PIN") or sh:t("instead of the password")))
+        return 0
+    if sub != "add" and sub != "remove":
+        sh:eprint("usage: key [list | add [--pin] | remove ID]")
+        return 2
+    if sub == "remove" and args[2] == nil:
+        sh:eprint("usage: key remove ID")
+        return 2
+    st = sh.account("status")
+    pw = nil
+    if type(st) == "table" and st.password:
+        pw = ask_secret(sh, sh:t("Your password: "))
+    if sub == "add":
+        mode = (args[2] == "--pin" or args[2] == "-p") and "key+pin" or "key"
+        r, why = sh.account("key_add", {password: pw, mode: mode})
+        if type(r) != "table":
+            sh:eprint("key: " .. sh:t(tostring(why)))
+            return 1
+        if mode == "key+pin":
+            sh:println(sh:t("Floppy #{id} is now your key: sign in with it and your PIN. Keep it somewhere safe (an ender chest).", {id: r.id}))
+        else:
+            sh:println(sh:t("Floppy #{id} is now your key: insert it and press Enter at the login screen. Keep it somewhere safe (an ender chest).", {id: r.id}))
+        return 0
+    ok, why = sh.account("key_remove", {password: pw, id: args[2]})
+    if not ok:
+        sh:eprint("key: " .. sh:t(tostring(why)))
+        return 1
+    sh:println(sh:t("Key floppy #{id} no longer works.", {id: args[2]}))
+    return 0
+add("key", b_key)
+
 # remember [MINUTES|off]: не спрашивать пароль столько минут после последнего входа
 def b_remember(sh, args):
     if not account_or_fail(sh, "remember"):

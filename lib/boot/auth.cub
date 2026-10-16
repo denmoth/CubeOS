@@ -95,6 +95,9 @@ export def check_hash(password, record):
     return _same(got, want)
 
 export const FAILS_PATH = "/cubeos/sys/sec/fails.lock"
+export const DISK_KEYS_PATH = "/cubeos/sys/sec/disk_keys.lock"
+export const KEY_MODES = {key: true, "key+pin": true}
+const KEEP_OLD = 5
 
 export class Auth:
     # opts: rounds (по умолчанию 1000), clock, entropy, min_password (по умолчанию 1), paths {users, shadow, sudoers}
@@ -110,6 +113,8 @@ export class Auth:
         self.sudoers_path = (o.paths ?? {}).sudoers ?? SUDOERS_PATH
         self.pins_path = (o.paths ?? {}).pins ?? PINS_PATH
         self.fails_path = (o.paths ?? {}).fails ?? FAILS_PATH
+        self.disk_keys_path = (o.paths ?? {}).disk_keys ?? DISK_KEYS_PATH
+        self.disk_keys = {}
         self.pins = {}
         self.records = []
         self.shadow = {}
@@ -138,6 +143,9 @@ export class Auth:
         text = self:_read(self.fails_path)
         ok_f, data_f = pcall(() => text != nil and json5.parse(text) or {})
         self.fails = ok_f and type(data_f) == "table" and data_f or {}
+        text = self:_read(self.disk_keys_path)
+        ok_k, data_k = pcall(() => text != nil and json5.parse(text) or {})
+        self.disk_keys = ok_k and type(data_k) == "table" and data_k or {}
         text = self:_read(self.sudoers_path)
         self.admins = {}
         if text != nil:
@@ -198,6 +206,120 @@ export class Auth:
         f.total = 0
         self:_save_fails()
         return res
+
+    # ------------------------------------------------------------ ключ-дискета (D248)
+    # disk_keys[имя] = [{id (номер дискеты), hash (секрета), next (новый, пока он пишется на дискету), old (прошлые хэши: так видна
+    # копия), mode ("key": вместо пароля, "key+pin": вместе с PIN), label, created, used, copied (когда пытались войти копией)}]
+
+    def _save_keys(self):
+        let me = self
+        pcall(() => me.fsys:mkdir(nil, paths.parent(me.disk_keys_path), {parents: true}))
+        me.fsys:write_file(nil, me.disk_keys_path, json5.stringify(me.disk_keys) .. "\n")
+
+    # новый секрет для дискеты: 64 шестнадцатеричных знака
+    def new_secret(self):
+        self.counter += 1
+        return sha256.hex(self.entropy() .. ":" .. self.counter .. ":" .. tostring(self.clock()))
+
+    def has_disk_keys(self):
+        for name, list in self.disk_keys:
+            if len(list) > 0:
+                return true
+        return false
+
+    # дискета с этим номером становится ключом пользователя (у другого пользователя она ключом быть перестаёт)
+    def add_disk_key(self, name, id, secret, mode="key", label=nil):
+        rec = self:user(name)
+        if rec == nil:
+            raise Error("no such user: " .. tostring(name))
+        if not KEY_MODES[mode]:
+            raise Error("the key mode is key or key+pin")
+        for user, list in self.disk_keys:
+            keep = []
+            for k in list:
+                if k.id != id:
+                    keep[len(keep) + 1] = k
+            self.disk_keys[user] = keep
+        list = self.disk_keys[rec.name] ?? []
+        list[len(list) + 1] = {id: id, hash: sha256.hex(secret), old: [], mode: mode, label: label, created: self.clock()}
+        self.disk_keys[rec.name] = list
+        self:_save_keys()
+
+    def remove_disk_key(self, name, id):
+        rec = self:user(name)
+        keep = []
+        found = false
+        for k in (rec != nil and self.disk_keys[rec.name] or nil) ?? []:
+            if k.id == id:
+                found = true
+            else:
+                keep[len(keep) + 1] = k
+        if found:
+            self.disk_keys[rec.name] = keep
+            self:_save_keys()
+        return found
+
+    def list_disk_keys(self, name):
+        rec = self:user(name)
+        out = []
+        for k in (rec != nil and self.disk_keys[rec.name] or nil) ?? []:
+            out[len(out) + 1] = {id: k.id, mode: k.mode, label: k.label, created: k.created, used: k.used}
+        return out
+
+    # PIN действует только вместе с дискетой
+    def pin_needs_key(self, name):
+        for k in self.disk_keys[name] ?? []:
+            if k.mode == "key+pin":
+                return true
+        return false
+
+    # проверка дискеты: {name, mode, key} или nil и причина ("unknown key", "bad key", "copied": это старая копия)
+    def check_disk_key(self, id, user, secret):
+        rec = self:user(user)
+        if rec == nil:
+            return nil, "unknown key"
+        h = sha256.hex(tostring(secret))
+        for k in self.disk_keys[rec.name] ?? []:
+            if k.id == id:
+                if _same(h, k.hash) or (k.next != nil and _same(h, k.next)):
+                    return {name: rec.name, mode: k.mode, key: k}
+                for o in k.old ?? []:
+                    if _same(h, o):
+                        k.copied = self.clock()
+                        self:_save_keys()
+                        return nil, "copied"
+                return nil, "bad key"
+        return nil, "unknown key"
+
+    # смена секрета: сначала запоминается новый (next), потом он пишется на дискету, потом становится главным
+    def begin_rotate(self, k, secret):
+        k.next = sha256.hex(secret)
+        self:_save_keys()
+
+    def finish_rotate(self, k):
+        old = k.old ?? []
+        table.insert(old, 1, k.hash)
+        while len(old) > KEEP_OLD:
+            table.remove(old)
+        k.old = old
+        k.hash = k.next ?? k.hash
+        k.next = nil
+        k.used = self.clock()
+        self:_save_keys()
+
+    # пытались войти старой копией дискеты: когда (последний раз) или nil; сообщается один раз
+    def take_key_alert(self, name):
+        rec = self:user(name)
+        when_ = nil
+        changed = false
+        for k in (rec != nil and self.disk_keys[rec.name] or nil) ?? []:
+            if k.copied != nil:
+                when_ = math.max(when_ ?? 0, k.copied)
+                k.copied = nil
+                changed = true
+        if changed:
+            self:_save_keys()
+        return when_
 
     # ------------------------------------------------------------ пользователи
 
@@ -375,7 +497,7 @@ export class Auth:
     # одно поле для PIN и пароля (D247): совпал пароль -> "password" (вход «с админкой»), совпал PIN (если не заблокирован) -> "pin".
     # Неверное считается и попыткой пароля, и попыткой PIN. Возвращает способ или nil, причину ("bad secret", "locked", "unknown"),
     # сколько попыток PIN осталось (nil, если PIN нет или он заблокирован) и сколько секунд ждать до следующей попытки
-    def verify_secret(self, name, secret):
+    def verify_secret(self, name, secret, key_ok=false):
         rec = self:user(name)
         if rec == nil:
             return nil, "unknown"
@@ -396,7 +518,7 @@ export class Auth:
                 p.fails = 0
                 self:save()
             return "password"
-        pin_usable = p != nil and (p.fails ?? 0) < PIN_TRIES
+        pin_usable = p != nil and (p.fails ?? 0) < PIN_TRIES and (key_ok or not self:pin_needs_key(rec.name))
         if pin_usable and secret != nil and secret != "" and check_hash(secret, p.hash):
             self:_succeeded(rec.name)
             if (p.fails ?? 0) > 0:

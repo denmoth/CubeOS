@@ -20,6 +20,7 @@
 import cfs
 import cfs.rules as rules_mod
 import json5
+import boot.diskkey as diskkey
 
 const PROFILE_DIRS = ["home/documents", "home/pictures", "home/videos", "home/projects", "apps", "cache", "cfg", "data",
     "desktop", "trash"]
@@ -46,6 +47,9 @@ export class Session:
         self.pids = []
         self.aliases = nil
 
+def auth_modes_ok(mode):
+    return mode == "key" or mode == "key+pin"
+
 export class SessionManager:
     # opts: kernel, clock, elevate_ms (по умолчанию 300000), lang, de, aliases (общие алиасы для всех сессий)
     def init(self, fsys, auth, opts=nil):
@@ -62,6 +66,9 @@ export class SessionManager:
         self.next_id = 1
         self.active_id = nil
         self.on_open = o.on_open
+        # для ключа-дискеты (D248): периферия и fs CC (в тестах подставные)
+        self.periph = o.periph ?? peripheral
+        self.fsapi = o.fsapi ?? fs
         self.on_close = o.on_close
         self.trust_login = o.trust_login != false
         self.state_path = o.state_path ?? "/cubeos/var/login.state"
@@ -123,6 +130,7 @@ export class SessionManager:
         s.admin_capable = self.auth:is_admin(rec.name)
         # неверные попытки с прошлого входа (D248): терминал скажет о них
         s.failures = self.auth.take_failures != nil and self.auth:take_failures(rec.name) or nil
+        s.key_alert = self.auth.take_key_alert != nil and self.auth:take_key_alert(rec.name) or nil
         s.login_method = method ?? (trusted and "trusted" or "password")
         s.manager = self
         self:_note_login(rec)
@@ -135,9 +143,39 @@ export class SessionManager:
             self.on_open(s)
         return s
 
+    # ключ-дискета в дисководе этого компьютера (D248): {user, mode} или nil и причина ("no key floppy", "copied", "bad key");
+    # want_user: только ключ этого пользователя. Секрет на дискете тут же меняется на новый
+    def key_login(self, want_user=nil):
+        why = "no key floppy"
+        for fl in diskkey.floppies(self.periph, self.fsapi):
+            data = diskkey.read(self.fsapi, fl.path)
+            if data != nil and (want_user == nil or data.user == want_user):
+                r, bad = self.auth:check_disk_key(fl.id, data.user, data.secret)
+                if r != nil:
+                    fresh = self.auth:new_secret()
+                    self.auth:begin_rotate(r.key, fresh)
+                    let path = fl.path
+                    let me = self
+                    if pcall(() => diskkey.write(me.fsapi, path, r.name, fresh)):
+                        self.auth:finish_rotate(r.key)
+                    return {user: r.name, mode: r.mode}
+                why = bad
+        return nil, why
+
+    # разблокировка дискетой (режим key)
+    def unlock_key(self, id):
+        s = self.sessions[id]
+        if s == nil:
+            return false, "no session"
+        s.login_method = "key"
+        s.state = "active"
+        s.unlock_failures = self.auth.take_failures != nil and self.auth:take_failures(s.user) or nil
+        return true
+
     # вход одним полем (D247): PIN или пароль, способ входа по тому, что совпало. nil, причина, попыток PIN, секунд ждать
-    def open_secret(self, name, secret):
-        how, why, left, wait = self.auth:verify_secret(name, secret)
+    # key_ok: дискета уже проверена (для режима key+pin)
+    def open_secret(self, name, secret, key_ok=false):
+        how, why, left, wait = self.auth:verify_secret(name, secret, key_ok)
         if how == nil:
             return nil, why, left, wait
         return self:open(name, nil, true, how)
@@ -240,12 +278,12 @@ export class SessionManager:
 
     # снять блокировку (D226, D247): method nil — одно поле, подходит и PIN, и пароль (пароль: дальше sudo как после входа по
     # паролю); "pin" или "password" — только это. Возвращает true или false, причину и число (попыток PIN или секунд ждать)
-    def unlock(self, id, secret, method=nil):
+    def unlock(self, id, secret, method=nil, key_ok=false):
         s = self.sessions[id]
         if s == nil:
             return false, "no session"
         if method == nil:
-            how, why, left, wait = self.auth:verify_secret(s.user, secret)
+            how, why, left, wait = self.auth:verify_secret(s.user, secret, key_ok)
             if how == nil:
                 return false, why, why == "locked" and wait or left
             s.login_method = how
@@ -316,6 +354,42 @@ export class SessionManager:
             if not ok:
                 return false, why
             return pcall(() => self.auth:set_field(s.user, "remember_minutes", args.minutes))
+        if op == "key_list":
+            return self.auth:list_disk_keys(s.user)
+        if op == "key_add":
+            ok, why = own_password()
+            if not ok:
+                return false, why
+            mode = args.mode ?? "key"
+            if not auth_modes_ok(mode):
+                return false, "the key mode is key or key+pin"
+            list = diskkey.floppies(self.periph, self.fsapi)
+            if len(list) == 0:
+                return false, "no floppy in a drive attached to this computer"
+            fl = list[1]
+            secret = self.auth:new_secret()
+            let path = fl.path
+            let me = self
+            okw, err = pcall(() => diskkey.write(me.fsapi, path, s.user, secret))
+            if not okw:
+                return false, "cannot write the floppy: " .. tostring(err)
+            if fl.label == nil or fl.label == "":
+                pcall(() => fl.drive.setDiskLabel(string.sub(tostring(s.display) .. " key", 1, 32)))
+            self.auth:add_disk_key(s.user, fl.id, secret, mode, fl.label ?? (tostring(s.display) .. " key"))
+            return {id: fl.id, mode: mode}
+        if op == "key_remove":
+            ok, why = own_password()
+            if not ok:
+                return false, why
+            id = tonumber(args.id)
+            if id == nil or not self.auth:remove_disk_key(s.user, id):
+                return false, "no such key floppy"
+            for fl in diskkey.floppies(self.periph, self.fsapi):
+                if fl.id == id:
+                    let path2 = fl.path
+                    let me2 = self
+                    pcall(() => diskkey.remove(me2.fsapi, path2))
+            return true
         if op == "status":
             rec = self.auth:user(s.user)
             return {pin: self.auth:has_pin(s.user), remember: rec.remember_minutes ?? 0, admin: s.admin_capable,

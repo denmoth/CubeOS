@@ -128,6 +128,10 @@ export def program(session, opts=nil):
         def failures_note(f):
             when_ = t.time:date_text(f.last) .. " " .. t.time:time_text(f.last)
             return {text: "{n} wrong sign-in attempts since your last sign-in, the last on {when}", vars: {n: f.total, when: when_}}
+        if session.key_alert != nil:
+            okk, when_k = pcall(() => t.time:date_text(session.key_alert) .. " " .. t.time:time_text(session.key_alert))
+            notes[len(notes) + 1] = {text: "Someone tried to sign in with an old copy of your key floppy ({when}): make a new key (key add) and remove the old one (key remove)",
+                vars: {when: okk and when_k or "?"}}
         if session.failures != nil:
             okn, note_ = pcall(() => failures_note(session.failures))
             if okn:

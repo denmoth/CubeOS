@@ -312,6 +312,12 @@ msgstr "Скачать страницу или файл"
 msgid "Gets the address over HTTP and prints it or saves it. HTTP must be allowed on the server."
 msgstr "Получает адрес по HTTP и печатает или сохраняет. HTTP должен быть разрешён на сервере."
 
+msgid "Sign in with a key floppy"
+msgstr "Вход по ключу-дискете"
+
+msgid "Makes the floppy in a drive attached to this computer your key: at the login screen insert it and press Enter. With --pin the floppy and your PIN are needed together (your PIN alone stops working; the password always works). The secret on the floppy changes every time you sign in with it, so a copy stops working, and an attempt with an old copy is reported to you. Changing keys asks for your password."
+msgstr "Делает дискету в дисководе, прикреплённом к этому компьютеру, вашим ключом: на экране входа вставьте её и нажмите Enter. С --pin нужны дискета и PIN вместе (один PIN перестаёт подходить; пароль подходит всегда). Секрет на дискете меняется при каждом входе ею, поэтому копия перестаёт работать, а о попытке войти старой копией вам сообщат. Менять ключи можно только с паролем."
+
 msgid "Lock the terminal"
 msgstr "Заблокировать терминал"
 
@@ -915,6 +921,24 @@ msgstr "Только статус и заголовки"
 msgid "Download a file"
 msgstr "Скачать файл"
 
+msgid "Your key floppies (the default)"
+msgstr "Ваши ключи-дискеты (по умолчанию)"
+
+msgid "Make the inserted floppy a key that replaces the password"
+msgstr "Сделать вставленную дискету ключом вместо пароля"
+
+msgid "A key that works together with your PIN"
+msgstr "Ключ, который работает вместе с PIN"
+
+msgid "The floppy with this number stops being a key"
+msgstr "Дискета с этим номером перестаёт быть ключом"
+
+msgid "Make a key"
+msgstr "Сделать ключ"
+
+msgid "A lost key stops working"
+msgstr "Потерянный ключ перестаёт работать"
+
 msgid "Lock by itself after so many minutes without input (off: never)"
 msgstr "Блокироваться самому после стольких минут без ввода (off: никогда)"
 
@@ -1332,6 +1356,18 @@ msgstr "блокировка здесь недоступна"
 msgid "the minutes are a number from 1 to 1440 or off"
 msgstr "минуты это число от 1 до 1440 или off"
 
+msgid "no floppy in a drive attached to this computer"
+msgstr "в дисководе этого компьютера нет дискеты"
+
+msgid "the key mode is key or key+pin"
+msgstr "режим ключа: key или key+pin"
+
+msgid "no such key floppy"
+msgstr "нет такой ключа-дискеты"
+
+msgid "Someone tried to sign in with an old copy of your key floppy ({when}): make a new key (key add) and remove the old one (key remove)"
+msgstr "Кто-то пытался войти старой копией вашей ключа-дискеты ({when}): сделайте новый ключ (key add) и уберите старый (key remove)"
+
 msgid "{n} wrong sign-in attempts since your last sign-in, the last on {when}"
 msgstr "С прошлого входа неверных попыток войти: {n}, последняя {when}"
 
@@ -1457,6 +1493,24 @@ msgstr "PIN задан. В следующий раз входите по нем�
 
 msgid "PIN removed."
 msgstr "PIN убран."
+
+msgid "No key floppies. Insert a floppy into a drive attached to this computer and run key add."
+msgstr "Ключей-дискет нет. Вставьте дискету в дисковод этого компьютера и выполните key add."
+
+msgid "with the PIN"
+msgstr "вместе с PIN"
+
+msgid "instead of the password"
+msgstr "вместо пароля"
+
+msgid "Floppy #{id} is now your key: sign in with it and your PIN. Keep it somewhere safe (an ender chest)."
+msgstr "Дискета №{id} теперь ваш ключ: входите ею и PIN. Храните её надёжно (в эндер-сундуке)."
+
+msgid "Floppy #{id} is now your key: insert it and press Enter at the login screen. Keep it somewhere safe (an ender chest)."
+msgstr "Дискета №{id} теперь ваш ключ: на экране входа вставьте её и нажмите Enter. Храните её надёжно (в эндер-сундуке)."
+
+msgid "Key floppy #{id} no longer works."
+msgstr "Ключ-дискета №{id} больше не работает."
 
 msgid "Every login asks for the password or PIN."
 msgstr "Каждый вход спрашивает пароль или PIN."

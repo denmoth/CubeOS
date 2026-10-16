@@ -1,0 +1,55 @@
+# boot.diskkey: ключ-дискета (D248). На дискете скрытый файл .cubeos_key {user, secret}; система помнит номер дискеты (его выдаёт
+# игра, подделать нельзя) и хэш секрета, секрет меняется при каждом входе дискетой (boot.auth, boot.session).
+# Ключом считается только дискета в дисководе, прикреплённом прямо к компьютеру (сверху, снизу, по бокам): дисковод в проводной
+# сети видят все компьютеры этой сети.
+#
+#   diskkey.floppies(peripheral, fs)   [{side, drive, id, path, label}] дискет с данными в таких дисководах
+#   diskkey.read(fs, path)             {user, secret} или nil
+#   diskkey.write(fs, path, user, secret)   через .new и замену: при сбое остаётся старый или новый файл, не половина
+#   diskkey.remove(fs, path)
+
+import json5
+
+export const FILE = ".cubeos_key"
+export const SIDES = {top: true, bottom: true, left: true, right: true, front: true, back: true}
+
+export def floppies(periph, fsapi):
+    out = []
+    ok, names = pcall(() => periph.getNames())
+    for name in (ok and names or []):
+        okt, kind = pcall(() => periph.getType(name))
+        if SIDES[name] and okt and kind == "drive":
+            d = periph.wrap(name)
+            okp, present = pcall(() => d.isDiskPresent())
+            okm, path = pcall(() => d.getMountPath())
+            oki, id = pcall(() => d.getDiskID())
+            if okp and present and okm and path != nil and oki and id != nil:
+                okl, label = pcall(() => d.getDiskLabel())
+                out[len(out) + 1] = {side: name, drive: d, id: id, path: path, label: okl and label or nil}
+    return out
+
+export def read(fsapi, path):
+    for f in [path .. "/" .. FILE, path .. "/" .. FILE .. ".new"]:
+        if fsapi.exists(f):
+            h = fsapi.open(f, "r")
+            text = h.readAll()
+            h.close()
+            ok, data = pcall(() => json5.parse(text))
+            if ok and type(data) == "table" and type(data.user) == "string" and type(data.secret) == "string":
+                return data
+    return nil
+
+export def write(fsapi, path, user, secret):
+    tmp = path .. "/" .. FILE .. ".new"
+    h = fsapi.open(tmp, "w")
+    h.write(json5.stringify({user: user, secret: secret}) .. "\n")
+    h.close()
+    target = path .. "/" .. FILE
+    if fsapi.exists(target):
+        fsapi.delete(target)
+    fsapi.move(tmp, target)
+
+export def remove(fsapi, path):
+    for f in [path .. "/" .. FILE, path .. "/" .. FILE .. ".new"]:
+        if fsapi.exists(f):
+            fsapi.delete(f)

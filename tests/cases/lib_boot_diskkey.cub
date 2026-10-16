@@ -1,0 +1,136 @@
+import t
+import cfs
+import boot.auth as auth_mod
+import boot.session as session_mod
+import boot.greeter as greeter_mod
+import boot.console as console_mod
+import boot.diskkey as diskkey
+eq = t.eq
+
+# Ключ-дискета (D248): запись ключа, вход Enter-ом, смена секрета при каждом входе, копия не работает и о ней сообщается, чужой номер
+# дискеты не подходит, дисковод из проводной сети не считается, режим key+pin, отзыв, разблокировка.
+
+clock = {now: 1000000}
+def now():
+    return clock.now
+
+fsys = cfs.new({clock: now})
+fsys:mount("/", cfs.memory({now: now}))
+cfs.install_defaults(fsys)
+fsys:mkdir(nil, "/cubeos/var", {parents: true})
+auth = auth_mod.Auth(fsys, {rounds: 2, clock: now})
+auth:load()
+auth:create_user({name: "alice"}, "long-password", true)
+auth:set_pin("alice", "4321")
+
+# подставные дисковод и файлы дискеты
+files = {}
+ffs = {}
+ffs.exists = (p) => files[p] != nil
+def ffs_delete(p):
+    files[p] = nil
+ffs.delete = ffs_delete
+def ffs_move(a, b):
+    files[b] = files[a]
+    files[a] = nil
+ffs.move = ffs_move
+def ffs_open(p, mode):
+    h = {}
+    if mode == "r":
+        h.readAll = () => files[p]
+        h.close = () => nil
+        return h
+    buf = {t: ""}
+    def wr(x):
+        buf.t = buf.t .. x
+    def cl():
+        files[p] = buf.t
+    h.write = wr
+    h.close = cl
+    return h
+ffs.open = ffs_open
+disk = {id: 7, label: nil, present: true}
+drive = {}
+drive.isDiskPresent = () => disk.present
+drive.getMountPath = () => "disk"
+drive.getDiskID = () => disk.id
+drive.getDiskLabel = () => disk.label
+def set_label(l):
+    disk.label = l
+drive.setDiskLabel = set_label
+per = {names: ["bottom"]}
+per.getNames = () => per.names
+per.getType = (n) => "drive"
+per.wrap = (n) => drive
+
+sessions = session_mod.new(fsys, auth, {clock: now, periph: per, fsapi: ffs})
+s = sessions:open("alice", "long-password")
+
+# ------------------------------------------------------------ запись ключа
+ok, why = sessions:account(s.id, "key_add", {password: "wrong"})
+eq(ok, false, "making a key needs your password")
+r = sessions:account(s.id, "key_add", {password: "long-password"})
+eq(r != nil and r.id, 7, "the floppy in the drive becomes a key")
+eq(files["disk/.cubeos_key"] != nil, true, "with the secret file on it")
+eq(disk.label, "alice key", "and a label")
+eq(string.find(fsys:read_file(nil, auth_mod.DISK_KEYS_PATH), diskkey.read(ffs, "disk").secret, 1, true), nil, "the system keeps only a hash of the secret")
+sessions:close(s.id)
+
+# ------------------------------------------------------------ вход: Enter с дискетой
+first = files["disk/.cubeos_key"]
+con = console_mod.ScriptedConsole([""])
+s = greeter_mod.new(con, auth, sessions, {}):login()
+eq(s != nil and s.user, "alice", "Enter at the login screen signs in with the key floppy")
+eq(s.login_method, "key", "as a key login (sudo will ask for the password)")
+eq(files["disk/.cubeos_key"] != first, true, "the secret on the floppy changed")
+sessions:close(s.id)
+
+# копия: старое содержимое дискеты больше не входит, и об этом сообщат
+files["disk/.cubeos_key"] = first
+r, why = sessions:key_login()
+eq([r, why], [nil, "copied"], "an old copy of the floppy does not work")
+s = sessions:open("alice", "long-password")
+eq(s.key_alert != nil, true, "the owner is told about the copy at the next sign-in")
+sessions:close(s.id)
+
+# правильный секрет, но другой номер дискеты (скопировали файл на свою дискету)
+s = sessions:open("alice", "long-password")
+sessions:account(s.id, "key_add", {password: "long-password"})
+sessions:close(s.id)
+good = files["disk/.cubeos_key"]
+disk.id = 99
+r, why = sessions:key_login()
+eq(r, nil, "the right file on another floppy does not work")
+disk.id = 7
+
+# дисковод в проводной сети не считается
+per.names = ["drive_0"]
+r, why = sessions:key_login()
+eq([r, why], [nil, "no key floppy"], "a drive on the wired network is not used for keys")
+per.names = ["bottom"]
+
+# ------------------------------------------------------------ key+pin
+s = sessions:open("alice", "long-password")
+sessions:account(s.id, "key_add", {password: "long-password", mode: "key+pin"})
+sessions:close(s.id)
+disk.present = false
+eq(auth:verify_secret("alice", "4321"), nil, "with key+pin the PIN alone does not work")
+eq(auth:verify_secret("alice", "long-password"), "password", "the password always works")
+disk.present = true
+con = console_mod.ScriptedConsole(["", "4321"])
+s = greeter_mod.new(con, auth, sessions, {}):login()
+eq(s != nil and s.login_method, "pin", "the floppy and the PIN together sign in")
+
+# разблокировка дискетой
+sessions:lock(s.id)
+con2 = console_mod.ScriptedConsole(["", "4321"])
+eq(greeter_mod.new(con2, auth, sessions, {}):unlock(s), true, "the floppy and the PIN unlock too")
+
+# ------------------------------------------------------------ отзыв
+list = sessions:account(s.id, "key_list")
+eq(len(list), 1, "one key in the list")
+eq(sessions:account(s.id, "key_remove", {password: "long-password", id: 7}), true, "remove the key")
+r, why = sessions:key_login()
+eq(r, nil, "a removed key does not sign in")
+eq(files["disk/.cubeos_key"], nil, "and its file is gone from the floppy")
+print("done")
