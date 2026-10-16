@@ -690,4 +690,5 @@ T = {
 "Encryption: required (plain requests are refused)": ("Шифрование: обязательно (открытые запросы отклоняются)", "Шифрування: обов'язкове (відкриті запити відхиляються)"),
 "this computer accepts only encrypted requests (net encrypt on there)": ("этот компьютер принимает только зашифрованные запросы (net encrypt on на вашем)", "цей комп'ютер приймає лише зашифровані запити (net encrypt on на вашому)"),
 "the encryption mode is on, off or require": ("режим шифрования: on, off или require", "режим шифрування: on, off або require"),
+"{n} wrong sign-in attempts since your last sign-in, the last on {when}": ("С прошлого входа неверных попыток войти: {n}, последняя {when}", "Від минулого входу хибних спроб увійти: {n}, остання {when}"),
 }

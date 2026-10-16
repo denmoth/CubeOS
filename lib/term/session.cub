@@ -124,6 +124,14 @@ export def program(session, opts=nil):
         # сеть (служба netd): op и args как у её запросов
         def net(op, args=nil):
             return host_call("net", {op: op, args: args})
+        # неверные попытки входа с прошлого входа (D248)
+        def failures_note(f):
+            when_ = t.time:date_text(f.last) .. " " .. t.time:time_text(f.last)
+            return {text: "{n} wrong sign-in attempts since your last sign-in, the last on {when}", vars: {n: f.total, when: when_}}
+        if session.failures != nil:
+            okn, note_ = pcall(() => failures_note(session.failures))
+            if okn:
+                notes[len(notes) + 1] = note_
         cfg = view:expand("$cfg")
         env.cush_opts = {history_path: cfg .. "/cush_history", config_path: cfg .. "/cush.conf", user: session.user, host: o.host,
             home: session.env.home, time: t.time, time_save: time_save, power: power, inputlog: inputlog, log: shell_log, notes: notes, sudo: sudo, account: account, keyboard: keyboard, audio: audio, net: net, lock: lock, assets: o.assets ?? "/repo/assets",
@@ -202,6 +210,11 @@ export def program(session, opts=nil):
             locked.on = false
             locked.last_input = sys.now()
             sys.log("info", "terminal unlocked")
+            f = session.unlock_failures
+            session.unlock_failures = nil
+            if f != nil:
+                n = failures_note(f)
+                cur.proc:feed("cubeos_note", n.text, n.vars.n, n.vars.when)
             return true
         u:set_root(tv)
         u:focus_widget(tv)

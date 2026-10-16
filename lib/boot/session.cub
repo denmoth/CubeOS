@@ -121,6 +121,8 @@ export class SessionManager:
         view = cfs.view(self.fsys, subject, {aliases: cfs.default_aliases(profile)})
         s = Session(id, rec, profile, subject, view, {now: self.clock(), lang: self.lang, de: self.de})
         s.admin_capable = self.auth:is_admin(rec.name)
+        # неверные попытки с прошлого входа (D248): терминал скажет о них
+        s.failures = self.auth.take_failures != nil and self.auth:take_failures(rec.name) or nil
         s.login_method = method ?? (trusted and "trusted" or "password")
         s.manager = self
         self:_note_login(rec)
@@ -248,6 +250,7 @@ export class SessionManager:
                 return false, why, why == "locked" and wait or left
             s.login_method = how
             s.state = "active"
+            s.unlock_failures = self.auth.take_failures != nil and self.auth:take_failures(s.user) or nil
             return true
         how = method
         if how == "pin":

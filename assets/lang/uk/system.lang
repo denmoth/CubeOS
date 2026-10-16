@@ -1332,6 +1332,9 @@ msgstr "блокування тут недоступне"
 msgid "the minutes are a number from 1 to 1440 or off"
 msgstr "хвилини це число від 1 до 1440 або off"
 
+msgid "{n} wrong sign-in attempts since your last sign-in, the last on {when}"
+msgstr "Від минулого входу хибних спроб увійти: {n}, остання {when}"
+
 msgid "shared folders work only over a wired modem"
 msgstr "спільні теки працюють лише через дротовий модем"
 

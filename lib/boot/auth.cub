@@ -94,6 +94,8 @@ export def check_hash(password, record):
     got = sha256.to_hex(sha256.pbkdf2(password, _from_hex(salt_hex), tonumber(rounds)))
     return _same(got, want)
 
+export const FAILS_PATH = "/cubeos/sys/sec/fails.lock"
+
 export class Auth:
     # opts: rounds (по умолчанию 1000), clock, entropy, min_password (по умолчанию 1), paths {users, shadow, sudoers}
     def init(self, fsys, opts=nil):
@@ -107,6 +109,7 @@ export class Auth:
         self.shadow_path = (o.paths ?? {}).shadow ?? SHADOW_PATH
         self.sudoers_path = (o.paths ?? {}).sudoers ?? SUDOERS_PATH
         self.pins_path = (o.paths ?? {}).pins ?? PINS_PATH
+        self.fails_path = (o.paths ?? {}).fails ?? FAILS_PATH
         self.pins = {}
         self.records = []
         self.shadow = {}
@@ -132,6 +135,9 @@ export class Auth:
         self.shadow = text != nil and json5.parse(text) or {}
         text = self:_read(self.pins_path)
         self.pins = text != nil and json5.parse(text) or {}
+        text = self:_read(self.fails_path)
+        ok_f, data_f = pcall(() => text != nil and json5.parse(text) or {})
+        self.fails = ok_f and type(data_f) == "table" and data_f or {}
         text = self:_read(self.sudoers_path)
         self.admins = {}
         if text != nil:
@@ -151,6 +157,47 @@ export class Auth:
             store.mkdir(paths.parent(pair[1]))
             txn:write(pair[1], json5.stringify(pair[2], {json5: true, indent: 2}) .. "\n")
         txn:commit()
+
+    # ------------------------------------------------------------ неверные попытки (D248): на диске, чтобы Ctrl+R их не сбрасывал
+    # fails[имя] = {count (подряд, для паузы), until (мс, до этого не проверять), total (с прошлого входа), last (мс последней)}
+
+    def _save_fails(self):
+        let me = self
+        pcall(() => me.fsys:mkdir(nil, paths.parent(me.fails_path), {parents: true}))
+        pcall(() => me.fsys:write_file(nil, me.fails_path, json5.stringify(me.fails) .. "\n"))
+
+    # неверная попытка: пауза после третьей подряд 5 с, дальше вдвое, но не больше минуты; возвращает паузу в мс
+    def _failed(self, name, t, pause=true):
+        f = self.fails[name] ?? {}
+        f.total = (f.total ?? 0) + 1
+        f.last = t
+        wait = 0
+        if pause:
+            f.count = (f.count ?? 0) + 1
+            if f.count >= 3:
+                wait = math.min(60000, 5000 * 2 ** (f.count - 3))
+            f.until = t + wait
+        self.fails[name] = f
+        self:_save_fails()
+        return wait
+
+    def _succeeded(self, name):
+        f = self.fails[name]
+        if f != nil and ((f.count ?? 0) > 0 or (f.until ?? 0) > 0):
+            f.count = 0
+            f.until = 0
+            self:_save_fails()
+
+    # сколько было неверных попыток с прошлого входа и когда последняя: {total, last} или nil; счёт начинается заново
+    def take_failures(self, name):
+        rec = self:user(name)
+        f = rec != nil and self.fails[rec.name] or nil
+        if f == nil or (f.total ?? 0) == 0:
+            return nil
+        res = {total: f.total, last: f.last}
+        f.total = 0
+        self:_save_fails()
+        return res
 
     # ------------------------------------------------------------ пользователи
 
@@ -284,6 +331,7 @@ export class Auth:
             return true
         p.fails = (p.fails ?? 0) + 1
         self:save()
+        self:_failed(rec.name, self.clock(), false)
         if p.fails >= PIN_TRIES:
             return false, "pin locked"
         return false, "bad pin", PIN_TRIES - p.fails
@@ -305,7 +353,7 @@ export class Auth:
             return false, "unknown"
         t = self.clock()
         fail = self.fails[rec.name]
-        if fail != nil and fail.until > t:
+        if fail != nil and (fail.until ?? 0) > t:
             return false, "locked", math.ceil((fail.until - t) / 1000)
         stored = self.shadow[rec.name]
         ok = false
@@ -314,18 +362,14 @@ export class Auth:
         else:
             ok = password != nil and check_hash(password, stored)
         if ok:
-            self.fails[rec.name] = nil
+            self:_succeeded(rec.name)
             # верный пароль снимает блокировку PIN
             p = self.pins[rec.name]
             if p != nil and (p.fails ?? 0) > 0:
                 p.fails = 0
                 self:save()
             return true
-        count = (fail != nil and fail.count or 0) + 1
-        wait = 0
-        if count >= 3:
-            wait = math.min(60000, 5000 * 2 ** (count - 3))
-        self.fails[rec.name] = {count: count, until: t + wait}
+        wait = self:_failed(rec.name, t)
         return false, "bad password", math.ceil(wait / 1000)
 
     # одно поле для PIN и пароля (D247): совпал пароль -> "password" (вход «с админкой»), совпал PIN (если не заблокирован) -> "pin".
@@ -337,7 +381,7 @@ export class Auth:
             return nil, "unknown"
         t = self.clock()
         fail = self.fails[rec.name]
-        if fail != nil and fail.until > t:
+        if fail != nil and (fail.until ?? 0) > t:
             return nil, "locked", nil, math.ceil((fail.until - t) / 1000)
         stored = self.shadow[rec.name]
         p = self.pins[rec.name]
@@ -347,23 +391,19 @@ export class Auth:
         else:
             pw_ok = secret != nil and check_hash(secret, stored)
         if pw_ok:
-            self.fails[rec.name] = nil
+            self:_succeeded(rec.name)
             if p != nil and (p.fails ?? 0) > 0:
                 p.fails = 0
                 self:save()
             return "password"
         pin_usable = p != nil and (p.fails ?? 0) < PIN_TRIES
         if pin_usable and secret != nil and secret != "" and check_hash(secret, p.hash):
-            self.fails[rec.name] = nil
+            self:_succeeded(rec.name)
             if (p.fails ?? 0) > 0:
                 p.fails = 0
                 self:save()
             return "pin"
-        count = (fail != nil and fail.count or 0) + 1
-        wait = 0
-        if count >= 3:
-            wait = math.min(60000, 5000 * 2 ** (count - 3))
-        self.fails[rec.name] = {count: count, until: t + wait}
+        wait = self:_failed(rec.name, t)
         left = nil
         if pin_usable:
             p.fails = (p.fails ?? 0) + 1

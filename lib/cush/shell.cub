@@ -985,6 +985,9 @@ export class Shell:
             # удержание Ctrl+T: программа не спрашивается (D222)
             if self.fg != nil:
                 self:force_kill_fg()
+        elif name == "cubeos_note":
+            # сообщение хозяина терминала (неверные попытки входа, пока было заблокировано)
+            self:notify("e", self:t(tostring(ev[2]), {n: ev[3], when: ev[4]}))
         elif name == "cubeos_copy":
             if self.fg == nil:
                 self.editor:copy_selection()
@@ -1020,7 +1023,10 @@ export class Shell:
             self:println(self.config.motd)
         # заметки хозяина терминала (opts.notes): например, какие ROM-библиотеки не загрузились; подробности в журнале
         for note in (o.notes ?? []):
-            self:write_color("8", note)
+            if type(note) == "table":
+                self:write_color("e", self:t(note.text, note.vars))
+            else:
+                self:write_color("8", note)
             self:println("")
 
     def shutdown(self):

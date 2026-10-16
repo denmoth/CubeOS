@@ -126,4 +126,14 @@ eq([how, why, left], [nil, "bad secret", 4], "a wrong entry counts as a wrong PI
 auth:create_user({name: "dave"}, "1357", false)
 auth:set_pin("dave", "1357")
 eq(auth:verify_secret("dave", "1357"), "password", "when the PIN and the password are the same, it is the password (with sudo trust)")
+# неверные попытки на диске (D248): перезагрузка не снимает паузу, счёт с прошлого входа выдаётся один раз
+for i in range[1, 3]:
+    auth:verify("bob", "nope")
+again = auth_mod.Auth(fsys, {rounds: 2, clock: auth.clock})
+again:load()
+ok, why = again:verify("bob", "bobpass")
+eq([ok, why], [false, "locked"], "after a reboot the pause is still there")
+f = again:take_failures("bob")
+eq(f != nil and f.total >= 3, true, "the wrong attempts since the last sign-in are counted")
+eq(again:take_failures("bob"), nil, "and told only once")
 print("done")
