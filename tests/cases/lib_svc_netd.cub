@@ -221,16 +221,22 @@ def on_air(text):
 eq(on_air("hello from base"), false, "file contents never travel as plain text")
 eq(on_air("0123456789"), false, "neither does an uploaded file")
 # выключено у обоих: работает, но текст виден
-call(desk, "encrypt", {on: false}, "e1")
-call(base, "encrypt", {on: false}, "e2")
+call(desk, "encrypt", {mode: "off"}, "e1")
+call(base, "encrypt", {mode: "off"}, "e2")
 r = job(() => desk.fsys:read_file(nil, D .. "/docs/readme.txt"), "plain")
 eq(r[2], "hello from base", "with encryption off on both, files still work")
 eq(on_air("hello from base"), true, "but then they are visible on the cable")
-# хозяин требует шифрования, клиент без него: отказ
-call(base, "encrypt", {on: true}, "e3")
+# хозяин шифрует (on), клиент нет: принимается, ответ зашифрован
+call(base, "encrypt", {mode: "on"}, "e3")
 r = job(() => desk.fsys:read_file(nil, D .. "/docs/readme.txt"), "mixed")
-eq(r[1] == false and string.find(tostring(r[2]), "only encrypted", 1, true) != nil, true, "a host with encryption on refuses plain requests")
-call(desk, "encrypt", {on: true}, "e4")
+eq(r[2], "hello from base", "a host with encryption on still accepts plain requests")
+# require: только зашифрованное
+call(base, "encrypt", {mode: "require"}, "e5")
+r = job(() => desk.fsys:read_file(nil, D .. "/docs/readme.txt"), "req")
+eq(r[1] == false and string.find(tostring(r[2]), "only encrypted", 1, true) != nil, true, "a host with require refuses plain requests")
+r = call(base, "encrypt", {mode: "maybe"}, "bad")
+eq(string.find(tostring(r[2]), "on, off or require", 1, true) != nil, true, "an unknown mode is refused")
+call(desk, "encrypt", {mode: "on"}, "e4")
 r = job(() => desk.fsys:read_file(nil, D .. "/docs/readme.txt"), "again")
 eq(r[2], "hello from base", "encryption on again on both")
 

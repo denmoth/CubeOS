@@ -72,6 +72,14 @@ def _short(text, n=32):
     return string.sub(text, 1, n)
 
 # путь общей папки не должен пересекаться с системными местами (ни внутри них, ни содержать их)
+# режим шифрования из net.conf: строка или старое true/false
+def _encrypt_mode(v):
+    if v == "off" or v == false:
+        return "off"
+    if v == "require":
+        return "require"
+    return "on"
+
 export def share_problem(path):
     p = paths.normalize(path)
     if p == "/" or p == "/cubeos":
@@ -90,7 +98,7 @@ export def main(sys, args):
     my_id = a.id ?? os.getComputerID()
     rounds = a.rounds ?? ROUNDS
     clock = a.now ?? (() => os.epoch("utc"))
-    conf = {name: nil, wireless: false, encrypt: true, shares: {}, mounts: []}
+    conf = {name: nil, wireless: false, encrypt: "on", shares: {}, mounts: []}
     peer_keys = {}
     peers = {}
     last_seq = {}
@@ -111,7 +119,7 @@ export def main(sys, args):
     loaded = read_json(CONF_PATH) ?? {}
     conf.name = _short(loaded.name)
     conf.wireless = loaded.wireless == true
-    conf.encrypt = loaded.encrypt != false
+    conf.encrypt = _encrypt_mode(loaded.encrypt)
     conf.shares = type(loaded.shares) == "table" and loaded.shares or {}
     conf.mounts = type(loaded.mounts) == "table" and loaded.mounts or []
     peer_keys = read_json(KEYS_PATH) ?? {}
@@ -176,7 +184,7 @@ export def main(sys, args):
                 return m.wired
         return false
 
-    link = link_mod.new({id: my_id, modems: modem_list, now: clock, wireless: conf.wireless, encrypt: conf.encrypt})
+    link = link_mod.new({id: my_id, modems: modem_list, now: clock, wireless: conf.wireless, encrypt: conf.encrypt != "off"})
 
     def note_peer(m, side, wired, dist):
         p = peers[m.src] ?? {}
@@ -192,7 +200,7 @@ export def main(sys, args):
     def reply(m, side, kind, body, key=nil):
         r = link:message(kind, m.src, body, proto.id_of(m))
         if key != nil:
-            proto.seal(r, key, m.was_enc == true or conf.encrypt)
+            proto.seal(r, key, m.was_enc == true or conf.encrypt != "off")
         link:send(r, {side: side})
 
     # ------------------------------------------------------------ общие папки (сторона хозяина)
@@ -340,8 +348,8 @@ export def main(sys, args):
         if not proto.open(m, info.key):
             sys.log("warn", "bad signature from computer " .. tostring(m.src) .. ", ignored")
             return nil
-        if conf.encrypt and not m.was_enc:
-            reply(m, side, "denied", {err: "this computer accepts only encrypted requests (net encrypt on on both)"})
+        if conf.encrypt == "require" and not m.was_enc:
+            reply(m, side, "denied", {err: "this computer accepts only encrypted requests (net encrypt on there)"})
             return nil
         if not proto.fresh(m, last_seq[m.src], clock()):
             sys.log("warn", "replayed or stale message from computer " .. tostring(m.src) .. ", ignored")
@@ -498,14 +506,19 @@ export def main(sys, args):
         return my_name()
     handlers.name = set_name
 
-    # шифрование файлов и сопряжения (D246): on true по умолчанию; включённое требует его и от собеседника
+    # шифрование (D246, D247): mode "on" (по умолчанию: своё шифруем, принимаем любое), "require" (принимаем только
+    # зашифрованное), "off" (всё открытым текстом, зашифрованное всё равно понимаем)
     def set_encrypt(q, sender):
         need_admin(sender)
-        conf.encrypt = q != nil and q.on == true
-        link.encrypt = conf.encrypt
+        o = q ?? {}
+        mode = o.mode ?? (o.on == true and "on" or (o.on == false and "off" or nil))
+        if mode != "on" and mode != "off" and mode != "require":
+            raise Error("the encryption mode is on, off or require")
+        conf.encrypt = mode
+        link.encrypt = mode != "off"
         save_conf()
-        sys.log("info", "network encryption " .. (conf.encrypt and "on" or "off"))
-        return conf.encrypt
+        sys.log("info", "network encryption: " .. mode)
+        return mode
     handlers.encrypt = set_encrypt
 
     def pair_code(q, sender):

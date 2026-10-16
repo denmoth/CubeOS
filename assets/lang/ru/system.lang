@@ -321,8 +321,8 @@ msgstr "Блокирует терминал: появляется экран в�
 msgid "Network: other computers, shared folders"
 msgstr "Сеть: другие компьютеры, общие папки"
 
-msgid "Talks to other CubeOS computers through modems (channel 47100). To use a folder of another computer as a disk: share it there (net share), pair the computers once with a code (net pair on the host shows it, net pair HOST CODE here), then net mount HOST SHARE; the folder appears in /cubeos/net/HOST/SHARE and stays mounted after a reboot. Shared folders and pairing work only over wired modems; requests are signed with the pairing key and encrypted (net encrypt off turns encryption off). Changing settings needs an administrator."
-msgstr "Связь с другими компьютерами CubeOS через модемы (канал 47100). Чтобы пользоваться папкой другого компьютера как диском: откройте её там (net share), один раз сопрягите компьютеры кодом (net pair на хозяине показывает код, здесь net pair ХОСТ КОД), потом net mount ХОСТ ПАПКА; папка появится в /cubeos/net/ХОСТ/ПАПКА и останется после перезагрузки. Общие папки и сопряжение работают только через проводные модемы; запросы подписаны ключом пары и зашифрованы (net encrypt off выключает шифрование). Менять настройки может только администратор."
+msgid "Talks to other CubeOS computers through modems (channel 47100). To use a folder of another computer as a disk: share it there (net share), pair the computers once with a code (net pair on the host shows it, net pair HOST CODE here), then net mount HOST SHARE; the folder appears in /cubeos/net/HOST/SHARE and stays mounted after a reboot. Shared folders and pairing work only over wired modems; requests are signed with the pairing key and encrypted (net encrypt: on sends encrypted and accepts plain too, require accepts only encrypted, off sends plain). Changing settings needs an administrator."
+msgstr "Связь с другими компьютерами CubeOS через модемы (канал 47100). Чтобы пользоваться папкой другого компьютера как диском: откройте её там (net share), один раз сопрягите компьютеры кодом (net pair на хозяине показывает код, здесь net pair ХОСТ КОД), потом net mount ХОСТ ПАПКА; папка появится в /cubeos/net/ХОСТ/ПАПКА и останется после перезагрузки. Общие папки и сопряжение работают только через проводные модемы; запросы подписаны ключом пары и зашифрованы (net encrypt: on шифрует своё и принимает открытое, require принимает только зашифрованное, off шлёт открытым текстом). Менять настройки может только администратор."
 
 msgid "Check that another computer answers"
 msgstr "Проверить, отвечает ли другой компьютер"
@@ -936,8 +936,8 @@ msgstr "Доступен ли компьютер и как быстро отве
 msgid "The name of this computer on the network"
 msgstr "Имя этого компьютера в сети"
 
-msgid "Encrypt files and pairing, and demand it from others"
-msgstr "Шифровать файлы и сопряжение и требовать этого от других"
+msgid "on: send encrypted; require: accept only encrypted; off: plain text"
+msgstr "on: слать зашифрованно; require: принимать только зашифрованное; off: открытым текстом"
 
 msgid "Show a one-time pairing code (on the host)"
 msgstr "Показать одноразовый код сопряжения (на хозяине)"
@@ -1320,8 +1320,11 @@ msgstr "неверный код сопряжения"
 msgid "this computer is not paired with you"
 msgstr "этот компьютер не сопряжён с вами"
 
-msgid "this computer accepts only encrypted requests (net encrypt on on both)"
-msgstr "этот компьютер принимает только зашифрованные запросы (net encrypt on на обоих)"
+msgid "this computer accepts only encrypted requests (net encrypt on there)"
+msgstr "этот компьютер принимает только зашифрованные запросы (net encrypt on на вашем)"
+
+msgid "the encryption mode is on, off or require"
+msgstr "режим шифрования: on, off или require"
 
 msgid "locking is not available here"
 msgstr "блокировка здесь недоступна"
@@ -1710,6 +1713,15 @@ msgstr "поиск"
 msgid "the network is not available here"
 msgstr "сеть здесь недоступна"
 
+msgid "Encryption: required (plain requests are refused)"
+msgstr "Шифрование: обязательно (открытые запросы отклоняются)"
+
+msgid "Encryption: off (files travel as plain text)"
+msgstr "Шифрование: выключено (файлы идут открытым текстом)"
+
+msgid "Encryption: on (plain requests are accepted too)"
+msgstr "Шифрование: включено (открытые запросы тоже принимаются)"
+
 msgid "Computer: {name} (#{id})"
 msgstr "Компьютер: {name} (№{id})"
 
@@ -1727,12 +1739,6 @@ msgstr "нет (подключите проводной модем)"
 
 msgid "Paired computers: {n}"
 msgstr "Сопряжённых компьютеров: {n}"
-
-msgid "Encryption: on"
-msgstr "Шифрование: включено"
-
-msgid "Encryption: off (files travel as plain text)"
-msgstr "Шифрование: выключено (файлы идут открытым текстом)"
 
 msgid "read-only"
 msgstr "только чтение"

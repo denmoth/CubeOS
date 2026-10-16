@@ -15,6 +15,13 @@ def net_call(sh, name, op, args=nil, vars=nil):
         sh:eprint(name .. ": " .. sh:t(tostring(why), vars ?? {}))
     return res
 
+def enc_text(sh, mode):
+    if mode == "require":
+        return sh:t("Encryption: required (plain requests are refused)")
+    if mode == "off":
+        return sh:t("Encryption: off (files travel as plain text)")
+    return sh:t("Encryption: on (plain requests are accepted too)")
+
 def show_status(sh):
     s = net_call(sh, "net", "status")
     if s == nil:
@@ -25,7 +32,7 @@ def show_status(sh):
         ms[len(ms) + 1] = m.side .. " (" .. sh:t(m.wired and "wired" or "wireless") .. ")"
     sh:println(sh:t("Modems: {list}", {list: len(ms) > 0 and table.concat(ms, ", ") or sh:t("none (attach a wired modem)")}))
     sh:println(sh:t("Paired computers: {n}", {n: s.paired}))
-    sh:println(sh:t(s.encrypt and "Encryption: on" or "Encryption: off (files travel as plain text)"))
+    sh:println(enc_text(sh, s.encrypt))
     sh_list = []
     for x in s.shares:
         sh_list[len(sh_list) + 1] = x.name .. (x.readonly and (" (" .. sh:t("read-only") .. ")") or "")
@@ -89,13 +96,13 @@ def b_net(sh, args):
         sh:println(sh:t("This computer is now called {name} on the network.", {name: r}))
         return 0
     if sub == "encrypt":
-        if host != "on" and host != "off":
-            sh:eprint("usage: net encrypt on|off")
+        if host != "on" and host != "off" and host != "require":
+            sh:eprint("usage: net encrypt on|off|require")
             return 2
-        r = net_call(sh, "net", "encrypt", {on: host == "on"})
+        r = net_call(sh, "net", "encrypt", {mode: host})
         if r == nil:
             return 1
-        sh:println(sh:t(r and "Encryption: on" or "Encryption: off (files travel as plain text)"))
+        sh:println(enc_text(sh, r))
         return 0
     if sub == "pair":
         if host == nil:

@@ -32,7 +32,7 @@
 
 Код `lib/svc/netd.cub`, `lib/net/proto.cub` (сообщения, подпись, свежесть), `lib/net/link.cub` (отправка и ожидание ответа), `lib/net/remote.cub` (папка другого компьютера как провайдер CFS). Тесты `lib_svc_netd` (два ядра с подставным проводным модемом), `lib_cush_net`. Настройки `/cubeos/sys/cfg/net.conf` (`name`, `wireless`, `encrypt`, `shares`, `mounts`), ключи `/cubeos/sys/sec/net_keys.lock`.
 
-- Шифрование (D246): с `encrypt: true` (по умолчанию) тело каждого подписанного сообщения шифруется ChaCha20 (ключ HMAC(ключ пары, "cubenet:enc"), nonce из номера отправителя и его счётчика), подпись поверх шифротекста; включённое шифрование требует его и от собеседника, ответ шифруется, если зашифрован запрос. Протокол версии 2.
+- Шифрование (D246, D247): режим `encrypt` `on` (по умолчанию), `require` или `off`; при шифровании тело подписанного сообщения шифруется ChaCha20 (ключ HMAC(ключ пары, "cubenet:enc"), nonce из номера отправителя и его счётчика), подпись поверх шифротекста; `require` отклоняет открытые запросы, `on` их принимает; ответ шифруется, если зашифрован запрос или режим не `off`. Протокол версии 2.
 - Запросы: `status`, `scan {seconds}`, `ping {host}`, `peers`, `name {name}`, `encrypt {on}`, `pair_code`, `pair {host, code}`, `forget {host}`, `share {name, path, readonly}`, `unshare {name}`, `shares`, `remote_shares {host}`, `mount {host, share, point}`, `unmount {point}`, `mounts`. Менять может только администратор.
 - Команды `net` (подкоманды те же) и `ping ХОСТ [N]`. Хост это имя из `net scan` или номер компьютера.
 - Помощник `netd-events` ждёт `modem_message` и `peripheral` и шлёт их службе; сама служба, когда спрашивает другой компьютер (поиск, сопряжение), ждёт ответ системным вызовом `wait_event` с `keep`.
