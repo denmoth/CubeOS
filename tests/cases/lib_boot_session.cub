@@ -102,7 +102,7 @@ eq(sm:lock(1), true, "lock")
 eq(sm:get(1).state, "locked", "state locked")
 eq(string.find(message_of(() => sm:spawn(1, (sys, args) => nil)), "locked", 1, true) != nil, true, "no spawn in a locked session")
 ok, why = sm:unlock(1, "bad")
-eq([ok, why], [false, "bad password"], "wrong password does not unlock")
+eq([ok, why], [false, "bad secret"], "wrong password does not unlock")
 eq(sm:unlock(1, "secret"), true, "unlock")
 eq(sm:get(1).state, "active", "active again")
 

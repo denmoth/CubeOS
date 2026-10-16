@@ -133,6 +133,13 @@ export class SessionManager:
             self.on_open(s)
         return s
 
+    # вход одним полем (D247): PIN или пароль, способ входа по тому, что совпало. nil, причина, попыток PIN, секунд ждать
+    def open_secret(self, name, secret):
+        how, why, left, wait = self.auth:verify_secret(name, secret)
+        if how == nil:
+            return nil, why, left, wait
+        return self:open(name, nil, true, how)
+
     # вход по PIN: nil и причина ("pin locked": нужен пароль), как open
     def open_pin(self, name, pin):
         ok, why, left = self.auth:verify_pin(name, pin)
@@ -229,13 +236,20 @@ export class SessionManager:
             return "pin"
         return "password"
 
-    # снять блокировку (D226): method "pin" или "password" (nil: как unlock_method). Возвращает true или false, причину
-    # ("bad pin", "pin locked", "bad password", "locked") и число (попыток PIN осталось или секунд ждать)
+    # снять блокировку (D226, D247): method nil — одно поле, подходит и PIN, и пароль (пароль: дальше sudo как после входа по
+    # паролю); "pin" или "password" — только это. Возвращает true или false, причину и число (попыток PIN или секунд ждать)
     def unlock(self, id, secret, method=nil):
         s = self.sessions[id]
         if s == nil:
             return false, "no session"
-        how = method ?? self:unlock_method(id)
+        if method == nil:
+            how, why, left, wait = self.auth:verify_secret(s.user, secret)
+            if how == nil:
+                return false, why, why == "locked" and wait or left
+            s.login_method = how
+            s.state = "active"
+            return true
+        how = method
         if how == "pin":
             okp, whyp, left = self.auth:verify_pin(s.user, secret)
             if not okp:

@@ -328,6 +328,49 @@ export class Auth:
         self.fails[rec.name] = {count: count, until: t + wait}
         return false, "bad password", math.ceil(wait / 1000)
 
+    # одно поле для PIN и пароля (D247): совпал пароль -> "password" (вход «с админкой»), совпал PIN (если не заблокирован) -> "pin".
+    # Неверное считается и попыткой пароля, и попыткой PIN. Возвращает способ или nil, причину ("bad secret", "locked", "unknown"),
+    # сколько попыток PIN осталось (nil, если PIN нет или он заблокирован) и сколько секунд ждать до следующей попытки
+    def verify_secret(self, name, secret):
+        rec = self:user(name)
+        if rec == nil:
+            return nil, "unknown"
+        t = self.clock()
+        fail = self.fails[rec.name]
+        if fail != nil and fail.until > t:
+            return nil, "locked", nil, math.ceil((fail.until - t) / 1000)
+        stored = self.shadow[rec.name]
+        p = self.pins[rec.name]
+        pw_ok = false
+        if stored == nil:
+            pw_ok = secret == nil or secret == ""
+        else:
+            pw_ok = secret != nil and check_hash(secret, stored)
+        if pw_ok:
+            self.fails[rec.name] = nil
+            if p != nil and (p.fails ?? 0) > 0:
+                p.fails = 0
+                self:save()
+            return "password"
+        pin_usable = p != nil and (p.fails ?? 0) < PIN_TRIES
+        if pin_usable and secret != nil and secret != "" and check_hash(secret, p.hash):
+            self.fails[rec.name] = nil
+            if (p.fails ?? 0) > 0:
+                p.fails = 0
+                self:save()
+            return "pin"
+        count = (fail != nil and fail.count or 0) + 1
+        wait = 0
+        if count >= 3:
+            wait = math.min(60000, 5000 * 2 ** (count - 3))
+        self.fails[rec.name] = {count: count, until: t + wait}
+        left = nil
+        if pin_usable:
+            p.fails = (p.fails ?? 0) + 1
+            self:save()
+            left = math.max(0, PIN_TRIES - p.fails)
+        return nil, "bad secret", left, math.ceil(wait / 1000)
+
     # субъект CFS для пользователя; elevated: добавить роль admin (только для администраторов)
     def subject_for(self, name, elevated=false):
         rec = self:user(name)

@@ -35,6 +35,37 @@ export class TextGreeter:
             self.busy(nil)
         return s, why, wait
 
+    def _secret_prompt(self, rec):
+        if self.auth:pin_locked(rec.name):
+            return "Password for " .. rec.display .. " (too many wrong PINs): "
+        return "PIN or password for " .. rec.display .. ": "
+
+    def _wrong(self, why, left, wait):
+        if why == "locked":
+            return "Too many attempts. Wait " .. tostring(wait) .. " s."
+        if left == 0:
+            return "Wrong PIN or password. Too many wrong PINs: now only the password works."
+        return "Wrong PIN or password." .. (left != nil and (" PIN tries left: " .. left) or "")
+
+    # одно поле: PIN или пароль
+    def _secret_login(self, rec):
+        c = self.console
+        for attempt in range[1, self.retries]:
+            secret = c:read_line(self:_secret_prompt(rec), true)
+            if secret == nil:
+                return nil
+            if self.busy != nil:
+                self.busy("checking the PIN or password")
+            s, why, left, wait = self.sessions:open_secret(rec.name, secret)
+            if self.busy != nil:
+                self.busy(nil)
+            if s != nil:
+                return s
+            c:write_line(self:_wrong(why, left, wait))
+            if why == "locked":
+                return nil
+        return nil
+
     # PIN (D226): «p» вместо PIN переходит к паролю; после 5 неверных PIN только пароль. nil, если надо спросить пароль
     def _pin_login(self, rec):
         c = self.console
@@ -145,10 +176,9 @@ export class TextGreeter:
             s = self.sessions:open(rec.name, nil, true, "remember")
             if s != nil:
                 return s
-        if self.auth.has_pin != nil and self.auth:has_pin(rec.name) and not self.auth:pin_locked(rec.name):
-            s, stop = self:_pin_login(rec)
-            if s != nil or stop:
-                return s
+        # PIN и пароль в одном поле (D247): что совпало, тем и вошли (пароль даёт sudo без вопроса, как раньше)
+        if self.auth.has_pin != nil and self.auth:has_pin(rec.name):
+            return self:_secret_login(rec)
         # без пароля: входим сразу
         if self.auth.shadow[rec.name] == nil:
             s, why = self.sessions:open(name, "")
@@ -174,6 +204,8 @@ export class TextGreeter:
     def unlock(self, s):
         c = self.console
         mgr = self.sessions
+        rec = self.auth:user(s.user) ?? {name: s.user, display: s.display}
+        has_pin = self.auth.has_pin != nil and self.auth:has_pin(s.user)
         note = nil
         while true:
             self:_header()
@@ -182,30 +214,19 @@ export class TextGreeter:
             if note != nil:
                 c:write_line(note)
                 c:write_line("")
-            method = mgr:unlock_method(s.id)
-            secret = nil
-            if method == "pin":
-                secret = c:read_line("PIN for " .. tostring(s.display) .. " (p: use the password): ", true)
-                if secret != nil and string.lower(secret) == "p":
-                    method = "password"
-                    secret = nil
-            if method == "password":
-                secret = c:read_line("Password for " .. tostring(s.display) .. ": ", true)
+            prompt = has_pin and self:_secret_prompt({name: s.user, display: s.display ?? s.user}) or ("Password for " .. tostring(s.display) .. ": ")
+            secret = c:read_line(prompt, true)
             if secret != nil:
                 if self.busy != nil:
-                    self.busy(method == "pin" and "checking the PIN" or "checking the password")
-                ok, why, extra = mgr:unlock(s.id, secret, method)
+                    self.busy("checking the PIN or password")
+                ok, why, extra = mgr:unlock(s.id, secret)
                 if self.busy != nil:
                     self.busy(nil)
                 if ok:
                     return true
-                note = "Wrong password."
-                if why == "bad pin":
-                    note = "Wrong PIN." .. (extra != nil and (" Tries left: " .. extra) or "")
-                elif why == "pin locked":
-                    note = "Too many wrong PINs. Unlock with your password."
-                elif why == "locked":
-                    note = "Too many attempts. Wait " .. tostring(extra) .. " s."
+                note = why == "locked" and self:_wrong(why, nil, extra) or self:_wrong(why, extra, nil)
+                if not has_pin:
+                    note = why == "locked" and note or "Wrong password."
 
 export def new(console, auth, sessions, opts=nil):
     return TextGreeter(console, auth, sessions, opts)
