@@ -1,12 +1,41 @@
-# cde.wallpaper: обои рабочего стола (шаг 1: статичная картинка из цветов темы; обои-файлы и живые обои это шаг 3)
+# cde.wallpaper: обои рабочего стола (шаг 3.4)
 #
-#   wp = wallpaper.default(w, h)       поверхность w x h: диагональный градиент с узором Байера и контур куба
+#   surface, live = wallpaper.make(spec, W, H, ctx)       поверхность W x H и (для живых обоев) объект анимации или nil
+#   names = wallpaper.names(dirs, extra)                 имена: встроенные, картинки .cimg из папок dirs, extra (список имён)
+#   wp = wallpaper.default(w, h)                         обои по умолчанию («cube»), как в шаге 1
+#
+# spec: имя ("cube") или таблица {name: "gradient"} / {name: "sunset", mode: "fill"}. Встроенные:
+#   cube       градиент ступеней обоев темы и два контура куба (по умолчанию)
+#   cube-live  то же, но по рёбрам куба бежит свет: меняются только цвета нескольких мест палитры, пиксели не перерисовываются
+#   gradient   градиент без рисунка; grid  градиент с тонкой сеткой; plain  одним цветом
+# Всё остальное это картинка assets/wallpapers/<имя>.cimg (или из пользовательской папки). Такие обои раскладываются по режимам
+#   fill (по умолчанию: во весь экран с обрезкой краёв), fit (целиком, поля цветом обоев), stretch, center, tile
+# и переводятся в общие цвета палитры (16..211, они не зависят от темы) с дизерингом Байера между двумя ближайшими цветами.
+# Встроенные обои рисуются ступенями обоев темы, поэтому меняются вместе с темой; картинка остаётся как есть.
+#
+# ctx: palette (палитра экрана), theme (таблица темы), alloc(n) (места палитры для анимации), read(name) (текст файла .cimg или nil)
+# Живые обои: live.slots (занятые места палитры), live:step(now) (меняет их цвет), live.next (когда вызвать в следующий раз, мс).
 
 import cgl.surface as surface_mod
+import cgl.color as color
+import cgl.cimg as cimg
 import cde.theme as theme
 
-# изометрический куб контуром: центр (cx, cy), ребро r
-def _cube(s, cx, cy, r, c, glow):
+export const BUILTIN = ["cube", "cube-live", "gradient", "grid", "plain"]
+const SLOTS = 6
+const SEG = 3
+const FRAME_MS = 100
+
+def _gradient(s, w, h):
+    steps = []
+    for i in range[0, theme.DESK_N - 1]:
+        steps[i + 1] = theme.DESK0 + i
+    s:fill_gradient(0, 0, w, h, steps, "d", {dither: true})
+
+# ------------------------------------------------------------ куб
+
+# рёбра изометрического куба: центр (cx, cy), ребро r; список [[x0, y0], [x1, y1]] и вершины
+def _cube_edges(cx, cy, r):
     dx = math.floor(r * 0.866)
     dy = math.floor(r / 2)
     top = [cx, cy - r]
@@ -16,19 +45,219 @@ def _cube(s, cx, cy, r, c, glow):
     lb = [cx - dx, cy + dy]
     rb = [cx + dx, cy + dy]
     bot = [cx, cy + r]
-    edges = [[top, lt], [top, rt], [lt, mid], [rt, mid], [lt, lb], [rt, rb], [mid, bot], [lb, bot], [rb, bot]]
+    return [[top, lt], [top, rt], [lt, mid], [rt, mid], [lt, lb], [rt, rb], [mid, bot], [lb, bot], [rb, bot]], [top, lt, rt, mid, lb, rb, bot]
+
+# контур куба одним цветом (статичные обои)
+def _cube(s, cx, cy, r, c, glow):
+    edges, points = _cube_edges(cx, cy, r)
     for e in edges:
         s:line(e[1][1], e[1][2], e[2][1], e[2][2], c)
-    for p in [top, lt, rt, mid, lb, rb, bot]:
+    for p in points:
         s:set(p[1], p[2], glow)
+
+# контур куба по местам палитры: пиксели ребра идут отрезками по SEG пикселей, номер места растёт вдоль ребра (свет бежит
+# потому, что цвета мест потом сдвигаются по кругу); first: с какого места палитры начинать
+def _cube_live(s, cx, cy, r, slots, glow, shift):
+    edges, points = _cube_edges(cx, cy, r)
+    n = len(slots)
+    for k, e in edges:
+        x0 = e[1][1]
+        y0 = e[1][2]
+        x1 = e[2][1]
+        y1 = e[2][2]
+        steps = math.max(math.abs(x1 - x0), math.abs(y1 - y0))
+        for i in range[0, steps]:
+            t = steps == 0 and 0 or i / steps
+            x = math.floor(x0 + (x1 - x0) * t + 0.5)
+            y = math.floor(y0 + (y1 - y0) * t + 0.5)
+            s:set(x, y, slots[(math.floor(i / SEG) + shift + k) % n + 1])
+    for p in points:
+        s:set(p[1], p[2], glow)
+
+def _cube_pair(s, w, h, put):
+    r = math.floor(math.min(w, h) * 0.3)
+    put(s, math.floor(w * 0.72), math.floor(h * 0.48), r, 0)
+    put(s, math.floor(w * 0.72), math.floor(h * 0.48), math.floor(r * 0.55), 3)
+
+# ------------------------------------------------------------ живые обои
+
+class Live:
+    def init(self, ctx, slots):
+        self.ctx = ctx
+        self.slots = slots
+        self.next = 0
+        self.start = nil
+
+    # цвета мест: бегущая яркая точка с хвостом между цветом линий и цветом свечения темы
+    def step(self, now, speed=1):
+        if self.start == nil:
+            self.start = now
+        th = self.ctx.theme()
+        # линия слегка темнее цвета темы, свечение светлее: так бегущая точка хорошо видна
+        r0, g0, b0 = color.parse_hex(th.desk_line)
+        r1, g1, b1 = color.parse_hex(th.desk_glow)
+        r0 = math.floor(r0 * 0.75)
+        g0 = math.floor(g0 * 0.75)
+        b0 = math.floor(b0 * 0.75)
+        r1 = math.floor(r1 + (255 - r1) * 0.35)
+        g1 = math.floor(g1 + (255 - g1) * 0.35)
+        b1 = math.floor(b1 + (255 - b1) * 0.35)
+        n = len(self.slots)
+        phase = (now - self.start) / 1000 * 2.2 * speed
+        list = []
+        for j in range[0, n - 1]:
+            p = (j - phase) % n
+            b = math.max(0, 1 - p / (n * 0.55))
+            b = b * b
+            list[len(list) + 1] = [self.slots[j + 1], math.floor(r0 + (r1 - r0) * b + 0.5), math.floor(g0 + (g1 - g0) * b + 0.5),
+                math.floor(b0 + (b1 - b0) * b + 0.5)]
+        self.ctx.set_colors(list)
+        self.next = now + FRAME_MS
+
+# ------------------------------------------------------------ картинки
+
+# для каждого цвета картинки: два ближайших общих цвета палитры экрана и доля второго (для дизеринга)
+def _mapper(spal, pal):
+    first = theme.GRAY0
+    last = theme.GENERAL0 + 179
+    main = []
+    alt = []
+    share = []
+    for v in range[0, spal.size - 1]:
+        r, g, b = spal:get(v)
+        d1 = 1e30
+        d2 = 1e30
+        i1 = first
+        i2 = first
+        for i in range[first, last]:
+            pr, pg, pb = pal:get(i)
+            d = 0.30 * (pr - r) ** 2 + 0.59 * (pg - g) ** 2 + 0.11 * (pb - b) ** 2
+            if d < d1:
+                d2 = d1
+                i2 = i1
+                d1 = d
+                i1 = i
+            elif d < d2:
+                d2 = d
+                i2 = i
+        main[v + 1] = i1
+        alt[v + 1] = i2
+        # смесь нужна, только если первый цвет заметно далёк от нужного
+        share[v + 1] = (d1 < 40 or d1 + d2 == 0) and 0 or math.min(0.5, d1 / (d1 + d2))
+    return main, alt, share
+
+# картинка src (поверхность с палитрой spal) на поверхность W x H в режиме mode
+def _image(src, spal, W, H, mode, pal):
+    main, alt, share = _mapper(spal, pal)
+    out = surface_mod.new(W, H, theme.DESK0 + 2)
+    sw = src.w
+    sh = src.h
+    scale = 1
+    if mode == "fill":
+        scale = math.max(W / sw, H / sh)
+    elif mode == "fit":
+        scale = math.min(W / sw, H / sh)
+    sx = scale
+    sy = scale
+    if mode == "stretch":
+        sx = W / sw
+        sy = H / sh
+    ox = math.floor((W - sw * sx) / 2)
+    oy = math.floor((H - sh * sy) / 2)
+    tile = mode == "tile"
+    spx = src.px
+    px = out.px
+    for y in range[0, H - 1]:
+        v = math.floor((y - oy) / sy)
+        if tile:
+            v = y % sh
+        if v >= 0 and v < sh:
+            row = v * sw + 1
+            base = y * W + 1
+            for x in range[0, W - 1]:
+                u = math.floor((x - ox) / sx)
+                if tile:
+                    u = x % sw
+                if u >= 0 and u < sw:
+                    idx = spx[row + u]
+                    if idx >= 0:
+                        c = main[idx + 1]
+                        a = alt[idx + 1]
+                        if share[idx + 1] > 0 and color.dither(share[idx + 1], x, y):
+                            c = a
+                        px[base + x] = c
+    out:touch()
+    return out
+
+# ------------------------------------------------------------ сборка
+
+export def make(spec, W, H, ctx):
+    name = type(spec) == "table" and spec.name or spec
+    name = name ?? "cube"
+    mode = type(spec) == "table" and spec.mode or "fill"
+    s = surface_mod.new(W, H, theme.DESK0)
+    if name == "plain":
+        s:clear(theme.DESK0 + 3)
+        return s, nil
+    if name == "gradient" or name == "grid" or name == "cube" or name == "cube-live":
+        _gradient(s, W, H)
+    if name == "grid":
+        gap = 16
+        for x in range[0, W - 1] step gap:
+            s:vline(x, 0, H, theme.DESK0 + 1)
+        for y in range[0, H - 1] step gap:
+            s:hline(0, y, W, theme.DESK0 + 1)
+        return s, nil
+    if name == "cube":
+        _cube_pair(s, W, H, (s2, cx, cy, r, k) => _cube(s2, cx, cy, r, theme.DESK_LINE, theme.DESK_GLOW))
+        return s, nil
+    if name == "cube-live":
+        slots = ctx.alloc(SLOTS)
+        if slots == nil:
+            _cube_pair(s, W, H, (s2, cx, cy, r, k) => _cube(s2, cx, cy, r, theme.DESK_LINE, theme.DESK_GLOW))
+            return s, nil
+        _cube_pair(s, W, H, (s2, cx, cy, r, k) => _cube_live(s2, cx, cy, r, slots, theme.DESK_GLOW, k))
+        live = Live(ctx, slots)
+        live:step(ctx.now())
+        return s, live
+    if name == "gradient":
+        return s, nil
+    # картинка
+    data = ctx.read(name)
+    if data != nil:
+        ok, src, spal = pcall(cimg.decode, data)
+        if ok:
+            return _image(src, spal ?? color.default_palette(), W, H, mode, ctx.palette), nil
+    _gradient(s, W, H)
+    return s, nil
 
 export def default(w, h):
     s = surface_mod.new(w, h, theme.DESK0)
-    steps = []
-    for i in range[0, theme.DESK_N - 1]:
-        steps[i + 1] = theme.DESK0 + i
-    s:fill_gradient(0, 0, w, h, steps, "d", {dither: true})
-    r = math.floor(math.min(w, h) * 0.3)
-    _cube(s, math.floor(w * 0.72), math.floor(h * 0.48), r, theme.DESK_LINE, theme.DESK_GLOW)
-    _cube(s, math.floor(w * 0.72), math.floor(h * 0.48), math.floor(r * 0.55), theme.DESK_LINE, theme.DESK_GLOW)
+    _gradient(s, w, h)
+    _cube_pair(s, w, h, (s2, cx, cy, r, k) => _cube(s2, cx, cy, r, theme.DESK_LINE, theme.DESK_GLOW))
     return s
+
+# имена обоев: встроенные, картинки из папок (файлы .cimg) и extra (список имён)
+export def names(dirs, extra=nil):
+    out = []
+    seen = {}
+    def add(n):
+        if not seen[n]:
+            seen[n] = true
+            out[len(out) + 1] = n
+    for n in BUILTIN:
+        add(n)
+    files = []
+    for d in dirs ?? []:
+        ok, list = pcall(fs.list, d)
+        if ok and list != nil:
+            for f in list:
+                n = string.match(f, "^(.+)%.cimg$")
+                if n != nil:
+                    files[len(files) + 1] = n
+    for n in extra ?? []:
+        files[len(files) + 1] = n
+    table.sort(files)
+    for n in files:
+        add(n)
+    return out

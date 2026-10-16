@@ -162,6 +162,24 @@ def tray_shoot(tag, theme_name):
                 k:feed("key", 256, false)
                 settle(k, 10)
 
+def wp_shoot(name, tag):
+    wm = demo.build({term: make_term(51, 19), assets: "/repo/assets", clock: now, theme: "tokyo-night",
+        panel: {time_text: () => "14:32"}, background: name, animations: {enabled: tag != "static"}})
+    k = kernel.new({clock: now})
+    def desk(sys, args):
+        wm:run(sys)
+    k:spawn(desk, [], {name: "cde", ui: true})
+    settle(k, 10)
+    wm:toggle_desktop()
+    settle(k, 10)
+    dump(wm, "ui_panel_wp_" .. name .. "_a")
+    if wm.live != nil:
+        clock.now = clock.now + 700
+        settle(k, 4)
+        dump(wm, "ui_panel_wp_" .. name .. "_b")
+
+for n in ["sunset", "aurora", "night-city", "cube-live", "grid"]:
+    wp_shoot(n, "x")
 tray_shoot("tokyo", "tokyo-night")
 tray_shoot("light", "light")
 menu_shoot(51, 19, "tokyo", "tokyo-night")

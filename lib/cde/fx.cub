@@ -15,7 +15,7 @@ import cde.theme as theme
 
 const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5]
 
-export const DEFAULTS = {enabled: true, speed: 1, windows: true, glow: true, widgets: true}
+export const DEFAULTS = {enabled: true, speed: 1, windows: true, glow: true, widgets: true, wallpaper: true}
 
 # настройки анимаций: недостающее из DEFAULTS
 export def make_settings(conf=nil):

@@ -7,7 +7,7 @@
 # экран, Ctrl+Alt+= и Ctrl+Alt+- крупнее и мельче (масштаб), Ctrl+Alt+K витрина элементов cdk, Ctrl+Alt+Q выход из сессии
 # (панель задач cde.panel; «Пуск» с меню на шаге 3.2). Ctrl+Alt+P панель сверху или снизу, Ctrl+Alt+L кнопки окон слева или по центру.
 # Настройки пользователя $cfg/cde.conf (JSON5): theme (имя темы), scale ("auto" или 1..4); тема и масштаб, выбранные сочетаниями,
-# сохраняются туда же; panel ({position, align, height, clock}, cde.panel); animations ({enabled, speed, windows, glow, widgets}, cde.fx), Ctrl+Alt+A включает и выключает анимации.
+# сохраняются туда же; panel ({position, align, height, clock}, cde.panel); wallpaper (имя обоев или {name, mode}, Ctrl+Alt+W следующие, cde.wallpaper); animations ({enabled, speed, windows, glow, widgets}, cde.fx), Ctrl+Alt+A включает и выключает анимации.
 # opts: term, assets, theme, host, ready(wm) (для тестов), terminal_ready(ctx) (для тестов: ready терминала)
 
 import cde.wm as wm_mod
@@ -17,6 +17,7 @@ import cde.apps as apps_mod
 import cde.startmenu as startmenu
 import cde.tray as tray_mod
 import cde.theme as theme_mod
+import cde.wallpaper as wallpaper_mod
 import clock as clock_mod
 import json5
 
@@ -68,7 +69,24 @@ export def program(session, opts=nil):
         panel = o.panel
         if panel == nil:
             panel = panel_conf
-        wm = wm_mod.new({term: o.term, assets: o.assets ?? "/repo/assets", theme: o.theme ?? conf.theme, scale: conf.scale ?? "auto",
+        # свои обои: картинки .cimg в $cfg/wallpapers пользователя
+        wall_dir = view != nil and (view:expand("$cfg") .. "/wallpapers") or nil
+        def user_wallpapers():
+            out = []
+            if wall_dir != nil:
+                okl, list = pcall(view.list, view, wall_dir)
+                if okl and type(list) == "table":
+                    for e in list:
+                        m = string.match(tostring(type(e) == "table" and e.name or e), "^(.+)%.cimg$")
+                        if m != nil:
+                            out[len(out) + 1] = m
+            return out
+        def wallpaper_loader(name):
+            if wall_dir == nil or string.find(name, "/", 1, true) != nil or string.find(name, "..", 1, true) != nil:
+                return nil
+            okr, data = pcall(view.read, view, wall_dir .. "/" .. name .. ".cimg")
+            return okr and data or nil
+        wm = wm_mod.new({term: o.term, background: o.background ?? conf.wallpaper, wallpaper_loader: wallpaper_loader, assets: o.assets ?? "/repo/assets", theme: o.theme ?? conf.theme, scale: conf.scale ?? "auto",
             animations: o.animations ?? conf.animations, panel: panel})
         term_opts = {assets: o.assets, host: o.host, ready: o.terminal_ready}
         def open_terminal():
@@ -108,6 +126,17 @@ export def program(session, opts=nil):
                 wm:set_panel({align: wm.panel.align == "center" and "left" or "center"})
                 save_panel()
         wm:hotkey("ctrl+alt+p", panel_position)
+        # Ctrl+Alt+W следующие обои по кругу (пока нет «Настроек»)
+        def next_wallpaper():
+            names = wallpaper_mod.names(wm.wallpaper_dirs, user_wallpapers())
+            cur = type(wm.background) == "table" and wm.background.name or wm.background
+            pick = names[1]
+            for i, n in names:
+                if n == cur and names[i + 1] != nil:
+                    pick = names[i + 1]
+            wm:set_wallpaper(pick)
+            save("wallpaper", pick)
+        wm:hotkey("ctrl+alt+w", next_wallpaper)
         # каталог для меню «Пуск»: приложения и команды (темы, масштаб, панель, анимации, выход)
         reg = apps_mod.new()
         reg:add({id: "terminal", name: "Terminal", icon: "terminal", keywords: ["console", "shell", "cmd", "терминал", "консоль", "термінал"],
@@ -132,6 +161,11 @@ export def program(session, opts=nil):
                 w:set_panel(change)
                 save_panel()
             return run
+        def run_wallpaper(name):
+            def run(w):
+                w:set_wallpaper(name)
+                save("wallpaper", name)
+            return run
         def command(id, name, icon, words, run):
             return {id: id, name: name, icon: icon, kind: "action", keywords: words, run: run}
         def commands():
@@ -140,6 +174,9 @@ export def program(session, opts=nil):
                 th = theme_mod.find(name, wm.theme_dirs)
                 out[len(out) + 1] = command("theme:" .. name, "Theme: " .. (th.display ?? name), "star",
                     ["colors", "dark", "light", "тема", "цвета"], run_theme(name))
+            for name in wallpaper_mod.names(wm.wallpaper_dirs, user_wallpapers()):
+                out[len(out) + 1] = command("wallpaper:" .. name, "Wallpaper: " .. name, "star", ["background", "desktop", "обои", "фон"],
+                    run_wallpaper(name))
             for v in SCALES:
                 out[len(out) + 1] = command("scale:" .. tostring(v), "Scale: " .. (v == "auto" and "Auto" or v .. "x"), "search",
                     ["zoom", "size", "масштаб"], run_scale(v))

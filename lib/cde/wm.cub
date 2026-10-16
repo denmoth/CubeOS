@@ -70,9 +70,16 @@ export class WM:
         self.scale = self:pick_scale(self.scale_setting)
         self.W = math.floor(self.screen.w / self.scale)
         self.H = math.floor(self.screen.h / self.scale)
-        self.make_wallpaper = o.wallpaper_fn ?? wallpaper_mod.default
-        self.comp = comp_mod.new(self.screen, self.font, {wallpaper: o.wallpaper ?? self.make_wallpaper(self.W, self.H),
-            deco: self.deco, scale: self.scale})
+        # обои: background (имя или {name, mode}, см. cde.wallpaper), wallpaper_dirs (папки с картинками .cimg), wallpaper_loader(имя)
+        # (текст файла или nil: пользовательские папки), wallpaper_fn(w, h) (своя поверхность, для тестов и демо)
+        self.clock = o.clock ?? _now_ms
+        self.background = o.background ?? "cube"
+        self.wallpaper_dirs = o.wallpaper_dirs ?? [assets .. "/wallpapers"]
+        self.wallpaper_loader = o.wallpaper_loader
+        self.wallpaper_fn = o.wallpaper_fn
+        self.wall_owner = {}
+        self.live = nil
+        self.comp = comp_mod.new(self.screen, self.font, {wallpaper: o.wallpaper, deco: self.deco, scale: self.scale})
         self.windows = self.comp.windows
         self.anim = fx_mod.make_settings(o.animations)
         self.fx = fx_mod.new(self)
@@ -88,6 +95,7 @@ export class WM:
         for slot in theme.POOL:
             self.pool_free[len(self.pool_free) + 1] = slot
         self.owned = {}
+        self.comp.wallpaper = o.wallpaper ?? self:_wallpaper_surface()
         self.focused = nil
         self.next_id = 1
         self.pending = []
@@ -102,7 +110,6 @@ export class WM:
         self.hidden = nil
         self.sys = nil
         self.pid = nil
-        self.clock = o.clock ?? _now_ms
         self.on_start = o.on_start
         self.running = false
         self.waiting = false
@@ -278,6 +285,8 @@ export class WM:
         # идёт анимация: кадр каждые 50 мс (20 кадров, как обновляется экран CC)
         if self.fx:active() and now + 50 < until:
             until = now + 50
+        if self.live != nil and self.live.next < until:
+            until = math.max(now, self.live.next)
         if self.panel != nil and self.panel.next_tick < until:
             until = math.max(now, self.panel.next_tick)
         return math.max(0, until - now) / 1000
@@ -298,6 +307,8 @@ export class WM:
             self:_reap()
         if self.panel != nil:
             self.panel:tick(now)
+        if self.live != nil and now >= self.live.next:
+            self.live:step(now, self.anim.speed)
         if self.fx:active():
             self.fx:step()
 
@@ -970,6 +981,40 @@ export class WM:
             k -= 1
         return k
 
+    # ------------------------------------------------------------ обои
+
+    # поверхность обоев по настройке background (живые обои занимают места палитры и запускают анимацию)
+    def _wallpaper_surface(self):
+        if self.wallpaper_fn != nil:
+            return self.wallpaper_fn(self.W, self.H)
+        let me = self
+        self:_free_colors(self.wall_owner)
+        self.live = nil
+        def read_image(name):
+            if me.wallpaper_loader != nil:
+                ok, data = pcall(me.wallpaper_loader, name)
+                if ok and data != nil:
+                    return data
+            for d in me.wallpaper_dirs:
+                f = fs.open(d .. "/" .. name .. ".cimg", "rb")
+                if f != nil:
+                    data = f.readAll()
+                    f.close()
+                    return data
+            return nil
+        ctx = {palette: self.palette, theme: () => me.theme, read: read_image, now: () => me.clock(),
+            alloc: (n) => (me.anim.enabled and me.anim.wallpaper != false) and me:_alloc(me.wall_owner, n) or nil,
+            set_colors: (list) => me:_set_colors(me.wall_owner, list)}
+        surf, live = wallpaper_mod.make(self.background, self.W, self.H, ctx)
+        self.live = live
+        return surf
+
+    # другие обои на ходу: имя или {name, mode}
+    def set_wallpaper(self, spec):
+        self.background = spec
+        self.comp.wallpaper = self:_wallpaper_surface()
+        self.comp:damage_all()
+
     # сменить масштаб на ходу ("auto" или 1..4)
     def set_scale(self, setting):
         self.scale_setting = setting
@@ -985,7 +1030,7 @@ export class WM:
         self.comp:set_scale(self.scale)
         self.W = self.comp.W
         self.H = self.comp.H
-        self.comp.wallpaper = self.make_wallpaper(self.W, self.H)
+        self.comp.wallpaper = self:_wallpaper_surface()
         if self.panel != nil:
             self.panel:fit(self.W, self.H)
         self.area = self:_work_area()

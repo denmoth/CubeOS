@@ -137,7 +137,7 @@ export def mini_app(sys, ctx):
 # собирает рабочий стол: менеджер и три окна (для игры и снимков). opts: term, assets
 export def build(opts=nil):
     o = opts ?? {}
-    wm = cde.wm.new({term: o.term, assets: o.assets ?? "/repo/assets", theme: o.theme, clock: o.clock, animations: o.animations,
+    wm = cde.wm.new({term: o.term, assets: o.assets ?? "/repo/assets", theme: o.theme, clock: o.clock, animations: o.animations, background: o.background,
         panel: o.panel ?? {time_text: o.time_text}})
     wm:launch(cube_app, {name: "cube"})
     wm:launch(notes_app, {name: "notes"})

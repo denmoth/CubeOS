@@ -1,0 +1,91 @@
+import t
+import kernel
+import cde
+import cde.theme as theme
+import cde.wallpaper as wallpaper
+import cgl.cimg as cimg
+import cgl.surface as surface_mod
+eq = t.eq
+
+def make_term():
+    api = {}
+    def get_size(px):
+        if px:
+            return 306, 171
+        return 51, 19
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "setGraphicsMode", "drawPixels", "setFrozen"]:
+        api[name] = nothing
+    return api
+
+clock = {now: 1000}
+def now():
+    return clock.now
+
+def new_wm(o):
+    o.term = make_term()
+    o.assets = "/repo/assets"
+    o.clock = now
+    return cde.wm.new(o)
+
+# ---------------------------------------------------------------- имена
+names = wallpaper.names(["/repo/assets/wallpapers"], ["mine"])
+has = {}
+for n in names:
+    has[n] = true
+eq([has.cube, has["cube-live"], has.gradient, has.grid, has.plain], [true, true, true, true, true], "built-in wallpapers are listed")
+eq([has.sunset, has.aurora, has["night-city"], has.mine], [true, true, true, true], "image files and extra names are listed")
+
+# ---------------------------------------------------------------- встроенные
+wm = new_wm({animations: {enabled: false}})
+eq(wm.background, "cube", "the default wallpaper is the cube")
+eq(wm.comp.wallpaper:equals(wallpaper.default(wm.W, wm.H)), true, "and it is the step 1 picture")
+wm:set_wallpaper("plain")
+eq(wm.comp.wallpaper:get(5, 5) == wm.comp.wallpaper:get(200, 100), true, "plain is one color")
+wm:set_wallpaper("grid")
+eq([wm.comp.wallpaper:get(192, 101) == theme.DESK0 + 1, wm.comp.wallpaper:get(200, 101) != theme.DESK0 + 1], [true, true], "grid has lines")
+wm:set_wallpaper({name: "no-such-image"})
+eq(wm.comp.wallpaper:get(0, 0) >= theme.DESK0 and wm.comp.wallpaper:get(0, 0) < theme.DESK0 + theme.DESK_N, true, "a missing image falls back to the gradient")
+
+# ---------------------------------------------------------------- картинки из файла
+def solid(w, h, v):
+    s = surface_mod.new(w, h, v)
+    return s
+red = surface_mod.new(10, 10, 0)
+pal = cde.theme.palette(cde.theme.get())
+data = cimg.encode(red, pal)
+wm2 = new_wm({animations: {enabled: false}, background: {name: "red", mode: "fit"}, wallpaper_loader: (n) => n == "red" and data or nil})
+w2 = wm2.comp.wallpaper
+bg = theme.DESK0 + 2
+eq(w2:get(2, 80), bg, "fit: letterbox at the sides")
+eq(w2:get(153, 85) != bg, true, "fit: the picture in the middle")
+wm2:set_wallpaper({name: "red", mode: "fill"})
+eq(wm2.comp.wallpaper:get(2, 80) != bg and wm2.comp.wallpaper:get(300, 5) != bg, true, "fill: covers the whole screen")
+wm2:set_wallpaper({name: "red", mode: "center"})
+eq([wm2.comp.wallpaper:get(2, 80) == bg, wm2.comp.wallpaper:get(153, 85) != bg], [true, true], "center: ten pixels in the middle")
+wm2:set_wallpaper({name: "red", mode: "tile"})
+eq(wm2.comp.wallpaper:get(305, 170) != bg and wm2.comp.wallpaper:get(0, 0) != bg, true, "tile: repeated over the screen")
+c = wm2.comp.wallpaper:get(153, 85)
+eq(c >= 16 and c <= 211, true, "image colors are the shared palette colors, not the theme's")
+
+# готовые картинки из assets
+wm3 = new_wm({animations: {enabled: false}, background: "sunset"})
+eq(wm3.comp.wallpaper:get(100, 5) >= 16 and wm3.comp.wallpaper:get(100, 5) <= 211, true, "the built-in sunset loads from assets")
+
+# ---------------------------------------------------------------- живые обои
+wm4 = new_wm({background: "cube-live"})
+eq(wm4.live != nil and len(wm4.live.slots), 6, "live wallpaper takes six palette slots")
+eq(len(wm4.pool_free), 2, "two stay free for applications")
+slot = wm4.live.slots[1]
+r0, g0, b0 = wm4.palette:get(slot)
+wm4.live:step(wm4.clock() + 450)
+r1, g1, b1 = wm4.palette:get(slot)
+eq([r0, g0, b0] != [r1, g1, b1], true, "stepping changes the slot colors")
+wm4:set_wallpaper("cube")
+eq([wm4.live, len(wm4.pool_free)], [nil, 8], "another wallpaper frees the slots")
+wm5 = new_wm({animations: {enabled: false}, background: "cube-live"})
+eq([wm5.live, len(wm5.pool_free)], [nil, 8], "no animation: a still picture, nothing is taken")
+
+print("done")

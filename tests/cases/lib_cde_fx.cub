@@ -217,7 +217,7 @@ def cpx(cv, x, y):
 
 # ---------------------------------------------------------------- settings
 eq(fx_mod.make_settings(nil), fx_mod.DEFAULTS, "settings: no config gives the defaults")
-eq(fx_mod.make_settings(nil), {enabled: true, speed: 1, windows: true, glow: true, widgets: true}, "settings: everything is on by default")
+eq(fx_mod.make_settings(nil), {enabled: true, speed: 1, windows: true, glow: true, widgets: true, wallpaper: true}, "settings: everything is on by default")
 st_a = fx_mod.make_settings({speed: 2, glow: false})
 eq([st_a.enabled, st_a.speed, st_a.windows, st_a.glow, st_a.widgets], [true, 2, true, false, true], "settings: missing keys come from the defaults")
 eq([fx_mod.make_settings({speed: 99}).speed, fx_mod.make_settings({speed: 0}).speed, fx_mod.make_settings({speed: "x"}).speed], [10, 0.1, 1], "settings: speed is clamped to 0.1..10, junk gives 1")
