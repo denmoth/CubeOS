@@ -26,7 +26,11 @@ import cde.compositor as comp_mod
 import cde.wallpaper as wallpaper_mod
 
 const WM_EVENTS = ["key", "key_up", "char", "paste", "mouse_click", "mouse_drag", "mouse_up", "mouse_scroll", "terminate",
-    "term_resize", "cubeos_cde"]
+    "term_resize", "monitor_resize", "monitor_touch", "cubeos_cde"]
+# автоматический масштаб: сколько логических пикселей нужно на одну единицу масштаба (306x171 это 1x, монитор 984x729 это 2x)
+const AUTO_W = 420
+const AUTO_H = 240
+const MAX_SCALE = 4
 export const APP_EVENTS = ["key", "key_up", "char", "paste", "mouse_click", "mouse_drag", "mouse_up", "mouse_scroll",
     "win_resize", "win_close", "win_focus", "win_blur", "win_theme"]
 # полоса у края окна, за которую меняют размер (пикселей внутрь и наружу)
@@ -41,7 +45,7 @@ def _now_ms():
 export class WM:
     # opts: term, screen (готовый экран cgl; иначе cgl.open), assets (папка со шрифтами и темами), font, theme (имя темы или
     #       таблица темы), theme_dirs (папки с файлами .theme; по умолчанию assets/themes), wallpaper (поверхность), clock (мс),
-    #       on_start (левый Alt)
+    #       on_start (левый Alt), scale ("auto" или 1..4: во сколько раз крупнее; логический экран = экран / масштаб)
     def init(self, opts=nil):
         o = opts ?? {}
         assets = o.assets ?? "/repo/assets"
@@ -59,12 +63,19 @@ export class WM:
             self.screen = cgl.open(open_opts)
         self.font = o.font ?? font_lib.default(assets)
         self.deco = theme.deco(self.theme, self.font)
-        self.W = self.screen.w
-        self.H = self.screen.h
+        self.scale_setting = o.scale ?? "auto"
+        self.scale = self:pick_scale(self.scale_setting)
+        self.W = math.floor(self.screen.w / self.scale)
+        self.H = math.floor(self.screen.h / self.scale)
         self.make_wallpaper = o.wallpaper_fn ?? wallpaper_mod.default
         self.comp = comp_mod.new(self.screen, self.font, {wallpaper: o.wallpaper ?? self.make_wallpaper(self.W, self.H),
-            deco: self.deco})
+            deco: self.deco, scale: self.scale})
         self.windows = self.comp.windows
+        # свободные места палитры для приложений: номер -> окно, которое его взяло
+        self.pool_free = []
+        for slot in theme.POOL:
+            self.pool_free[len(self.pool_free) + 1] = slot
+        self.owned = {}
         self.focused = nil
         self.next_id = 1
         self.pending = []
@@ -149,6 +160,44 @@ export class WM:
         if self.waiting and not self.wake_sent and self.sys != nil and coroutine.running() != self.co:
             self.wake_sent = true
             pcall(self.sys.post, self.pid, "cubeos_cde")
+
+    # n мест палитры окну (список номеров) или nil, если свободных столько нет
+    def _alloc(self, win, n):
+        if n <= 0 or n > len(self.pool_free):
+            return nil
+        list = []
+        for i in range[1, n]:
+            slot = table.remove(self.pool_free, 1)
+            self.owned[slot] = win
+            list[i] = slot
+        return list
+
+    # меняет цвета своих мест палитры: список [номер, r, g, b]; чужие номера пропускаются
+    def _set_colors(self, win, list):
+        mine = []
+        for e in list:
+            if self.owned[e[1]] == win:
+                mine[len(mine) + 1] = e
+        if len(mine) > 0:
+            self.screen:set_colors(mine)
+        return len(mine)
+
+    # окно закрыто: его места палитры свободны и снова цвета фона темы
+    def _free_colors(self, win):
+        back = []
+        r, g, b = theme.palette(self.theme):get(theme.WIN_BG)
+        for slot, owner in self.owned:
+            if owner == win:
+                back[len(back) + 1] = slot
+        for slot in back:
+            self.owned[slot] = nil
+            self.pool_free[len(self.pool_free) + 1] = slot
+        if len(back) > 0:
+            table.sort(self.pool_free)
+            entries = []
+            for slot in back:
+                entries[len(entries) + 1] = [slot, r, g, b]
+            self.screen:set_colors(entries)
 
     def _title_changed(self, win):
         win.title_dirty = true
@@ -253,6 +302,7 @@ export class WM:
             w = self.windows[i]
             if w.closed:
                 self.comp:damage_window(w)
+                self:_free_colors(w)
                 table.remove(self.windows, i)
                 if self.focused == w:
                     self:_set_focus(self:_topmost())
@@ -783,8 +833,13 @@ export class WM:
 
     def handle(self, ev):
         name = ev[1]
-        if name == "mouse_click" or name == "mouse_drag" or name == "mouse_up" or name == "mouse_scroll":
-            px, py = self.screen:to_pixel(ev[3], ev[4])
+        if name == "monitor_touch":
+            # касание монитора: нажатие и отпускание в этой точке
+            px, py = self:_logical(ev[3], ev[4])
+            self:_click(1, px, py)
+            self:_up(1, px, py)
+        elif name == "mouse_click" or name == "mouse_drag" or name == "mouse_up" or name == "mouse_scroll":
+            px, py = self:_logical(ev[3], ev[4])
             if name == "mouse_click":
                 self:_click(ev[2], px, py)
             elif name == "mouse_drag":
@@ -807,24 +862,49 @@ export class WM:
         elif name == "terminate":
             # удержание Ctrl+T: CC сам шлёт terminate; окно в фокусе закрывается без вопросов (D222)
             self:force_close(self.focused)
-        elif name == "term_resize":
+        elif name == "term_resize" or name == "monitor_resize":
             self:_resized()
 
-    # экран поменял размер: новые обои, развёрнутые окна по новому размеру, видимые окна в пределах экрана
+    # событие мыши (пиксели экрана или клетки телетекста) -> логический пиксель
+    def _logical(self, x, y):
+        px, py = self.screen:to_pixel(x, y)
+        return math.floor(px / self.scale), math.floor(py / self.scale)
+
+    # масштаб для настройки: число 1..4 (меньше, если логический экран вышел бы совсем маленьким) или "auto" по размеру экрана
+    def pick_scale(self, setting):
+        sw = self.screen.w
+        sh = self.screen.h
+        if setting == "auto" or tonumber(setting) == nil:
+            return math.max(1, math.min(MAX_SCALE, math.floor(math.min(sw / AUTO_W, sh / AUTO_H))))
+        k = math.max(1, math.min(MAX_SCALE, math.floor(tonumber(setting))))
+        while k > 1 and (sw / k < 200 or sh / k < 110):
+            k -= 1
+        return k
+
+    # сменить масштаб на ходу ("auto" или 1..4)
+    def set_scale(self, setting):
+        self.scale_setting = setting
+        self:_relayout()
+
+    # экран поменял размер (терминал компьютера, монитор): масштаб заново, новые обои, окна в пределах экрана
     def _resized(self):
         self.screen:resize()
-        self.W = self.screen.w
-        self.H = self.screen.h
-        self.comp.s = self.screen.surface
-        self.comp.W = self.W
-        self.comp.H = self.H
+        self:_relayout()
+
+    def _relayout(self):
+        self.scale = self:pick_scale(self.scale_setting)
+        self.comp:set_scale(self.scale)
+        self.W = self.comp.W
+        self.H = self.comp.H
         self.comp.wallpaper = self.make_wallpaper(self.W, self.H)
         for w in self.windows:
             r = self:area_for(w.state)
             if r != nil:
                 self:move_resize(w, r.x, r.y, r.w, r.h)
             else:
-                self:move_resize(w, math.max(0, math.min(self.W - w.w, w.x)), math.max(0, math.min(self.H - self.deco.title, w.y)), w.w, w.h)
+                nw = math.min(w.w, self.W)
+                nh = math.min(w.h, self.H)
+                self:move_resize(w, math.max(0, math.min(self.W - nw, w.x)), math.max(0, math.min(self.H - nh, w.y)), nw, nh)
         self.comp:damage_all()
 
     # ------------------------------------------------------------ тема
@@ -835,7 +915,12 @@ export class WM:
         if type(th) != "table":
             th = theme.find(th, self.theme_dirs)
         self.theme = th
-        self.screen:set_colors(theme.entries(th))
+        # места палитры, которые держат приложения, тема не трогает
+        entries = []
+        for e in theme.entries(th):
+            if self.owned[e[1]] == nil:
+                entries[len(entries) + 1] = e
+        self.screen:set_colors(entries)
         self.palette = self.screen.palette
         self.deco = theme.deco(th, self.font)
         self.comp:set_deco(self.deco, theme.dim_map(self.palette, self.deco.shadow_strength))

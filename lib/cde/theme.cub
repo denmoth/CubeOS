@@ -7,10 +7,12 @@
 #
 # Раскладка палитры (одна на весь экран, её видят все приложения; приложения берут цвета через ближайший цвет, cde.app.rgb):
 #   0..15     16 цветов CC в тонах темы (белый, оранжевый, ... чёрный): текстовые окна и программы, рисующие цветами CC
-#   16..215   куб 6x6x6 без последних 16 цветов (r = 255)
+#   16..31    16 серых от почти чёрного до почти белого
+#   32..211   общие цвета: 12 оттенков x 3 насыщенности x 5 яркостей (в том числе тёмные тона, которых нет в кубе 6x6x6)
+#   212..215  свободные места для приложений (win:alloc_colors), вместе с 248..255
 #   216..223  обои (8 ступеней)
 #   224..231  градиент заголовка активного окна (8 ступеней)
-#   232..247  цвета интерфейса (роли ниже), 248..255 запас (анимации палитрой)
+#   232..247  цвета интерфейса (роли ниже), 248..255 свободные места для приложений (анимации палитрой)
 #
 # Файл темы (assets/themes/*.theme, свои в $cfg/themes):
 #   {name, display, dark, text: [16 цветов CC], desk: [ступени обоев], title_active: "#hex" или [цвета градиента], роли...,
@@ -42,6 +44,14 @@ export const BTN_MAX = 246
 # сплошной цвет активного заголовка (середина градиента): значки, подложки
 export const TITLE_ACTIVE = 247
 export const SPARE0 = 248
+export const GRAY0 = 16
+export const GENERAL0 = 32
+# свободные места палитры, которые приложения берут себе (win:alloc_colors) и меняют на ходу (анимации палитрой)
+export const POOL = [212, 213, 214, 215, 248, 249, 250, 251, 252, 253, 254, 255]
+
+const HUES = 12
+const SATS = [0.35, 0.65, 1]
+const VALS = [0.22, 0.4, 0.58, 0.77, 0.96]
 
 const ROLES = ["win_bg", "title_inactive", "title_text", "title_dim", "border_active", "border_inactive", "close", "button_down",
     "accent", "preview", "desk_line", "desk_glow", "btn_close", "btn_min", "btn_max"]
@@ -154,9 +164,23 @@ def _steps(value, n):
         out[i + 1] = [r, g, bl]
     return out
 
-# палитра рабочего стола: стандартная палитра cgl, поверх цвета CC в тонах темы и цвета интерфейса
+# общие цвета 16..211: серые и оттенки по кругу (одинаковые во всех темах)
+def _general(p):
+    for i in range[0, 15]:
+        level = math.floor(10 + i * 235 / 15 + 0.5)
+        p:set(GRAY0 + i, level, level, level)
+    n = GENERAL0
+    for hi in range[0, HUES - 1]:
+        for sat in SATS:
+            for val in VALS:
+                r, g, b = color.hsv_to_rgb(hi * 360 / HUES, sat, val)
+                p:set(n, r, g, b)
+                n += 1
+
+# палитра рабочего стола: цвета CC в тонах темы, общие цвета, цвета интерфейса
 export def palette(th):
     p = color.default_palette()
+    _general(p)
     for i in range[0, 15]:
         _set_hex(p, i, th.text[i + 1])
     for i, c in _steps(th.desk, DESK_N):
@@ -168,7 +192,7 @@ export def palette(th):
     p:set(TITLE_ACTIVE, mid[1], mid[2], mid[3])
     for i, role in ROLES:
         _set_hex(p, WIN_BG + i - 1, th[role])
-    for i in range[SPARE0, 255]:
+    for i in POOL:
         _set_hex(p, i, th.win_bg)
     return p
 

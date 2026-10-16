@@ -11,6 +11,8 @@
 #   name, a, b, c, d = win:wait_event(0.5)   следующее событие окна (или nil по таймауту), см. cde.app
 #   win:close()                        закрыть окно
 #   win:request("max")                 попросить менеджер: "min", "max" (развернуть или вернуть), "full" (F11), "normal"
+#   slots = win:alloc_colors(4)        свои места палитры (номера) или nil; win:set_colors([[номер, r, g, b], ...]) меняет их цвет
+#                                      на ходу (анимация палитрой почти ничего не стоит); места освобождаются вместе с окном
 #   win:set_drag_areas([[x, y, w, h]]) окно со своим заголовком ({decorations: false}): за эти места (координаты содержимого)
 #                                      окно таскают и разворачивают двойным кликом; края для размера остаются у менеджера
 #
@@ -283,6 +285,12 @@ export class Window:
     def set_title(self, title):
         self.title = tostring(title)
         self.wm:_title_changed(self)
+
+    def alloc_colors(self, n):
+        return self.wm:_alloc(self, n)
+
+    def set_colors(self, list):
+        return self.wm:_set_colors(self, list)
 
     def request(self, action):
         self.requests[len(self.requests) + 1] = action

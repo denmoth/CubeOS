@@ -5,6 +5,8 @@
 #   comp:damage(x, y, w, h)              это место экрана надо пересобрать
 #   comp:damage_window(win)              весь прямоугольник окна с тенью
 #   n = comp:compose()                   пересобирает изменённые места (слияние близких прямоугольников) и показывает кадр
+#   comp:set_scale(2)                    масштаб: кадр собирается в логических пикселях (экран / масштаб), изменённые места
+#                                        увеличиваются на настоящий экран; окна, мышь и приложения живут в логических пикселях
 #
 # Пересборка прямоугольника: ищется самое верхнее окно, которое закрывает его целиком (тогда нижние слои не рисуются вовсе),
 # иначе кладутся обои; дальше снизу вверх окна, которые его задевают: тень (затемнение того, что под ней, по таблице), заголовок
@@ -21,10 +23,9 @@ export class Compositor:
     def init(self, screen, font, opts=nil):
         o = opts ?? {}
         self.screen = screen
-        self.s = screen.surface
-        self.W = screen.w
-        self.H = screen.h
         self.font = font
+        self.scale = 1
+        self:set_scale(o.scale ?? 1)
         self.wallpaper = o.wallpaper ?? surface_mod.new(self.W, self.H, theme.DESK0)
         self.deco = o.deco
         self.dim = o.dim ?? theme.dim_map(screen.palette, self.deco != nil and self.deco.shadow_strength or 0.55)
@@ -38,6 +39,20 @@ export class Compositor:
         # номер поколения темы: заголовки перерисовываются после смены
         self.gen = 0
         self.stats = {composes: 0, rects: 0, pixels: 0, titles: 0}
+
+    # логический экран: при масштабе 1 это сама поверхность экрана, иначе своя поверхность (экран / масштаб)
+    def set_scale(self, scale):
+        self.scale = math.max(1, math.floor(scale))
+        self.W = math.floor(self.screen.w / self.scale)
+        self.H = math.floor(self.screen.h / self.scale)
+        if self.scale == 1:
+            self.s = self.screen.surface
+        else:
+            self.s = surface_mod.new(self.W, self.H, theme.DESK0)
+            # полоска справа и снизу, которая не делится на масштаб
+            self.screen.surface:clear(theme.DESK0)
+        self.rects = []
+        self:damage_all()
 
     def set_deco(self, deco, dim):
         self.deco = deco
@@ -118,9 +133,13 @@ export class Compositor:
         if len(self.rects) == 0:
             return 0
         list = self:_merged()
+        k = self.scale
         for r in list:
             self:_paint(r[1], r[2], r[3], r[4])
             self.stats.pixels += (r[3] - r[1] + 1) * (r[4] - r[2] + 1)
+            if k > 1:
+                self.screen.surface:blit(self.s, r[1] * k, r[2] * k, {sx: r[1], sy: r[2], sw: r[3] - r[1] + 1, sh: r[4] - r[2] + 1,
+                    scale: k, transparent: false})
         self.stats.composes += 1
         self.stats.rects += len(list)
         self.screen:present()

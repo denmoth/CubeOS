@@ -149,6 +149,16 @@ system.kernel:feed("key", keys.t, false)
 system.kernel:feed("key_up", keys.leftCtrl)
 eq(wait(system, () => len(wm.windows) == 1), true, "Ctrl+T closes the focused terminal window")
 
+# тема сочетанием сохраняется в $cfg/cde.conf
+system.kernel:feed("key", keys.leftCtrl, false)
+system.kernel:feed("key", keys.leftAlt, false)
+system.kernel:feed("key", keys.t, false)
+system.kernel:feed("key_up", keys.leftAlt)
+system.kernel:feed("key_up", keys.leftCtrl)
+conf = "/cubeos/users/ivan/cfg/cde.conf"
+eq(wait(system, () => fsys:exists(nil, conf)), true, "the theme choice is saved")
+eq(string.find(fsys:read_file(nil, conf), wm.theme.name, 1, true) != nil and wm.theme.name != "tokyo-night", true, "with the new theme name")
+
 # выход из сессии: Ctrl+Alt+Q, снова экран входа
 system.kernel:feed("key", keys.leftCtrl, false)
 system.kernel:feed("key", keys.leftAlt, false)

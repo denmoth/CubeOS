@@ -4,17 +4,45 @@
 #
 # Процесс сессии становится оконным менеджером (держит фокус ввода ядра), приложения запускаются его потомками с правами и видом CFS
 # пользователя. Первым открывается терминал. Alt+Enter новый терминал, Ctrl+Alt+T следующая тема (пока нет настроек), F11 полный
-# экран, Ctrl+Alt+Q выход из сессии (панель и «Пуск» на шаге 3).
+# экран, Ctrl+Alt+= и Ctrl+Alt+- крупнее и мельче (масштаб), Ctrl+Alt+Q выход из сессии (панель и «Пуск» на шаге 3).
+# Настройки пользователя $cfg/cde.conf (JSON5): theme (имя темы), scale ("auto" или 1..4); тема и масштаб, выбранные сочетаниями,
+# сохраняются туда же.
 # opts: term, assets, theme, host, ready(wm) (для тестов), terminal_ready(ctx) (для тестов: ready терминала)
 
 import cde.wm as wm_mod
 import cde.terminal as terminal
+import json5
+
+const SCALES = ["auto", 1, 2, 3, 4]
 
 export def program(session, opts=nil):
     o = opts ?? {}
 
     def main(sys, args):
-        wm = wm_mod.new({term: o.term, assets: o.assets ?? "/repo/assets", theme: o.theme})
+        view = sys.view()
+        conf_path = nil
+        conf = {}
+        if view != nil:
+            conf_path = view:expand("$cfg") .. "/cde.conf"
+            def read_conf():
+                if view:exists(conf_path):
+                    data = json5.parse(view:read(conf_path))
+                    if type(data) == "table":
+                        return data
+                return {}
+            okc, data = pcall(read_conf)
+            if okc:
+                conf = data
+        def save(key, value):
+            if conf_path == nil:
+                return
+            def write_conf():
+                text = view:exists(conf_path) and view:read(conf_path) or "{}\n"
+                view:write_atomic(conf_path, json5.patch(text, [key], value))
+            okw, err = pcall(write_conf)
+            if not okw:
+                sys.log("warn", "desktop: cannot save " .. key .. ": " .. tostring(err))
+        wm = wm_mod.new({term: o.term, assets: o.assets ?? "/repo/assets", theme: o.theme ?? conf.theme, scale: conf.scale ?? "auto"})
         term_opts = {assets: o.assets, host: o.host, ready: o.terminal_ready}
         def open_terminal():
             wm:launch(terminal.main, {name: "terminal"}, [session, term_opts])
@@ -22,7 +50,23 @@ export def program(session, opts=nil):
             wm:stop()
         wm:hotkey("alt+enter", open_terminal)
         wm:hotkey("ctrl+alt+q", logout)
-        wm:hotkey("ctrl+alt+t", () => wm:next_theme())
+        def next_theme():
+            wm:next_theme()
+            save("theme", wm.theme.name)
+        def zoom(dir):
+            pos = 1
+            for i, v in SCALES:
+                if v == wm.scale_setting:
+                    pos = i
+            # от «auto» шаг идёт от масштаба, который сейчас на экране
+            if pos == 1:
+                pos = wm.scale + 1
+            pos = math.max(2, math.min(len(SCALES), pos + dir))
+            wm:set_scale(SCALES[pos])
+            save("scale", SCALES[pos])
+        wm:hotkey("ctrl+alt+t", next_theme)
+        wm:hotkey("ctrl+alt+equals", () => zoom(1))
+        wm:hotkey("ctrl+alt+minus", () => zoom(-1))
         open_terminal()
         sys.log("info", "desktop started for " .. tostring(session.user))
         if o.ready != nil:
