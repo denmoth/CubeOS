@@ -197,14 +197,14 @@ end
 
 -- 10. пункт меню CraftOS: без учётных записей открыт, при отказе возврат в меню
 do
-  local w = world({ events = { { "key", "delete" }, { "key", "down" }, { "key", "down" }, { "key", "down" }, { "key", "down" }, { "key", "enter" } },
+  local w = world({ events = { { "key", "delete" }, { "key", "down" }, { "key", "down" }, { "key", "down" }, { "key", "down" }, { "key", "down" }, { "key", "enter" } },
     reads = { "y" }, loaders = { [B .. "rescue.lua"] = "rescue" } })
   local r = w.run("stage1")
   check("CraftOS entry without accounts", r == "craftos", r)
 end
 do
   local calls, log = 0, {}
-  local w = world({ events = { { "key", "delete" }, { "key", "down" }, { "key", "down" }, { "key", "down" }, { "key", "down" }, { "key", "enter" }, { "key", "enter" } },
+  local w = world({ events = { { "key", "delete" }, { "key", "down" }, { "key", "down" }, { "key", "down" }, { "key", "down" }, { "key", "down" }, { "key", "enter" }, { "key", "enter" } },
     loaders = { [B .. "rescue.lua"] = function(arg) calls = calls + 1; log[#log + 1] = arg.gate; return "reboot" end,
       [B .. "stage2.lua"] = function() return "booted" end } })
   local r = w.run("stage1")
@@ -350,4 +350,13 @@ do
     loaders = { [B .. "stage2.lua"] = function(ctx) seen = ctx end } })
   w.run("stage1")
   check("input log menu entry", seen and seen.input_log == true and seen.mode == nil, seen and tostring(seen.input_log))
+end
+
+-- 16a. пункт меню «CubeOS (terminal)»: полноэкранный терминал вместо рабочего стола на эту загрузку
+do
+  local seen
+  local w = world({ events = { { "key", "delete" }, { "key", "down" }, { "key", "down" }, { "key", "down" }, { "key", "enter" } },
+    loaders = { [B .. "stage2.lua"] = function(ctx) seen = ctx end } })
+  w.run("stage1")
+  check("terminal menu entry", seen and seen.terminal == true and seen.mode == nil, seen and tostring(seen.terminal))
 end

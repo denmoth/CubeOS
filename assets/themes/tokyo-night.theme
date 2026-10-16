@@ -1,0 +1,39 @@
+// Тема рабочего стола CDE (docs/19-cde.md, lib/cde/theme.cub). Цвета "#rrggbb".
+{
+  name: "tokyo-night",
+  display: "Tokyo Night",
+  dark: true,
+  // 16 цветов CC: white orange magenta lightBlue yellow lime pink gray lightGray cyan purple blue brown green red black
+  text: ["#c0caf5", "#ff9e64", "#bb9af7", "#7dcfff", "#e0af68", "#9ece6a", "#f7a8c8", "#414868",
+         "#787c99", "#2ac3de", "#9d7cd8", "#7aa2f7", "#b4916a", "#73daca", "#f7768e", "#16161e"],
+  // обои: ступени от тёмного к светлому
+  desk: ["#11121a", "#1b1e30", "#262c48", "#3f4878"],
+  // заголовок активного окна: один цвет или градиент слева направо
+  title_active: ["#33395c", "#24283b", "#1f2335"],
+  title_inactive: "#1c1e2b",
+  win_bg: "#1a1b26",
+  title_text: "#c0caf5",
+  title_dim: "#565f89",
+  border_active: "#7aa2f7",
+  border_inactive: "#2f344d",
+  close: "#f7768e",
+  button_down: "#3b4261",
+  accent: "#7aa2f7",
+  preview: "#bb9af7",
+  desk_line: "#3d4670",
+  desk_glow: "#7aa2f7",
+  btn_close: "#f7768e",
+  btn_min: "#e0af68",
+  btn_max: "#9ece6a",
+  window: {
+    buttons: "right",              // "left" или "right"
+    order: ["min", "max", "close"],
+    style: "win",                  // "win" (значки), "mac" (цветные кружки), "kde" (значки, закрыть в круге)
+    radius: 2,                     // 0..4
+    border: true,
+    title_height: 12,
+    title_align: "left",           // "left" или "center"
+    shadow: 2,                     // 0..3
+    shadow_strength: 0.55,
+  },
+}

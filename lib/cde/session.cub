@@ -3,7 +3,8 @@
 #   shell = (session) => cde_session.program(session, {assets: "/repo/assets"})      для boot.new({shell: ...})
 #
 # Процесс сессии становится оконным менеджером (держит фокус ввода ядра), приложения запускаются его потомками с правами и видом CFS
-# пользователя. Первым открывается терминал. Alt+Enter новый терминал, Ctrl+Alt+Q выход из сессии (панель и «Пуск» на шаге 3).
+# пользователя. Первым открывается терминал. Alt+Enter новый терминал, Ctrl+Alt+T следующая тема (пока нет настроек), F11 полный
+# экран, Ctrl+Alt+Q выход из сессии (панель и «Пуск» на шаге 3).
 # opts: term, assets, theme, host, ready(wm) (для тестов), terminal_ready(ctx) (для тестов: ready терминала)
 
 import cde.wm as wm_mod
@@ -21,6 +22,7 @@ export def program(session, opts=nil):
             wm:stop()
         wm:hotkey("alt+enter", open_terminal)
         wm:hotkey("ctrl+alt+q", logout)
+        wm:hotkey("ctrl+alt+t", () => wm:next_theme())
         open_terminal()
         sys.log("info", "desktop started for " .. tostring(session.user))
         if o.ready != nil:

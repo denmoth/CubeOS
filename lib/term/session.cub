@@ -339,6 +339,10 @@ export def program(session, opts=nil):
             if ev == "win_close":
                 u.quit = true
                 return "none"
+            if ev == "win_theme":
+                # палитра экрана сменилась: цвета терминала заново подбираются под неё
+                out:set_theme(out.theme)
+                return "none"
             if ev == "win_focus" or ev == "win_blur":
                 return "none"
             if ev == "cubeos_keyboard":

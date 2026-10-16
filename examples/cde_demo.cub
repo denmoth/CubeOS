@@ -1,6 +1,6 @@
 # Демонстрация рабочего стола CDE (шаг 1): три окна-процесса ядра. «Cube» рисует пикселями (вращающийся куб), «Notes»
 # текстовое окно (клетки со шрифтом, ввод с клавиатуры), «Clock» маленькое пиксельное окно с часами.
-# Запуск в CC: /repo/game/cde_demo.lua. Alt+Enter открывает ещё одно окно заметок. Выход: Ctrl+Alt+Q.
+# Запуск в CC: /repo/game/cde_demo.lua. Alt+Enter открывает ещё одно окно заметок, Ctrl+Alt+T следующая тема, F11 полный экран. Выход: Ctrl+Alt+Q.
 
 import cde
 import cgl.g3d as g3d
@@ -99,6 +99,38 @@ export def clock_app(sys, ctx):
             break
     win:close()
 
+# ---------------------------------------------------------------- окно со своим заголовком: мини-плеер
+
+export def mini_app(sys, ctx):
+    win = app.open(sys, ctx, {title: "Mini player", kind: "pixel", w: 112, h: 34, decorations: false, resizable: false})
+    th = app.theme
+    f = ctx.wm.font
+    head = app.ramp(ctx, [[187, 154, 247], [122, 162, 247]], 8)
+    win:set_drag_areas([[0, 0, 88, 11]])
+    t = 0
+    while true:
+        cv = win.canvas
+        cv:clear(th.WIN_BG)
+        cv:fill_gradient(0, 0, cv.w, 11, head, "h", {dither: true})
+        cv:text(f, 4, 1, "Now playing", th.WIN_BG)
+        cv:circle(cv.w - 17, 5, 3, th.BTN_MIN, true)
+        cv:circle(cv.w - 7, 5, 3, th.BTN_CLOSE, true)
+        cv:text(f, 4, 14, "C418 - Sweden", th.TITLE_TEXT)
+        cv:fill_rect(4, 26, cv.w - 8, 3, th.BORDER_INACTIVE)
+        done_w = math.floor((cv.w - 8) * ((t % 30) / 30))
+        cv:fill_rect(4, 26, done_w, 3, th.ACCENT)
+        win:present()
+        ev = table.pack(win:wait_event(0.5))
+        if ev[1] == "win_close":
+            break
+        if ev[1] == "mouse_click" and ev[4] < 11:
+            if ev[3] >= cv.w - 11:
+                break
+            if ev[3] >= cv.w - 21:
+                win:request("min")
+        t += 0.5
+    win:close()
+
 # ---------------------------------------------------------------- запуск
 
 # собирает рабочий стол: менеджер и три окна (для игры и снимков). opts: term, assets
@@ -108,11 +140,13 @@ export def build(opts=nil):
     wm:launch(cube_app, {name: "cube"})
     wm:launch(notes_app, {name: "notes"})
     wm:launch(clock_app, {name: "clock"})
+    wm:launch(mini_app, {name: "mini"})
     n = {count: 1}
     def more():
         n.count += 1
         wm:launch(notes_app, {name: "notes"}, ["Notes " .. n.count])
     wm:hotkey("alt+enter", more)
+    wm:hotkey("ctrl+alt+t", () => wm:next_theme())
     return wm
 
 export def main(opts=nil):

@@ -10,19 +10,22 @@
 #   win:set_title("...")               заголовок
 #   name, a, b, c, d = win:wait_event(0.5)   следующее событие окна (или nil по таймауту), см. cde.app
 #   win:close()                        закрыть окно
+#   win:request("max")                 попросить менеджер: "min", "max" (развернуть или вернуть), "full" (F11), "normal"
+#   win:set_drag_areas([[x, y, w, h]]) окно со своим заголовком ({decorations: false}): за эти места (координаты содержимого)
+#                                      окно таскают и разворачивают двойным кликом; края для размера остаются у менеджера
 #
-# Геометрия: x, y, w, h это внешний прямоугольник окна (рамка и заголовок) на экране; содержимое начинается с (x + 1, y + TITLE)
-# и имеет размер cw x ch. Состояние state: "normal", "max" (на весь экран), "left", "right" (половинки); minimized отдельно.
+# Геометрия: x, y, w, h это внешний прямоугольник окна (рамка и заголовок) на экране; содержимое начинается с (x + left, y + top)
+# (win:insets(), по теме: рамка 1 пиксель или без неё, заголовок theme.window.title_height) и имеет размер cw x ch.
+# Состояние state: "normal", "max" (на весь экран), "left", "right" (половинки), "full" (полный экран без рамки, F11);
+# minimized отдельно. Окно без рамки менеджера (decorations: false) рисует заголовок само.
 
 import cgl.surface as surface_mod
 import ui.cells as cells_mod
 import term.chars as chars
 import cde.theme as theme
 
-# высота заголовка вместе с верхней линией рамки; рамка 1 пиксель с остальных сторон
+# высота заголовка по умолчанию (вместе с верхней линией рамки); настоящая берётся из темы (wm.deco.title)
 export const TITLE = 12
-# тень справа и снизу
-export const SHADOW = 2
 
 const TELE = {}
 
@@ -80,6 +83,9 @@ export class Window:
         self.cursor_on = false
         self.blink = true
         self.fg = 0
+        self.decorated = o.decorations != false
+        self.drag_areas = []
+        self.requests = []
         cw = 0
         ch = 0
         if self.kind == "text":
@@ -96,8 +102,9 @@ export class Window:
             self.min_h = o.min_h ?? 16
         self.x = o.x ?? 0
         self.y = o.y ?? 0
-        self.w = cw + 2
-        self.h = ch + TITLE + 1
+        l, t, r, b = self:insets()
+        self.w = cw + l + r
+        self.h = ch + t + b
         self.cw = 0
         self.ch = 0
         self.canvas = nil
@@ -105,11 +112,22 @@ export class Window:
 
     # ------------------------------------------------------------ геометрия
 
+    # отступы содержимого от внешнего края: слева, сверху (заголовок), справа, снизу
+    def insets(self):
+        if self.state == "full" or not self.decorated:
+            return 0, 0, 0, 0
+        d = self.wm.deco
+        if d.border:
+            return 1, d.title, 1, 1
+        return 0, d.title, 0, 0
+
     def content_x(self):
-        return self.x + 1
+        l, t, r, b = self:insets()
+        return self.x + l
 
     def content_y(self):
-        return self.y + TITLE
+        l, t, r, b = self:insets()
+        return self.y + t
 
     def visible(self):
         return not self.minimized and not self.closed
@@ -119,11 +137,27 @@ export class Window:
         return px >= self.x and px < self.x + self.w and py >= self.y and py < self.y + self.h
 
     def in_content(self, px, py):
-        return px >= self.x + 1 and px < self.x + 1 + self.cw and py >= self.y + TITLE and py < self.y + TITLE + self.ch
+        l, t, r, b = self:insets()
+        return px >= self.x + l and px < self.x + l + self.cw and py >= self.y + t and py < self.y + t + self.ch
 
-    # размер содержимого для внешнего размера (текстовое окно в обычном состоянии подгоняется под целые клетки)
+    # точка экрана в месте, за которое таскают окно со своим заголовком
+    def in_drag_area(self, px, py):
+        lx = px - self:content_x()
+        ly = py - self:content_y()
+        for a in self.drag_areas:
+            if lx >= a[1] and lx < a[1] + a[3] and ly >= a[2] and ly < a[2] + a[4]:
+                return true
+        return false
+
+    # размер содержимого для внешнего размера
     def content_for(self, ow, oh):
-        return math.max(1, ow - 2), math.max(1, oh - TITLE - 1)
+        l, t, r, b = self:insets()
+        return math.max(1, ow - l - r), math.max(1, oh - t - b)
+
+    # внешний размер для размера содержимого
+    def outer_for(self, cw, ch):
+        l, t, r, b = self:insets()
+        return cw + l + r, ch + t + b
 
     # создаёт поверхность (и клетки) нужного размера, сохраняя нарисованное в общей части; true, если размер изменился
     def _make_content(self, cw, ch):
@@ -249,6 +283,13 @@ export class Window:
     def set_title(self, title):
         self.title = tostring(title)
         self.wm:_title_changed(self)
+
+    def request(self, action):
+        self.requests[len(self.requests) + 1] = action
+        self.wm:_wake(self)
+
+    def set_drag_areas(self, list):
+        self.drag_areas = list ?? []
 
     def close(self):
         if not self.closed:

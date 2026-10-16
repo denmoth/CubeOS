@@ -16,7 +16,7 @@
 #   mouse_click/mouse_drag/mouse_up(кнопка, x, y, id), mouse_scroll(направление, x, y, id): у пиксельного окна x, y это пиксели
 #     содержимого с нуля, у текстового клетки с единицы (как в терминале CC)
 #   win_resize(ширина, высота, id): пиксели или столбцы и строки; win.canvas уже новая поверхность, нарисовать заново
-#   win_close(id): просьба закрыть (кнопка ×, Ctrl+T); win_focus(id), win_blur(id)
+#   win_close(id): просьба закрыть (кнопка ×, Ctrl+T); win_focus(id), win_blur(id); win_theme(имя темы, id): тема сменилась
 
 import cgl
 import font as font_lib
@@ -25,11 +25,10 @@ import cde.window as window_mod
 import cde.compositor as comp_mod
 import cde.wallpaper as wallpaper_mod
 
-const TITLE = window_mod.TITLE
 const WM_EVENTS = ["key", "key_up", "char", "paste", "mouse_click", "mouse_drag", "mouse_up", "mouse_scroll", "terminate",
     "term_resize", "cubeos_cde"]
 export const APP_EVENTS = ["key", "key_up", "char", "paste", "mouse_click", "mouse_drag", "mouse_up", "mouse_scroll",
-    "win_resize", "win_close", "win_focus", "win_blur"]
+    "win_resize", "win_close", "win_focus", "win_blur", "win_theme"]
 # полоса у края окна, за которую меняют размер (пикселей внутрь и наружу)
 const GRIP = 2
 const DOUBLE_MS = 450
@@ -40,11 +39,14 @@ def _now_ms():
     return os.epoch("utc")
 
 export class WM:
-    # opts: term, screen (готовый экран cgl; иначе cgl.open), assets (папка со шрифтами), font, theme (имя), wallpaper (поверхность),
-    #       clock (мс), on_start (левый Alt)
+    # opts: term, screen (готовый экран cgl; иначе cgl.open), assets (папка со шрифтами и темами), font, theme (имя темы или
+    #       таблица темы), theme_dirs (папки с файлами .theme; по умолчанию assets/themes), wallpaper (поверхность), clock (мс),
+    #       on_start (левый Alt)
     def init(self, opts=nil):
         o = opts ?? {}
-        self.theme = theme.get(o.theme)
+        assets = o.assets ?? "/repo/assets"
+        self.theme_dirs = o.theme_dirs ?? [assets .. "/themes"]
+        self.theme = type(o.theme) == "table" and o.theme or theme.find(o.theme, self.theme_dirs)
         self.palette = theme.palette(self.theme)
         if o.screen != nil:
             self.screen = o.screen
@@ -55,11 +57,13 @@ export class WM:
             if o.term != nil:
                 open_opts.term = o.term
             self.screen = cgl.open(open_opts)
-        self.font = o.font ?? font_lib.default(o.assets ?? "/repo/assets")
+        self.font = o.font ?? font_lib.default(assets)
+        self.deco = theme.deco(self.theme, self.font)
         self.W = self.screen.w
         self.H = self.screen.h
         self.make_wallpaper = o.wallpaper_fn ?? wallpaper_mod.default
-        self.comp = comp_mod.new(self.screen, self.font, {wallpaper: o.wallpaper ?? self.make_wallpaper(self.W, self.H)})
+        self.comp = comp_mod.new(self.screen, self.font, {wallpaper: o.wallpaper ?? self.make_wallpaper(self.W, self.H),
+            deco: self.deco})
         self.windows = self.comp.windows
         self.focused = nil
         self.next_id = 1
@@ -258,28 +262,78 @@ export class WM:
             else:
                 if w.title_dirty:
                     w.title_dirty = false
-                    self.comp:damage(w.x, w.y, w.w, TITLE)
+                    self:_damage_title(w)
+                if len(w.requests) > 0:
+                    reqs = w.requests
+                    w.requests = []
+                    for rq in reqs:
+                        self:_request(w, rq)
                 cv = w.canvas
                 if cv.dx0 <= cv.dx1 and cv.dy0 <= cv.dy1:
                     if w:visible():
-                        self.comp:damage(w.x + 1 + cv.dx0, w.y + TITLE + cv.dy0, cv.dx1 - cv.dx0 + 1, cv.dy1 - cv.dy0 + 1)
+                        self.comp:damage(w:content_x() + cv.dx0, w:content_y() + cv.dy0, cv.dx1 - cv.dx0 + 1, cv.dy1 - cv.dy0 + 1)
                     cv:clean()
                 w.wake_pending = false
                 i += 1
         self.comp:compose()
 
+    def _damage_title(self, w):
+        l, t, r, b = w:insets()
+        if t > 0:
+            self.comp:damage(w.x, w.y, w.w, t)
+
+    # просьба окна (свой заголовок, кнопки приложения): min, max, full, normal
+    def _request(self, win, action):
+        if action == "min":
+            self:minimize(win)
+        elif action == "max":
+            self:toggle_max(win)
+        elif action == "full":
+            self:toggle_full(win)
+        elif action == "normal":
+            self:set_state(win, "normal")
+
     # новое окно: место (лесенкой от центра, если приложение не задало), поверх всех, фокус
     def _place(self, win):
         if not win.placed:
-            x = math.floor((self.W - win.w) / 2) + (self.cascade % 6) * 12 - 30
-            y = math.floor((self.H - win.h) / 2) + (self.cascade % 6) * 10 - 25
-            self.cascade += 1
-            win.x = math.max(0, math.min(self.W - win.w, x))
-            win.y = math.max(0, math.min(self.H - win.h, y))
+            win.x, win.y = self:_smart_spot(win.w, win.h)
         win.canvas:clean()
         self.windows[len(self.windows) + 1] = win
         self.comp:damage_window(win)
         self:_set_focus(win)
+
+    # место для нового окна (как «умная» расстановка KDE): из точек сетки выбирается та, где окно меньше всего закрывает видимые
+    # окна; при равенстве ближе к центру экрана
+    def _smart_spot(self, w, h):
+        max_x = math.max(0, self.W - w)
+        max_y = math.max(0, self.H - h)
+        cx = max_x / 2
+        cy = max_y / 2
+        best_x = math.floor(cx)
+        best_y = math.floor(cy)
+        best = nil
+        step = 8
+        others = []
+        for o in self.windows:
+            if o:visible():
+                others[len(others) + 1] = o
+        y = 0
+        while y <= max_y:
+            x = 0
+            while x <= max_x:
+                overlap = 0
+                for o in others:
+                    ox = math.max(0, math.min(x + w, o.x + o.w) - math.max(x, o.x))
+                    oy = math.max(0, math.min(y + h, o.y + o.h) - math.max(y, o.y))
+                    overlap += ox * oy
+                score = overlap * 1000 + (x - cx) * (x - cx) + (y - cy) * (y - cy)
+                if best == nil or score < best:
+                    best = score
+                    best_x = x
+                    best_y = y
+                x = x == max_x and max_x + 1 or math.min(max_x, x + step)
+            y = y == max_y and max_y + 1 or math.min(max_y, y + step)
+        return best_x, best_y
 
     # ------------------------------------------------------------ фокус и порядок
 
@@ -321,7 +375,7 @@ export class WM:
         self.focused = win
         self.comp.focused = win
         if old != nil and not old.closed:
-            self.comp:damage(old.x, old.y, old.w, TITLE)
+            self:_damage_title(old)
             old:_blink(true)
             self:_post(old, "win_blur")
         if win != nil:
@@ -361,10 +415,10 @@ export class WM:
 
     # ------------------------------------------------------------ состояния окна
 
-    # прямоугольник для состояния: max, left, right
+    # прямоугольник для состояния: max, left, right, full
     def area_for(self, state):
         half = math.floor(self.W / 2)
-        if state == "max":
+        if state == "max" or state == "full":
             return {x: 0, y: 0, w: self.W, h: self.H}
         if state == "left":
             return {x: 0, y: 0, w: half, h: self.H}
@@ -373,8 +427,8 @@ export class WM:
         return nil
 
     def set_state(self, win, state):
-        # окно постоянного размера не разворачивается и не прилипает
-        if not win.resizable and state != "normal":
+        # окно постоянного размера не разворачивается и не прилипает (полный экран можно)
+        if not win.resizable and state != "normal" and state != "full":
             return
         if win.minimized:
             win.minimized = false
@@ -395,6 +449,20 @@ export class WM:
             self:set_state(win, "normal")
         else:
             self:set_state(win, "max")
+
+    # F11: полный экран без рамки и повторно обратно (к тому состоянию, что было до него)
+    def toggle_full(self, win):
+        if win.state == "full":
+            back = win.before_full ?? "normal"
+            win.state = "normal"
+            if back == "normal":
+                r = win.normal ?? {x: win.x, y: win.y, w: win.w, h: win.h}
+                self:move_resize(win, r.x, r.y, r.w, r.h)
+            else:
+                self:set_state(win, back)
+        else:
+            win.before_full = win.state
+            self:set_state(win, "full")
 
     def minimize(self, win):
         if win.minimized:
@@ -449,8 +517,7 @@ export class WM:
         if win.kind == "text" and win.state == "normal":
             cw = math.max(win.font.width, math.floor(cw / win.font.width) * win.font.width)
             ch = math.max(win.font.height, math.floor(ch / win.font.height) * win.font.height)
-            w = cw + 2
-            h = ch + TITLE + 1
+            w, h = win:outer_for(cw, ch)
         win.x = x
         win.y = y
         win.w = w
@@ -492,6 +559,9 @@ export class WM:
             me:request_close(me.focused)
         def desk():
             me:toggle_desktop()
+        def full():
+            if me.focused != nil:
+                me:toggle_full(me.focused)
         self.hotkeys["alt+left"] = prev
         self.hotkeys["alt+right"] = nxt
         self.hotkeys["alt+up"] = up
@@ -500,6 +570,7 @@ export class WM:
         self.hotkeys["alt+shift+right"] = right
         self.hotkeys["ctrl+t"] = close
         self.hotkeys["alt+d"] = desk
+        self.hotkeys["f11"] = full
 
     # своё сочетание: "ctrl+alt+shift+имя" (имя клавиши как в keys.getName); fn = nil снимает
     def hotkey(self, combo, fn):
@@ -538,7 +609,7 @@ export class WM:
             self:_post(self.focused, "key", code, held == true)
             return
         self.alt_tap = false
-        if self:_mod("ctrl") or self:_mod("alt"):
+        if true:
             fn = self.hotkeys[self:_combo(code)]
             if fn != nil:
                 # символ той же клавиши (Ctrl+T, Alt+D), если CC его пришлёт, окну не достаётся
@@ -570,10 +641,13 @@ export class WM:
                     if edges.left or edges.right or edges.top or edges.bottom:
                         return w, "resize", edges
                 if inside:
-                    if py < w.y + TITLE:
-                        for b in self.comp:buttons(w):
-                            if px >= b.x and px < b.x + comp_mod.BUTTON_W and py >= w.y + 1:
-                                return w, "button", b.which
+                    l, t, r, b = w:insets()
+                    if py < w.y + t:
+                        for bt in self.comp:buttons(w):
+                            if px >= bt.x and px < bt.x + bt.w and py >= w.y + 1:
+                                return w, "button", bt.which
+                        return w, "title", nil
+                    if not w.decorated and w.state != "full" and w:in_drag_area(px, py):
                         return w, "title", nil
                     if w:in_content(px, py):
                         return w, "content", nil
@@ -582,8 +656,8 @@ export class WM:
 
     # координаты события для окна: пиксели с нуля или клетки с единицы
     def _local(self, win, px, py):
-        lx = px - win.x - 1
-        ly = py - win.y - TITLE
+        lx = px - win:content_x()
+        ly = py - win:content_y()
         if win.kind == "text":
             return math.floor(lx / win.font.width) + 1, math.floor(ly / win.font.height) + 1
         return lx, ly
@@ -598,7 +672,7 @@ export class WM:
             self.drag = {kind: "resize", win: win, edges: extra, sx: px, sy: py, r: {x: win.x, y: win.y, w: win.w, h: win.h}}
         elif part == "button":
             self.comp.pressed = {win: win, which: extra}
-            self.comp:damage(win.x, win.y, win.w, TITLE)
+            self:_damage_title(win)
             self.drag = {kind: "button", win: win, which: extra}
         elif part == "title":
             now = self.clock()
@@ -629,9 +703,9 @@ export class WM:
                 ratio = d.ox / math.max(1, win.w)
                 self:set_state(win, "normal")
                 d.ox = math.floor(ratio * win.w)
-                d.oy = math.min(d.oy, TITLE - 2)
+                d.oy = math.min(d.oy, self.deco.title - 2)
             x = math.max(30 - win.w, math.min(self.W - 30, px - d.ox))
-            y = math.max(0, math.min(self.H - TITLE, py - d.oy))
+            y = math.max(0, math.min(self.H - self.deco.title, py - d.oy))
             if x != win.x or y != win.y:
                 self:move_resize(win, x, y, win.w, win.h)
             snap = nil
@@ -649,8 +723,7 @@ export class WM:
             e = d.edges
             dx = px - d.sx
             dy = py - d.sy
-            min_w = win.min_w + 2
-            min_h = win.min_h + TITLE + 1
+            min_w, min_h = win:outer_for(win.min_w, win.min_h)
             x = r.x
             y = r.y
             w = r.w
@@ -683,7 +756,7 @@ export class WM:
         win = d.win
         if d.kind == "button":
             self.comp.pressed = nil
-            self.comp:damage(win.x, win.y, win.w, TITLE)
+            self:_damage_title(win)
             w2, part, which = self:hit(px, py)
             if w2 == win and part == "button" and which == d.which:
                 if which == "close":
@@ -751,8 +824,41 @@ export class WM:
             if r != nil:
                 self:move_resize(w, r.x, r.y, r.w, r.h)
             else:
-                self:move_resize(w, math.max(0, math.min(self.W - w.w, w.x)), math.max(0, math.min(self.H - TITLE, w.y)), w.w, w.h)
+                self:move_resize(w, math.max(0, math.min(self.W - w.w, w.x)), math.max(0, math.min(self.H - self.deco.title, w.y)), w.w, w.h)
         self.comp:damage_all()
+
+    # ------------------------------------------------------------ тема
+
+    # смена темы на ходу: палитра (обои и всё, что нарисовано цветами темы, меняются без перерисовки), рамки окон по новой теме
+    # (размер содержимого сохраняется), окнам событие win_theme. th: имя темы из theme_dirs или таблица темы
+    def set_theme(self, th):
+        if type(th) != "table":
+            th = theme.find(th, self.theme_dirs)
+        self.theme = th
+        self.screen:set_colors(theme.entries(th))
+        self.palette = self.screen.palette
+        self.deco = theme.deco(th, self.font)
+        self.comp:set_deco(self.deco, theme.dim_map(self.palette, self.deco.shadow_strength))
+        for w in self.windows:
+            r = self:area_for(w.state)
+            if r != nil:
+                self:move_resize(w, r.x, r.y, r.w, r.h)
+            else:
+                ow, oh = w:outer_for(w.cw, w.ch)
+                self:move_resize(w, w.x, w.y, ow, oh)
+            self:_post(w, "win_theme", th.name)
+        self.comp:damage_all()
+
+    # следующая тема из папок тем по кругу (для сочетания клавиш, пока нет настроек)
+    def next_theme(self):
+        names = theme.list(self.theme_dirs)
+        if len(names) == 0:
+            return
+        pick = names[1]
+        for i, n in names:
+            if n == self.theme.name and names[i + 1] != nil:
+                pick = names[i + 1]
+        self:set_theme(pick)
 
 export def new(opts=nil):
     return WM(opts)

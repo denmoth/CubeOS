@@ -32,9 +32,9 @@ end
 
 local ITEMS = {
   { "CubeOS", "boot" },
-  { "CubeOS (terminal)", "terminal" },
   { "CubeOS (safe mode)", "safe" },
   { "CubeOS (input log)", "inputlog" },
+  { "CubeOS (terminal)", "terminal" },
   { "Recovery", "recovery" },
   { "CraftOS", "craftos" },
 }

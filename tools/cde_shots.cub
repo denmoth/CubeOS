@@ -102,7 +102,9 @@ def shoot(cols, rows, tag, theme_name):
 # tools/cde_shots.sh term: только терминал в окне
 if not fs.exists("/repo/build/cde_shots_term_only"):
     shoot(51, 19, "small", "tokyo-night")
+    shoot(51, 19, "dark", "dark")
     shoot(51, 19, "light", "light")
+    shoot(51, 19, "nord", "nord")
     shoot(82, 40, "monitor", "tokyo-night")
 
 # ---------------------------------------------------------------- терминал в окне после настоящего входа (CFS в памяти)

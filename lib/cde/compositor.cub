@@ -1,24 +1,20 @@
 # cde.compositor: собирает кадр рабочего стола из обоев и окон и показывает только изменённые места
 #
-#   comp = compositor.new(screen, font, {wallpaper: surface})    screen из cgl.open, обои размером с экран
+#   comp = compositor.new(screen, font, {wallpaper: surface, deco: theme.deco(th, font)})
 #   comp.windows                         список окон снизу вверх (последнее сверху)
 #   comp:damage(x, y, w, h)              это место экрана надо пересобрать
 #   comp:damage_window(win)              весь прямоугольник окна с тенью
 #   n = comp:compose()                   пересобирает изменённые места (слияние близких прямоугольников) и показывает кадр
 #
 # Пересборка прямоугольника: ищется самое верхнее окно, которое закрывает его целиком (тогда нижние слои не рисуются вовсе),
-# иначе кладутся обои; дальше снизу вверх окна, которые его задевают: тень (затемнение того, что под ней, по таблице), рамка
-# с заголовком и кнопками, содержимое (blit из win.canvas). Всё рисуется с отсечением по прямоугольнику, так что набор текста
-# в окне пересобирает несколько клеток, а перетаскивание окна только старое и новое место.
+# иначе кладутся обои; дальше снизу вверх окна, которые его задевают: тень (затемнение того, что под ней, по таблице), заголовок
+# (готовая картинка: градиент, кнопки, название; пересчитывается только при изменении), содержимое (blit из win.canvas), рамка.
+# Скруглённые углы: строки у верхнего и нижнего края рисуются с отсечением по форме угла, там видно то, что под окном.
+# Вид рамки задаёт тема (cde.theme.deco): высота заголовка, радиус, рамка, тень, кнопки слева или справа, стиль win, mac или kde.
 
 import cgl.surface as surface_mod
 import cde.theme as theme
-import cde.window as window_mod
 
-const TITLE = window_mod.TITLE
-const SHADOW = window_mod.SHADOW
-# ширина кнопки заголовка
-export const BUTTON_W = 13
 const MAX_RECTS = 24
 
 export class Compositor:
@@ -30,7 +26,8 @@ export class Compositor:
         self.H = screen.h
         self.font = font
         self.wallpaper = o.wallpaper ?? surface_mod.new(self.W, self.H, theme.DESK0)
-        self.dim = o.dim ?? theme.dim_map(screen.palette)
+        self.deco = o.deco
+        self.dim = o.dim ?? theme.dim_map(screen.palette, self.deco != nil and self.deco.shadow_strength or 0.55)
         self.windows = []
         self.rects = []
         self.focused = nil
@@ -38,7 +35,17 @@ export class Compositor:
         self.pressed = nil
         # предпросмотр прилипания при перетаскивании: {x, y, w, h} или nil
         self.preview = nil
-        self.stats = {composes: 0, rects: 0, pixels: 0}
+        # номер поколения темы: заголовки перерисовываются после смены
+        self.gen = 0
+        self.stats = {composes: 0, rects: 0, pixels: 0, titles: 0}
+
+    def set_deco(self, deco, dim):
+        self.deco = deco
+        self.dim = dim
+        self.gen += 1
+
+    def shadow(self):
+        return self.deco.shadow
 
     # ------------------------------------------------------------ изменённые места
 
@@ -52,7 +59,8 @@ export class Compositor:
         self.rects[len(self.rects) + 1] = [x0, y0, x1, y1]
 
     def damage_window(self, win):
-        self:damage(win.x, win.y, win.w + SHADOW, win.h + SHADOW)
+        sh = win.state == "full" and 0 or self.deco.shadow
+        self:damage(win.x, win.y, win.w + sh, win.h + sh)
 
     def damage_all(self):
         self.rects = [[0, 0, self.W - 1, self.H - 1]]
@@ -70,10 +78,7 @@ export class Compositor:
         list = self.rects
         self.rects = []
         if len(list) > MAX_RECTS * 2:
-            u = list[1]
-            for r in list:
-                u = [math.min(u[1], r[1]), math.min(u[2], r[2]), math.max(u[3], r[3]), math.max(u[4], r[4])]
-            return [u]
+            return [self:_union(list)]
         changed = true
         while changed:
             changed = false
@@ -98,15 +103,17 @@ export class Compositor:
                     j += 1
                 i += 1
         if len(list) > MAX_RECTS:
-            u = list[1]
-            for r in list:
-                u = [math.min(u[1], r[1]), math.min(u[2], r[2]), math.max(u[3], r[3]), math.max(u[4], r[4])]
-            return [u]
+            return [self:_union(list)]
         return list
+
+    def _union(self, list):
+        u = list[1]
+        for r in list:
+            u = [math.min(u[1], r[1]), math.min(u[2], r[2]), math.max(u[3], r[3]), math.max(u[4], r[4])]
+        return u
 
     # ------------------------------------------------------------ сборка кадра
 
-    # пересобирает изменённые места и показывает кадр; возвращает число прямоугольников
     def compose(self):
         if len(self.rects) == 0:
             return 0
@@ -119,18 +126,25 @@ export class Compositor:
         self.screen:present()
         return len(list)
 
+    def _radius(self, win):
+        if win.state == "full" or win.state == "max":
+            return 0
+        return self.deco.radius
+
     # окно закрывает прямоугольник целиком (без скруглённых углов)
     def _covers(self, win, x0, y0, x1, y1):
         if not win:visible():
             return false
         if x0 < win.x or x1 > win.x + win.w - 1 or y0 < win.y or y1 > win.y + win.h - 1:
             return false
-        if y0 >= win.y + 2 and y1 <= win.y + win.h - 3:
+        r = self:_radius(win)
+        if y0 >= win.y + r and y1 <= win.y + win.h - 1 - r:
             return true
-        return x0 >= win.x + 2 and x1 <= win.x + win.w - 3
+        return x0 >= win.x + r and x1 <= win.x + win.w - 1 - r
 
     def _touches(self, win, x0, y0, x1, y1):
-        return win:visible() and x0 <= win.x + win.w - 1 + SHADOW and x1 >= win.x and y0 <= win.y + win.h - 1 + SHADOW and y1 >= win.y
+        sh = win.state == "full" and 0 or self.deco.shadow
+        return win:visible() and x0 <= win.x + win.w - 1 + sh and x1 >= win.x and y0 <= win.y + win.h - 1 + sh and y1 >= win.y
 
     def _paint(self, x0, y0, x1, y1):
         s = self.s
@@ -151,15 +165,23 @@ export class Compositor:
             if self:_touches(win, x0, y0, x1, y1):
                 if not (covered and i == start):
                     self:_shadow(win, x0, y0, x1, y1)
-                self:_window(win)
+                self:_window(win, x0, y0, x1, y1)
         if self.preview != nil:
             self:_preview(self.preview)
         s:pop_clip()
 
     # затемняет пиксели под тенью окна (только внутри прямоугольника сборки)
     def _shadow(self, win, x0, y0, x1, y1):
-        self:_dim_rect(win.x + win.w, win.y + 3, SHADOW, win.h - 2, x0, y0, x1, y1)
-        self:_dim_rect(win.x + 3, win.y + win.h, win.w - 3, SHADOW, x0, y0, x1, y1)
+        sh = self.deco.shadow
+        if sh <= 0 or win.state == "full":
+            return
+        r = self:_radius(win)
+        self:_dim_rect(win.x + win.w, win.y + sh + 1, sh, win.h - 1 - r, x0, y0, x1, y1)
+        self:_dim_rect(win.x + sh + 1, win.y + win.h, win.w - 1 - r, sh, x0, y0, x1, y1)
+        # угол тени: скругление по радиусу окна
+        for i in range[0, sh - 1]:
+            self:_dim_rect(win.x + win.w - r + i, win.y + win.h - r + i, r - i, 1, x0, y0, x1, y1)
+            self:_dim_rect(win.x + win.w - r + i, win.y + win.h, 1, sh - i, x0, y0, x1, y1)
 
     def _dim_rect(self, x, y, w, h, x0, y0, x1, y1):
         ax0 = math.max(x, x0)
@@ -179,73 +201,185 @@ export class Compositor:
                 px[base + xx] = dim[v] ?? v
         s:mark(ax0, ay0, ax1, ay1)
 
-    def _window(self, win):
+    # окно с учётом формы: середина целиком, строки углов по одной с отсечением по скруглению
+    def _window(self, win, x0, y0, x1, y1):
         s = self.s
+        r = self:_radius(win)
         active = self.focused == win
+        title = self:_title_surface(win, active)
+        if r == 0:
+            self:_body(win, title, active)
+            return
+        mid0 = win.y + r
+        mid1 = win.y + win.h - 1 - r
+        if mid1 >= mid0 and y1 >= mid0 and y0 <= mid1:
+            s:push_clip(win.x, mid0, win.w, mid1 - mid0 + 1)
+            self:_body(win, title, active)
+            s:pop_clip()
+        for i in range[0, r - 1]:
+            inset = theme.corner_inset(r, i)
+            for row in [win.y + i, win.y + win.h - 1 - i]:
+                if row >= y0 and row <= y1:
+                    s:push_clip(win.x + inset, row, win.w - inset * 2, 1)
+                    self:_body(win, title, active)
+                    s:pop_clip()
+
+    def _body(self, win, title, active):
+        s = self.s
+        l, t, rr, b = win:insets()
+        if title != nil:
+            s:blit(title, win.x + l, win.y + (self.deco.border and 1 or 0), {transparent: false})
+        s:blit(win.canvas, win.x + l, win.y + t, {transparent: false})
+        if l > 0:
+            self:_border(win, active)
+
+    # рамка 1 пиксель по форме окна
+    def _border(self, win, active):
+        s = self.s
+        c = active and theme.BORDER_ACTIVE or theme.BORDER_INACTIVE
         x = win.x
         y = win.y
         w = win.w
         h = win.h
-        bc = active and theme.BORDER_ACTIVE or theme.BORDER_INACTIVE
-        tb = active and theme.TITLE_ACTIVE or theme.TITLE_INACTIVE
-        # заголовок
-        s:fill_rect(x + 1, y + 1, w - 2, TITLE - 1, tb)
-        # содержимое
-        s:blit(win.canvas, x + 1, y + TITLE, {transparent: false})
-        # рамка со скруглёнными углами (угловые пиксели не рисуются: там видно то, что под окном)
-        s:hline(x + 2, y, w - 4, bc)
-        s:hline(x + 2, y + h - 1, w - 4, bc)
-        s:vline(x, y + 2, h - 4, bc)
-        s:vline(x + w - 1, y + 2, h - 4, bc)
-        s:set(x + 1, y + 1, bc)
-        s:set(x + w - 2, y + 1, bc)
-        s:set(x + 1, y + h - 2, bc)
-        s:set(x + w - 2, y + h - 2, bc)
-        # кнопки справа: свернуть, развернуть, закрыть
-        fg = active and theme.TITLE_TEXT or theme.TITLE_DIM
-        buttons = self:buttons(win)
-        for b in buttons:
-            down = self.pressed != nil and self.pressed.win == win and self.pressed.which == b.which
-            icon = fg
-            if down:
-                s:fill_rect(b.x, y + 1, BUTTON_W, TITLE - 1, b.which == "close" and theme.CLOSE or theme.BUTTON_DOWN)
-                if b.which == "close":
-                    icon = theme.TITLE_TEXT
-            self:_icon(b.which, b.x + 6, y + 6, icon, win.state == "max", tb)
-        # название
-        left = x + 5
-        room = buttons[1].x - left - 3
-        if room > self.font.width:
-            title = surface_mod.ellipsize(self.font, win.title, room, "..")
-            s:text(self.font, left, y + 2, title, fg)
+        r = self:_radius(win)
+        s:hline(x + r, y, w - r * 2, c)
+        s:hline(x + r, y + h - 1, w - r * 2, c)
+        s:vline(x, y + r, h - r * 2, c)
+        s:vline(x + w - 1, y + r, h - r * 2, c)
+        prev = r
+        for i in range[0, r - 1]:
+            inset = theme.corner_inset(r, i)
+            # пиксели рамки этой строки угла: от inset до (inset предыдущей строки - 1)
+            last = math.max(inset, prev - 1)
+            for dx in range[inset, last]:
+                s:set(x + dx, y + i, c)
+                s:set(x + w - 1 - dx, y + i, c)
+                s:set(x + dx, y + h - 1 - i, c)
+                s:set(x + w - 1 - dx, y + h - 1 - i, c)
+            prev = inset
 
-    # кнопки заголовка: список {which, x} слева направо
+    # ------------------------------------------------------------ заголовок
+
+    # кнопки заголовка: список {which, x, w} в координатах экрана, по теме (сторона, порядок, стиль)
     def buttons(self, win):
-        right = win.x + win.w - 1
+        d = self.deco
+        if not win.decorated or win.state == "full":
+            return []
+        order = []
+        for name in d.order:
+            if name != "max" or win.resizable:
+                order[len(order) + 1] = name
+        bw = d.bw
         list = []
-        if win.resizable:
-            list[1] = {which: "min", x: right - BUTTON_W * 3}
-            list[2] = {which: "max", x: right - BUTTON_W * 2}
-            list[3] = {which: "close", x: right - BUTTON_W}
+        if d.side == "left":
+            x = win.x + (d.style == "mac" and 4 or 1)
+            for name in order:
+                list[len(list) + 1] = {which: name, x: x, w: bw}
+                x += bw
         else:
-            list[1] = {which: "min", x: right - BUTTON_W * 2}
-            list[2] = {which: "close", x: right - BUTTON_W}
+            x = win.x + win.w - 1 - bw * len(order) - (d.style == "mac" and 3 or 0)
+            for name in order:
+                list[len(list) + 1] = {which: name, x: x, w: bw}
+                x += bw
         return list
 
-    def _icon(self, which, cx, cy, c, maximized, bg):
-        s = self.s
+    # картинка заголовка (внутри рамки): пересчитывается, только когда меняется то, что на ней видно
+    def _title_surface(self, win, active):
+        l, t, r, b = win:insets()
+        if t == 0:
+            return nil
+        top = self.deco.border and 1 or 0
+        tw = win.w - l - r
+        th = t - top
+        pressed = (self.pressed != nil and self.pressed.win == win) and self.pressed.which or ""
+        key = tw .. "|" .. th .. "|" .. tostring(active) .. "|" .. pressed .. "|" .. win.title .. "|" .. win.state .. "|" .. self.gen
+        if win._tkey == key:
+            return win._tsurf
+        self.stats.titles += 1
+        ts = surface_mod.new(math.max(1, tw), math.max(1, th), theme.TITLE_INACTIVE)
+        d = self.deco
+        if active:
+            if d.solid:
+                ts:clear(theme.GRAD0)
+            else:
+                steps = []
+                for i in range[0, theme.GRAD_N - 1]:
+                    steps[i + 1] = theme.GRAD0 + i
+                ts:fill_gradient(0, 0, tw, th, steps, "h", {dither: true})
+        ox = win.x + l
+        cy = math.floor((th - 1) / 2)
+        fg = active and theme.TITLE_TEXT or theme.TITLE_DIM
+        buttons = self:buttons(win)
+        for bt in buttons:
+            self:_button(ts, d.style, bt.which, bt.x - ox, bt.w, th, cy, active, pressed == bt.which, win.state == "max")
+        # название: слева после кнопок или по центру
+        left = 4
+        right = tw - 4
+        if len(buttons) > 0:
+            if d.side == "left":
+                left = buttons[len(buttons)].x - ox + buttons[len(buttons)].w + 3
+            else:
+                right = buttons[1].x - ox - 3
+        room = right - left
+        if room > self.font.width:
+            text = surface_mod.ellipsize(self.font, win.title, room, "..")
+            tw_text = surface_mod.measure(self.font, text)
+            tx = left
+            if d.align == "center":
+                tx = math.floor((tw - tw_text) / 2)
+                tx = math.max(left, math.min(tx, right - tw_text))
+            ts:text(self.font, tx, math.floor((th - self.font.height) / 2), text, fg)
+        win._tkey = key
+        win._tsurf = ts
+        return ts
+
+    def _button(self, ts, style, which, bx, bw, th, cy, active, down, maximized):
+        fg = active and theme.TITLE_TEXT or theme.TITLE_DIM
+        cx = bx + math.floor(bw / 2)
+        if style == "mac":
+            c = theme.TITLE_DIM
+            if active:
+                c = which == "close" and theme.BTN_CLOSE or (which == "min" and theme.BTN_MIN or theme.BTN_MAX)
+            ts:circle(cx, cy, 3, c, true)
+            if down:
+                g = theme.WIN_BG
+                if which == "close":
+                    ts:line(cx - 1, cy - 1, cx + 1, cy + 1, g)
+                    ts:line(cx + 1, cy - 1, cx - 1, cy + 1, g)
+                elif which == "min":
+                    ts:hline(cx - 1, cy, 3, g)
+                else:
+                    ts:hline(cx - 1, cy, 3, g)
+                    ts:vline(cx, cy - 1, 3, g)
+            return
+        if down:
+            ts:fill_rect(bx, 0, bw, th, which == "close" and theme.CLOSE or theme.BUTTON_DOWN)
+            if which == "close":
+                fg = theme.TITLE_TEXT
+        elif style == "kde" and which == "close" and active:
+            ts:circle(cx, cy, 4, theme.BTN_CLOSE, true)
+            ts:line(cx - 1, cy - 1, cx + 1, cy + 1, theme.WIN_BG)
+            ts:line(cx + 1, cy - 1, cx - 1, cy + 1, theme.WIN_BG)
+            return
         if which == "close":
-            s:line(cx - 2, cy - 2, cx + 2, cy + 2, c)
-            s:line(cx + 2, cy - 2, cx - 2, cy + 2, c)
+            ts:line(cx - 2, cy - 2, cx + 2, cy + 2, fg)
+            ts:line(cx + 2, cy - 2, cx - 2, cy + 2, fg)
         elif which == "max":
             if maximized:
-                s:rect(cx - 1, cy - 3, 5, 5, c)
-                s:fill_rect(cx - 3, cy - 1, 5, 5, bg)
-                s:rect(cx - 3, cy - 1, 5, 5, c)
+                ts:rect(cx - 1, cy - 3, 5, 5, fg)
+                ts:fill_rect(cx - 3, cy - 1, 5, 5, ts:get(bx, 0) ?? theme.TITLE_INACTIVE)
+                ts:rect(cx - 3, cy - 1, 5, 5, fg)
+            elif style == "kde":
+                ts:line(cx - 3, cy + 1, cx, cy - 2, fg)
+                ts:line(cx, cy - 2, cx + 3, cy + 1, fg)
             else:
-                s:rect(cx - 2, cy - 2, 5, 5, c)
+                ts:rect(cx - 2, cy - 2, 5, 5, fg)
         else:
-            s:hline(cx - 2, cy + 2, 5, c)
+            if style == "kde":
+                ts:line(cx - 3, cy - 1, cx, cy + 2, fg)
+                ts:line(cx, cy + 2, cx + 3, cy - 1, fg)
+            else:
+                ts:hline(cx - 2, cy + 2, 5, fg)
 
     # рамка предпросмотра прилипания (куда встанет окно, если отпустить)
     def _preview(self, r):

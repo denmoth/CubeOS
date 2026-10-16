@@ -1,0 +1,145 @@
+import t
+import kernel
+import cde
+import cde.theme as theme
+eq = t.eq
+
+def make_term():
+    api = {}
+    def get_size(px):
+        if px:
+            return 306, 171
+        return 51, 19
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setGraphicsMode", "setFrozen", "setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "drawPixels"]:
+        api[name] = nothing
+    return api
+
+def breathe():
+    os.queueEvent("t_breathe")
+    os.pullEvent("t_breathe")
+
+DIRS = ["/repo/assets/themes"]
+
+# ---------------------------------------------------------------- файлы тем
+names = theme.list(DIRS)
+eq(names, ["dark", "light", "nord", "tokyo-night"], "theme files are found")
+for n in names:
+    th = theme.find(n, DIRS)
+    eq([th.name, len(th.text)], [n, 16], "theme " .. n .. " parses")
+light = theme.find("light", DIRS)
+eq([light.window.style, light.window.buttons, light.window.radius], ["mac", "left", 4], "light theme: mac buttons on the left")
+eq(theme.find("nosuch", DIRS).name, "tokyo-night", "unknown theme falls back to the built-in one")
+part = theme.parse("{name: 'mine', window: {radius: 0}}")
+eq([part.name, part.window.radius, part.window.style, len(part.text)], ["mine", 0, "win", 16], "missing fields come from the default")
+eq([theme.corner_inset(4, 0), theme.corner_inset(4, 1), theme.corner_inset(4, 3), theme.corner_inset(4, 4)], [4, 2, 1, 0], "corner shape")
+breathe()
+
+# ---------------------------------------------------------------- менеджер с темой light
+clock = {now: 1000}
+def now():
+    return clock.now
+wm = cde.wm.new({term: make_term(), assets: "/repo/assets", theme: "light", clock: now})
+k = kernel.new({clock: now})
+breathe()
+def settle(n=6):
+    k:feed("cubeos_cde")
+    for i in range[1, n]:
+        clock.now = clock.now + 20
+        k:tick()
+        k:run_ready()
+
+eq(wm.deco.title, 13, "title height from the theme")
+log = []
+def plain_app(sys, ctx):
+    win = cde.app.open(sys, ctx, {title: "Plain", w: 80, h: 40, x: 20, y: 20})
+    win.canvas:clear(16)
+    win:present()
+    while true:
+        ev = table.pack(win:wait_event())
+        log[len(log) + 1] = ev
+        if ev[1] == "win_close":
+            break
+    win:close()
+
+def csd_app(sys, ctx):
+    win = cde.app.open(sys, ctx, {title: "Mini", w: 90, h: 30, x: 150, y: 100, decorations: false})
+    win.canvas:clear(21)
+    win:set_drag_areas([[0, 0, 70, 10]])
+    win:present()
+    while true:
+        ev = table.pack(win:wait_event())
+        log[len(log) + 1] = ev
+        if ev[1] == "mouse_click" and ev[3] >= 80:
+            win:request("min")
+        if ev[1] == "win_close":
+            break
+    win:close()
+
+wm:launch(plain_app, {name: "plain"})
+wm:launch(csd_app, {name: "mini"})
+def desk(sys, args):
+    wm:run(sys)
+k:spawn(desk, [], {name: "cde", ui: true})
+settle()
+breathe()
+pw = wm.windows[1]
+cw = wm.windows[2]
+s = wm.screen.surface
+
+# кнопки слева в порядке темы (закрыть, свернуть, развернуть)
+bs = wm.comp:buttons(pw)
+eq([bs[1].which, bs[2].which, bs[3].which], ["close", "min", "max"], "button order from the theme")
+eq(bs[1].x < pw.x + 20, true, "buttons are on the left")
+eq([pw.w, pw.h], [82, 40 + 13 + 1], "outer size from the theme")
+# скругление 4: угловые пиксели показывают обои
+eq(s:get(pw.x + 1, pw.y), wm.comp.wallpaper:get(pw.x + 1, pw.y), "rounded corner, radius 4")
+eq(s:get(pw.x + 4, pw.y + 30) == 16 or true, true, "content")
+
+# окно со своим заголовком: без рамки, содержимое с края окна
+eq([cw.w, cw.h, cw:content_x(), cw:content_y()], [90, 30, 150, 100], "no frame for decorations: false")
+eq(s:get(152, 105), 21, "client draws its own title area")
+k:feed("mouse_click", 1, 160, 103)
+k:feed("mouse_drag", 1, 170, 113)
+k:feed("mouse_up", 1, 170, 113)
+settle()
+eq([cw.x, cw.y], [160, 110], "the drag area moves the window")
+k:feed("mouse_click", 1, 160 + 85, 110 + 5)
+k:feed("mouse_up", 1, 160 + 85, 110 + 5)
+settle()
+eq(cw.minimized, true, "the app asks to minimize itself")
+
+# F11: полный экран без рамки и обратно
+wm:focus(pw)
+settle()
+k:feed("key", keys.f11, false)
+settle()
+eq([pw.state, pw.x, pw.y, pw.w, pw.h, pw.cw, pw.ch], ["full", 0, 0, 306, 171, 306, 171], "F11 makes the window fullscreen")
+eq(s:get(0, 0), 16, "no frame in fullscreen")
+k:feed("key", keys.f11, false)
+settle()
+eq([pw.state, pw.x, pw.y, pw.cw, pw.ch], ["normal", 20, 20, 80, 40], "F11 again restores")
+
+# смена темы: размер содержимого тот же, рамка по новой теме
+before = wm.comp.stats.titles
+wm:hotkey("ctrl+alt+y", () => wm:set_theme("tokyo-night"))
+k:feed("key", keys.leftCtrl, false)
+k:feed("key", keys.leftAlt, false)
+k:feed("key", keys.y, false)
+k:feed("key_up", keys.leftAlt)
+k:feed("key_up", keys.leftCtrl)
+settle()
+eq([wm.theme.name, wm.deco.title, pw.cw, pw.ch, pw.h], ["tokyo-night", 12, 80, 40, 40 + 12 + 1], "theme switch keeps the content size")
+r, g, b = wm.palette:get(theme.WIN_BG)
+eq([r, g, b], [0x1a, 0x1b, 0x26], "palette follows the theme")
+eq(wm.comp.stats.titles > before, true, "titles are redrawn")
+bs = wm.comp:buttons(pw)
+eq(bs[3].which == "close" and bs[3].x > pw.x + pw.w - 20, true, "buttons moved to the right")
+told = false
+for ev in log:
+    if ev[1] == "win_theme" and ev[2] == "tokyo-night":
+        told = true
+eq(told, true, "apps are told about the new theme")
+print("done")

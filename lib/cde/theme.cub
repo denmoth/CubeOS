@@ -1,90 +1,174 @@
-# cde.theme: палитра рабочего стола и цвета окон (шаг 1; темы файлами сделает cdk, шаг 2)
+# cde.theme: темы рабочего стола (файлы .theme в JSON5), палитра экрана и вид окон
 #
-#   th = theme.get("tokyo-night")
+#   th = theme.find("tokyo-night", ["/repo/assets/themes"])    файл темы (неизвестное поле берётся из tokyo-night)
 #   pal = theme.palette(th)            палитра cgl на 256 цветов для cgl.open({palette: pal})
+#   d = theme.deco(th, font)           размеры рамки окна: заголовок, радиус углов, кнопки, тень
 #   dim = theme.dim_map(pal, 0.55)     номер цвета -> номер того же цвета потемнее (тени окон)
 #
-# Раскладка палитры (одна на весь экран, её видят все приложения):
+# Раскладка палитры (одна на весь экран, её видят все приложения; приложения берут цвета через ближайший цвет, cde.app.rgb):
 #   0..15     16 цветов CC в тонах темы (белый, оранжевый, ... чёрный): текстовые окна и программы, рисующие цветами CC
-#   16..231   куб 6x6x6, как в стандартной палитре cgl: общие цвета для пиксельных приложений
-#   232..255  цвета интерфейса (роли ниже): обои, рамки, заголовки, тени
-# Серые 232..255 стандартной палитры заняты интерфейсом; серые для приложений есть в кубе (16, 59, 102, 145, 188, 231).
+#   16..215   куб 6x6x6 без последних 16 цветов (r = 255)
+#   216..223  обои (8 ступеней)
+#   224..231  градиент заголовка активного окна (8 ступеней)
+#   232..247  цвета интерфейса (роли ниже), 248..255 запас (анимации палитрой)
+#
+# Файл темы (assets/themes/*.theme, свои в $cfg/themes):
+#   {name, display, dark, text: [16 цветов CC], desk: [ступени обоев], title_active: "#hex" или [цвета градиента], роли...,
+#    window: {buttons: "right" | "left", order: ["min", "max", "close"], style: "win" | "mac" | "kde", radius: 0..4, border: true,
+#             title_height: 12, title_align: "left" | "center", shadow: 0..3, shadow_strength: 0.55}}
 
 import cgl.color as color
+import json5
 
-export const DESK0 = 232
+export const DESK0 = 216
 export const DESK_N = 8
-export const WIN_BG = 240
-export const TITLE_ACTIVE = 241
-export const TITLE_INACTIVE = 242
-export const TITLE_TEXT = 243
-export const TITLE_DIM = 244
-export const BORDER_ACTIVE = 245
-export const BORDER_INACTIVE = 246
-export const CLOSE = 247
-export const BUTTON_DOWN = 248
-export const ACCENT = 249
-export const PREVIEW = 250
-export const DESK_LINE = 251
-export const DESK_GLOW = 252
-export const SPARE0 = 253
+export const GRAD0 = 224
+export const GRAD_N = 8
+export const WIN_BG = 232
+export const TITLE_INACTIVE = 233
+export const TITLE_TEXT = 234
+export const TITLE_DIM = 235
+export const BORDER_ACTIVE = 236
+export const BORDER_INACTIVE = 237
+export const CLOSE = 238
+export const BUTTON_DOWN = 239
+export const ACCENT = 240
+export const PREVIEW = 241
+export const DESK_LINE = 242
+export const DESK_GLOW = 243
+export const BTN_CLOSE = 244
+export const BTN_MIN = 245
+export const BTN_MAX = 246
+# сплошной цвет активного заголовка (середина градиента): значки, подложки
+export const TITLE_ACTIVE = 247
+export const SPARE0 = 248
 
-const ROLES = ["win_bg", "title_active", "title_inactive", "title_text", "title_dim", "border_active", "border_inactive", "close",
-    "button_down", "accent", "preview", "desk_line", "desk_glow"]
+const ROLES = ["win_bg", "title_inactive", "title_text", "title_dim", "border_active", "border_inactive", "close", "button_down",
+    "accent", "preview", "desk_line", "desk_glow", "btn_close", "btn_min", "btn_max"]
 
-const THEMES = {
-    "tokyo-night": {
-        name: "tokyo-night",
-        # 16 цветов CC по номерам: white orange magenta lightBlue yellow lime pink gray lightGray cyan purple blue brown green red black
-        text: ["#c0caf5", "#ff9e64", "#bb9af7", "#7dcfff", "#e0af68", "#9ece6a", "#f7a8c8", "#414868", "#787c99", "#2ac3de",
-            "#9d7cd8", "#7aa2f7", "#b4916a", "#73daca", "#f7768e", "#16161e"],
-        desk: ["#11121a", "#161825", "#1b1e30", "#20253c", "#262c48", "#2d3456", "#353d66", "#3f4878"],
-        win_bg: "#1a1b26", title_active: "#24283b", title_inactive: "#1c1e2b", title_text: "#c0caf5", title_dim: "#565f89",
-        border_active: "#7aa2f7", border_inactive: "#2f344d", close: "#f7768e", button_down: "#3b4261", accent: "#7aa2f7",
-        preview: "#bb9af7", desk_line: "#3d4670", desk_glow: "#7aa2f7"
-    },
-    "dark": {
-        name: "dark",
-        text: ["#f0f0f0", "#f2a14a", "#d98ad0", "#8cb4f0", "#e8d870", "#8ccf4a", "#f0b0c8", "#4c4c4c", "#999999", "#4cb0c8",
-            "#a070e0", "#4c7ad8", "#9a7656", "#5aa65a", "#e05050", "#141414"],
-        desk: ["#0c0c0e", "#121216", "#18181e", "#1e1e26", "#24242e", "#2a2a36", "#30303e", "#363646"],
-        win_bg: "#1c1c1c", title_active: "#2b2b2b", title_inactive: "#202020", title_text: "#f0f0f0", title_dim: "#7a7a7a",
-        border_active: "#5a8dee", border_inactive: "#333333", close: "#e04848", button_down: "#444444", accent: "#5a8dee",
-        preview: "#5a8dee", desk_line: "#3a3a48", desk_glow: "#5a8dee"
-    },
-    "light": {
-        name: "light",
-        text: ["#ffffff", "#d9822b", "#b04fb0", "#2f8fd8", "#c9a227", "#5aa02c", "#e07aa0", "#808080", "#b0b0b0", "#1f9aaa",
-            "#7a4fc8", "#2a62c9", "#8a6440", "#3f8f3f", "#d03b3b", "#202020"],
-        desk: ["#c8d4e8", "#cdd8eb", "#d2dcee", "#d7e0f1", "#dce4f3", "#e1e8f5", "#e6ecf7", "#ebf0f9"],
-        win_bg: "#f6f6f6", title_active: "#e4e8ef", title_inactive: "#eeeeee", title_text: "#202020", title_dim: "#8a8a8a",
-        border_active: "#2a62c9", border_inactive: "#c4c4c4", close: "#e04848", button_down: "#c8ccd4", accent: "#2a62c9",
-        preview: "#2a62c9", desk_line: "#b4c2dc", desk_glow: "#ffffff"
-    }
+const WINDOW_DEFAULTS = {buttons: "right", order: ["min", "max", "close"], style: "win", radius: 2, border: true, title_height: 12,
+    title_align: "left", shadow: 2, shadow_strength: 0.55}
+
+# встроенная тема: запасной вариант, если файлов нет, и значения для полей, которых нет в файле
+const BUILTIN = {
+    name: "tokyo-night",
+    display: "Tokyo Night",
+    dark: true,
+    text: ["#c0caf5", "#ff9e64", "#bb9af7", "#7dcfff", "#e0af68", "#9ece6a", "#f7a8c8", "#414868", "#787c99", "#2ac3de",
+        "#9d7cd8", "#7aa2f7", "#b4916a", "#73daca", "#f7768e", "#16161e"],
+    desk: ["#11121a", "#161825", "#1b1e30", "#20253c", "#262c48", "#2d3456", "#353d66", "#3f4878"],
+    title_active: ["#2a3050", "#24283b"],
+    win_bg: "#1a1b26", title_inactive: "#1c1e2b", title_text: "#c0caf5", title_dim: "#565f89",
+    border_active: "#7aa2f7", border_inactive: "#2f344d", close: "#f7768e", button_down: "#3b4261", accent: "#7aa2f7",
+    preview: "#bb9af7", desk_line: "#3d4670", desk_glow: "#7aa2f7", btn_close: "#f7768e", btn_min: "#e0af68", btn_max: "#9ece6a",
+    window: WINDOW_DEFAULTS
 }
 
-export def names():
-    return ["tokyo-night", "dark", "light"]
+def _merge(base, over):
+    out = {}
+    for k, v in base:
+        out[k] = v
+    if type(over) == "table":
+        for k, v in over:
+            if k == "window":
+                win = {}
+                for wk, wv in base.window:
+                    win[wk] = wv
+                if type(v) == "table":
+                    for wk, wv in v:
+                        win[wk] = wv
+                out.window = win
+            else:
+                out[k] = v
+    return out
 
-# тема по имени (неизвестное имя даёт tokyo-night)
+# тема из текста файла (JSON5); недостающие поля из встроенной
+export def parse(text):
+    data = json5.parse(text)
+    if type(data) != "table":
+        raise Error("a theme file must be an object")
+    return _merge(BUILTIN, data)
+
+def _read(path):
+    if not fs.exists(path):
+        return nil
+    h = fs.open(path, "r")
+    if h == nil:
+        return nil
+    text = h.readAll()
+    h.close()
+    return text
+
+# тема по имени из папок dirs (первая найденная); без файла встроенная (её имя tokyo-night)
+export def find(name=nil, dirs=nil, reader=nil):
+    rd = reader ?? _read
+    for d in dirs ?? []:
+        text = rd(d .. "/" .. (name ?? "tokyo-night") .. ".theme")
+        if text != nil:
+            ok, th = pcall(parse, text)
+            if ok:
+                return th
+    return _merge(BUILTIN, nil)
+
+# имена тем в папках (без повторов, по алфавиту)
+export def list(dirs, lister=nil):
+    seen = {}
+    out = []
+    for d in dirs ?? []:
+        ok, files = pcall(lister ?? fs.list, d)
+        if ok and files != nil:
+            for f in files:
+                n = string.match(f, "^(.+)%.theme$")
+                if n != nil and not seen[n]:
+                    seen[n] = true
+                    out[len(out) + 1] = n
+    table.sort(out)
+    return out
+
+# старое имя: тема без файлов (тесты, демо)
 export def get(name=nil):
-    return THEMES[name ?? "tokyo-night"] ?? THEMES["tokyo-night"]
+    return _merge(BUILTIN, nil)
 
 def _set_hex(p, index, hex):
     r, g, b = color.parse_hex(hex)
     p:set(index, r, g, b)
+
+# список цветов (строка или список строк) -> n ступеней [r, g, b]
+def _steps(value, n):
+    stops = []
+    list_ = type(value) == "table" and value or [value]
+    for hex in list_:
+        r, g, b = color.parse_hex(hex)
+        stops[len(stops) + 1] = [r, g, b]
+    if len(stops) == 1:
+        stops[2] = stops[1]
+    out = []
+    count = len(stops)
+    for i in range[0, n - 1]:
+        pos = n == 1 and 0 or i / (n - 1) * (count - 1)
+        k = math.min(math.floor(pos), count - 2)
+        a = stops[k + 1]
+        b = stops[k + 2]
+        t = pos - k
+        r, g, bl = color.lerp_rgb(a[1], a[2], a[3], b[1], b[2], b[3], t)
+        out[i + 1] = [r, g, bl]
+    return out
 
 # палитра рабочего стола: стандартная палитра cgl, поверх цвета CC в тонах темы и цвета интерфейса
 export def palette(th):
     p = color.default_palette()
     for i in range[0, 15]:
         _set_hex(p, i, th.text[i + 1])
-    for i in range[0, DESK_N - 1]:
-        _set_hex(p, DESK0 + i, th.desk[i + 1])
+    for i, c in _steps(th.desk, DESK_N):
+        p:set(DESK0 + i - 1, c[1], c[2], c[3])
+    grad = _steps(th.title_active, GRAD_N)
+    for i, c in grad:
+        p:set(GRAD0 + i - 1, c[1], c[2], c[3])
+    mid = grad[math.floor(GRAD_N / 2) + 1]
+    p:set(TITLE_ACTIVE, mid[1], mid[2], mid[3])
     for i, role in ROLES:
         _set_hex(p, WIN_BG + i - 1, th[role])
-    _set_hex(p, SPARE0, th.win_bg)
-    for i in range[SPARE0 + 1, 255]:
+    for i in range[SPARE0, 255]:
         _set_hex(p, i, th.win_bg)
     return p
 
@@ -96,6 +180,33 @@ export def entries(th):
         r, g, b = p:get(i)
         out[len(out) + 1] = [i, r, g, b]
     return out
+
+# градиент заголовка одним цветом (тогда рисуется заливкой)
+export def solid_title(th):
+    return type(th.title_active) != "table" or len(th.title_active) < 2 or th.title_active[1] == th.title_active[len(th.title_active)]
+
+# ширина кнопки заголовка по стилю
+export def button_w(style):
+    if style == "mac":
+        return 11
+    return 13
+
+# размеры рамки окна по теме и шрифту
+export def deco(th, font):
+    w = th.window
+    title = math.max(font.height + 3, math.floor(tonumber(w.title_height) ?? 12))
+    return {title: title, radius: math.max(0, math.min(4, math.floor(tonumber(w.radius) ?? 2))), border: w.border != false,
+        shadow: math.max(0, math.min(3, math.floor(tonumber(w.shadow) ?? 2))), shadow_strength: tonumber(w.shadow_strength) ?? 0.55,
+        side: w.buttons == "left" and "left" or "right", order: w.order ?? ["min", "max", "close"], style: w.style ?? "win",
+        align: w.title_align == "center" and "center" or "left", bw: button_w(w.style), solid: solid_title(th)}
+
+# сколько пикселей срезано скруглением в строке i от края (i с нуля), радиус r
+const CORNERS = [[1], [2, 1], [3, 1, 1], [4, 2, 1, 1]]
+
+export def corner_inset(r, i):
+    if r <= 0 or i >= r:
+        return 0
+    return CORNERS[r][i + 1]
 
 # номер цвета -> номер ближайшего к тому же цвету, умноженному на factor (тени, затемнение под диалогом)
 export def dim_map(p, factor=0.55):
