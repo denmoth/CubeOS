@@ -23,7 +23,7 @@ print("Loading CDE...")
 preload({
   "unicode", "font", "pixelbuf", "compress", "cgl.color", "cgl.surface", "cgl.quant", "cgl.graphics", "cgl.teletext", "cgl.mirror",
   "cgl.anim", "cgl", "cgl.g3d", "ui.cells", "cfs.rules", "kernel.sys", "kernel", "kernel.cc",
-  "cde.theme", "cde.window", "cde.wallpaper", "cde.compositor", "cde.wm", "cde.app", "cde",
+  "cde.theme", "cde.window", "cde.wallpaper", "cde.icons", "cde.panel", "cde.compositor", "cde.wm", "cde.app", "cde",
   "input.layout", "cdk.style", "cdk.icons", "cdk.widget", "cdk.controls", "cdk.input", "cdk.ui", "cdk", "cdk.gallery",
 })
 local demo = loader.import("cde_demo")

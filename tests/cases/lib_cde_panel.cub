@@ -1,0 +1,191 @@
+import t
+import kernel
+import cde
+import cde.theme as theme
+eq = t.eq
+
+# подставной терминал CC: Graphics 51x19 клеток (306x171 пикселей)
+def make_term():
+    api = {}
+    def get_size(px):
+        if px:
+            return 306, 171
+        return 51, 19
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "setGraphicsMode", "drawPixels", "setFrozen"]:
+        api[name] = nothing
+    return api
+
+clock = {now: 1000}
+def now():
+    return clock.now
+
+def breathe():
+    os.queueEvent("t_breathe")
+    os.pullEvent("t_breathe")
+
+shown = {text: "12:34"}
+starts = {n: 0}
+wm = cde.wm.new({animations: {enabled: false}, term: make_term(), assets: "/repo/assets", clock: now,
+    panel: {time_text: () => shown.text}, on_start: () => rawset(starts, "n", starts.n + 1)})
+k = kernel.new({clock: now})
+breathe()
+
+def settle(n=6):
+    k:feed("cubeos_cde")
+    for i in range[1, n]:
+        clock.now = clock.now + 20
+        k:tick()
+        k:run_ready()
+
+logs = {}
+def make_app(title, x, y):
+    def app(sys, ctx):
+        win = cde.app.open(sys, ctx, {title: title, kind: "pixel", w: 60, h: 30, x: x, y: y})
+        win.canvas:fill_rect(0, 0, 60, 30, 196)
+        win:present()
+        logs[title] = []
+        while true:
+            ev = table.pack(win:wait_event())
+            logs[title][len(logs[title]) + 1] = ev[1]
+            if ev[1] == "win_close":
+                break
+        win:close()
+    return app
+
+wm:launch(make_app("Alpha", 10, 10), {name: "alpha"})
+wm:launch(make_app("Beta", 100, 20), {name: "beta"})
+wm:launch(make_app("Gamma", 200, 30), {name: "gamma"})
+def desk(sys, args):
+    wm:run(sys)
+k:spawn(desk, [], {name: "cde", ui: true})
+settle()
+breathe()
+
+p = wm.panel
+a = wm.windows[1]
+b = wm.windows[2]
+g = wm.windows[3]
+s = wm.comp.s
+H = 171
+ph = p.rect.h
+# ---------------------------------------------------------------- геометрия
+eq([p.rect.x, p.rect.y, p.rect.w, p.rect.h], [0, H - ph, 306, ph], "panel sits at the bottom")
+eq([wm.area.x, wm.area.y, wm.area.w, wm.area.h], [0, 0, 306, H - ph], "work area is the screen without the panel")
+eq(p.clock_text, "12:34", "clock text comes from time_text")
+eq(len(p.items), 6, "start, three windows, clock, show desktop")
+ia = p:item_for(a)
+ib = p:item_for(b)
+eq(ia != nil and ib != nil and ia.x < ib.x, true, "buttons go in opening order")
+r = p:dock_rect(a)
+eq([r.x, r.y, r.w, r.h], [ia.x, p.rect.y + ia.y, ia.w, ia.h], "windows minimize into their button")
+# панель нарисована поверх всего: пиксель кнопки «Пуск» это акцент (или его оттенок), а не обои
+sx = p.items[1].x + 1
+sy = p.rect.y + p.items[1].y + 3
+eq(s:get(sx, sy) != wm.comp.wallpaper:get(sx, sy), true, "panel pixels are on the screen")
+eq(s:get(3, p.rect.y), p.col.edge, "panel has an edge line on its top")
+
+# ---------------------------------------------------------------- развернуть и половинки в рабочей области
+wm:set_state(a, "max")
+eq([a.x, a.y, a.w, a.h], [0, 0, 306, H - ph], "maximized window stops above the panel")
+wm:set_state(a, "left")
+eq([a.x, a.y, a.w, a.h], [0, 0, 153, H - ph], "left half stops above the panel")
+wm:set_state(a, "normal")
+settle()
+
+# ---------------------------------------------------------------- нажатия на кнопки
+def click(it, button=1):
+    px = it.x + 3
+    py = p.rect.y + it.y + 3
+    k:feed("mouse_click", button, px, py)
+    settle()
+    pressed = p.pressed
+    k:feed("mouse_up", button, px, py)
+    settle()
+    return pressed
+
+wm:focus(b)
+settle()
+eq(wm.focused == b, true, "second window has the focus")
+pressed = click(p:item_for(a))
+eq(pressed, "w" .. a.id, "button is shown pressed while the mouse is down")
+eq(p.pressed, nil, "and released after")
+eq(wm.focused == a, true, "click on an unfocused window button focuses it")
+click(p:item_for(a))
+eq([a.minimized, wm.focused == b], [true, true], "click on the focused window button minimizes it, focus goes on")
+click(p:item_for(a))
+eq([a.minimized, wm.focused == a], [false, true], "click on a minimized window button restores it")
+click(p:item_for(g), 3)
+eq(logs.Gamma[len(logs.Gamma)], "win_close", "middle click asks the window to close")
+settle()
+eq(len(wm.windows), 2, "the closed window is gone from the panel")
+
+# «Пуск»
+click(p.items[1])
+eq(starts.n, 1, "Start button calls on_start")
+
+# колесо над панелью листает окна
+wm:focus(a)
+settle()
+k:feed("mouse_scroll", 1, 100, p.rect.y + 5)
+settle()
+eq(wm.focused == b, true, "scroll over the panel switches to the next window")
+
+# полоса у края: показать рабочий стол и вернуть
+desk_it = p.items[2]
+click(desk_it)
+eq([a.minimized, b.minimized], [true, true], "show-desktop strip minimizes all windows")
+click(desk_it)
+eq([a.minimized, b.minimized], [false, false], "second click brings them back")
+
+# клик по панели не снимает фокус и не доходит до окон под ней
+wm:focus(a)
+settle()
+before = len(logs.Alpha)
+k:feed("mouse_click", 1, 200, p.rect.y + 2)
+k:feed("mouse_up", 1, 200, p.rect.y + 2)
+settle()
+eq(wm.focused == a and len(logs.Alpha) == before, true, "clicking empty panel space keeps focus and sends nothing")
+
+# ---------------------------------------------------------------- перетаскивание окна не уходит под панель
+k:feed("mouse_click", 1, a.x + 10, a.y + 3)
+k:feed("mouse_drag", 1, a.x + 10, 120)
+k:feed("mouse_drag", 1, a.x + 10, 170)
+k:feed("mouse_up", 1, a.x + 10, 170)
+settle()
+eq(a.y + wm.deco.title <= H - ph, true, "a dragged title bar stays above the panel")
+
+# ---------------------------------------------------------------- часы идут
+shown.text = "12:35"
+clock.now = clock.now + 1500
+settle()
+eq(p.clock_text, "12:35", "clock text follows time_text")
+
+# ---------------------------------------------------------------- полный экран прячет панель
+wm:set_state(a, "full")
+settle()
+eq(p.hidden, true, "a full screen window hides the panel")
+eq(wm:hit(150, H - 2) == a, true, "the panel does not catch clicks while hidden")
+wm:set_state(a, "normal")
+settle()
+eq(p.hidden, false, "panel comes back")
+
+# ---------------------------------------------------------------- панель сверху и по центру
+wm:set_state(b, "max")
+wm:set_panel({position: "top", align: "center"})
+settle()
+eq([p.rect.y, wm.area.y, wm.area.h], [0, ph, H - ph], "panel moved to the top")
+eq([b.y, b.h], [ph, H - ph], "a maximized window follows the work area")
+eq(a.y >= ph, true, "normal windows are pushed out of the panel")
+ia = p:item_for(a)
+eq(ia.x > 3 + 17 + 6 + 20, true, "buttons are centered")
+hw, hpart = wm:hit(100, 3)
+eq([hw, hpart], [nil, "panel"], "the top strip is the panel")
+
+# ---------------------------------------------------------------- без панели всё как раньше
+wm2 = cde.wm.new({animations: {enabled: false}, term: make_term(), assets: "/repo/assets", clock: now})
+eq([wm2.panel, wm2.area.h], [nil, 171], "no panel by default")
+
+print("done")

@@ -100,11 +100,17 @@ export class Fx:
         self:ghost(win, {x: win.x, y: win.y, w: win.w, h: win.h, level: 16}, {x: win.x, y: win.y + 6, w: win.w, h: win.h, level: 0},
             0.16, "in_cubic", false, nil, snap)
 
-    # место, куда сворачиваются окна: низ экрана по центру (потом кнопка окна на панели задач)
+    # место, куда сворачиваются окна: кнопка окна на панели задач, без неё низ рабочей области по центру
     def dock_rect(self, win):
+        p = self.wm.panel
+        if p != nil:
+            r = p:dock_rect(win)
+            if r != nil:
+                return r
+        a = self.wm.area
         w = math.max(8, math.floor(win.w * 0.18))
         h = math.max(5, math.floor(win.h * 0.18))
-        return {x: math.floor((self.wm.W - w) / 2), y: self.wm.H - h - 1, w: w, h: h}
+        return {x: math.floor((self.wm.W - w) / 2), y: a.y + a.h - h - 1, w: w, h: h}
 
     def minimize(self, win, snap):
         to_r = self:dock_rect(win)

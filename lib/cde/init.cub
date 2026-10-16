@@ -6,16 +6,18 @@
 #   kernel:spawn((sys, a) => wm:run(sys), [], {name: "cde", ui: true})
 #
 # Части: cde.wm (оконный менеджер, ввод, клавиши), cde.compositor (сборка кадра по изменённым местам), cde.window (окно),
-# cde.app (API для приложений), cde.theme (палитра и цвета окон), cde.wallpaper (обои).
+# cde.app (API для приложений), cde.theme (палитра и цвета окон), cde.wallpaper (обои), cde.panel (панель задач).
 
 import cde.wm as wm_mod
 import cde.app as app_mod
 import cde.theme as theme_mod
 import cde.window as window_mod
 import cde.compositor as compositor_mod
+import cde.panel as panel_mod
 
 export const wm = wm_mod
 export const app = app_mod
 export const theme = theme_mod
 export const window = window_mod
 export const compositor = compositor_mod
+export const panel = panel_mod

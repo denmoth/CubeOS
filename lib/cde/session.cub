@@ -5,14 +5,15 @@
 # Процесс сессии становится оконным менеджером (держит фокус ввода ядра), приложения запускаются его потомками с правами и видом CFS
 # пользователя. Первым открывается терминал. Alt+Enter новый терминал, Ctrl+Alt+T следующая тема (пока нет настроек), F11 полный
 # экран, Ctrl+Alt+= и Ctrl+Alt+- крупнее и мельче (масштаб), Ctrl+Alt+K витрина элементов cdk, Ctrl+Alt+Q выход из сессии
-# (панель и «Пуск» на шаге 3).
+# (панель задач cde.panel; «Пуск» с меню на шаге 3.2). Ctrl+Alt+P панель сверху или снизу, Ctrl+Alt+L кнопки окон слева или по центру.
 # Настройки пользователя $cfg/cde.conf (JSON5): theme (имя темы), scale ("auto" или 1..4); тема и масштаб, выбранные сочетаниями,
-# сохраняются туда же; animations ({enabled, speed, windows, glow, widgets}, cde.fx), Ctrl+Alt+A включает и выключает анимации.
+# сохраняются туда же; panel ({position, align, height, clock}, cde.panel); animations ({enabled, speed, windows, glow, widgets}, cde.fx), Ctrl+Alt+A включает и выключает анимации.
 # opts: term, assets, theme, host, ready(wm) (для тестов), terminal_ready(ctx) (для тестов: ready терминала)
 
 import cde.wm as wm_mod
 import cde.terminal as terminal
 import cdk.gallery as gallery
+import clock as clock_mod
 import json5
 
 const SCALES = ["auto", 1, 2, 3, 4]
@@ -44,8 +45,27 @@ export def program(session, opts=nil):
             okw, err = pcall(write_conf)
             if not okw:
                 sys.log("warn", "desktop: cannot save " .. key .. ": " .. tostring(err))
+        # часы панели: настройки времени системы (time.conf), без файла UTC
+        def make_time():
+            text = nil
+            if view != nil:
+                okr, t = pcall(view.read, view, "/cubeos/sys/cfg/time.conf")
+                if okr and type(t) == "string":
+                    text = t
+            c = clock_mod.from_text(text ?? "{}")
+            return () => c:time_text()
+        panel_conf = {}
+        for k, v in (type(conf.panel) == "table" and conf.panel or {}):
+            panel_conf[k] = v
+        if panel_conf.time_text == nil:
+            okt, tt = pcall(make_time)
+            if okt:
+                panel_conf.time_text = tt
+        panel = o.panel
+        if panel == nil:
+            panel = panel_conf
         wm = wm_mod.new({term: o.term, assets: o.assets ?? "/repo/assets", theme: o.theme ?? conf.theme, scale: conf.scale ?? "auto",
-            animations: o.animations ?? conf.animations})
+            animations: o.animations ?? conf.animations, panel: panel})
         term_opts = {assets: o.assets, host: o.host, ready: o.terminal_ready}
         def open_terminal():
             wm:launch(terminal.main, {name: "terminal"}, [session, term_opts])
@@ -72,6 +92,19 @@ export def program(session, opts=nil):
             wm.anim.enabled = not wm.anim.enabled
             save("animations", wm.anim)
         wm:hotkey("ctrl+alt+a", toggle_anim)
+        # панель: Ctrl+Alt+P сверху или снизу, Ctrl+Alt+L кнопки окон слева или по центру (потом «Настройки»)
+        def save_panel():
+            save("panel", {position: wm.panel.position, align: wm.panel.align, height: wm.panel.height})
+        def panel_position():
+            if wm.panel != nil:
+                wm:set_panel({position: wm.panel.position == "top" and "bottom" or "top"})
+                save_panel()
+        def panel_align():
+            if wm.panel != nil:
+                wm:set_panel({align: wm.panel.align == "center" and "left" or "center"})
+                save_panel()
+        wm:hotkey("ctrl+alt+p", panel_position)
+        wm:hotkey("ctrl+alt+l", panel_align)
         wm:hotkey("ctrl+alt+k", () => wm:launch(gallery.main, {name: "gallery"}))
         wm:hotkey("ctrl+alt+equals", () => zoom(1))
         wm:hotkey("ctrl+alt+minus", () => zoom(-1))

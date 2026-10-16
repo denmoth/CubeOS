@@ -86,6 +86,9 @@ export class Window:
         self.blink = true
         self.fg = 0
         self.decorated = o.decorations != false
+        # значок на панели задач (имя из cde.icons; иначе буква названия) и показывать ли окно на панели
+        self.icon = o.icon
+        self.taskbar = o.taskbar != false
         self.fx_hidden = false
         self.drag_areas = []
         self.requests = []

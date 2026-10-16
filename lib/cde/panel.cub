@@ -1,0 +1,356 @@
+# cde.panel: панель задач рабочего стола (шаг 3.1)
+#
+#   wm = cde.wm.new({panel: {position: "bottom", align: "left", height: 16, time_text: () => "14:32"}})
+#
+# Панель это не окно, а слой композитора поверх окон (под анимациями): готовая картинка `panel.surf`, которая пересобирается, только
+# когда что-то на ней поменялось (окна, названия, фокус, время, тема). Слева кнопка «Пуск» (вызывает wm.on_start, как одиночный левый
+# Alt), дальше кнопки окон (значок и название; значок окна `icon` из cde.icons или буква на цветной плашке), справа область
+# уведомлений (пока часы) и узкая полоса «показать рабочий стол» у самого края.
+#
+# Нажатия (кнопка срабатывает при отпускании над ней): кнопка окна поднимает окно, возвращает свёрнутое, а у окна в фокусе сворачивает
+# его; средняя кнопка мыши закрывает окно; колесо над панелью листает окна; полоса у края как Alt+D. Окно в полном экране (F11)
+# закрывает панель. Рабочая область `panel:work_area()` это экран без панели: в неё разворачиваются окна и встают половинки.
+#
+# Настройки (opts, потом $cfg/cde.conf, panel): position ("bottom" | "top"), align ("left" | "center": где кнопки окон), height
+# (пикселей, по умолчанию высота шрифта + 7), clock (false убирает часы), time_text (функция: текст часов).
+# Область уведомлений расширяется: panel.tray это список {key, w, draw(panel, s, x, y, w, h), click(panel, button)}, шаг 3.3.
+
+import cgl.surface as surface_mod
+import unicode
+import cde.theme as theme
+import cde.icons as icons
+
+const MAX_BTN = 56
+const MIN_BTN = 15
+const GAP = 2
+const START_W = 17
+const DESK_W = 4
+const TEXT_MIN = 34
+
+def _default_time():
+    return os.date("%H:%M", os.epoch("local") / 1000)
+
+# цвет палитры, ближайший к цвету номера c, умноженному на k (светлее при k > 1, темнее при k < 1)
+def _shade(pal, c, k):
+    r, g, b = pal:get(c)
+    return pal:nearest(math.min(255, math.floor(r * k + 0.5)), math.min(255, math.floor(g * k + 0.5)), math.min(255, math.floor(b * k + 0.5)))
+
+export class Panel:
+    def init(self, wm, opts=nil):
+        o = opts ?? {}
+        self.wm = wm
+        self.position = o.position == "top" and "top" or "bottom"
+        self.align = o.align == "center" and "center" or "left"
+        self.height = math.max(13, math.floor(tonumber(o.height) ?? (wm.font.height + 7)))
+        self.show_clock = o.clock != false
+        self.time_text = o.time_text ?? _default_time
+        self.clock_text = ""
+        self.next_tick = 0
+        self.rect = {x: 0, y: 0, w: 0, h: 0}
+        self.surf = nil
+        self.items = []
+        self.tray = []
+        self.pressed = nil
+        self.start_open = false
+        self.hidden = false
+        self.key = nil
+        self.gen = 0
+        self.col = {}
+        self:fit(wm.W, wm.H)
+        self:tick(0)
+        self.next_tick = 0
+
+    # ------------------------------------------------------------ геометрия
+
+    # размер экрана (логический) изменился: прямоугольник панели и картинка заново
+    def fit(self, W, H):
+        h = self.height
+        self.rect = {x: 0, y: self.position == "top" and 0 or math.max(0, H - h), w: W, h: h}
+        self.surf = surface_mod.new(math.max(1, W), h, theme.WIN_BG)
+        self.key = nil
+        self:retheme()
+        self.wm.comp:damage(self.rect.x, self.rect.y, self.rect.w, self.rect.h)
+
+    # рабочая область: экран без панели
+    def work_area(self):
+        W = self.wm.W
+        H = self.wm.H
+        r = self.rect
+        if self.position == "top":
+            return {x: 0, y: r.h, w: W, h: math.max(1, H - r.h)}
+        return {x: 0, y: 0, w: W, h: math.max(1, H - r.h)}
+
+    # новые настройки на ходу (position, align, height, clock); потом менеджер пересчитывает рабочую область
+    def configure(self, o):
+        if o.position != nil:
+            self.position = o.position == "top" and "top" or "bottom"
+        if o.align != nil:
+            self.align = o.align == "center" and "center" or "left"
+        if o.height != nil:
+            self.height = math.max(13, math.floor(tonumber(o.height) ?? self.height))
+        if o.clock != nil:
+            self.show_clock = o.clock != false
+        self:fit(self.wm.W, self.wm.H)
+
+    # цвета панели из палитры экрана (после смены темы)
+    def retheme(self):
+        pal = self.wm.screen.palette
+        self.gen += 1
+        self.key = nil
+        self.col = {bg0: theme.TITLE_INACTIVE, bg1: theme.WIN_BG, edge: theme.BORDER_INACTIVE, edge_hi: _shade(pal, theme.CTRL_BG, 0.9),
+            btn: theme.CTRL_BG, btn_hi: _shade(pal, theme.CTRL_BG, 1.45), act: theme.CTRL_HI, act_hi: _shade(pal, theme.CTRL_HI, 1.4),
+            down: theme.BUTTON_DOWN, accent: theme.ACCENT, accent_hi: _shade(pal, theme.ACCENT, 1.3), accent_lo: _shade(pal, theme.ACCENT, 0.7),
+            text: theme.TITLE_TEXT, dim: theme.TITLE_DIM, on_accent: theme.ACCENT_TEXT}
+
+    def contains(self, px, py):
+        r = self.rect
+        return not self.hidden and px >= r.x and px < r.x + r.w and py >= r.y and py < r.y + r.h
+
+    # ------------------------------------------------------------ состояние
+
+    # окна на панели: по порядку открытия
+    def tasks(self):
+        list = []
+        for w in self.wm.windows:
+            if not w.closed and w.taskbar != false:
+                list[len(list) + 1] = w
+        table.sort(list, (a, b) => a.id < b.id)
+        return list
+
+    # время обновляется раз в секунду; true, если текст поменялся
+    def tick(self, now):
+        if now < self.next_tick:
+            return false
+        self.next_tick = now + 1000
+        ok, text = pcall(self.time_text)
+        text = ok and tostring(text) or ""
+        if text != self.clock_text:
+            self.clock_text = text
+            return true
+        return false
+
+    # вызывает менеджер на каждом проходе: пересобирает картинку, если что-то на ней поменялось
+    def update(self):
+        wm = self.wm
+        f = wm.focused
+        hide = f != nil and f.state == "full" and not f.minimized and not f.closed
+        r = self.rect
+        if hide != self.hidden:
+            self.hidden = hide
+            wm.comp:damage(r.x, r.y, r.w, r.h)
+        tasks = self:tasks()
+        parts = [r.w, r.h, self.position, self.align, self.gen, f != nil and f.id or 0, self.clock_text, self.pressed ?? "", self.show_clock and 1 or 0]
+        for w in tasks:
+            parts[len(parts) + 1] = w.id .. (w.minimized and "m" or "v") .. w.title .. (w.icon ?? "")
+        for t in self.tray:
+            parts[len(parts) + 1] = tostring(t.state ?? "")
+        key = table.concat(parts, "|")
+        if key == self.key:
+            return
+        self.key = key
+        self:_layout(tasks)
+        self:_draw(tasks)
+        if not self.hidden:
+            wm.comp:damage(r.x, r.y, r.w, r.h)
+
+    # ------------------------------------------------------------ раскладка
+
+    def _layout(self, tasks):
+        f = self.wm.font
+        r = self.rect
+        by = self.position == "top" and 2 or 3
+        bh = r.h - 5
+        items = []
+        items[1] = {key: "start", kind: "start", x: 3, y: by, w: START_W, h: bh}
+        # справа налево: полоса рабочего стола, часы, значки области уведомлений
+        x = r.w - DESK_W
+        items[2] = {key: "desk", kind: "desk", x: x, y: 1, w: DESK_W, h: r.h - 2}
+        if self.show_clock:
+            tw = surface_mod.measure(f, self.clock_text) + 9
+            x -= tw
+            items[len(items) + 1] = {key: "clock", kind: "clock", x: x, y: by, w: tw, h: bh}
+        for t in self.tray:
+            tw = type(t.w) == "function" and t.w(self) or t.w
+            x -= tw
+            items[len(items) + 1] = {key: t.key, kind: "tray", x: x, y: by, w: tw, h: bh, tray: t}
+        tx0 = 3 + START_W + 6
+        tx1 = x - 4
+        n = len(tasks)
+        if n > 0:
+            avail = tx1 - tx0
+            bw = math.floor((avail - GAP * (n - 1)) / n)
+            bw = math.max(MIN_BTN, math.min(MAX_BTN, bw))
+            gw = n * bw + (n - 1) * GAP
+            bx = tx0
+            if self.align == "center":
+                bx = tx0 + math.max(0, math.floor((avail - gw) / 2))
+            for w in tasks:
+                if bx + bw > tx1 + 1:
+                    break
+                items[len(items) + 1] = {key: "w" .. w.id, kind: "task", x: bx, y: by, w: bw, h: bh, win: w}
+                bx += bw + GAP
+        self.items = items
+
+    # кнопка окна или nil
+    def item_for(self, win):
+        for it in self.items:
+            if it.win == win:
+                return it
+        return nil
+
+    # куда сворачивается окно: прямоугольник его кнопки в координатах экрана
+    def dock_rect(self, win):
+        it = self:item_for(win)
+        if it == nil:
+            return nil
+        return {x: it.x + self.rect.x, y: it.y + self.rect.y, w: it.w, h: it.h}
+
+    def item_at(self, px, py):
+        lx = px - self.rect.x
+        ly = py - self.rect.y
+        for i in range[len(self.items), 1] step -1:
+            it = self.items[i]
+            if lx >= it.x and lx < it.x + it.w and ly >= it.y and ly < it.y + it.h:
+                return it
+        # полоса у края и кнопки тянутся на всю высоту панели, чтобы в них проще попасть
+        for it in self.items:
+            if lx >= it.x and lx < it.x + it.w and ly >= 0 and ly < self.rect.h and (it.kind == "desk" or it.kind == "task" or it.kind == "start"):
+                return it
+        return nil
+
+    # ------------------------------------------------------------ рисование
+
+    def _draw(self, tasks):
+        s = self.surf
+        c = self.col
+        r = self.rect
+        top = self.position == "top"
+        s:fill_gradient(0, 0, r.w, r.h, [c.bg0, c.bg1], "v", {dither: true})
+        s:hline(0, top and r.h - 1 or 0, r.w, c.edge)
+        s:hline(0, top and r.h - 2 or 1, r.w, c.edge_hi)
+        for it in self.items:
+            if it.kind == "start":
+                self:_start(it)
+            elif it.kind == "task":
+                self:_task(it)
+            elif it.kind == "clock":
+                self:_clock(it)
+            elif it.kind == "desk":
+                self:_desk(it)
+            elif it.kind == "tray":
+                it.tray.draw(self, s, it.x, it.y, it.w, it.h)
+        # черта между «Пуском» и кнопками окон
+        s:vline(3 + START_W + 3, (self.position == "top" and 3 or 4), r.h - 8, c.edge)
+
+    def _start(self, it):
+        s = self.surf
+        c = self.col
+        down = self.pressed == "start" or self.start_open == true
+        s:round_rect(it.x, it.y, it.w, it.h, 2, down and c.accent_lo or c.accent, true)
+        if not down:
+            s:hline(it.x + 2, it.y, it.w - 4, c.accent_hi)
+        icons.draw(s, "cube", it.x + math.floor((it.w - 9) / 2), it.y + math.floor((it.h - 9) / 2) + (down and 1 or 0), c.on_accent, c.on_accent)
+
+    def _task(self, it):
+        s = self.surf
+        c = self.col
+        f = self.wm.font
+        w = it.win
+        active = self.wm.focused == w and not w.minimized
+        down = self.pressed == it.key
+        if down:
+            s:round_rect(it.x, it.y, it.w, it.h, 2, c.down, true)
+        elif active:
+            s:round_rect(it.x, it.y, it.w, it.h, 2, c.act, true)
+            s:hline(it.x + 2, it.y, it.w - 4, c.act_hi)
+        elif not w.minimized:
+            s:round_rect(it.x, it.y, it.w, it.h, 2, c.btn, true)
+            s:hline(it.x + 2, it.y, it.w - 4, c.btn_hi)
+        fg = w.minimized and c.dim or c.text
+        icon_x = it.x + (it.w < TEXT_MIN and math.floor((it.w - 9) / 2) or 4)
+        self:_icon(w, icon_x, it.y + math.floor((it.h - 9) / 2) - 0, w.minimized)
+        if it.w >= TEXT_MIN:
+            room = it.w - 4 - 9 - 4 - 3
+            text = surface_mod.ellipsize(f, w.title, room, "..")
+            s:text(f, it.x + 4 + 9 + 4, it.y + math.floor((it.h - f.height) / 2), text, fg)
+        # метка снизу: окно в фокусе горит акцентом, открытое видно чёрточкой, свёрнутое без метки
+        if active:
+            s:hline(it.x + 3, it.y + it.h - 2, it.w - 6, c.accent)
+            s:hline(it.x + 3, it.y + it.h - 1, it.w - 6, c.accent)
+        elif not w.minimized:
+            s:hline(it.x + math.floor(it.w / 2) - 2, it.y + it.h - 1, 5, c.dim)
+
+    # значок окна: из cde.icons по имени или буква названия на цветной плашке (цвет от названия)
+    def _icon(self, win, x, y, dim):
+        s = self.surf
+        c = self.col
+        if win.icon != nil and icons.has(win.icon):
+            icons.draw(s, win.icon, x, y, dim and c.dim or c.accent, dim and c.dim or c.text)
+            return
+        title = win.title
+        hash = 7
+        for i in range[1, string.len(title)]:
+            hash = (hash * 31 + string.byte(title, i)) % 9973
+        color = theme.GENERAL0 + (hash % 12) * 15 + 5 + 3
+        if dim:
+            color = c.dim
+        s:round_rect(x, y, 9, 9, 2, color, true)
+        letter = unicode.upper(unicode.sub(title, 1, 1))
+        f = self.wm.font
+        lw = surface_mod.measure(f, letter)
+        s:text(f, x + math.floor((9 - lw) / 2), y + math.floor((9 - f.height) / 2), letter, theme.GRAY0)
+
+    def _clock(self, it):
+        s = self.surf
+        c = self.col
+        f = self.wm.font
+        if self.pressed == "clock":
+            s:round_rect(it.x, it.y, it.w, it.h, 2, c.down, true)
+        tw = surface_mod.measure(f, self.clock_text)
+        s:text(f, it.x + math.floor((it.w - tw) / 2), it.y + math.floor((it.h - f.height) / 2), self.clock_text, c.text)
+
+    def _desk(self, it):
+        s = self.surf
+        c = self.col
+        s:fill_rect(it.x, 2, it.w, self.rect.h - 4, self.pressed == "desk" and c.down or c.btn)
+        s:vline(it.x, 2, self.rect.h - 4, c.edge)
+
+    # рисует нужную часть картинки панели в прямоугольнике сборки (вызывает композитор)
+    def paint(self, s, x0, y0, x1, y1):
+        if self.hidden:
+            return
+        r = self.rect
+        ax0 = math.max(x0, r.x)
+        ay0 = math.max(y0, r.y)
+        ax1 = math.min(x1, r.x + r.w - 1)
+        ay1 = math.min(y1, r.y + r.h - 1)
+        if ax0 > ax1 or ay0 > ay1:
+            return
+        s:blit(self.surf, ax0, ay0, {sx: ax0 - r.x, sy: ay0 - r.y, sw: ax1 - ax0 + 1, sh: ay1 - ay0 + 1, transparent: false})
+
+    # ------------------------------------------------------------ нажатия
+
+    def set_pressed(self, key):
+        self.pressed = key
+
+    # кнопка отпущена над тем же местом: button 1 действие, 3 (средняя) закрыть окно
+    def activate(self, it, button):
+        wm = self.wm
+        if it.kind == "start":
+            if wm.on_start != nil:
+                wm.on_start()
+        elif it.kind == "desk":
+            wm:toggle_desktop()
+        elif it.kind == "task":
+            w = it.win
+            if button == 3:
+                wm:request_close(w)
+            elif w.minimized or wm.focused != w:
+                wm:focus(w)
+            else:
+                wm:minimize(w)
+        elif it.kind == "tray" and it.tray.click != nil:
+            it.tray.click(self, button)
+
+export def new(wm, opts=nil):
+    return Panel(wm, opts)

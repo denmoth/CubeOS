@@ -25,6 +25,7 @@ import cde.window as window_mod
 import cde.compositor as comp_mod
 import cde.wallpaper as wallpaper_mod
 import cde.fx as fx_mod
+import cde.panel as panel_mod
 
 const WM_EVENTS = ["key", "key_up", "char", "paste", "mouse_click", "mouse_drag", "mouse_up", "mouse_scroll", "terminate",
     "term_resize", "monitor_resize", "monitor_touch", "cubeos_cde"]
@@ -47,7 +48,7 @@ export class WM:
     # opts: term, screen (готовый экран cgl; иначе cgl.open), assets (папка со шрифтами и темами), font, theme (имя темы или
     #       таблица темы), theme_dirs (папки с файлами .theme; по умолчанию assets/themes), wallpaper (поверхность), clock (мс),
     #       on_start (левый Alt), scale ("auto" или 1..4: во сколько раз крупнее; логический экран = экран / масштаб),
-    #       animations ({enabled, speed, windows, glow, widgets}, cde.fx)
+    #       animations ({enabled, speed, windows, glow, widgets}, cde.fx), panel (настройки панели задач, cde.panel; без неё панели нет)
     def init(self, opts=nil):
         o = opts ?? {}
         assets = o.assets ?? "/repo/assets"
@@ -76,6 +77,12 @@ export class WM:
         self.anim = fx_mod.make_settings(o.animations)
         self.fx = fx_mod.new(self)
         self.comp.fx = self.fx
+        # панель задач и рабочая область (экран без панели)
+        self.panel = nil
+        if o.panel != nil and o.panel != false:
+            self.panel = panel_mod.new(self, o.panel == true and {} or o.panel)
+            self.comp.panel = self.panel
+        self.area = self:_work_area()
         # свободные места палитры для приложений: номер -> окно, которое его взяло
         self.pool_free = []
         for slot in theme.POOL:
@@ -264,6 +271,8 @@ export class WM:
         # идёт анимация: кадр каждые 50 мс (20 кадров, как обновляется экран CC)
         if self.fx:active() and now + 50 < until:
             until = now + 50
+        if self.panel != nil and self.panel.next_tick < until:
+            until = math.max(now, self.panel.next_tick)
         return math.max(0, until - now) / 1000
 
     def _blinking(self):
@@ -280,6 +289,8 @@ export class WM:
         if now >= self.next_reap:
             self.next_reap = now + REAP_MS
             self:_reap()
+        if self.panel != nil:
+            self.panel:tick(now)
         if self.fx:active():
             self.fx:step()
 
@@ -336,6 +347,8 @@ export class WM:
                     cv:clean()
                 w.wake_pending = false
                 i += 1
+        if self.panel != nil:
+            self.panel:update()
         self.comp:compose()
 
     def _damage_title(self, w):
@@ -367,10 +380,11 @@ export class WM:
     # место для нового окна (как «умная» расстановка KDE): из точек сетки выбирается та, где окно меньше всего закрывает видимые
     # окна; при равенстве ближе к центру экрана
     def _smart_spot(self, w, h):
-        max_x = math.max(0, self.W - w)
-        max_y = math.max(0, self.H - h)
-        cx = max_x / 2
-        cy = max_y / 2
+        a = self.area
+        max_x = a.x + math.max(0, a.w - w)
+        max_y = a.y + math.max(0, a.h - h)
+        cx = (a.x + max_x) / 2
+        cy = (a.y + max_y) / 2
         best_x = math.floor(cx)
         best_y = math.floor(cy)
         best = nil
@@ -379,9 +393,9 @@ export class WM:
         for o in self.windows:
             if o:visible():
                 others[len(others) + 1] = o
-        y = 0
+        y = a.y
         while y <= max_y:
-            x = 0
+            x = a.x
             while x <= max_x:
                 overlap = 0
                 for o in others:
@@ -480,15 +494,24 @@ export class WM:
 
     # ------------------------------------------------------------ состояния окна
 
-    # прямоугольник для состояния: max, left, right, full
+    # рабочая область: экран без панели задач
+    def _work_area(self):
+        if self.panel != nil:
+            return self.panel:work_area()
+        return {x: 0, y: 0, w: self.W, h: self.H}
+
+    # прямоугольник для состояния: max, left, right (в рабочей области), full (весь экран)
     def area_for(self, state):
-        half = math.floor(self.W / 2)
-        if state == "max" or state == "full":
+        a = self.area
+        half = math.floor(a.w / 2)
+        if state == "full":
             return {x: 0, y: 0, w: self.W, h: self.H}
+        if state == "max":
+            return {x: a.x, y: a.y, w: a.w, h: a.h}
         if state == "left":
-            return {x: 0, y: 0, w: half, h: self.H}
+            return {x: a.x, y: a.y, w: half, h: a.h}
         if state == "right":
-            return {x: half, y: 0, w: self.W - half, h: self.H}
+            return {x: a.x + half, y: a.y, w: a.w - half, h: a.h}
         return nil
 
     # animate = false: без анимации (окно тянут мышью)
@@ -712,6 +735,8 @@ export class WM:
 
     # окно под точкой и часть окна: "title", "button" (which), "content", "border", "resize" (края)
     def hit(self, px, py):
+        if self.panel != nil and self.panel:contains(px, py):
+            return nil, "panel", nil
         for i in range[len(self.windows), 1] step -1:
             w = self.windows[i]
             if w:visible() and px >= w.x - GRIP and px < w.x + w.w + GRIP and py >= w.y - GRIP and py < w.y + w.h + GRIP:
@@ -745,6 +770,12 @@ export class WM:
 
     def _click(self, btn, px, py):
         win, part, extra = self:hit(px, py)
+        if part == "panel":
+            it = self.panel:item_at(px, py)
+            if it != nil:
+                self.panel:set_pressed(it.key)
+                self.drag = {kind: "panel", item: it}
+            return
         if win == nil:
             self:_set_focus(nil)
             return
@@ -771,7 +802,7 @@ export class WM:
 
     def _drag(self, btn, px, py):
         d = self.drag
-        if d == nil:
+        if d == nil or d.kind == "panel":
             return
         win = d.win
         if d.kind == "move":
@@ -786,12 +817,12 @@ export class WM:
                 d.ox = math.floor(ratio * win.w)
                 d.oy = math.min(d.oy, self.deco.title - 2)
             x = math.max(30 - win.w, math.min(self.W - 30, px - d.ox))
-            y = math.max(0, math.min(self.H - self.deco.title, py - d.oy))
+            y = math.max(self.area.y, math.min(self.area.y + self.area.h - self.deco.title, py - d.oy))
             if x != win.x or y != win.y:
                 self:move_resize(win, x, y, win.w, win.h)
             snap = nil
             if win.resizable:
-                if py <= 0:
+                if py <= self.area.y:
                     snap = "max"
                 elif px <= 0:
                     snap = "left"
@@ -834,6 +865,12 @@ export class WM:
         self.drag = nil
         if d == nil:
             return
+        if d.kind == "panel":
+            self.panel:set_pressed(nil)
+            it = self.panel:item_at(px, py)
+            if it != nil and it.key == d.item.key:
+                self.panel:activate(it, btn)
+            return
         win = d.win
         if d.kind == "button":
             self.comp.pressed = nil
@@ -856,6 +893,9 @@ export class WM:
 
     def _scroll(self, dir, px, py):
         win, part, extra = self:hit(px, py)
+        if part == "panel":
+            self:cycle(dir > 0 and 1 or -1)
+            return
         if win != nil and part == "content":
             lx, ly = self:_local(win, px, py)
             self:_post(win, "mouse_scroll", dir, lx, ly)
@@ -928,14 +968,31 @@ export class WM:
         self.W = self.comp.W
         self.H = self.comp.H
         self.comp.wallpaper = self.make_wallpaper(self.W, self.H)
+        if self.panel != nil:
+            self.panel:fit(self.W, self.H)
+        self.area = self:_work_area()
+        self:_fit_windows()
+        self.comp:damage_all()
+
+    # окна по новой рабочей области: развёрнутые и половинки заново, остальные не выходят за область
+    def _fit_windows(self):
+        a = self.area
         for w in self.windows:
             r = self:area_for(w.state)
             if r != nil:
                 self:move_resize(w, r.x, r.y, r.w, r.h)
             else:
-                nw = math.min(w.w, self.W)
-                nh = math.min(w.h, self.H)
-                self:move_resize(w, math.max(0, math.min(self.W - nw, w.x)), math.max(0, math.min(self.H - nh, w.y)), nw, nh)
+                nw = math.min(w.w, a.w)
+                nh = math.min(w.h, a.h)
+                self:move_resize(w, math.max(a.x, math.min(a.x + a.w - nw, w.x)), math.max(a.y, math.min(a.y + a.h - nh, w.y)), nw, nh)
+
+    # настройки панели на ходу: {position: "top" | "bottom", align: "left" | "center", height, clock}
+    def set_panel(self, o):
+        if self.panel == nil:
+            return
+        self.panel:configure(o)
+        self.area = self:_work_area()
+        self:_fit_windows()
         self.comp:damage_all()
 
     # ------------------------------------------------------------ тема
@@ -955,6 +1012,8 @@ export class WM:
         self.palette = self.screen.palette
         self.deco = theme.deco(th, self.font)
         self.comp:set_deco(self.deco, theme.dim_map(self.palette, self.deco.shadow_strength))
+        if self.panel != nil:
+            self.panel:retheme()
         # свечение рамки, начатое при старой теме, кончилось бы её цветом: гасим, цвет рамки уже новый
         self.fx.glow = nil
         for w in self.windows:
