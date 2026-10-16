@@ -1,0 +1,121 @@
+# cde.apps: каталог приложений и команд рабочего стола и поиск по нему (меню «Пуск», шаг 3.2)
+#
+#   reg = apps.new()
+#   reg:add({id: "terminal", name: "Terminal", icon: "terminal", keywords: ["console", "консоль"], run: (wm) => ...})
+#   reg:provider(() => [{id: "theme:nord", name: "Theme: Nord", detail: "Theme", kind: "action", run: (wm) => ...}])
+#   list = reg:search("term")          записи по убыванию совпадения; пустой запрос: приложения, самые частые вверху
+#
+# Запись: id, name (показывается), icon (cde.icons), detail (серая подпись справа), keywords (слова для поиска, в том числе на
+# других языках), kind ("app", по умолчанию, или "action": команды вроде смены темы, они видны только в поиске), run(wm) (вызывается
+# в процессе менеджера окон). Поставщики (provider) дают записи заново при каждом поиске: темы, масштаб и прочее, что меняется.
+#
+# Совпадение по словам запроса (все должны найтись): название целиком, с начала, с начала слова, внутри, буквы по порядку; слова
+# запроса можно писать на любой раскладке в нижнем регистре (сравнение без учёта регистра). Ключевые слова весят меньше названия.
+
+import unicode
+
+def _norm(s):
+    return unicode.lower(tostring(s ?? ""))
+
+def _starts(text, token):
+    return string.sub(text, 1, string.len(token)) == token
+
+# буквы токена встречаются в тексте по порядку
+def _fuzzy(text, token):
+    tc = unicode.chars(token)
+    xc = unicode.chars(text)
+    j = 1
+    for ch in xc:
+        if j <= len(tc) and ch == tc[j]:
+            j += 1
+    return j > len(tc)
+
+# насколько токен подходит тексту (0: не подходит)
+def _field(text, token):
+    if text == "":
+        return 0
+    if text == token:
+        return 120
+    if _starts(text, token):
+        return 100
+    for word in string.gmatch(text, "[^%s%p]+"):
+        if _starts(word, token):
+            return 80
+    if string.find(text, token, 1, true) != nil:
+        return 55
+    if unicode.length(token) >= 2 and _fuzzy(text, token):
+        return 15
+    return 0
+
+# оценка записи для запроса (список слов в нижнем регистре); 0: не подходит
+export def score(tokens, e):
+    name = _norm(e.name)
+    total = 0
+    for token in tokens:
+        best = _field(name, token)
+        for kw in e.keywords ?? []:
+            best = math.max(best, math.floor(_field(_norm(kw), token) * 0.6))
+        if best == 0:
+            return 0
+        total += best
+    return total
+
+export def tokens(query):
+    out = []
+    for w in string.gmatch(_norm(query), "%S+"):
+        out[len(out) + 1] = w
+    return out
+
+export class Registry:
+    def init(self):
+        self.list = []
+        self.providers = []
+        self.uses = {}
+
+    def add(self, e):
+        self.list[len(self.list) + 1] = e
+        return e
+
+    def provider(self, fn):
+        self.providers[len(self.providers) + 1] = fn
+
+    # все записи: свои и от поставщиков
+    def entries(self):
+        out = []
+        for e in self.list:
+            out[len(out) + 1] = e
+        for fn in self.providers:
+            ok, more = pcall(fn)
+            if ok and type(more) == "table":
+                for e in more:
+                    out[len(out) + 1] = e
+        return out
+
+    # запись запущена: чаще запускаемые поднимаются выше
+    def used(self, e):
+        if e.id == nil:
+            return
+        self.uses[e.id] = (self.uses[e.id] ?? 0) + 1
+
+    def search(self, query):
+        toks = tokens(query)
+        all = self:entries()
+        out = []
+        if len(toks) == 0:
+            for i, e in all:
+                if (e.kind ?? "app") == "app":
+                    out[len(out) + 1] = {e: e, score: (self.uses[e.id] ?? 0) * 1000 - i}
+        else:
+            for i, e in all:
+                sc = score(toks, e)
+                if sc > 0:
+                    bonus = math.min(self.uses[e.id] ?? 0, 5) * 2 + ((e.kind ?? "app") == "app" and 3 or 0)
+                    out[len(out) + 1] = {e: e, score: sc * 10 + bonus - i / 1000}
+        table.sort(out, (a, b) => a.score > b.score)
+        res = []
+        for r in out:
+            res[len(res) + 1] = r.e
+        return res
+
+export def new():
+    return Registry()

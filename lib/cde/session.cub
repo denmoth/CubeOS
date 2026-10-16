@@ -13,6 +13,9 @@
 import cde.wm as wm_mod
 import cde.terminal as terminal
 import cdk.gallery as gallery
+import cde.apps as apps_mod
+import cde.startmenu as startmenu
+import cde.theme as theme_mod
 import clock as clock_mod
 import json5
 
@@ -104,6 +107,57 @@ export def program(session, opts=nil):
                 wm:set_panel({align: wm.panel.align == "center" and "left" or "center"})
                 save_panel()
         wm:hotkey("ctrl+alt+p", panel_position)
+        # каталог для меню «Пуск»: приложения и команды (темы, масштаб, панель, анимации, выход)
+        reg = apps_mod.new()
+        reg:add({id: "terminal", name: "Terminal", icon: "terminal", keywords: ["console", "shell", "cmd", "терминал", "консоль", "термінал"],
+            run: (w) => open_terminal()})
+        reg:add({id: "widgets", name: "Widget gallery", icon: "cube", keywords: ["cdk", "controls", "ui", "виджеты", "элементы"],
+            run: (w) => w:launch(gallery.main, {name: "gallery"})})
+        def logout_entry():
+            return {id: "logout", name: "Log out", icon: "close", kind: "action", keywords: ["exit", "quit", "sign out", "выход", "выйти"],
+                run: (w) => w:stop()}
+        def run_theme(name):
+            def run(w):
+                w:set_theme(name)
+                save("theme", name)
+            return run
+        def run_scale(v):
+            def run(w):
+                w:set_scale(v)
+                save("scale", v)
+            return run
+        def run_panel(change):
+            def run(w):
+                w:set_panel(change)
+                save_panel()
+            return run
+        def command(id, name, icon, words, run):
+            return {id: id, name: name, icon: icon, kind: "action", keywords: words, run: run}
+        def commands():
+            out = []
+            for name in theme_mod.list(wm.theme_dirs):
+                th = theme_mod.find(name, wm.theme_dirs)
+                out[len(out) + 1] = command("theme:" .. name, "Theme: " .. (th.display ?? name), "star",
+                    ["colors", "dark", "light", "тема", "цвета"], run_theme(name))
+            for v in SCALES:
+                out[len(out) + 1] = command("scale:" .. tostring(v), "Scale: " .. (v == "auto" and "Auto" or v .. "x"), "search",
+                    ["zoom", "size", "масштаб"], run_scale(v))
+            if wm.panel != nil:
+                words = ["taskbar", "панель"]
+                out[len(out) + 1] = command("panel:top", "Panel at the top", "gear", words, run_panel({position: "top"}))
+                out[len(out) + 1] = command("panel:bottom", "Panel at the bottom", "gear", words, run_panel({position: "bottom"}))
+                out[len(out) + 1] = command("panel:center", "Panel buttons in the center", "gear", words, run_panel({align: "center"}))
+                out[len(out) + 1] = command("panel:left", "Panel buttons on the left", "gear", words, run_panel({align: "left"}))
+            out[len(out) + 1] = command("anim", "Animations: " .. (wm.anim.enabled and "turn off" or "turn on"), "play",
+                ["effects", "анимации"], (w) => toggle_anim())
+            out[len(out) + 1] = logout_entry()
+            return out
+        reg:provider(commands)
+        menu_opts = {user: tostring(session.user ?? "user"), footer: [{text: "Log out", icon: "close", run: (w) => w:stop()}]}
+        def toggle_menu():
+            startmenu.toggle(wm, reg, menu_opts)
+        wm.on_start = toggle_menu
+        wm:hotkey("ctrl+space", toggle_menu)
         wm:hotkey("ctrl+alt+l", panel_align)
         wm:hotkey("ctrl+alt+k", () => wm:launch(gallery.main, {name: "gallery"}))
         wm:hotkey("ctrl+alt+equals", () => zoom(1))

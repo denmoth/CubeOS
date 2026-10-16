@@ -1,0 +1,96 @@
+# cde.startmenu: меню «Пуск» с поиском (шаг 3.2). Окно cdk без рамки у кнопки «Пуск»: поле поиска, список приложений (или найденного),
+# внизу пользователь и кнопки (выход). Открывается кнопкой на панели, одиночным левым Alt и Ctrl+Space, повторно закрывается.
+#
+#   wm.on_start = () => startmenu.toggle(wm, registry, {user: "denmoth", footer: [{text: "Log out", icon: "close", run: (wm) => wm:stop()}]})
+#
+# Печатать можно сразу: буквы идут в поле поиска (любая раскладка), ↑ ↓ PgUp PgDn по списку, Enter запускает выбранное, Esc сначала
+# стирает запрос, потом закрывает меню. Меню закрывается и когда окно теряет фокус (клик мимо). Выбранное выполняется в процессе
+# менеджера окон (wm:defer), поэтому запись каталога (cde.apps) может менять тему, масштаб, панель и запускать приложения.
+
+import cdk
+import cde.apps as apps_mod
+
+const WIDTH = 152
+const HEIGHT = 158
+const PAGE = 6
+
+def _items(reg, query, st):
+    out = []
+    for e in reg:search(query):
+        out[len(out) + 1] = {text: e.name, icon: e.icon, detail: e.detail, entry: e}
+    if len(out) == 0:
+        out[1] = {text: "Nothing found", color: st.dim}
+    return out
+
+export def main(sys, ctx):
+    wm = ctx.wm
+    reg = ctx.args[1]
+    o = ctx.args[2] ?? {}
+    a = wm.area
+    h = math.min(HEIGHT, a.h - 6)
+    top = wm.panel != nil and wm.panel.position == "top"
+    x = a.x + 3
+    y = top and a.y + 2 or a.y + a.h - h - 2
+    chosen = {}
+    ui = cdk.open(sys, ctx, {title: "Start", w: WIDTH, h: h, x: x, y: y, decorations: false, resizable: false, taskbar: false})
+    st = ui.style
+    wm.start_win = ui.win
+    wm.start_ui = ui
+    if wm.panel != nil:
+        wm.panel.start_open = true
+    def choose(entry):
+        chosen.entry = entry
+        ui:close()
+    def activate(i, it):
+        if it != nil and it.entry != nil:
+            choose(it.entry)
+    list = cdk.list_view({grow: 1, items: _items(reg, "", st), on_activate: activate})
+    def changed(text):
+        list:set_items(_items(reg, text, st))
+    def submit(text):
+        activate(list.selected, list.items[list.selected])
+    search = cdk.text_input({placeholder: "Type to search", on_change: changed, on_submit: submit})
+    footer = [cdk.icon("user", {color: st.accent}), cdk.label(o.user ?? "user", {grow: 1})]
+    for f in o.footer ?? []:
+        let item = f
+        footer[len(footer) + 1] = cdk.button(f.text, {icon: f.icon, variant: "flat", on_click: () => choose(item)})
+    def on_key(ev):
+        if ev.key == keys.up:
+            list:select(list.selected - 1)
+        elif ev.key == keys.down:
+            list:select(list.selected + 1)
+        elif ev.key == keys.pageUp:
+            list:select(list.selected - PAGE)
+        elif ev.key == keys.pageDown:
+            list:select(list.selected + PAGE)
+        elif ev.key == 256 or ev.key == 1:
+            if search.text != "":
+                search:set_text("")
+                changed("")
+            else:
+                ui:close()
+    def on_blur():
+        ui:close()
+    ui.on_key = on_key
+    ui.on_blur = on_blur
+    ui:set_root(cdk.column({padding: 5, gap: 4, bg: st.bg, border: st.border, radius: st.radius}, [
+        cdk.row({align: "center", gap: 4}, [cdk.icon("search", {color: st.dim}), cdk.column({grow: 1}, [search])]),
+        list,
+        cdk.separator(),
+        cdk.row({align: "center", gap: 3}, footer)]))
+    ui:set_focus(search)
+    ui:run()
+    wm.start_win = nil
+    if wm.panel != nil:
+        wm.panel.start_open = false
+    if chosen.entry != nil:
+        e = chosen.entry
+        reg:used(e)
+        wm:defer(() => e.run(wm))
+
+# открыть меню или закрыть, если оно уже открыто
+export def toggle(wm, reg, opts=nil):
+    if wm.start_win != nil and not wm.start_win.closed:
+        wm:request_close(wm.start_win)
+        return
+    wm:launch(main, {name: "start"}, [reg, opts])

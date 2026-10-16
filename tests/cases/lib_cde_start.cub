@@ -1,0 +1,177 @@
+import t
+import kernel
+import cde
+import cde.apps as apps_mod
+import cde.startmenu as startmenu
+eq = t.eq
+
+def make_term():
+    api = {}
+    def get_size(px):
+        if px:
+            return 306, 171
+        return 51, 19
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "setGraphicsMode", "drawPixels", "setFrozen"]:
+        api[name] = nothing
+    return api
+
+def breathe():
+    os.queueEvent("t_breathe")
+    os.pullEvent("t_breathe")
+
+# ---------------------------------------------------------------- поиск по каталогу (без окон)
+reg0 = apps_mod.new()
+reg0:add({id: "terminal", name: "Terminal", keywords: ["console", "консоль"], run: (w) => nil})
+reg0:add({id: "determinant", name: "Determinant calculator", run: (w) => nil})
+reg0:add({id: "files", name: "File manager", keywords: ["explorer"], run: (w) => nil})
+reg0:add({id: "theme", name: "Theme: Nord", kind: "action", detail: "Appearance", run: (w) => nil})
+def names(list):
+    out = []
+    for e in list:
+        out[len(out) + 1] = e.id
+    return out
+eq(names(reg0:search("term")), ["terminal", "determinant"], "name start beats name inside")
+eq(names(reg0:search("conso")), ["terminal"], "keywords are searched")
+eq(names(reg0:search("КОНСОЛЬ")), ["terminal"], "search ignores case, also for Cyrillic")
+eq(names(reg0:search("man file")), ["files"], "every word must match, in any order")
+eq(names(reg0:search("xyz")), [], "no match, empty list")
+eq(names(reg0:search("flmngr")), ["files"], "letters in order match a name")
+eq(names(reg0:search("")), ["terminal", "determinant", "files"], "empty query lists apps without commands, in catalog order")
+eq(names(reg0:search("theme")), ["theme"], "commands show up when searching")
+reg0:used(reg0.list[3])
+eq(names(reg0:search(""))[1], "files", "used apps move up")
+eq(names(reg0:search("t"))[1], "terminal", "a single letter prefers the start of the name")
+
+# ---------------------------------------------------------------- меню на рабочем столе
+clock = {now: 1000}
+def now():
+    return clock.now
+ran = []
+def make_app(title):
+    def app(sys, ctx):
+        win = cde.app.open(sys, ctx, {title: title, kind: "pixel", w: 60, h: 30, x: 30, y: 20})
+        win:present()
+        while true:
+            ev = table.pack(win:wait_event())
+            if ev[1] == "win_close":
+                break
+        win:close()
+    return app
+
+reg = apps_mod.new()
+reg:add({id: "alpha", name: "Alpha app", icon: "folder", run: (w) => w:launch(make_app("Alpha"), {name: "alpha"})})
+reg:add({id: "beta", name: "Beta app", run: (w) => w:launch(make_app("Beta"), {name: "beta"})})
+reg:add({id: "mode", name: "Theme: Test", kind: "action", detail: "Appearance", run: (w) => rawset(ran, "mode", true)})
+wm = cde.wm.new({animations: {enabled: false}, term: make_term(), assets: "/repo/assets", clock: now, panel: {time_text: () => "10:00"}})
+opts = {user: "denmoth", footer: [{text: "Log out", icon: "close", run: (w) => rawset(ran, "out", true)}]}
+wm.on_start = () => startmenu.toggle(wm, reg, opts)
+k = kernel.new({clock: now})
+breathe()
+def desk(sys, args):
+    wm:run(sys)
+k:spawn(desk, [], {name: "cde", ui: true})
+def settle(n=10):
+    k:feed("cubeos_cde")
+    for i in range[1, n]:
+        clock.now = clock.now + 20
+        k:tick()
+        k:run_ready()
+settle()
+p = wm.panel
+eq(wm.start_win == nil, true, "menu is closed at the start")
+
+def alt_tap():
+    k:feed("key", keys.leftAlt, false)
+    k:feed("key_up", keys.leftAlt)
+    settle()
+
+def type_text(text):
+    for i in range[1, string.len(text)]:
+        k:feed("char", string.sub(text, i, i))
+    settle()
+
+# кнопка «Пуск» открывает меню
+st = p.items[1]
+k:feed("mouse_click", 1, st.x + 3, p.rect.y + st.y + 3)
+k:feed("mouse_up", 1, st.x + 3, p.rect.y + st.y + 3)
+settle()
+w = wm.start_win
+eq(w != nil and w.title, "Start", "Start button opens the menu")
+eq(wm.focused == w, true, "menu has the focus")
+eq(w.y + w.h <= p.rect.y, true, "menu stands above the panel")
+eq([w.decorated, p:item_for(w)], [false, nil], "no frame, no taskbar button")
+eq(p.start_open, true, "Start button is shown pressed while the menu is open")
+ui = wm.start_ui
+def menu_list():
+    for c in wm.start_ui.root.children:
+        if c.kind == "list":
+            return c
+lst = menu_list()
+eq(len(lst.items), 2, "empty query: the two apps, no commands")
+
+# поиск
+type_text("alp")
+eq([len(lst.items), lst.items[1].text], [1, "Alpha app"], "typing filters the list")
+type_text("zzz")
+eq(lst.items[1].text, "Nothing found", "no matches")
+k:feed("key", 256, false)
+settle()
+eq([wm.start_win != nil, len(lst.items)], [true, 2], "Esc clears the query first")
+
+# стрелки и Enter запускают выбранное
+k:feed("key", keys.down, false)
+settle()
+eq(lst.selected, 2, "Down moves the selection")
+k:feed("key", keys.enter, false)
+settle()
+settle()
+eq(wm.start_win == nil, true, "Enter closes the menu")
+eq(p.start_open, false, "Start button is released")
+titles = []
+for x in wm.windows:
+    titles[len(titles) + 1] = x.title
+eq(titles, ["Beta"], "the chosen app was started")
+eq(wm.focused != nil and wm.focused.title, "Beta", "and has the focus")
+
+# левый Alt открывает и закрывает
+alt_tap()
+eq(wm.start_win != nil, true, "Alt tap opens the menu")
+alt_tap()
+settle()
+eq(wm.start_win == nil, true, "Alt tap closes it")
+
+# команды ищутся, запускаются в процессе менеджера
+alt_tap()
+type_text("theme")
+eq(menu_list().items[1].detail, "Appearance", "commands are found")
+k:feed("key", keys.enter, false)
+settle()
+settle()
+eq(ran.mode, true, "a command runs")
+
+# клик мимо закрывает
+alt_tap()
+eq(wm.start_win != nil, true, "menu opened again")
+k:feed("mouse_click", 1, 280, 20)
+k:feed("mouse_up", 1, 280, 20)
+settle()
+settle()
+eq(wm.start_win == nil, true, "click outside closes the menu")
+
+# кнопка внизу
+alt_tap()
+foot = wm.start_ui.root.children[4]
+btn = foot.children[3]
+eq(btn.kind, "button", "footer has the Log out button")
+bx = wm.start_win:content_x() + btn.x + 2
+by = wm.start_win:content_y() + btn.y + 2
+k:feed("mouse_click", 1, bx, by)
+k:feed("mouse_up", 1, bx, by)
+settle()
+settle()
+eq(ran.out, true, "footer button runs its action")
+
+print("done")

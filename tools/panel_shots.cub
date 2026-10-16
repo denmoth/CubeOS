@@ -3,6 +3,8 @@
 
 import kernel
 import cde_demo as demo
+import cde.apps as apps_mod
+import cde.startmenu as startmenu
 
 def make_term(cols, rows):
     api = {}
@@ -82,6 +84,41 @@ def shoot(cols, rows, tag, theme_name, panel):
     settle(k)
     dump(wm, "ui_panel_" .. tag .. "_3_top_center")
 
+def menu_shoot(cols, rows, tag, theme_name):
+    wm = demo.build({term: make_term(cols, rows), assets: "/repo/assets", clock: now, theme: theme_name,
+        panel: {time_text: () => "14:32"}, animations: {enabled: false}})
+    reg = apps_mod.new()
+    def nop(w):
+        pass
+    reg:add({id: "terminal", name: "Terminal", icon: "terminal", keywords: ["console"], run: nop})
+    reg:add({id: "widgets", name: "Widget gallery", icon: "cube", run: nop})
+    reg:add({id: "files", name: "File manager", icon: "folder", run: nop})
+    reg:add({id: "settings", name: "Settings", icon: "gear", run: nop})
+    reg:add({id: "calc", name: "Calculator", icon: "plus", run: nop})
+    reg:add({id: "notes", name: "Notes", icon: "file", run: nop})
+    reg:add({id: "t1", name: "Theme: Tokyo Night", icon: "star", kind: "action", detail: "Appearance", run: nop})
+    reg:add({id: "t2", name: "Theme: Nord", icon: "star", kind: "action", detail: "Appearance", run: nop})
+    reg:add({id: "t3", name: "Theme: Light", icon: "star", kind: "action", detail: "Appearance", run: nop})
+    opts = {user: "denmoth", footer: [{text: "Log out", icon: "close", run: nop}]}
+    wm.on_start = () => startmenu.toggle(wm, reg, opts)
+    k = kernel.new({clock: now})
+    def desk(sys, args):
+        wm:run(sys)
+    k:spawn(desk, [], {name: "cde", ui: true})
+    settle(k)
+    k:feed("key", keys.leftAlt, false)
+    k:feed("key_up", keys.leftAlt)
+    settle(k, 14)
+    dump(wm, "ui_panel_" .. tag .. "_menu")
+    for ch in ["t", "h", "e"]:
+        k:feed("char", ch)
+    settle(k, 10)
+    k:feed("key", keys.down, false)
+    settle(k, 10)
+    dump(wm, "ui_panel_" .. tag .. "_menu_search")
+
+menu_shoot(51, 19, "tokyo", "tokyo-night")
+menu_shoot(51, 19, "light", "light")
 shoot(51, 19, "tokyo", "tokyo-night", {time_text: () => "14:32"})
 shoot(51, 19, "light", "light", {time_text: () => "09:05"})
 shoot(51, 19, "nord", "nord", {time_text: () => "23:59"})

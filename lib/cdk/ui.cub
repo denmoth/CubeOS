@@ -35,6 +35,8 @@ export class UI:
         self.quit = false
         self.on_close = o.on_close
         self.on_key = o.on_key
+        # окно потеряло фокус (меню «Пуск» закрывается)
+        self.on_blur = o.on_blur
         self.pending = nil
         self.layers = []
         self.layers_dirty = false
@@ -540,6 +542,8 @@ export class UI:
                 self:relayout()
             elif name == "win_blur":
                 self.mods = {ctrl: false, shift: false, alt: false}
+                if self.on_blur != nil:
+                    self.on_blur()
             elif name != nil:
                 self:dispatch(name, ev[2], ev[3], ev[4])
             self:_run_timers()

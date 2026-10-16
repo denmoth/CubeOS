@@ -92,6 +92,7 @@ export class WM:
         self.next_id = 1
         self.pending = []
         self.to_launch = []
+        self.deferred = []
         self.hotkeys = {}
         self.mods = {}
         self.drag = nil
@@ -121,6 +122,12 @@ export class WM:
         self.to_launch[len(self.to_launch) + 1] = {program: program, opts: opts ?? {}, args: args ?? []}
         if self.running and coroutine.running() == self.co:
             self:_spawn_pending()
+
+    # выполнить fn в процессе менеджера на ближайшем проходе (из приложений: смена темы, панели, выход; вызовы ядра и события окнам
+    # работают только отсюда)
+    def defer(self, fn):
+        self.deferred[len(self.deferred) + 1] = fn
+        self:_wake(nil)
 
     def _spawn_pending(self):
         list = self.to_launch
@@ -256,7 +263,7 @@ export class WM:
         self.running = false
 
     def _has_work(self):
-        if len(self.pending) > 0 or len(self.to_launch) > 0 or len(self.comp.rects) > 0:
+        if len(self.pending) > 0 or len(self.to_launch) > 0 or len(self.deferred) > 0 or len(self.comp.rects) > 0:
             return true
         for w in self.windows:
             if w.wake_pending or w.closed or w.title_dirty:
@@ -310,6 +317,13 @@ export class WM:
 
     # один проход: новые окна, закрытые окна, нарисованное приложениями, сборка кадра
     def service(self):
+        if len(self.deferred) > 0:
+            list = self.deferred
+            self.deferred = []
+            for fn in list:
+                ok, err = pcall(fn)
+                if not ok:
+                    self:_log("error", "deferred call failed: " .. tostring(err))
         if len(self.to_launch) > 0 and self.sys != nil:
             self:_spawn_pending()
         if len(self.pending) > 0:

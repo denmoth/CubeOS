@@ -139,7 +139,7 @@ export class Panel:
             self.hidden = hide
             wm.comp:damage(r.x, r.y, r.w, r.h)
         tasks = self:tasks()
-        parts = [r.w, r.h, self.position, self.align, self.gen, f != nil and f.id or 0, self.clock_text, self.pressed ?? "", self.show_clock and 1 or 0]
+        parts = [r.w, r.h, self.position, self.align, self.gen, f != nil and f.id or 0, self.clock_text, self.pressed ?? "", self.show_clock and 1 or 0, self.start_open and 1 or 0]
         for w in tasks:
             parts[len(parts) + 1] = w.id .. (w.minimized and "m" or "v") .. w.title .. (w.icon ?? "")
         for t in self.tray:

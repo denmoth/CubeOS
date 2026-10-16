@@ -159,6 +159,22 @@ conf = "/cubeos/users/ivan/cfg/cde.conf"
 eq(wait(system, () => fsys:exists(nil, conf)), true, "the theme choice is saved")
 eq(string.find(fsys:read_file(nil, conf), wm.theme.name, 1, true) != nil and wm.theme.name != "tokyo-night", true, "with the new theme name")
 
+# меню «Пуск» (Ctrl+Space): приложения сессии и команды рабочего стола находятся поиском
+system.kernel:feed("key", keys.leftCtrl, false)
+system.kernel:feed("key", keys.space, false)
+system.kernel:feed("key_up", keys.leftCtrl)
+eq(wait(system, () => wm.start_win != nil), true, "Ctrl+Space opens the Start menu")
+def start_list():
+    for c in wm.start_ui.root.children:
+        if c.kind == "list":
+            return c
+eq(start_list().items[1].text, "Terminal", "the menu lists the terminal first")
+type_text(system, "scale")
+eq(wait(system, () => start_list().items[1].text == "Scale: Auto"), true, "commands are found by search")
+system.kernel:feed("key", 256, false)
+system.kernel:feed("key", 256, false)
+eq(wait(system, () => wm.start_win == nil), true, "Esc clears the query, then closes the menu")
+
 # выход из сессии: Ctrl+Alt+Q, снова экран входа
 system.kernel:feed("key", keys.leftCtrl, false)
 system.kernel:feed("key", keys.leftAlt, false)
