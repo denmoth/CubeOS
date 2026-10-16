@@ -8,11 +8,16 @@
 #   proto.sign(msg, key)            ставит mac
 #   proto.verify(msg, key)          подпись верна
 #   proto.fresh(msg, last_seq, now) не повтор: seq больше последнего и время в пределах окна
+#   proto.seal(msg, key, encrypt)   (D246) с encrypt тело шифруется ChaCha20 (поле enc вместо body), потом подпись поверх
+#   proto.open(msg, key)            подпись верна; если тело зашифровано, расшифровывает его обратно в body (msg.was_enc = true)
+# Ключ шифрования это HMAC(ключ пары, "cubenet:enc"), nonce: номер отправителя (4 байта) и его счётчик seq (8 байт): у каждого
+# сообщения свой. Версия 2: сообщения версии 1 не принимаются.
 
 import sha256
+import chacha20
 
 export const NAME = "cubenet"
-export const VERSION = 1
+export const VERSION = 2
 export const CHANNEL = 47100
 export const WINDOW_MS = 60000
 
@@ -58,6 +63,70 @@ export def sign(msg, key):
     msg.mac = mac_of(msg, key)
     return msg
 
+# разбор записи canon обратно в значение
+def _dec(s, i):
+    c = string.sub(s, i, i)
+    if c == "n":
+        return nil, i + 1
+    if c == "T":
+        return true, i + 1
+    if c == "F":
+        return false, i + 1
+    if c == "#":
+        j = string.find(s, ";", i, true)
+        return tonumber(string.sub(s, i + 1, j - 1)), j + 1
+    if c == "s":
+        j = string.find(s, ":", i, true)
+        n = tonumber(string.sub(s, i + 1, j - 1))
+        return string.sub(s, j + 1, j + n), j + n + 1
+    if c == "{":
+        t = {}
+        i += 1
+        while string.sub(s, i, i) != "}":
+            if i > len(s):
+                raise Error("cubenet: broken value")
+            k = nil
+            v = nil
+            k, i = _dec(s, i)
+            v, i = _dec(s, i)
+            if k != nil:
+                t[k] = v
+        return t, i + 1
+    raise Error("cubenet: broken value")
+
+export def decode(s):
+    v, i = _dec(s, 1)
+    return v
+
+def _u32(n):
+    n = n % 4294967296
+    return string.char(n % 256, math.floor(n / 256) % 256, math.floor(n / 65536) % 256, math.floor(n / 16777216) % 256)
+
+def _nonce(msg):
+    seq = msg.seq ?? 0
+    return _u32(msg.src ?? 0) .. _u32(seq % 4294967296) .. _u32(math.floor(seq / 4294967296))
+
+def _enc_key(key):
+    return sha256.hmac(key, "cubenet:enc")
+
+export def seal(msg, key, encrypt=false):
+    if encrypt:
+        msg.enc = chacha20.crypt(_enc_key(key), _nonce(msg), canon(msg.body))
+        msg.body = nil
+    return sign(msg, key)
+
+export def open(msg, key):
+    if not verify(msg, key):
+        return false
+    if type(msg.enc) == "string":
+        ok, body = pcall(() => decode(chacha20.crypt(_enc_key(key), _nonce(msg), msg.enc)))
+        if not ok:
+            return false
+        msg.body = body
+        msg.enc = nil
+        msg.was_enc = true
+    return true
+
 # сравнение без досрочного выхода
 def _same(a, b):
     if type(a) != "string" or type(b) != "string" or len(a) != len(b):
@@ -80,7 +149,7 @@ export def fresh(msg, last_seq, now):
 
 # похоже ли на сообщение CubeNet
 export def valid(msg):
-    return type(msg) == "table" and msg.proto == NAME and type(msg.src) == "number" and type(msg.type) == "string"
+    return type(msg) == "table" and msg.proto == NAME and msg.v == VERSION and type(msg.src) == "number" and type(msg.type) == "string"
 
 export def id_of(msg):
     return tostring(msg.src) .. ":" .. tostring(msg.seq)

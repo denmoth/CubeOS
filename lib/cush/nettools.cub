@@ -25,6 +25,7 @@ def show_status(sh):
         ms[len(ms) + 1] = m.side .. " (" .. sh:t(m.wired and "wired" or "wireless") .. ")"
     sh:println(sh:t("Modems: {list}", {list: len(ms) > 0 and table.concat(ms, ", ") or sh:t("none (attach a wired modem)")}))
     sh:println(sh:t("Paired computers: {n}", {n: s.paired}))
+    sh:println(sh:t(s.encrypt and "Encryption: on" or "Encryption: off (files travel as plain text)"))
     sh_list = []
     for x in s.shares:
         sh_list[len(sh_list) + 1] = x.name .. (x.readonly and (" (" .. sh:t("read-only") .. ")") or "")
@@ -86,6 +87,15 @@ def b_net(sh, args):
         if r == nil:
             return 1
         sh:println(sh:t("This computer is now called {name} on the network.", {name: r}))
+        return 0
+    if sub == "encrypt":
+        if host != "on" and host != "off":
+            sh:eprint("usage: net encrypt on|off")
+            return 2
+        r = net_call(sh, "net", "encrypt", {on: host == "on"})
+        if r == nil:
+            return 1
+        sh:println(sh:t(r and "Encryption: on" or "Encryption: off (files travel as plain text)"))
         return 0
     if sub == "pair":
         if host == nil:

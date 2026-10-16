@@ -37,6 +37,7 @@ export class Link:
         self.now = opts.now ?? (() => os.epoch("utc"))
         self.wait = opts.wait ?? wait_modem
         self.wireless = opts.wireless ?? false
+        self.encrypt = opts.encrypt ?? true
 
     def message(self, kind, dst, body=nil, re=nil):
         t = self.now()
@@ -59,7 +60,7 @@ export class Link:
         o = opts ?? {}
         msg = self:message(kind, dst, body)
         if o.key != nil:
-            proto.sign(msg, o.key)
+            proto.seal(msg, o.key, self.encrypt)
         want = proto.id_of(msg)
         if self:send(msg, {wired: o.key != nil and not self.wireless}) == 0:
             return nil, o.key != nil and not self.wireless and "no wired modem" or "no modem"
@@ -73,7 +74,7 @@ export class Link:
                 return nil, "no answer"
             m = ev[5]
             if self:_answer(m, want, dst):
-                if o.key == nil or proto.verify(m, o.key):
+                if o.key == nil or proto.open(m, o.key):
                     return m
                 if m.type == "denied" and m.mac == nil:
                     return m

@@ -1,0 +1,37 @@
+import t
+import chacha20
+import sha256
+eq = t.eq
+
+# ChaCha20 по RFC 8439 (векторы из 2.3.2 и 2.4.2; длинный текст сверен с библиотекой cryptography на Python)
+
+def hex_(s):
+    return sha256.to_hex(s)
+
+def unhex(h):
+    return (string.gsub(h, "..", (x) => string.char(tonumber(x, 16))))
+
+key = ""
+for i in range[0, 31]:
+    key = key .. string.char(i)
+eq(hex_(chacha20.block(key, unhex("000000090000004a00000000"), 1)),
+    "10f1e7e4d13b5915500fdd1fa32071c4c7d1f4c733c068030422aa9ac3d46c4ed2826446079faa0914c2d705d98b02a2b5129cd1de164eb9cbd083e8a2503c4e",
+    "the block function matches RFC 8439 2.3.2")
+msg = "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."
+nonce = unhex("000000000000004a00000000")
+c = chacha20.crypt(key, nonce, msg, 1)
+eq(hex_(string.sub(c, 1, 16)), "6e2e359a2568f98041ba0728dd0d6981", "encryption matches RFC 8439 2.4.2")
+eq(sha256.hex(c), "24daf11c996cb497b6ed7087f377a4cde496a6ea830319b9b06b9eab832bbb74", "the whole ciphertext too")
+eq(chacha20.crypt(key, nonce, c, 1), msg, "decryption is the same operation")
+parts = []
+for i in range[0, 19999]:
+    parts[i + 1] = string.char((i * 7) % 256)
+big = table.concat(parts)
+t0 = os.epoch("utc")
+c2 = chacha20.crypt(key, nonce, big)
+ms = os.epoch("utc") - t0
+eq(sha256.hex(c2), "8de6e6bbe34bbb0e55047ca88652373f71e117498ec51abbf58cad82cf3f7c83", "20 KB across many blocks")
+eq(chacha20.crypt(key, nonce, ""), "", "empty data")
+ok = pcall(() => chacha20.crypt("short", nonce, "x"))
+eq(ok, false, "a wrong key size is refused")
+print("done")

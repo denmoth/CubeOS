@@ -90,7 +90,7 @@ export def main(sys, args):
     my_id = a.id ?? os.getComputerID()
     rounds = a.rounds ?? ROUNDS
     clock = a.now ?? (() => os.epoch("utc"))
-    conf = {name: nil, wireless: false, shares: {}, mounts: []}
+    conf = {name: nil, wireless: false, encrypt: true, shares: {}, mounts: []}
     peer_keys = {}
     peers = {}
     last_seq = {}
@@ -111,6 +111,7 @@ export def main(sys, args):
     loaded = read_json(CONF_PATH) ?? {}
     conf.name = _short(loaded.name)
     conf.wireless = loaded.wireless == true
+    conf.encrypt = loaded.encrypt != false
     conf.shares = type(loaded.shares) == "table" and loaded.shares or {}
     conf.mounts = type(loaded.mounts) == "table" and loaded.mounts or []
     peer_keys = read_json(KEYS_PATH) ?? {}
@@ -120,6 +121,7 @@ export def main(sys, args):
         text = json5.patch(text, ["name"], conf.name ?? "")
         text = json5.patch(text, ["shares"], conf.shares)
         text = json5.patch(text, ["mounts"], conf.mounts)
+        text = json5.patch(text, ["encrypt"], conf.encrypt)
         view:write_atomic(CONF_PATH, text)
 
     def save_keys():
@@ -174,7 +176,7 @@ export def main(sys, args):
                 return m.wired
         return false
 
-    link = link_mod.new({id: my_id, modems: modem_list, now: clock, wireless: conf.wireless})
+    link = link_mod.new({id: my_id, modems: modem_list, now: clock, wireless: conf.wireless, encrypt: conf.encrypt})
 
     def note_peer(m, side, wired, dist):
         p = peers[m.src] ?? {}
@@ -186,10 +188,11 @@ export def main(sys, args):
             p.name = _short(m.body.name)
         peers[m.src] = p
 
+    # подписанный ответ шифруется, если зашифрован был запрос (или шифрование включено здесь)
     def reply(m, side, kind, body, key=nil):
         r = link:message(kind, m.src, body, proto.id_of(m))
         if key != nil:
-            proto.sign(r, key)
+            proto.seal(r, key, m.was_enc == true or conf.encrypt)
         link:send(r, {side: side})
 
     # ------------------------------------------------------------ общие папки (сторона хозяина)
@@ -313,7 +316,7 @@ export def main(sys, args):
             sys.busy("pairing")
             c.key = sha256.to_hex(proto.pair_key(p.code, p.salt, c.nc, c.nh, rounds))
             sys.busy(nil)
-        if proto.verify(m, c.key) and proto.fresh(m, nil, clock()):
+        if proto.open(m, c.key) and proto.fresh(m, nil, clock()):
             peer_keys[tostring(m.src)] = {key: c.key, name: c.name, paired: clock()}
             save_keys()
             st.pairing = nil
@@ -334,8 +337,11 @@ export def main(sys, args):
         if info == nil:
             reply(m, side, "denied", {err: "this computer is not paired with you"})
             return nil
-        if not proto.verify(m, info.key):
+        if not proto.open(m, info.key):
             sys.log("warn", "bad signature from computer " .. tostring(m.src) .. ", ignored")
+            return nil
+        if conf.encrypt and not m.was_enc:
+            reply(m, side, "denied", {err: "this computer accepts only encrypted requests (net encrypt on on both)"})
             return nil
         if not proto.fresh(m, last_seq[m.src], clock()):
             sys.log("warn", "replayed or stale message from computer " .. tostring(m.src) .. ", ignored")
@@ -457,7 +463,7 @@ export def main(sys, args):
         for id, k in peer_keys:
             paired += 1
         p = st.pairing
-        return {id: my_id, name: my_name(), modems: ms, paired: paired, shares: share_list(), wireless: conf.wireless,
+        return {id: my_id, name: my_name(), modems: ms, paired: paired, shares: share_list(), wireless: conf.wireless, encrypt: conf.encrypt,
             pairing: p != nil and clock() <= p.expires}
     handlers.status = status
 
@@ -491,6 +497,16 @@ export def main(sys, args):
         save_conf()
         return my_name()
     handlers.name = set_name
+
+    # шифрование файлов и сопряжения (D246): on true по умолчанию; включённое требует его и от собеседника
+    def set_encrypt(q, sender):
+        need_admin(sender)
+        conf.encrypt = q != nil and q.on == true
+        link.encrypt = conf.encrypt
+        save_conf()
+        sys.log("info", "network encryption " .. (conf.encrypt and "on" or "off"))
+        return conf.encrypt
+    handlers.encrypt = set_encrypt
 
     def pair_code(q, sender):
         need_admin(sender)

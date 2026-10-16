@@ -30,9 +30,10 @@
 
 ## Сеть (`netd`, D242)
 
-Код `lib/svc/netd.cub`, `lib/net/proto.cub` (сообщения, подпись, свежесть), `lib/net/link.cub` (отправка и ожидание ответа), `lib/net/remote.cub` (папка другого компьютера как провайдер CFS). Тесты `lib_svc_netd` (два ядра с подставным проводным модемом), `lib_cush_net`. Настройки `/cubeos/sys/cfg/net.conf` (`name`, `wireless`, `shares`, `mounts`), ключи `/cubeos/sys/sec/net_keys.lock`.
+Код `lib/svc/netd.cub`, `lib/net/proto.cub` (сообщения, подпись, свежесть), `lib/net/link.cub` (отправка и ожидание ответа), `lib/net/remote.cub` (папка другого компьютера как провайдер CFS). Тесты `lib_svc_netd` (два ядра с подставным проводным модемом), `lib_cush_net`. Настройки `/cubeos/sys/cfg/net.conf` (`name`, `wireless`, `encrypt`, `shares`, `mounts`), ключи `/cubeos/sys/sec/net_keys.lock`.
 
-- Запросы: `status`, `scan {seconds}`, `ping {host}`, `peers`, `name {name}`, `pair_code`, `pair {host, code}`, `forget {host}`, `share {name, path, readonly}`, `unshare {name}`, `shares`, `remote_shares {host}`, `mount {host, share, point}`, `unmount {point}`, `mounts`. Менять может только администратор.
+- Шифрование (D246): с `encrypt: true` (по умолчанию) тело каждого подписанного сообщения шифруется ChaCha20 (ключ HMAC(ключ пары, "cubenet:enc"), nonce из номера отправителя и его счётчика), подпись поверх шифротекста; включённое шифрование требует его и от собеседника, ответ шифруется, если зашифрован запрос. Протокол версии 2.
+- Запросы: `status`, `scan {seconds}`, `ping {host}`, `peers`, `name {name}`, `encrypt {on}`, `pair_code`, `pair {host, code}`, `forget {host}`, `share {name, path, readonly}`, `unshare {name}`, `shares`, `remote_shares {host}`, `mount {host, share, point}`, `unmount {point}`, `mounts`. Менять может только администратор.
 - Команды `net` (подкоманды те же) и `ping ХОСТ [N]`. Хост это имя из `net scan` или номер компьютера.
 - Помощник `netd-events` ждёт `modem_message` и `peripheral` и шлёт их службе; сама служба, когда спрашивает другой компьютер (поиск, сопряжение), ждёт ответ системным вызовом `wait_event` с `keep`.
 - Удалённый диск ждёт ответ в том процессе, который читает файл: в процессе ядра напрямую, в программе терминала через `compat.proc` (он пропускает к ядру только ожидание `modem_message` не дольше 10 с). Пока ответа нет, терминал стоит (до 3 с, потом `EIO`).

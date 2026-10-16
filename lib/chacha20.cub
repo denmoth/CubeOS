@@ -1,0 +1,97 @@
+# chacha20: потоковый шифр ChaCha20 (RFC 8439) на bit32. Шифрование и расшифровка это одно и то же (XOR с ключевым потоком).
+#
+#   out = chacha20.crypt(key, nonce, data, counter=0)    key: 32 байта, nonce: 12 байт (у каждого сообщения свой!), data: строка
+#   chacha20.block(key, nonce, counter)                  64 байта ключевого потока (для проверки по RFC)
+#
+# Одинаковые ключ и nonce дважды использовать нельзя: тогда из двух шифровок можно получить XOR открытых текстов.
+
+band = bit32.band
+bor = bit32.bor
+bxor = bit32.bxor
+lshift = bit32.lshift
+rshift = bit32.rshift
+
+const SIGMA = [0x61707865, 0x3320646e, 0x79622d32, 0x6b206574]
+
+def _words(s, n):
+    out = []
+    for i in range[0, n - 1]:
+        a, b, c, d = string.byte(s, i * 4 + 1, i * 4 + 4)
+        out[i + 1] = a + b * 256 + c * 65536 + d * 16777216
+    return out
+
+def _rotl(x, n):
+    return bor(lshift(x, n), rshift(x, 32 - n))
+
+def _qr(x, a, b, c, d):
+    x[a] = (x[a] + x[b]) % 4294967296
+    x[d] = _rotl(bxor(x[d], x[a]), 16)
+    x[c] = (x[c] + x[d]) % 4294967296
+    x[b] = _rotl(bxor(x[b], x[c]), 12)
+    x[a] = (x[a] + x[b]) % 4294967296
+    x[d] = _rotl(bxor(x[d], x[a]), 8)
+    x[c] = (x[c] + x[d]) % 4294967296
+    x[b] = _rotl(bxor(x[b], x[c]), 7)
+
+# 16 слов ключевого потока для блока с номером counter
+def _block_words(kw, nw, counter):
+    st = [SIGMA[1], SIGMA[2], SIGMA[3], SIGMA[4], kw[1], kw[2], kw[3], kw[4], kw[5], kw[6], kw[7], kw[8], counter % 4294967296,
+        nw[1], nw[2], nw[3]]
+    x = []
+    for i in range[1, 16]:
+        x[i] = st[i]
+    for r in range[1, 10]:
+        _qr(x, 1, 5, 9, 13)
+        _qr(x, 2, 6, 10, 14)
+        _qr(x, 3, 7, 11, 15)
+        _qr(x, 4, 8, 12, 16)
+        _qr(x, 1, 6, 11, 16)
+        _qr(x, 2, 7, 12, 13)
+        _qr(x, 3, 8, 9, 14)
+        _qr(x, 4, 5, 10, 15)
+    for i in range[1, 16]:
+        x[i] = (x[i] + st[i]) % 4294967296
+    return x
+
+def _check(key, nonce):
+    if type(key) != "string" or len(key) != 32:
+        raise Error("chacha20: the key must be 32 bytes")
+    if type(nonce) != "string" or len(nonce) != 12:
+        raise Error("chacha20: the nonce must be 12 bytes")
+
+export def block(key, nonce, counter=0):
+    _check(key, nonce)
+    w = _block_words(_words(key, 8), _words(nonce, 3), counter)
+    out = []
+    for i in range[1, 16]:
+        v = w[i]
+        out[i] = string.char(band(v, 255), band(rshift(v, 8), 255), band(rshift(v, 16), 255), rshift(v, 24))
+    return table.concat(out)
+
+export def crypt(key, nonce, data, counter=0):
+    _check(key, nonce)
+    kw = _words(key, 8)
+    nw = _words(nonce, 3)
+    n = len(data)
+    parts = []
+    pos = 1
+    ctr = counter
+    ks = []
+    while pos <= n:
+        w = _block_words(kw, nw, ctr)
+        ctr += 1
+        for i in range[1, 16]:
+            v = w[i]
+            j = i * 4
+            ks[j - 3] = band(v, 255)
+            ks[j - 2] = band(rshift(v, 8), 255)
+            ks[j - 1] = band(rshift(v, 16), 255)
+            ks[j] = rshift(v, 24)
+        last = math.min(n, pos + 63)
+        bytes_ = table.pack(string.byte(data, pos, last))
+        cnt = bytes_.n
+        for i in range[1, cnt]:
+            bytes_[i] = bxor(bytes_[i], ks[i])
+        parts[len(parts) + 1] = string.char(table.unpack(bytes_, 1, cnt))
+        pos += 64
+    return table.concat(parts)
