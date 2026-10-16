@@ -1,0 +1,225 @@
+# cdk.popup: меню, выпадающий список и диалоги (слои поверх окна, cdk.ui:open_layer)
+#
+#   popup.menu(ui, [{text: "Открыть", icon: "folder", shortcut: "Enter", on_select: fn}, {separator: true}, ...], x, y)
+#   cdk.dropdown({items: ["Авто", "1x", "2x"], index: 1, on_change: (i, text) => ...})
+#   popup.dialog(ui, {title: "Удалить?", text: "Файл уйдёт в корзину.", icon: "warn",
+#       buttons: [{text: "Отмена", value: false}, {text: "Удалить", variant: "danger", value: true}], on_result: (v) => ...})
+#   popup.message(ui, "Заголовок", "Текст")
+#
+# Меню: стрелки, Enter, клик; клик мимо или Esc закрывает. Диалог модальный: окно под ним затемнено, Esc даёт on_result(nil),
+# фокус сразу на последней кнопке (обычно главное действие), Enter нажимает её.
+
+import cdk.widget as widget
+import cdk.controls as controls
+import cdk.icons as icons
+import cgl.surface as surface_mod
+import unicode
+
+# ------------------------------------------------------------ меню
+
+export class Menu(widget.Widget):
+    def init(self, items, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "menu"
+        self.items = items
+        self.index = 0
+        self.focusable = true
+        self.min_w = o.min_w ?? 0
+
+    def _item_h(self, st, it):
+        return it.separator and 5 or st.line + 1
+
+    def measure(self, st):
+        w = 60
+        h = 4
+        for it in self.items:
+            if not it.separator:
+                iw = st:text_w(it.text ?? "") + 24 + (it.shortcut != nil and st:text_w(it.shortcut) + 12 or 0)
+                w = math.max(w, iw)
+            h += self:_item_h(st, it)
+        return w, h
+
+    def _at(self, st, py):
+        y = self.y + 2
+        for i, it in self.items:
+            ih = self:_item_h(st, it)
+            if py >= y and py < y + ih:
+                return (it.separator or it.disabled) and 0 or i
+            y += ih
+        return 0
+
+    def draw(self, s, st):
+        st:round_fill(s, self.x, self.y, self.w, self.h, st.ctrl)
+        st:round_line(s, self.x, self.y, self.w, self.h, st.border)
+        y = self.y + 2
+        for i, it in self.items:
+            ih = self:_item_h(st, it)
+            if it.separator:
+                s:hline(self.x + 4, y + 2, self.w - 8, st.border)
+            else:
+                active = i == self.index
+                fg = it.disabled and st.dim or (active and st.on_accent or st.text)
+                if active:
+                    st:round_fill(s, self.x + 2, y, self.w - 4, ih, st.accent)
+                if it.icon != nil:
+                    icons.draw(s, it.icon, self.x + 5, y + math.floor((ih - 9) / 2), active and st.on_accent or st.accent, st:darker(active and st.on_accent or st.accent))
+                elif it.checked:
+                    icons.draw(s, "check", self.x + 5, y + math.floor((ih - 9) / 2), fg)
+                ty = y + math.floor((ih - st.fh) / 2)
+                s:text(st.font, self.x + 18, ty, it.text ?? "", fg)
+                if it.shortcut != nil:
+                    s:text(st.font, self.x + self.w - 6 - st:text_w(it.shortcut), ty, it.shortcut, active and st.on_accent or st.dim)
+            y += ih
+
+    def _move(self, dir):
+        n = len(self.items)
+        i = self.index
+        for k in range[1, n]:
+            i = (i - 1 + dir) % n + 1
+            it = self.items[i]
+            if not it.separator and not it.disabled:
+                self.index = i
+                self:invalidate()
+                return
+
+    def choose(self, i):
+        it = self.items[i]
+        if it == nil or it.separator or it.disabled:
+            return
+        self.ui:close_layer(self)
+        if it.on_select != nil:
+            it.on_select(it, i)
+
+    def handle(self, ev):
+        st = self.ui.style
+        if ev.name == "down" or ev.name == "drag":
+            i = self:_at(st, ev.y)
+            if i != self.index:
+                self.index = i
+                self:invalidate()
+            return true
+        if ev.name == "up":
+            i = self:_at(st, ev.y)
+            if i > 0:
+                self:choose(i)
+            return true
+        if ev.name == "key":
+            if ev.key == keys.down:
+                self:_move(1)
+            elif ev.key == keys.up:
+                self:_move(-1)
+            elif ev.key == keys.enter or ev.key == keys.space:
+                if self.index > 0:
+                    self:choose(self.index)
+            else:
+                return false
+            return true
+        return false
+
+export def menu(ui, items, x, y, opts=nil):
+    m = Menu(items, opts)
+    o = opts ?? {}
+    return ui:open_layer(m, {x: x, y: y, dismiss: true, on_close: o.on_close})
+
+# ------------------------------------------------------------ выпадающий список
+
+export class Dropdown(controls.Button):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, "", o)
+        self.kind = "dropdown"
+        self.items = o.items ?? []
+        self.index = o.index ?? 1
+        self.on_change = o.on_change
+        let me = self
+        self.on_click = (b) => me:open()
+
+    def value(self):
+        return self.items[self.index]
+
+    def measure(self, st):
+        w = 40
+        for it in self.items:
+            w = math.max(w, st:text_w(tostring(it)) + 24)
+        return w, st.line + 2
+
+    def open(self):
+        let me = self
+        list = []
+        for i, it in self.items:
+            list[i] = {text: tostring(it), checked: i == self.index, on_select: (item, k) => me:set_index(k)}
+        m = Menu(list, {min_w: self.w})
+        m.index = self.index
+        self.ui:open_layer(m, {x: self.x, y: self.y + self.h + 1, dismiss: true})
+        m:layout(m.x, m.y, math.max(m.w, self.w), m.h)
+
+    def set_index(self, i):
+        if i != self.index:
+            self.index = i
+            self:invalidate()
+            if self.on_change != nil:
+                self.on_change(i, self.items[i])
+
+    def draw(self, s, st):
+        base = self.pressed and st.ctrl_lo or st.ctrl
+        st:plate(s, self.x, self.y, self.w, self.h, base, {hi: not self.pressed and st.hi or nil, shade: st.ctrl_lo})
+        ty = self.y + math.floor((self.h - st.fh) / 2)
+        s:text(st.font, self.x + 6, ty, tostring(self.items[self.index] ?? ""), st.text)
+        # стрелка вниз
+        cx = self.x + self.w - 8
+        cy = self.y + math.floor(self.h / 2) - 1
+        s:hline(cx - 2, cy, 5, st.dim)
+        s:hline(cx - 1, cy + 1, 3, st.dim)
+        s:set(cx, cy + 2, st.dim)
+        if self.focused:
+            st:ring(s, self.x, self.y, self.w, self.h)
+
+    def handle(self, ev):
+        if ev.name == "key" and (ev.key == keys.down or ev.key == keys.up) and not ev.alt:
+            self:set_index(math.max(1, math.min(len(self.items), self.index + (ev.key == keys.down and 1 or -1))))
+            return true
+        return super.handle(self, ev)
+
+export def dropdown(opts=nil):
+    return Dropdown(opts)
+
+# ------------------------------------------------------------ диалог
+
+export def dialog(ui, opts):
+    o = opts ?? {}
+    st = ui.style
+    width = o.width ?? math.min(200, ui.win.canvas.w - 20)
+    head = widget.row({align: "center", gap: 5}, [])
+    if o.icon != nil:
+        head:add(controls.icon(o.icon, {color: o.icon == "warn" and st.warn or st.accent}))
+    head:add(controls.label(o.title ?? "", {color: st.text}))
+    body = widget.column({gap: 1}, [])
+    for line in surface_mod.wrap(st.font, o.text ?? "", width - 16):
+        body:add(controls.label(line, {variant: "dim"}))
+    root = widget.card({gap: 6, border: st.border, padding: 7, width: width, bg: st.bg}, [head, body])
+    bar = widget.row({gap: 4}, [widget.spacer()])
+    done = {v: false}
+    def finish(value):
+        if done.v:
+            return
+        done.v = true
+        ui:close_layer(root)
+        if o.on_result != nil:
+            o.on_result(value)
+    buttons = o.buttons ?? [{text: "OK", variant: "primary", value: true}]
+    last = nil
+    for b in buttons:
+        btn = controls.button(b.text, {variant: b.variant, icon: b.icon, on_click: (x) => finish(b.value)})
+        bar:add(btn)
+        last = btn
+    root:add(bar)
+    root.on_escape = (r) => finish(nil)
+    ui:open_layer(root, {center: true, modal: true, dismiss: false})
+    if last != nil:
+        ui:set_focus(last)
+    return root
+
+export def message(ui, title, text, on_done=nil):
+    return dialog(ui, {title: title, text: text, icon: "info", buttons: [{text: "OK", variant: "primary", value: true}],
+        on_result: (v) => on_done != nil and on_done(v) or nil})

@@ -85,7 +85,7 @@ def shoot(cols, rows, tag, theme_name):
             buttons[len(buttons) + 1] = w
         for c in w.children:
             walk(c)
-    walk(ui.root)
+    walk(ui.root.children[1].tabs[1].content)
     click(field)
     for ch in ["n", "o", "t", "e", "s", " ", "a", "p", "p"]:
         k:feed("char", ch)
@@ -112,6 +112,52 @@ def shoot(cols, rows, tag, theme_name):
     run(4)
     dump(wm, "ui_cdk_" .. tag .. "_3_after")
 
+# страница списков: выбор строки, меню, диалог
+def shoot_lists(cols, rows, tag, theme_name):
+    wm = cde.wm.new({term: make_term(cols, rows), assets: "/repo/assets", clock: now, theme: theme_name})
+    k = kernel.new({clock: now})
+    got = {}
+    wm:launch(gallery.main, {name: "gallery"}, [(u) => rawset(got, "ui", u), 2])
+    def desk(sys, args):
+        wm:run(sys)
+    k:spawn(desk, [], {name: "cde", ui: true})
+    def run(n):
+        for i in range[1, n]:
+            clock.now = clock.now + 50
+            k:tick()
+            k:run_ready()
+        os.queueEvent("shot")
+        os.pullEvent("shot")
+    run(10)
+    ui = got.ui
+    win = wm.windows[1]
+    page = ui.root.children[1].tabs[2].content
+    files = page.children[1]
+    side = page.children[2]
+    def at(w, dx=nil, dy=nil):
+        return win:content_x() + w.x + (dx ?? math.floor(w.w / 2)), win:content_y() + w.y + (dy ?? math.floor(w.h / 2))
+    def click(w, dx=nil, dy=nil):
+        x, y = at(w, dx, dy)
+        k:feed("mouse_click", 1, x, y)
+        k:feed("mouse_up", 1, x, y)
+        run(2)
+    click(files, 20, 15 * 3 + 7)
+    for i in range[1, 3]:
+        k:feed("key", keys.down, false)
+    run(2)
+    dump(wm, "ui_cdk_" .. tag .. "_4_list")
+    click(side.children[2])
+    k:feed("key", keys.down, false)
+    k:feed("key", keys.down, false)
+    run(2)
+    dump(wm, "ui_cdk_" .. tag .. "_5_menu")
+    k:feed("key", keys.escape ?? 256, false)
+    run(2)
+    click(side.children[3])
+    dump(wm, "ui_cdk_" .. tag .. "_6_dialog")
+
+shoot_lists(51, 19, "tokyo", "tokyo-night")
+shoot_lists(51, 19, "light", "light")
 shoot(51, 19, "tokyo", "tokyo-night")
 shoot(51, 19, "dark", "dark")
 shoot(51, 19, "light", "light")

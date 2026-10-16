@@ -45,6 +45,8 @@ export class Style:
         pal = wm.palette
         # светлее и темнее цвета по палитре экрана: полоска света и тень на плашках
         self.dark = theme.dim_map(pal, 0.85)
+        # тень меню и диалогов, затемнение окна под диалогом
+        self.shadow = theme.dim_map(pal, 0.55)
         self.dark_theme = th.dark != false
         ar, ag, ab = pal:get(theme.ACCENT)
         self.accent_hi = pal:nearest(math.min(255, ar + 40), math.min(255, ag + 40), math.min(255, ab + 40))

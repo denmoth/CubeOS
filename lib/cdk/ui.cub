@@ -9,6 +9,9 @@
 # которые попросили (widget:invalidate): прямоугольник элемента заливается фоном родителя и рисуется заново. Фокус: Tab и Shift+Tab
 # по кругу, клик по элементу с focusable. Мышь: элемент под нажатием захватывает перетаскивание и отпускание. Таймеры: ui:after,
 # ui:every (по часам ядра). Буквы второго языка (кириллица в Windows) переводятся по раскладке системы, как в терминале (D235).
+# Слои поверх окна (меню, выпадающие списки, диалоги): ui:open_layer(w, {x, y, center, modal, dismiss, on_close}),
+# ui:close_layer(w). Фокус и Tab живут в верхнем слое; клик мимо закрывает слой с dismiss; модальный слой затемняет окно под собой
+# и не пускает к нему ввод; Esc закрывает верхний слой.
 
 import cde.app as app
 import cdk.style as style_mod
@@ -32,6 +35,7 @@ export class UI:
         self.on_close = o.on_close
         self.on_key = o.on_key
         self.pending = nil
+        self.layers = []
         self.stats = {layouts: 0, redraws: 0, full: 0}
         self.kbd = layout_mod.new(nil, nil, {mode: "auto", keyboard: o.keyboard ?? self:_keyboard(), dirs: o.layout_dirs})
 
@@ -62,6 +66,71 @@ export class UI:
             if d == w:
                 return
         self.dirty[len(self.dirty) + 1] = w
+
+    # ------------------------------------------------------------ слои
+
+    def open_layer(self, w, opts=nil):
+        o = opts ?? {}
+        cv = self.win.canvas
+        w:_attach(self)
+        pw, ph = w:pref(self.style)
+        pw = math.min(pw, cv.w - 4)
+        ph = math.min(ph, cv.h - 4)
+        x = o.x ?? 0
+        y = o.y ?? 0
+        if o.center:
+            x = math.floor((cv.w - pw) / 2)
+            y = math.floor((cv.h - ph) / 2)
+        x = math.max(2, math.min(x, cv.w - pw - 2))
+        y = math.max(2, math.min(y, cv.h - ph - 2))
+        layer = {w: w, modal: o.modal ?? false, dismiss: o.dismiss ?? true, on_close: o.on_close, focus_before: self.focus}
+        self.layers[len(self.layers) + 1] = layer
+        w:layout(x, y, pw, ph)
+        chain = []
+        self:_chain(w, chain)
+        self:set_focus(chain[1])
+        self:relayout()
+        return w
+
+    def close_layer(self, w=nil):
+        for i in range[len(self.layers), 1] step -1:
+            layer = self.layers[i]
+            if w == nil or layer.w == w:
+                table.remove(self.layers, i)
+                self.focus = nil
+                f = layer.focus_before
+                if f != nil and self:_shown(f):
+                    self:set_focus(f)
+                self:relayout()
+                if layer.on_close != nil:
+                    layer.on_close()
+                return true
+        return false
+
+    def top_layer(self):
+        return self.layers[len(self.layers)]
+
+    # корень элемента: окно или слой
+    def _top_of(self, w):
+        while w.parent != nil:
+            w = w.parent
+        return w
+
+    # элемент под точкой с учётом слоёв; второе значение true: клик поглощён (мимо модального слоя или закрыл меню)
+    def _hit(self, px, py, closing):
+        for i in range[len(self.layers), 1] step -1:
+            layer = self.layers[i]
+            got = layer.w:hit(px, py)
+            if got != nil:
+                return got, false
+            if layer.modal:
+                return nil, true
+            if layer.dismiss and closing:
+                self:close_layer(layer.w)
+                return nil, true
+            if layer.dismiss:
+                return nil, true
+        return self.root != nil and self.root:hit(px, py) or nil, false
 
     def _forget(self, w):
         if self.focus == w:
@@ -138,7 +207,10 @@ export class UI:
 
     def focus_next(self, dir=1):
         chain = []
-        if self.root != nil:
+        top = self:top_layer()
+        if top != nil:
+            self:_chain(top.w, chain)
+        elif self.root != nil:
             self:_chain(self.root, chain)
         if len(chain) == 0:
             return
@@ -201,7 +273,11 @@ export class UI:
             ev.button = a
             ev.dir = a
             if kind == "down":
-                target = self.root != nil and self.root:hit(b, c) or nil
+                target, eaten = self:_hit(b, c, true)
+                if eaten:
+                    self.capture = nil
+                    self.down_at = nil
+                    return
                 f = target
                 while f != nil and not (f.focusable and f.enabled):
                     f = f.parent
@@ -212,7 +288,7 @@ export class UI:
                 if target != nil:
                     self:_bubble(target, ev)
             elif kind == "scroll":
-                target = self.root != nil and self.root:hit(b, c) or nil
+                target, eaten = self:_hit(b, c, false)
                 if target != nil:
                     self:_bubble(target, ev)
             else:
@@ -221,7 +297,7 @@ export class UI:
                     got = self:_bubble(target, ev)
                 if kind == "up":
                     # клик: нажали и отпустили над тем же элементом
-                    over = self.root != nil and self.root:hit(b, c) or nil
+                    over, eaten2 = self:_hit(b, c, false)
                     if self.down_at != nil and over != nil and (over == self.down_at or self:_inside(over, self.down_at)):
                         click = self:_ev("click")
                         click.x = b
@@ -235,13 +311,18 @@ export class UI:
             if a == keys.tab and not self.mods.ctrl and not self.mods.alt:
                 self:focus_next(self.mods.shift and -1 or 1)
                 return
+            if (a == keys.escape or a == 256 or a == 1) and len(self.layers) > 0:
+                top = self:top_layer()
+                if top.w.on_escape == nil or top.w:on_escape() != false:
+                    self:close_layer(top.w)
+                return
             ev = self:_ev("key")
             ev.key = a
             ev.held = b
             took = nil
             if self.focus != nil:
                 took = self:_bubble(self.focus, ev)
-            if took == nil and self.on_key != nil:
+            if took == nil and self.on_key != nil and len(self.layers) == 0:
                 self.on_key(ev)
             if not self.mods.ctrl and not self.mods.alt and self.kbd:base_char(a, self.mods.shift) != nil:
                 let me = self
@@ -285,6 +366,10 @@ export class UI:
                 return false
             if w == self.root:
                 return true
+            if w.parent == nil:
+                for layer in self.layers:
+                    if layer.w == w:
+                        return true
             w = w.parent
         return false
 
@@ -300,6 +385,9 @@ export class UI:
             self.dirty = []
             cv:clear(self.root:bg() ?? st.bg)
             self.root:draw_tree(cv, st)
+            for layer in self.layers:
+                layer.w:layout(layer.w.x, layer.w.y, layer.w.w, layer.w.h)
+                self:_draw_layer(cv, st, layer)
             self.stats.full += 1
             self.win:present()
             return
@@ -309,6 +397,14 @@ export class UI:
         self.dirty = []
         for w in list:
             if self:_shown(w) and w.w > 0 and w.h > 0:
+                # внутри области прокрутки рисуется только видимая часть
+                views = 0
+                a = w.parent
+                while a != nil:
+                    if a.viewport:
+                        cv:push_clip(a.x, a.y, a.w - 5, a.h)
+                        views += 1
+                    a = a.parent
                 # кольцо фокуса выходит на пиксель за элемент: перерисовывается с запасом
                 cv:push_clip(w.x - 1, w.y - 1, w.w + 2, w.h + 2)
                 cv:fill_rect(w.x - 1, w.y - 1, w.w + 2, w.h + 2, self:_bg_of(w))
@@ -316,8 +412,48 @@ export class UI:
                     w.parent:draw(cv, st)
                 w:draw_tree(cv, st)
                 cv:pop_clip()
+                for i in range[1, views]:
+                    cv:pop_clip()
                 self.stats.redraws += 1
+                # под модальным слоем перерисованное снова затемняется; слои сверху рисуются заново
+                if len(self.layers) > 0 and self:_top_of(w) == self.root:
+                    if self:_modal():
+                        self:_dim(cv, st.shadow, w.x - 1, w.y - 1, w.w + 2, w.h + 2)
+                    for layer in self.layers:
+                        self:_draw_layer(cv, st, layer, true)
         self.win:present()
+
+    def _modal(self):
+        for layer in self.layers:
+            if layer.modal:
+                return true
+        return false
+
+    def _dim(self, cv, map, x, y, w, h):
+        x0 = math.max(0, x)
+        y0 = math.max(0, y)
+        x1 = math.min(cv.w - 1, x + w - 1)
+        y1 = math.min(cv.h - 1, y + h - 1)
+        px = cv.px
+        for yy in range[y0, y1]:
+            base = yy * cv.w + 1
+            for xx in range[x0, x1]:
+                v = px[base + xx]
+                px[base + xx] = map[v] ?? v
+        if x1 >= x0 and y1 >= y0:
+            cv:mark(x0, y0, x1, y1)
+
+    # слой: затемнение окна под модальным (один раз при полной перерисовке), тень, сам слой
+    def _draw_layer(self, cv, st, layer, again=false):
+        w = layer.w
+        if layer.modal and not again:
+            self:_dim(cv, st.shadow, 0, 0, cv.w, cv.h)
+        if not again:
+            self:_dim(cv, st.shadow, w.x + 2, w.y + w.h, w.w, 2)
+            self:_dim(cv, st.shadow, w.x + w.w, w.y + 2, 2, w.h - 2)
+        cv:push_clip(w.x - 1, w.y - 1, w.w + 2, w.h + 2)
+        w:draw_tree(cv, st)
+        cv:pop_clip()
 
     # ------------------------------------------------------------ цикл
 

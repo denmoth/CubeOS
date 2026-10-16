@@ -1,0 +1,443 @@
+import t
+import kernel
+import cde
+import cdk
+eq = t.eq
+
+def make_term():
+    api = {}
+    def get_size(px):
+        if px:
+            return 306, 171
+        return 51, 19
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setGraphicsMode", "setFrozen", "setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "drawPixels"]:
+        api[name] = nothing
+    return api
+
+def breathe():
+    os.queueEvent("t_breathe")
+    os.pullEvent("t_breathe")
+
+# сцена: свой менеджер окон и ядро, одно окно cdk; build(ui) возвращает корень
+def scene(build, opts=nil):
+    clock = {now: 1000}
+    def now():
+        return clock.now
+    wm = cde.wm.new({term: make_term(), assets: "/repo/assets", clock: now})
+    k = kernel.new({clock: now})
+    holder = {}
+    def main(sys, ctx):
+        app_ui = cdk.open(sys, ctx, opts ?? {title: "T", w: 200, h: 130, x: 20, y: 10})
+        app_ui:set_root(build(app_ui))
+        ctx.args[1](app_ui)
+        app_ui:run()
+    def got(u):
+        holder.ui = u
+    wm:launch(main, {name: "cdk"}, [got])
+    def desk(sys, args):
+        wm:run(sys)
+    k:spawn(desk, [], {name: "cde", ui: true})
+    s = {wm: wm, k: k, clock: clock, holder: holder}
+    def settle(n=8):
+        k:feed("cubeos_cde")
+        for i in range[1, n]:
+            clock.now = clock.now + 20
+            k:tick()
+            k:run_ready()
+    def sx(w):
+        return wm.windows[1]:content_x() + w.x
+    def sy(w):
+        return wm.windows[1]:content_y() + w.y
+    def click_at(px, py):
+        k:feed("mouse_click", 1, px, py)
+        k:feed("mouse_up", 1, px, py)
+        settle()
+    def click(w):
+        click_at(sx(w) + math.floor(w.w / 2), sy(w) + math.floor(w.h / 2))
+    def press(code):
+        k:feed("key", code, false)
+        k:feed("key_up", code)
+        settle()
+    def chord(mod, code):
+        k:feed("key", mod, false)
+        k:feed("key", code, false)
+        k:feed("key_up", code)
+        k:feed("key_up", mod)
+        settle()
+    def typed(text):
+        for i in range[1, len(text)]:
+            k:feed("char", string.sub(text, i, i))
+        settle()
+    s.settle = settle
+    s.sx = sx
+    s.sy = sy
+    s.click_at = click_at
+    s.click = click
+    s.press = press
+    s.chord = chord
+    s.typed = typed
+    settle()
+    breathe()
+    s.ui = holder.ui
+    s.win = wm.windows[1]
+    return s
+
+esc = keys.escape ?? 256
+
+def wheel(sc, dir, px, py):
+    sc.k:feed("mouse_scroll", dir, px, py)
+    sc.settle()
+
+def dlg_buttons(dg):
+    out = []
+    bar = dg.children[len(dg.children)]
+    for c in bar.children:
+        if c.kind == "button":
+            table.insert(out, c)
+    return out
+
+# ---------------------------------------------------------------- ScrollView
+sv_btn = cdk.button("Inside")
+sv_items = [sv_btn]
+for i in range[1, 8]:
+    table.insert(sv_items, cdk.spacer({width: 40, height: 30}))
+sv_col = cdk.column({gap: 0, align: "start"}, sv_items)
+sv = cdk.scroll(sv_col, {height: 70})
+sc = scene((ui) => cdk.column({padding: 4}, [sv]))
+ui = sc.ui
+eq(sv.h, 70, "scroll: fixed height")
+eq(sv.offset, 0, "scroll: starts at 0")
+eq(sv.max_offset > 0, true, "scroll: content is taller than the view")
+mx = sv.max_offset
+by0 = sv_btn.y
+vx = sc.sx(sv) + 10
+vy = sc.sy(sv) + 30
+wheel(sc, 1, vx, vy)
+eq(sv.offset, 12, "scroll: wheel down moves by 12")
+eq(sv_btn.y, by0 - 12, "scroll: child widgets move up by the offset")
+wheel(sc, -1, vx, vy)
+wheel(sc, -1, vx, vy)
+eq(sv.offset, 0, "scroll: clamps at 0")
+eq(sv_btn.y, by0, "scroll: child back in place")
+for i in range[1, 40]:
+    wheel(sc, 1, vx, vy)
+    if i % 10 == 0:
+        breathe()
+eq(sv.offset, mx, "scroll: clamps at max")
+wheel(sc, -1, vx, vy)
+eq(sv.offset, mx - 12, "scroll: wheel up from max")
+sv:scroll_to(0)
+sc.settle()
+bx = sc.sx(sv) + sv.w - 2
+by = sc.sy(sv) + 5
+sc.k:feed("mouse_click", 1, bx, by)
+sc.k:feed("mouse_drag", 1, bx, by + 10)
+sc.settle()
+eq(sv.offset > 0, true, "scroll: dragging the scrollbar scrolls")
+sc.k:feed("mouse_drag", 1, bx, by + 1000)
+sc.settle()
+eq(sv.offset, mx, "scroll: drag clamps at max")
+sc.k:feed("mouse_up", 1, bx, by + 1000)
+sc.settle()
+eq(sv.dragging, nil, "scroll: drag ends on mouse up")
+sv:scroll_to(0)
+sc.settle()
+sc.click(sv_btn)
+eq(ui.focus == sv_btn, true, "scroll: button inside has focus")
+sc.press(keys.pageDown)
+eq(sv.offset, sv.h - 10, "scroll: PageDown scrolls by h - 10")
+sc.press(keys.pageUp)
+eq(sv.offset, 0, "scroll: PageUp scrolls back")
+sc.press(keys.pageUp)
+eq(sv.offset, 0, "scroll: PageUp clamps at 0")
+breathe()
+
+# ---------------------------------------------------------------- ListView
+lv_items = []
+for i in range[1, 20]:
+    lv_items[i] = {text: "Item " .. i}
+lv_sel = []
+lv_act = []
+lv = cdk.list_view({items: lv_items, height: 66, on_select: (i, it) => table.insert(lv_sel, [i, it.text]), on_activate: (i, it) => table.insert(lv_act, [i, it.text])})
+sc = scene((ui) => cdk.column({padding: 4}, [lv]))
+ui = sc.ui
+rh = ui.style.line + 2
+vis = math.floor(lv.h / rh)
+page = math.max(1, vis - 1)
+eq(lv.h, 66, "list: fixed height")
+eq([lv.selected, lv.offset], [1, 0], "list: starts at row 1")
+sc.click_at(sc.sx(lv) + 10, sc.sy(lv) + 2 * rh + 3)
+eq(lv.selected, 3, "list: click selects the row under the pointer")
+eq(lv_sel, [[3, "Item 3"]], "list: on_select gets index and item")
+eq(ui.focus == lv, true, "list: click focuses")
+sc.press(keys.down)
+eq(lv.selected, 4, "list: Down")
+sc.press(keys.up)
+sc.press(keys.up)
+eq(lv.selected, 2, "list: Up")
+sc.press(keys.home)
+eq([lv.selected, lv.offset], [1, 0], "list: Home")
+sc.press(keys.up)
+eq(lv.selected, 1, "list: Up clamps at 1")
+for i in range[1, vis]:
+    sc.press(keys.down)
+eq(lv.selected, vis + 1, "list: Down x visible rows")
+eq(lv.offset > 0, true, "list: Down scrolls to keep the selection visible")
+ltop = (lv.selected - 1) * rh
+eq(ltop >= lv.offset and ltop + rh <= lv.offset + lv.h, true, "list: selection is visible after Down")
+breathe()
+sc.press(keys.home)
+eq(lv.offset, 0, "list: Home scrolls back to the top")
+sc.press(keys.pageDown)
+eq(lv.selected, 1 + page, "list: PageDown moves by a page")
+sc.press(keys["end"])
+eq(lv.selected, 20, "list: End")
+eq(lv.offset, 20 * rh - lv.h, "list: End scrolls to the bottom")
+sc.press(keys.down)
+eq(lv.selected, 20, "list: Down clamps at the end")
+sc.press(keys.pageUp)
+eq(lv.selected, 20 - page, "list: PageUp moves by a page")
+sc.press(keys.home)
+wheel(sc, 1, sc.sx(lv) + 10, sc.sy(lv) + 10)
+eq(lv.offset, rh, "list: wheel down scrolls one row")
+wheel(sc, -1, sc.sx(lv) + 10, sc.sy(lv) + 10)
+wheel(sc, -1, sc.sx(lv) + 10, sc.sy(lv) + 10)
+eq(lv.offset, 0, "list: wheel clamps at 0")
+for i in range[1, 40]:
+    wheel(sc, 1, sc.sx(lv) + 10, sc.sy(lv) + 10)
+    if i % 10 == 0:
+        breathe()
+eq(lv.offset, 20 * rh - lv.h, "list: wheel clamps at max")
+sc.press(keys.home)
+eq(len(lv_act), 0, "list: nothing activated so far")
+sc.press(keys.enter)
+eq(lv_act, [[1, "Item 1"]], "list: Enter activates")
+sc.press(keys.home)
+sc.click_at(sc.sx(lv) + 10, sc.sy(lv) + 4 * rh + 3)
+eq(len(lv_act), 1, "list: single click does not activate")
+sc.click_at(sc.sx(lv) + 10, sc.sy(lv) + 4 * rh + 3)
+eq(lv_act[len(lv_act)], [5, "Item 5"], "list: double click activates")
+eq(len(lv_act), 2, "list: double click activates once")
+sc.clock.now = sc.clock.now + 2000
+sc.click_at(sc.sx(lv) + 10, sc.sy(lv) + 1 * rh + 3)
+sc.clock.now = sc.clock.now + 2000
+sc.click_at(sc.sx(lv) + 10, sc.sy(lv) + 1 * rh + 3)
+eq(len(lv_act), 2, "list: slow second click does not activate")
+sc.click_at(sc.sx(lv) + 10, sc.sy(lv) + 0 * rh + 3)
+sc.click_at(sc.sx(lv) + 10, sc.sy(lv) + 1 * rh + 3)
+eq(len(lv_act), 2, "list: clicks on different rows do not activate")
+breathe()
+
+# ---------------------------------------------------------------- Tabs
+tb_log = []
+tb_c1 = cdk.label("page one")
+tb_c2 = cdk.label("page two")
+tb_c3 = cdk.label("page three")
+tb = cdk.tabs({tabs: [{title: "One", content: tb_c1}, {title: "Two", content: tb_c2}, {title: "Three", content: tb_c3}], on_change: (i, t) => table.insert(tb_log, i)})
+sc = scene((ui) => cdk.column({padding: 4}, [tb]))
+ui = sc.ui
+eq([tb.index, tb_c1.visible, tb_c2.visible, tb_c3.visible], [1, true, false, false], "tabs: first is active")
+xs = tb:_tab_x(ui.style)
+sc.click_at(sc.sx(tb) + (xs[2][1] - tb.x) + 4, sc.sy(tb) + 3)
+eq(tb.index, 2, "tabs: click on a title switches")
+eq([tb_c1.visible, tb_c2.visible, tb_c3.visible], [false, true, false], "tabs: only the active content is visible")
+eq(tb_log, [2], "tabs: on_change called")
+sc.click_at(sc.sx(tb) + (xs[2][1] - tb.x) + 4, sc.sy(tb) + 3)
+eq(tb_log, [2], "tabs: clicking the active title does not call on_change")
+sc.press(keys.right)
+eq(tb.index, 3, "tabs: Right")
+sc.press(keys.right)
+eq(tb.index, 3, "tabs: Right clamps")
+sc.press(keys.left)
+sc.press(keys.left)
+sc.press(keys.left)
+eq(tb.index, 1, "tabs: Left clamps at 1")
+eq([tb_c1.visible, tb_c2.visible, tb_c3.visible], [true, false, false], "tabs: content follows keys")
+sc.chord(keys.leftCtrl, keys.tab)
+eq(tb.index, 2, "tabs: Ctrl+Tab next")
+sc.chord(keys.leftCtrl, keys.tab)
+sc.chord(keys.leftCtrl, keys.tab)
+eq(tb.index, 1, "tabs: Ctrl+Tab cycles")
+eq(tb_log, [2, 3, 2, 1, 2, 3, 1], "tabs: on_change log")
+breathe()
+
+# ---------------------------------------------------------------- Menu
+mn_log = []
+mn_closed = []
+def mn_a(it, i):
+    table.insert(mn_log, "A")
+def mn_b(it, i):
+    table.insert(mn_log, "B")
+def mn_c(it, i):
+    table.insert(mn_log, "C")
+def mn_d(it, i):
+    table.insert(mn_log, "D")
+def mn_closed_cb():
+    table.insert(mn_closed, 1)
+mn_items = [{text: "A", on_select: mn_a}, {separator: true}, {text: "B", disabled: true, on_select: mn_b}, {text: "C", on_select: mn_c}, {text: "D", on_select: mn_d}]
+def mn_open(b):
+    cdk.menu(b.ui, mn_items, 30, 40, {on_close: mn_closed_cb})
+mn_btn = cdk.button("Open", {on_click: mn_open})
+mn_other = cdk.button("Other")
+sc = scene((ui) => cdk.column({padding: 4, gap: 4, align: "start"}, [mn_btn, mn_other]))
+ui = sc.ui
+sc.click(mn_btn)
+eq(len(ui.layers), 1, "menu: opened by the button")
+mn = ui.layers[1].w
+eq(ui.focus == mn, true, "menu: focus moves to the menu")
+sc.press(keys.down)
+eq(mn.index, 1, "menu: Down selects the first item")
+sc.press(keys.down)
+eq(mn.index, 4, "menu: Down skips separator and disabled")
+sc.press(keys.down)
+sc.press(keys.down)
+eq(mn.index, 1, "menu: Down wraps")
+sc.press(keys.up)
+eq(mn.index, 5, "menu: Up wraps")
+sc.press(keys.up)
+eq(mn.index, 4, "menu: Up")
+sc.press(keys.up)
+eq(mn.index, 1, "menu: Up skips disabled and separator")
+sc.press(keys.down)
+sc.press(keys.enter)
+eq(mn_log, ["C"], "menu: Enter chooses")
+eq(len(ui.layers), 0, "menu: Enter closes the layer")
+eq(len(mn_closed), 1, "menu: on_close called")
+eq(ui.focus == mn_btn, true, "menu: focus returns to the opener")
+breathe()
+sc.click(mn_btn)
+eq(len(ui.layers), 1, "menu: reopened")
+sc.click_at(sc.sx(mn_other) + 3, sc.sy(mn_other) + 3)
+eq(len(ui.layers), 0, "menu: click outside closes")
+eq(mn_log, ["C"], "menu: click outside does not choose")
+sc.click(mn_btn)
+sc.press(keys.down)
+sc.press(esc)
+eq(len(ui.layers), 0, "menu: Esc closes")
+eq(mn_log, ["C"], "menu: Esc does not choose")
+sc.click(mn_btn)
+mn = ui.layers[1].w
+st = ui.style
+iy = mn.y + 2 + mn:_item_h(st, mn.items[1]) + mn:_item_h(st, mn.items[2]) + mn:_item_h(st, mn.items[3]) + mn:_item_h(st, mn.items[4]) + 2
+ix = sc.sx(mn) + 6
+iyy = sc.win:content_y() + iy
+sc.k:feed("mouse_click", 1, ix, iyy)
+sc.settle()
+eq(mn.index, 5, "menu: mouse down highlights the item")
+eq(len(ui.layers), 1, "menu: mouse down alone does not close")
+sc.k:feed("mouse_up", 1, ix, iyy)
+sc.settle()
+eq(mn_log, ["C", "D"], "menu: mouse up on the item chooses it")
+eq(len(ui.layers), 0, "menu: closed after choosing by mouse")
+sc.click(mn_btn)
+mn = ui.layers[1].w
+iyy = sc.win:content_y() + mn.y + 2 + mn:_item_h(st, mn.items[1]) + mn:_item_h(st, mn.items[2]) + 2
+sc.k:feed("mouse_click", 1, ix, iyy)
+sc.k:feed("mouse_up", 1, ix, iyy)
+sc.settle()
+eq(mn_log, ["C", "D"], "menu: disabled item is not chosen by the mouse")
+sc.press(esc)
+breathe()
+
+# ---------------------------------------------------------------- Dropdown
+dd_log = []
+dd = cdk.dropdown({items: ["Auto", "1x", "2x", "3x"], index: 1, on_change: (i, tx) => table.insert(dd_log, [i, tx])})
+sc = scene((ui) => cdk.column({padding: 4, gap: 4, align: "start"}, [dd]))
+ui = sc.ui
+sc.click(dd)
+eq(len(ui.layers), 1, "dropdown: click opens a menu layer")
+dm = ui.layers[1].w
+eq(dm.index, 1, "dropdown: menu starts on the current item")
+sc.press(keys.down)
+sc.press(keys.down)
+sc.press(keys.enter)
+eq(dd.index, 3, "dropdown: choosing changes index")
+eq(dd_log, [[3, "2x"]], "dropdown: on_change called")
+eq(len(ui.layers), 0, "dropdown: menu closed")
+eq(ui.focus == dd, true, "dropdown: focus back on the dropdown")
+sc.press(keys.down)
+eq(dd.index, 4, "dropdown: Down on the focused dropdown changes index")
+sc.press(keys.down)
+eq(dd.index, 4, "dropdown: Down clamps")
+sc.press(keys.up)
+sc.press(keys.up)
+sc.press(keys.up)
+sc.press(keys.up)
+eq(dd.index, 1, "dropdown: Up clamps")
+eq(len(ui.layers), 0, "dropdown: keys do not open the menu")
+eq(dd_log[len(dd_log)], [1, "Auto"], "dropdown: on_change after keys")
+breathe()
+
+# ---------------------------------------------------------------- Dialog
+dg_res = []
+dg_back_clicks = []
+dg_back = cdk.button("Back", {on_click: (b) => table.insert(dg_back_clicks, 1)})
+def dg_result(v):
+    table.insert(dg_res, [v])
+def dg_open(b):
+    cdk.dialog(b.ui, {title: "Sure?", text: "Really do it.", buttons: [{text: "Cancel", value: false}, {text: "OK", variant: "primary", value: true}], on_result: dg_result})
+dg_btn = cdk.button("Ask", {on_click: dg_open})
+sc = scene((ui) => cdk.column({padding: 4, gap: 4, align: "start"}, [dg_btn, dg_back]))
+ui = sc.ui
+sc.click(dg_btn)
+eq(len(ui.layers), 1, "dialog: opened")
+dg = ui.layers[1].w
+dbtns = dlg_buttons(dg)
+eq(len(dbtns), 2, "dialog: two buttons")
+eq(ui.focus == dbtns[2], true, "dialog: focus starts on the last button")
+sc.click(dg_back)
+eq(len(dg_back_clicks), 0, "dialog: modal, window button not clicked")
+eq(len(ui.layers), 1, "dialog: stays open after outside click")
+sc.press(keys.tab)
+eq(ui.focus == dbtns[1], true, "dialog: Tab moves to the other dialog button")
+sc.press(keys.tab)
+eq(ui.focus == dbtns[2], true, "dialog: Tab wraps inside the dialog")
+sc.chord(keys.leftShift, keys.tab)
+eq(ui.focus == dbtns[1], true, "dialog: Shift+Tab stays inside the dialog")
+sc.press(keys.tab)
+sc.press(keys.enter)
+eq(dg_res, [[true]], "dialog: Enter on the last button gives true")
+eq(len(ui.layers), 0, "dialog: closed after the result")
+eq(ui.focus == dg_btn, true, "dialog: focus returns to the previous widget")
+breathe()
+sc.click(dg_btn)
+sc.press(esc)
+eq(len(dg_res), 2, "dialog: Esc gives one result")
+eq(dg_res[2][1], nil, "dialog: Esc gives on_result(nil)")
+eq(len(ui.layers), 0, "dialog: Esc closes")
+eq(ui.focus == dg_btn, true, "dialog: focus returns after Esc")
+sc.click(dg_btn)
+dbtns = dlg_buttons(ui.layers[1].w)
+sc.click(dbtns[1])
+eq(dg_res[len(dg_res)], [false], "dialog: Cancel gives false")
+eq(len(dg_res), 3, "dialog: one result per dialog")
+breathe()
+
+# ---------------------------------------------------------------- partial redraw under a modal
+rd_other = cdk.checkbox("Pixel")
+def rd_open(b):
+    cdk.dialog(b.ui, {title: "T", text: "Body text."})
+rd_btn = cdk.button("Ask", {on_click: rd_open})
+sc = scene((ui) => cdk.column({padding: 4, gap: 4, align: "start"}, [rd_btn, rd_other]))
+ui = sc.ui
+sc.click(rd_btn)
+eq(len(ui.layers), 1, "redraw: dialog open")
+dg = ui.layers[1].w
+cvs = ui.win.canvas
+def pix(x, y):
+    return cvs.px[y * cvs.w + 1 + x]
+eq(pix(dg.x + 3, dg.y + 3), ui.style.bg, "redraw: dialog card colour before")
+rd_other:invalidate()
+sc.settle()
+breathe()
+eq(len(ui.layers), 1, "redraw: dialog still open")
+eq(pix(dg.x + 3, dg.y + 3), ui.style.bg, "redraw: dialog card colour after")
+rd_btn:invalidate()
+rd_other.checked = true
+rd_other:invalidate()
+sc.settle()
+eq(pix(dg.x + 3, dg.y + 3), ui.style.bg, "redraw: dialog drawn after several invalidations")
+print("done")

@@ -3,14 +3,38 @@
 
 import cdk
 
+const FILES = [["Documents", "folder", "4 items"], ["Pictures", "folder", "12 items"], ["Music", "folder", "8 items"],
+    ["notes.txt", "file", "2 KB"], ["todo.md", "file", "1 KB"], ["cube.cimg", "cube", "6 KB"], ["startup.lua", "terminal", "3 KB"],
+    ["passwords.kdbx", "lock", "9 KB"], ["song.dfpwm", "volume", "120 KB"], ["trash", "trash", "empty"]]
+
+def _lists_page(ui, say):
+    items = []
+    for f in FILES:
+        items[len(items) + 1] = {text: f[1], icon: f[2], detail: f[3]}
+    files = cdk.list_view({items: items, grow: 1, on_select: (i, it) => say(it.text),
+        on_activate: (i, it) => cdk.message(ui, it.text, "Opening files comes with the file manager (step 5).")})
+    scale = cdk.dropdown({items: ["Scale: auto", "Scale: 1x", "Scale: 2x", "Scale: 3x"], on_change: (i, v) => say(v)})
+    def show_menu(b):
+        cdk.menu(ui, [{text: "Open", icon: "folder", shortcut: "Enter", on_select: (it) => say("Open")},
+            {text: "Rename", icon: "file", shortcut: "F2", on_select: (it) => say("Rename")},
+            {separator: true}, {text: "Copy", shortcut: "Ctrl+C"}, {text: "Paste", shortcut: "Ctrl+V", disabled: true},
+            {separator: true}, {text: "Delete", icon: "trash", shortcut: "Del", on_select: (it) => ask_delete()}], b.x, b.y + b.h + 1)
+    def ask_delete():
+        cdk.dialog(ui, {title: "Delete notes.txt?", icon: "warn", text: "The file goes to the trash. You can bring it back from there.",
+            buttons: [{text: "Cancel", value: false}, {text: "Delete", variant: "danger", icon: "trash", value: true}],
+            on_result: (v) => say(v and "Deleted" or "Kept")})
+    return cdk.row({padding: 4, gap: 6}, [files, cdk.column({gap: 4, width: 86}, [scale,
+        cdk.button("Menu", {icon: "plus", on_click: show_menu}), cdk.button("Dialog", {icon: "warn", on_click: (b) => ask_delete()}),
+        cdk.spacer(), cdk.label("Double-click", {variant: "dim"}), cdk.label("a file", {variant: "dim"})])])
+
 export def main(sys, ctx):
-    ui = cdk.open(sys, ctx, {title: "Desktop Kit", w: 250, h: 154})
+    ui = cdk.open(sys, ctx, {title: "Desktop Kit", w: 250, h: 156})
     status = cdk.label("Ready", {variant: "dim"})
     def say(text):
         status:set_text(text)
     search = cdk.text_input({placeholder: "Search apps and files", grow: 1, on_submit: (t) => say("Search: " .. t)})
     volume = cdk.slider({value: 60, grow: 1, on_change: (v) => say("Volume " .. v .. "%")})
-    root = cdk.column({padding: 6, gap: 4}, [
+    controls_page = cdk.column({padding: 4, gap: 4}, [
         cdk.row({align: "center", gap: 5}, [cdk.icon("cube", {color: ui.style.accent}), cdk.label("Desktop Kit", {variant: "title"}),
             cdk.spacer(), status]),
         cdk.row({gap: 4}, [cdk.icon("search", {color: ui.style.dim}), search, cdk.button("Go", {variant: "primary"})]),
@@ -27,6 +51,9 @@ export def main(sys, ctx):
         cdk.row({gap: 4}, [cdk.button("", {icon: "gear", variant: "flat"}), cdk.spacer(), cdk.button("Cancel"),
             cdk.button("Delete", {variant: "danger", icon: "trash"}), cdk.button("Save", {variant: "primary", icon: "check",
             on_click: () => say("Saved")})])])
+    lists_page = _lists_page(ui, say)
+    root = cdk.column({padding: 2}, [cdk.tabs({grow: 1, tabs: [{title: "Controls", content: controls_page},
+        {title: "Lists", content: lists_page}], index: ctx.args[2] ?? 1})])
     ui:set_root(root)
     # для снимков и тестов: ctx.args[1](ui) получает среду окна
     if ctx.args[1] != nil:

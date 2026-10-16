@@ -1,0 +1,353 @@
+# cdk.lists: область прокрутки, список и вкладки
+#
+#   cdk.scroll(child, {height: 80})            прокрутка колесом, полосой справа (тянуть мышью), PageUp/PageDown
+#   cdk.list_view({items: [{text, icon, detail, color}], on_select: (i, item) => ..., on_activate: fn, height: 90})
+#                                              выбор кликом и стрелками, двойной клик или Enter: on_activate; только видимые строки рисуются
+#   cdk.tabs({tabs: [{title: "Общие", content: виджет}], index: 1, on_change: fn})
+
+import cdk.widget as widget
+import cdk.icons as icons
+import unicode
+
+const BAR = 5
+
+def _scrollbar(s, st, x, y, h, offset, total, view, active):
+    if total <= view:
+        return
+    s:fill_rect(x + 1, y, 3, h, st.bg)
+    th = math.max(8, math.floor(h * view / total))
+    ty = y + math.floor((h - th) * offset / math.max(1, total - view))
+    st:round_fill(s, x + 1, ty, 3, th, active and st.accent or st.hi, 1)
+
+# ------------------------------------------------------------ область прокрутки
+
+export class ScrollView(widget.Widget):
+    def init(self, child, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "scroll"
+        self.viewport = true
+        self.offset = 0
+        self.max_offset = 0
+        self.content_h = 0
+        self.fixed_h = o.height
+        self.dragging = nil
+        self:add(child)
+
+    def child(self):
+        return self.children[1]
+
+    def measure(self, st):
+        cw, ch = self:child():pref(st)
+        return cw + BAR, self.fixed_h ?? math.min(ch, 90)
+
+    def layout_children(self):
+        st = self.ui != nil and self.ui.style or nil
+        if st == nil:
+            return
+        c = self:child()
+        cw, ch = c:pref(st)
+        self.content_h = math.max(ch, self.h)
+        self.max_offset = math.max(0, ch - self.h)
+        self.offset = math.max(0, math.min(self.offset, self.max_offset))
+        c:layout(self.x, self.y - self.offset, self.w - BAR, self.content_h)
+
+    def scroll_to(self, off):
+        off = math.max(0, math.min(math.floor(off), self.max_offset))
+        if off != self.offset:
+            self.offset = off
+            self:layout_children()
+            self:invalidate()
+
+    def scroll_by(self, d):
+        self:scroll_to(self.offset + d)
+
+    # показать прямоугольник (координаты холста) целиком
+    def reveal(self, y, h):
+        if y < self.y:
+            self:scroll_by(y - self.y)
+        elif y + h > self.y + self.h:
+            self:scroll_by(y + h - (self.y + self.h))
+
+    def draw_tree(self, s, st):
+        s:push_clip(self.x, self.y, self.w - BAR, self.h)
+        self:child():draw_tree(s, st)
+        s:pop_clip()
+        _scrollbar(s, st, self.x + self.w - BAR, self.y, self.h, self.offset, self.content_h, self.h, self.dragging != nil)
+
+    def hit(self, px, py):
+        if not self.visible or not self:contains(px, py):
+            return nil
+        if px >= self.x + self.w - BAR:
+            return self
+        return self:child():hit(px, py) ?? self
+
+    def handle(self, ev):
+        if ev.name == "scroll":
+            self:scroll_by(ev.dir * 12)
+            return self.max_offset > 0
+        if ev.name == "down" and ev.x >= self.x + self.w - BAR:
+            self.dragging = {y: ev.y, offset: self.offset}
+            self:invalidate()
+            return true
+        if ev.name == "drag" and self.dragging != nil:
+            k = self.content_h / math.max(1, self.h)
+            self:scroll_to(self.dragging.offset + (ev.y - self.dragging.y) * k)
+            return true
+        if ev.name == "up" and self.dragging != nil:
+            self.dragging = nil
+            self:invalidate()
+            return true
+        if ev.name == "key":
+            if ev.key == keys.pageDown:
+                self:scroll_by(self.h - 10)
+                return true
+            if ev.key == keys.pageUp:
+                self:scroll_by(-(self.h - 10))
+                return true
+        return false
+
+export def scroll(child, opts=nil):
+    return ScrollView(child, opts)
+
+# ------------------------------------------------------------ список
+
+export class ListView(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "list"
+        self.items = o.items ?? []
+        self.selected = o.selected ?? (len(self.items) > 0 and 1 or 0)
+        self.on_select = o.on_select
+        self.on_activate = o.on_activate
+        self.fixed_h = o.height
+        self.offset = 0
+        self.focusable = true
+        self.last_click = nil
+        self.dragging = nil
+
+    def row_h(self, st):
+        return st.line + 2
+
+    def set_items(self, items):
+        self.items = items
+        self.selected = math.min(self.selected, len(items))
+        if self.selected == 0 and len(items) > 0:
+            self.selected = 1
+        self.offset = 0
+        self:invalidate()
+
+    def measure(self, st):
+        w = 80
+        for it in self.items:
+            w = math.max(w, st:text_w(it.text ?? "") + 30 + (it.detail != nil and st:text_w(it.detail) + 8 or 0))
+        return w, self.fixed_h ?? math.min(len(self.items), 6) * self:row_h(st)
+
+    def _max_offset(self, st):
+        return math.max(0, len(self.items) * self:row_h(st) - self.h)
+
+    def _ensure_visible(self, st, i):
+        rh = self:row_h(st)
+        top = (i - 1) * rh
+        if top < self.offset:
+            self.offset = top
+        elif top + rh > self.offset + self.h:
+            self.offset = top + rh - self.h
+        self.offset = math.max(0, math.min(self.offset, self:_max_offset(st)))
+
+    def select(self, i, notify=true):
+        if len(self.items) == 0:
+            return
+        i = math.max(1, math.min(len(self.items), i))
+        st = self.ui.style
+        self:_ensure_visible(st, i)
+        if i != self.selected:
+            self.selected = i
+            if notify and self.on_select != nil:
+                self.on_select(i, self.items[i])
+        self:invalidate()
+
+    def activate(self):
+        if self.selected > 0 and self.on_activate != nil:
+            self.on_activate(self.selected, self.items[self.selected])
+
+    def draw(self, s, st):
+        rh = self:row_h(st)
+        total = len(self.items) * rh
+        has_bar = total > self.h
+        rw = self.w - (has_bar and BAR or 0)
+        first = math.floor(self.offset / rh) + 1
+        last = math.min(len(self.items), math.floor((self.offset + self.h - 1) / rh) + 1)
+        for i in range[first, last]:
+            it = self.items[i]
+            y = self.y + (i - 1) * rh - self.offset
+            fg = it.color ?? st.text
+            if i == self.selected:
+                st:round_fill(s, self.x, y, rw, rh, self.focused and st.sel or st.ctrl)
+                if self.focused:
+                    st:round_fill(s, self.x + 1, y + 3, 2, rh - 6, st.accent, 1)
+            tx = self.x + 6
+            if it.icon != nil:
+                icons.draw(s, it.icon, tx, y + math.floor((rh - 9) / 2), it.icon_color ?? st.accent, st:darker(it.icon_color ?? st.accent))
+                tx += 13
+            ty = y + math.floor((rh - st.fh) / 2)
+            right = self.x + rw - 4
+            if it.detail != nil:
+                dw = st:text_w(it.detail)
+                s:text(st.font, right - dw, ty, it.detail, st.dim)
+                right -= dw + 6
+            text = it.text ?? ""
+            room = math.floor((right - tx) / st.fw)
+            if unicode.length(text) > room:
+                text = unicode.sub(text, 1, math.max(0, room - 2)) .. ".."
+            s:text(st.font, tx, ty, text, fg)
+        if has_bar:
+            _scrollbar(s, st, self.x + self.w - BAR, self.y, self.h, self.offset, total, self.h, self.dragging != nil)
+
+    def _row_at(self, st, py):
+        return math.floor((py - self.y + self.offset) / self:row_h(st)) + 1
+
+    def handle(self, ev):
+        st = self.ui.style
+        rh = self:row_h(st)
+        if ev.name == "scroll":
+            self.offset = math.max(0, math.min(self.offset + ev.dir * rh, self:_max_offset(st)))
+            self:invalidate()
+            return true
+        if ev.name == "down":
+            if ev.x >= self.x + self.w - BAR and len(self.items) * rh > self.h:
+                self.dragging = {y: ev.y, offset: self.offset}
+                return true
+            i = self:_row_at(st, ev.y)
+            if i >= 1 and i <= len(self.items):
+                now = self.ui:now()
+                double = self.last_click != nil and self.last_click.i == i and now - self.last_click.at < 0.45
+                self.last_click = {i: i, at: now}
+                self:select(i)
+                if double:
+                    self.last_click = nil
+                    self:activate()
+            return true
+        if ev.name == "drag" and self.dragging != nil:
+            k = len(self.items) * rh / math.max(1, self.h)
+            self.offset = math.max(0, math.min(math.floor(self.dragging.offset + (ev.y - self.dragging.y) * k), self:_max_offset(st)))
+            self:invalidate()
+            return true
+        if ev.name == "up":
+            self.dragging = nil
+            return true
+        if ev.name == "key":
+            page = math.max(1, math.floor(self.h / rh) - 1)
+            if ev.key == keys.down:
+                self:select(self.selected + 1)
+            elif ev.key == keys.up:
+                self:select(self.selected - 1)
+            elif ev.key == keys.home:
+                self:select(1)
+            elif ev.key == keys["end"]:
+                self:select(len(self.items))
+            elif ev.key == keys.pageDown:
+                self:select(self.selected + page)
+            elif ev.key == keys.pageUp:
+                self:select(self.selected - page)
+            elif ev.key == keys.enter:
+                self:activate()
+            else:
+                return false
+            return true
+        return ev.name == "click"
+
+export def list_view(opts=nil):
+    return ListView(opts)
+
+# ------------------------------------------------------------ вкладки
+
+export class Tabs(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "tabs"
+        self.tabs = o.tabs ?? []
+        self.index = o.index ?? 1
+        self.on_change = o.on_change
+        self.focusable = true
+        for i, t in self.tabs:
+            t.content.visible = i == self.index
+            self:add(t.content)
+
+    def header_h(self, st):
+        return st.line + 3
+
+    def measure(self, st):
+        hw = 0
+        for t in self.tabs:
+            hw += st:text_w(t.title) + 12
+        cw = 0
+        ch = 0
+        for t in self.tabs:
+            w, h = t.content:pref(st)
+            cw = math.max(cw, w)
+            ch = math.max(ch, h)
+        return math.max(hw, cw), self:header_h(st) + 3 + ch
+
+    def layout_children(self):
+        st = self.ui != nil and self.ui.style or nil
+        if st == nil:
+            return
+        top = self.y + self:header_h(st) + 3
+        for i, t in self.tabs:
+            t.content.visible = i == self.index
+            t.content:layout(self.x, top, self.w, self.y + self.h - top)
+
+    def set_index(self, i):
+        i = math.max(1, math.min(len(self.tabs), i))
+        if i != self.index:
+            self.index = i
+            self:relayout()
+            if self.on_change != nil:
+                self.on_change(i, self.tabs[i])
+
+    def _tab_x(self, st):
+        xs = []
+        x = self.x
+        for i, t in self.tabs:
+            w = st:text_w(t.title) + 12
+            xs[i] = [x, w]
+            x += w
+        return xs
+
+    def draw(self, s, st):
+        hh = self:header_h(st)
+        s:hline(self.x, self.y + hh, self.w, st.border)
+        for i, p in self:_tab_x(st):
+            t = self.tabs[i]
+            active = i == self.index
+            if active:
+                st:round_fill(s, p[1], self.y, p[2], hh, st.ctrl)
+                s:fill_rect(p[1] + 2, self.y + hh - 1, p[2] - 4, 2, st.accent)
+            s:text(st.font, p[1] + 6, self.y + math.floor((hh - st.fh) / 2), t.title, active and st.text or st.dim)
+            if active and self.focused:
+                st:round_line(s, p[1], self.y, p[2], hh, st.accent)
+
+    def handle(self, ev):
+        st = self.ui.style
+        if ev.name == "down" and ev.y < self.y + self:header_h(st) + 1:
+            for i, p in self:_tab_x(st):
+                if ev.x >= p[1] and ev.x < p[1] + p[2]:
+                    self:set_index(i)
+            return true
+        if ev.name == "key":
+            if ev.key == keys.left:
+                self:set_index(self.index - 1)
+                return true
+            if ev.key == keys.right:
+                self:set_index(self.index + 1)
+                return true
+        if ev.name == "key" and ev.ctrl and ev.key == keys.tab:
+            self:set_index(self.index % len(self.tabs) + 1)
+            return true
+        return false
+
+export def tabs(opts=nil):
+    return Tabs(opts)

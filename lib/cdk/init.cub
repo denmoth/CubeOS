@@ -9,7 +9,8 @@
 #       ui:run()
 #
 # Части: cdk.ui (среда в окне), cdk.widget (дерево, ряд, столбец, сетка, карточка, распорка), cdk.controls (надпись, кнопка, значок,
-# флажок, переключатель, ползунок, полоса загрузки, разделитель), cdk.input (поле ввода), cdk.icons (значки), cdk.style (вид из темы).
+# флажок, переключатель, ползунок, полоса загрузки, разделитель), cdk.input (поле ввода), cdk.lists (прокрутка, список, вкладки),
+# cdk.popup (меню, выпадающий список, диалоги), cdk.icons (значки), cdk.style (вид из темы).
 
 import cdk.ui as ui_mod
 import cdk.widget as widget_mod
@@ -17,6 +18,8 @@ import cdk.controls as controls_mod
 import cdk.input as input_mod
 import cdk.icons as icons_mod
 import cdk.style as style_mod
+import cdk.lists as lists_mod
+import cdk.popup as popup_mod
 
 export const ui = ui_mod
 export const widget = widget_mod
@@ -24,6 +27,8 @@ export const controls = controls_mod
 export const input = input_mod
 export const icons = icons_mod
 export const style = style_mod
+export const lists = lists_mod
+export const popup = popup_mod
 
 export const open = ui_mod.open
 export const row = widget_mod.row
@@ -40,3 +45,10 @@ export const slider = controls_mod.slider
 export const progress = controls_mod.progress
 export const separator = controls_mod.separator
 export const text_input = input_mod.text_input
+export const scroll = lists_mod.scroll
+export const list_view = lists_mod.list_view
+export const tabs = lists_mod.tabs
+export const dropdown = popup_mod.dropdown
+export const menu = popup_mod.menu
+export const dialog = popup_mod.dialog
+export const message = popup_mod.message
