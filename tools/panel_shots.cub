@@ -178,7 +178,7 @@ def wp_shoot(name, tag):
         settle(k, 4)
         dump(wm, "ui_panel_wp_" .. name .. "_b")
 
-for n in ["sunset", "aurora", "night-city", "cube-live", "grid"]:
+for n in ["boot-wave", "nyan", "matrix", "vaporwave", "creeper", "sus"]:
     wp_shoot(n, "x")
 tray_shoot("tokyo", "tokyo-night")
 tray_shoot("light", "light")

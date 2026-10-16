@@ -8,6 +8,8 @@
 #   cube       градиент ступеней обоев темы и два контура куба (по умолчанию)
 #   cube-live  то же, но по рёбрам куба бежит свет: меняются только цвета нескольких мест палитры, пиксели не перерисовываются
 #   gradient   градиент без рисунка; grid  градиент с тонкой сеткой; plain  одним цветом
+# Живые (cde.wallpaper_live): boot-wave (куб с экрана загрузки, по нему бежит полоса света, мерцают звёзды), nyan (кот с радугой),
+# matrix (зелёный дождь), vaporwave (закат и бегущая сетка).
 # Всё остальное это картинка assets/wallpapers/<имя>.cimg (или из пользовательской папки). Такие обои раскладываются по режимам
 #   fill (по умолчанию: во весь экран с обрезкой краёв), fit (целиком, поля цветом обоев), stretch, center, tile
 # и переводятся в общие цвета палитры (16..211, они не зависят от темы) с дизерингом Байера между двумя ближайшими цветами.
@@ -20,6 +22,7 @@ import cgl.surface as surface_mod
 import cgl.color as color
 import cgl.cimg as cimg
 import cde.theme as theme
+import cde.wallpaper_live as live_mod
 
 export const BUILTIN = ["cube", "cube-live", "gradient", "grid", "plain"]
 const SLOTS = 6
@@ -222,6 +225,8 @@ export def make(spec, W, H, ctx):
         return s, live
     if name == "gradient":
         return s, nil
+    if live_mod.BUILD[name] != nil:
+        return live_mod.build(name, W, H, ctx)
     # картинка
     data = ctx.read(name)
     if data != nil:
@@ -246,6 +251,8 @@ export def names(dirs, extra=nil):
             seen[n] = true
             out[len(out) + 1] = n
     for n in BUILTIN:
+        add(n)
+    for n in live_mod.NAMES:
         add(n)
     files = []
     for d in dirs ?? []:

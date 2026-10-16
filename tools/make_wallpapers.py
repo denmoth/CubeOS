@@ -141,11 +141,63 @@ def city():
     return im
 
 
+def creeper():
+    rnd = random.Random(31)
+    im = Image.new("RGB", (W, H))
+    d = ImageDraw.Draw(im)
+    greens = [(28, 74, 30), (34, 88, 36), (40, 100, 42), (24, 62, 28), (46, 112, 48)]
+    for by in range(0, H, 6):
+        for bx in range(0, W, 6):
+            d.rectangle((bx, by, bx + 5, by + 5), fill=rnd.choice(greens))
+    face = ["........", ".##..##.", ".##..##.", "...##...", "..####..", "..####..", "..#..#..", "........"]
+    cell = 11
+    ox = (W - 8 * cell) // 2
+    oy = (H - 8 * cell) // 2
+    d.rectangle((ox - 3, oy - 3, ox + 8 * cell + 2, oy + 8 * cell + 2), fill=(18, 44, 20))
+    for y in range(8 * cell):
+        for x in range(8 * cell):
+            gx, gy = x // cell, y // cell
+            if face[gy][gx] == "#":
+                v = rnd.choice([0, 6, 12])
+                d.point((ox + x, oy + y), fill=(v, v + 4, v))
+            else:
+                g = rnd.choice(greens)
+                d.point((ox + x, oy + y), fill=g)
+    return im
+
+
+def crewmate(d, ox, oy, k, body, shade):
+    """Член экипажа из простых фигур, k: во сколько раз крупнее (рисуется на 17x20)."""
+    def r(x0, y0, x1, y1, c):
+        d.rectangle((ox + x0 * k, oy + y0 * k, ox + (x1 + 1) * k - 1, oy + (y1 + 1) * k - 1), fill=c)
+    r(0, 6, 3, 13, shade)
+    r(3, 2, 13, 16, body)
+    r(4, 1, 12, 1, body)
+    r(3, 14, 13, 16, body)
+    r(7, 14, 9, 16, (0, 0, 0))
+    r(9, 4, 14, 8, (150, 220, 245))
+    r(9, 8, 14, 8, (90, 150, 190))
+    r(10, 4, 12, 4, (235, 250, 255))
+    r(3, 12, 13, 13, shade)
+
+
+def sus():
+    rnd = random.Random(41)
+    im = gradient([(0, (6, 6, 20)), (1, (22, 14, 44))])
+    stars(im, rnd, 120, H)
+    # крупный красный и маленький зелёный вдали
+    layer = Image.new("RGB", (W, H), (0, 0, 0))
+    d = ImageDraw.Draw(im)
+    crewmate(d, 118, 14, 4, (200, 30, 40), (130, 20, 40))
+    crewmate(d, 52, 70, 2, (30, 160, 70), (20, 100, 60))
+    return im
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(SRC, exist_ok=True)
     tool = os.path.join(ROOT, "tools", "png2cimg.py")
-    for name, fn in [("sunset", sunset), ("aurora", aurora), ("night-city", city)]:
+    for name, fn in [("sunset", sunset), ("aurora", aurora), ("night-city", city), ("creeper", creeper), ("sus", sus)]:
         png = os.path.join(SRC, name + ".png")
         fn().save(png)
         out = os.path.join(OUT, name + ".cimg")

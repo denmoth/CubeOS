@@ -1002,8 +1002,10 @@ export class WM:
                     f.close()
                     return data
             return nil
-        ctx = {palette: self.palette, theme: () => me.theme, read: read_image, now: () => me.clock(),
-            alloc: (n) => (me.anim.enabled and me.anim.wallpaper != false) and me:_alloc(me.wall_owner, n) or nil,
+        animated = self.anim.enabled and self.anim.wallpaper != false
+        ctx = {palette: self.palette, theme: () => me.theme, read: read_image, now: () => me.clock(), animated: animated,
+            damage: (x, y, w, h) => me.comp:damage(x, y, w, h),
+            alloc: (n) => animated and me:_alloc(me.wall_owner, n) or nil,
             set_colors: (list) => me:_set_colors(me.wall_owner, list)}
         surf, live = wallpaper_mod.make(self.background, self.W, self.H, ctx)
         self.live = live

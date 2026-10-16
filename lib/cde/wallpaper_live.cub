@@ -1,0 +1,381 @@
+# cde.wallpaper_live: живые обои (шаг 3.4): boot-wave, nyan, matrix, vaporwave
+#
+#   surface, live = live.build("nyan", W, H, ctx)       nil, nil: такого живого обоя нет
+#
+# Живые обои двух видов, и часто вместе:
+#   палитровые: часть пикселей закрашена номерами из нескольких мест палитры (ctx.alloc), кадр это только смена цветов этих мест
+#               (ничего не перерисовывается, почти бесплатно): мерцание звёзд, бегущий свет, дождь «матрицы»;
+#   пиксельные: маленький прямоугольник (куб с волной, кот с радугой) перерисовывается и сообщается композитору (ctx.damage).
+# Если анимаций нет (ctx.animated == false) или мест палитры не хватило, рисуется первый кадр без движения.
+# ctx: palette, theme(), alloc(n), set_colors(list), damage(x, y, w, h), now(), animated.
+# Анимация: live.next (когда вызвать в следующий раз, мс), live:step(now, speed).
+
+import cgl.surface as surface_mod
+import cgl.color as color
+import cde.theme as theme
+
+const FPS_BOOT = 70
+const FPS_NYAN = 130
+const FPS_PAL = 80
+
+def _clamp(v, lo, hi):
+    return math.max(lo, math.min(hi, v))
+
+def _mix(a, b, k):
+    return a + (b - a) * k
+
+# номер общего цвета палитры (16..211: от темы не зависит) ближе всего к (r, g, b)
+def _near(ctx, r, g, b):
+    return ctx.palette:nearest(_clamp(math.floor(r + 0.5), 0, 255), _clamp(math.floor(g + 0.5), 0, 255), _clamp(math.floor(b + 0.5), 0, 255), 16, 211)
+
+# простой повторяемый генератор случайных чисел (рисунок обоев одинаков при каждом запуске)
+def _rng(seed):
+    st = {v: seed}
+    def roll(n):
+        st.v = (st.v * 75 + 74) % 65537
+        return st.v % n
+    return roll
+
+# градиент сверху вниз по списку [[позиция 0..1, r, g, b], ...] номерами палитры с дизерингом
+def _vgradient(ctx, s, x, y, w, h, stops, steps=14):
+    list = []
+    for i in range[0, steps - 1]:
+        t = i / (steps - 1)
+        r, g, b = 0, 0, 0
+        for k in range[1, len(stops) - 1]:
+            a = stops[k]
+            c = stops[k + 1]
+            if t >= a[1] and t <= c[1]:
+                u = c[1] == a[1] and 0 or (t - a[1]) / (c[1] - a[1])
+                r = _mix(a[2], c[2], u)
+                g = _mix(a[3], c[3], u)
+                b = _mix(a[4], c[4], u)
+        list[i + 1] = _near(ctx, r, g, b)
+    s:fill_gradient(x, y, w, h, list, "v", {dither: true})
+
+# ------------------------------------------------------------ общие объекты анимации
+
+# палитровая и (или) пиксельная анимация: pal(slots, t) -> список [номер, r, g, b]; pix(t) -> x, y, w, h изменённого места
+class Anim:
+    def init(self, ctx, slots, pal, pix, ms):
+        self.ctx = ctx
+        self.slots = slots ?? []
+        self.pal = pal
+        self.pix = pix
+        self.ms = ms
+        self.next = 0
+        self.start = nil
+
+    def step(self, now, speed=1):
+        if self.start == nil:
+            self.start = now
+        t = (now - self.start) / 1000 * speed
+        if self.pal != nil:
+            self.ctx.set_colors(self.pal(self.slots, t))
+        if self.pix != nil:
+            x, y, w, h = self.pix(t)
+            if x != nil:
+                self.ctx.damage(x, y, w, h)
+        self.next = now + self.ms / math.max(0.1, speed)
+
+# ------------------------------------------------------------ boot-wave: куб загрузки с бегущей волной света
+
+const TONE_RGB = [[125, 207, 255], [122, 162, 247], [61, 89, 161]]
+const LEVELS = 16
+
+def _inside(poly, x, y):
+    sign = 0
+    n = len(poly)
+    for i in range[1, n]:
+        a = poly[i]
+        b = poly[i % n + 1]
+        cross = (b[1] - a[1]) * (y - a[2]) - (b[2] - a[2]) * (x - a[1])
+        if cross != 0:
+            sg = cross > 0 and 1 or -1
+            if sign == 0:
+                sign = sg
+            elif sign != sg:
+                return false
+    return true
+
+def _boot_wave(ctx, W, H):
+    s = surface_mod.new(W, H, theme.DESK0)
+    _vgradient(ctx, s, 0, 0, W, H, [[0, 6, 8, 20], [1, 34, 40, 86]])
+    # куб логотипа CubeOS (32x33 единицы, как на экране загрузки) в центре
+    unit = H * 0.42 / 33
+    cw = math.floor(32 * unit)
+    ch = math.floor(33 * unit)
+    ox = math.floor((W - cw) / 2)
+    oy = math.floor(H * 0.46 - ch / 2)
+    polys = [[[16, 0], [32, 8], [16, 16], [0, 8]], [[0, 8], [16, 16], [16, 32], [0, 24]], [[16, 16], [32, 8], [32, 24], [16, 32]]]
+    tone = []
+    for y in range[0, ch - 1]:
+        for x in range[0, cw - 1]:
+            u = (x + 0.5) / unit
+            v = (y + 0.5) / unit
+            tn = 0
+            for k in range[1, 3]:
+                if tn == 0 and _inside(polys[k], u, v):
+                    tn = k
+            tone[y * cw + x + 1] = tn
+    # номера цветов: тон x уровень (0 призрак, средний обычный, выше блик)
+    shade = []
+    for tn in range[1, 3]:
+        c = TONE_RGB[tn]
+        row = []
+        for lv in range[0, LEVELS - 1]:
+            if lv == 0:
+                row[1] = _near(ctx, _mix(34, c[1], 0.12), _mix(40, c[2], 0.12), _mix(86, c[3], 0.12))
+            else:
+                k = lv / (LEVELS - 1)
+                base = 0.78 + 0.22 * math.min(1, k * 2)
+                glow = math.max(0, (k - 0.5) * 2)
+                row[lv + 1] = _near(ctx, _mix(c[1] * base, 255, glow), _mix(c[2] * base, 255, glow), _mix(c[3] * base, 255, glow))
+        shade[tn] = row
+    # звёзды: места палитры мерцают
+    slots = ctx.animated and ctx.alloc(4) or nil
+    rnd = _rng(5)
+    stars = []
+    for i in range[1, 46]:
+        x = rnd(W)
+        y = rnd(H)
+        if x < ox - 2 or x > ox + cw + 2 or y < oy - 2 or y > oy + ch + 2:
+            stars[len(stars) + 1] = [x, y, i % 4 + 1]
+    for st in stars:
+        s:set(st[1], st[2], slots != nil and slots[st[3]] or _near(ctx, 150, 160, 200))
+    def paint(t):
+        # волна света: фронт идёт слева направо, на фронте блик, позади перелив
+        period = 4.2
+        fade = cw * 0.3
+        front = ((t % period) / period) * (cw + 2 * fade) - fade
+        lvl = []
+        for x in range[0, cw - 1]:
+            d = front - x
+            glow = math.max(0, 1 - math.abs(d) / (fade * 0.55))
+            glow = glow * glow
+            shim = 0.5 + 0.5 * math.sin(t * 2.4 - x * 0.16)
+            k = 0.45 + 0.1 * shim + 0.45 * glow
+            lvl[x + 1] = _clamp(math.floor(k * (LEVELS - 1) + 0.5), 1, LEVELS - 1)
+        px = s.px
+        for y in range[0, ch - 1]:
+            base = (oy + y) * W + ox + 1
+            row = y * cw + 1
+            for x in range[0, cw - 1]:
+                tn = tone[row + x]
+                if tn > 0:
+                    px[base + x] = shade[tn][lvl[x + 1] + 1]
+        s:mark(ox, oy, ox + cw - 1, oy + ch - 1)
+        return ox, oy, cw, ch
+    paint(1.5)
+    if not ctx.animated:
+        return s, nil
+    def pal(sl, t):
+        out = []
+        for j in range[1, len(sl)]:
+            a = 0.25 + 0.75 * (0.5 + 0.5 * math.sin(t * (1.1 + j * 0.45) + j * 1.9))
+            a = a * a
+            out[len(out) + 1] = [sl[j], math.floor(_mix(20, 215, a)), math.floor(_mix(24, 225, a)), math.floor(_mix(44, 255, a))]
+        return out
+    return s, Anim(ctx, slots, slots != nil and pal or nil, paint, FPS_BOOT)
+
+# ------------------------------------------------------------ nyan: кот и радуга
+
+def _cat(ctx, frame):
+    sp = surface_mod.new(34, 24, surface_mod.CLEAR)
+    K = _near(ctx, 0, 0, 0)
+    T = _near(ctx, 255, 204, 153)
+    P = _near(ctx, 255, 153, 255)
+    S = _near(ctx, 255, 51, 153)
+    G = _near(ctx, 153, 153, 153)
+    Wc = _near(ctx, 255, 255, 255)
+    C = _near(ctx, 255, 153, 153)
+    by = frame % 2
+    # хвост
+    ty = 9 + by
+    sp:fill_rect(0, ty, 5, 4, K)
+    sp:fill_rect(1, ty + 1, 4, 2, G)
+    # лапы
+    off = frame % 2
+    for lx in [6 + off, 10 - off, 19 + off, 23 - off]:
+        sp:fill_rect(lx, 18 + by, 4, 4, K)
+        sp:fill_rect(lx + 1, 18 + by, 2, 3, G)
+    # тело: чёрный контур, коричневая кромка, розовая начинка
+    sp:fill_rect(4, 2 + by, 20, 16, K)
+    sp:fill_rect(5, 3 + by, 18, 14, T)
+    sp:fill_rect(6, 4 + by, 16, 12, P)
+    for corner in [[4, 2], [23, 2], [4, 17], [23, 17]]:
+        sp:set(corner[1], corner[2] + by, surface_mod.CLEAR)
+    for sprinkle in [[8, 6], [12, 5], [16, 8], [19, 6], [9, 11], [14, 13], [18, 12], [7, 14], [20, 10], [11, 8]]:
+        sp:set(sprinkle[1], sprinkle[2] + by, S)
+    # голова
+    hy = 7 + by
+    sp:fill_rect(17, hy, 16, 13, K)
+    sp:fill_rect(18, hy + 1, 14, 11, G)
+    for ear in [[18, hy - 3], [28, hy - 3]]:
+        sp:fill_rect(ear[1], ear[2], 4, 4, K)
+        sp:fill_rect(ear[1] + 1, ear[2] + 1, 2, 3, G)
+    sp:fill_rect(21, hy + 4, 2, 3, K)
+    sp:fill_rect(28, hy + 4, 2, 3, K)
+    sp:set(21, hy + 4, Wc)
+    sp:set(28, hy + 4, Wc)
+    sp:fill_rect(19, hy + 8, 2, 2, C)
+    sp:fill_rect(30, hy + 8, 2, 2, C)
+    sp:hline(24, hy + 8, 3, K)
+    sp:set(25, hy + 9, K)
+    return sp
+
+def _nyan(ctx, W, H):
+    s = surface_mod.new(W, H, theme.DESK0)
+    bg = _near(ctx, 0, 51, 102)
+    s:clear(bg)
+    cats = [_cat(ctx, 0), _cat(ctx, 1)]
+    cx = math.floor(W * 0.5)
+    cy = math.floor(H * 0.5) - 12
+    rainbow = [_near(ctx, 255, 0, 0), _near(ctx, 255, 153, 0), _near(ctx, 255, 255, 0), _near(ctx, 51, 255, 0), _near(ctx, 0, 153, 255),
+        _near(ctx, 102, 51, 255)]
+    rnd = _rng(9)
+    slots = ctx.animated and ctx.alloc(4) or nil
+    stars = []
+    for i in range[1, 36]:
+        stars[i] = [rnd(W - 4) + 2, rnd(H - 4) + 2, i % 4 + 1]
+    top = cy + 1
+    band = 3
+    rx0 = 0
+    rx1 = cx + 8
+    zone_y = top - 3
+    zone_h = band * 6 + 8
+    def star(st):
+        c = slots != nil and slots[st[3]] or _near(ctx, 255, 255, 255)
+        x = st[1]
+        y = st[2]
+        s:set(x, y, c)
+        s:set(x - 1, y, c)
+        s:set(x + 1, y, c)
+        s:set(x, y - 1, c)
+        s:set(x, y + 1, c)
+    def paint(t):
+        frame = math.floor(t * 7)
+        s:fill_rect(rx0, zone_y, rx1 - rx0 + 1, zone_h, bg)
+        # радуга: столбики по 4 пикселя, соседние сдвинуты вверх и вниз, сдвиг меняется каждый кадр
+        gx = 0
+        while gx < rx1 - 6:
+            wave = ((math.floor(gx / 4) + frame) % 2) * 2 - 1
+            for k in range[1, 6]:
+                s:fill_rect(gx, top + (k - 1) * band + wave, 4, band, rainbow[k])
+            gx += 4
+        cat = cats[frame % 2 + 1]
+        s:blit(cat, cx - 4, cy - 4, {})
+        for st in stars:
+            if st[2] >= zone_y - 2 and st[2] <= zone_y + zone_h + 2 and st[1] <= rx1 + 2:
+                star(st)
+        return rx0, zone_y, rx1 - rx0 + 1, zone_h
+    for st in stars:
+        star(st)
+    paint(0)
+    if not ctx.animated:
+        return s, nil
+    def pal(sl, t):
+        out = []
+        for j in range[1, len(sl)]:
+            a = 0.3 + 0.7 * (0.5 + 0.5 * math.sin(t * 3 + j * 1.6))
+            out[len(out) + 1] = [sl[j], math.floor(_mix(0, 255, a)), math.floor(_mix(51, 255, a)), math.floor(_mix(102, 255, a))]
+        return out
+    return s, Anim(ctx, slots, slots != nil and pal or nil, paint, FPS_NYAN)
+
+# ------------------------------------------------------------ matrix: зелёный дождь
+
+const CELL_W = 5
+const CELL_H = 7
+
+def _matrix(ctx, W, H):
+    s = surface_mod.new(W, H, theme.DESK0)
+    s:clear(_near(ctx, 0, 8, 0))
+    slots = ctx.animated and ctx.alloc(6) or nil
+    n = slots != nil and 6 or 1
+    rnd = _rng(3)
+    static_c = _near(ctx, 0, 140, 40)
+    cols = math.floor(W / CELL_W)
+    rows = math.floor(H / CELL_H)
+    for c in range[0, cols - 1]:
+        if rnd(100) < 72:
+            off = rnd(n)
+            for r in range[0, rows - 1]:
+                if rnd(100) < 78:
+                    j = slots != nil and slots[(r + off) % n + 1] or static_c
+                    # знак: случайные точки в поле 3x5
+                    for gy in range[0, 4]:
+                        for gx in range[0, 2]:
+                            if rnd(100) < 46:
+                                s:set(c * CELL_W + 1 + gx, r * CELL_H + 1 + gy, j)
+    if slots == nil:
+        return s, nil
+    def pal(sl, t):
+        out = []
+        phase = t * 4.5
+        for j in range[0, 5]:
+            p = (j - phase) % 6
+            if p < 1:
+                k = 1
+                col = [_mix(120, 220, 1 - p), 255, _mix(120, 220, 1 - p)]
+            else:
+                k = math.max(0.06, 1 - (p - 1) / 4.2)
+                col = [0, math.floor(255 * k * k), math.floor(70 * k * k)]
+            out[len(out) + 1] = [sl[j + 1], math.floor(col[1]), math.floor(col[2]), math.floor(col[3])]
+        return out
+    return s, Anim(ctx, slots, pal, nil, FPS_PAL)
+
+# ------------------------------------------------------------ vaporwave: закат и сетка
+
+def _vapor(ctx, W, H):
+    s = surface_mod.new(W, H, theme.DESK0)
+    hz = math.floor(H * 0.56)
+    _vgradient(ctx, s, 0, 0, W, hz, [[0, 18, 0, 52], [0.55, 120, 20, 130], [0.85, 255, 70, 150], [1, 255, 170, 90]], 16)
+    _vgradient(ctx, s, 0, hz, W, H - hz, [[0, 40, 0, 70], [1, 10, 0, 28]], 10)
+    # солнце с полосами в нижней половине
+    cx = math.floor(W / 2)
+    cy = math.floor(hz - H * 0.02)
+    r = math.floor(H * 0.26)
+    sun = [_near(ctx, 255, 230, 120), _near(ctx, 255, 170, 90), _near(ctx, 255, 90, 140), _near(ctx, 230, 50, 160)]
+    for y in range[cy - r, cy + r]:
+        if y < hz:
+            t = (y - (cy - r)) / (2 * r)
+            half = math.floor(math.sqrt(math.max(0, r * r - (y - cy) ** 2)))
+            gap = t > 0.5 and math.floor((t - 0.5) * 22) % 2 == 1 and (y % 3 != 0)
+            if not gap:
+                s:hline(cx - half, y, half * 2 + 1, sun[math.min(4, math.floor(t * 4) + 1)])
+    s:hline(0, hz, W, _near(ctx, 255, 120, 200))
+    # сетка пола: вертикали сходятся в точку на горизонте, горизонтали идут всё чаще к горизонту
+    line = _near(ctx, 200, 60, 220)
+    for i in range[-12, 12]:
+        s:line(cx, hz, cx + i * math.floor(W / 7), H - 1, line)
+    slots = ctx.animated and ctx.alloc(6) or nil
+    k_n = 12
+    for k in range[1, k_n]:
+        y = hz + math.floor((H - hz) * (k / k_n) ** 2)
+        if y < H:
+            c = slots != nil and slots[(k_n - k) % 6 + 1] or line
+            s:hline(0, y, W, c)
+            if k > 6:
+                s:hline(0, y + 1, W, c)
+    if slots == nil:
+        return s, nil
+    def pal(sl, t):
+        out = []
+        phase = t * 2.4
+        for j in range[0, 5]:
+            p = (j - phase) % 6
+            b = math.max(0, 1 - p / 3)
+            b = b * b
+            out[len(out) + 1] = [sl[j + 1], math.floor(_mix(110, 90, b)), math.floor(_mix(30, 255, b)), math.floor(_mix(150, 255, b))]
+        return out
+    return s, Anim(ctx, slots, pal, nil, FPS_PAL)
+
+export const BUILD = {"boot-wave": _boot_wave, nyan: _nyan, matrix: _matrix, vaporwave: _vapor}
+
+export const NAMES = ["boot-wave", "nyan", "matrix", "vaporwave"]
+
+export def build(name, W, H, ctx):
+    fn = BUILD[name]
+    if fn == nil:
+        return nil, nil
+    return fn(ctx, W, H)

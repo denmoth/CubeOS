@@ -88,4 +88,25 @@ eq([wm4.live, len(wm4.pool_free)], [nil, 8], "another wallpaper frees the slots"
 wm5 = new_wm({animations: {enabled: false}, background: "cube-live"})
 eq([wm5.live, len(wm5.pool_free)], [nil, 8], "no animation: a still picture, nothing is taken")
 
+# ---------------------------------------------------------------- новые живые обои и картинки
+eq([has.nyan, has["boot-wave"], has.matrix, has.vaporwave, has.creeper, has.sus], [true, true, true, true, true, true], "new wallpapers are listed")
+for n in ["boot-wave", "nyan", "matrix", "vaporwave"]:
+    w6 = new_wm({background: n})
+    eq(w6.live != nil, true, n .. ": animated when animations are on")
+    free = len(w6.pool_free)
+    w6.comp.rects = []
+    before = w6.palette:get(w6.live.slots[1] ?? 0)
+    w6.live:step(w6.clock() + 40)
+    w6.live:step(w6.clock() + 700)
+    eq(w6.live.next > w6.clock(), true, n .. ": schedules the next frame")
+    eq(len(w6.live.slots) > 0 or len(w6.comp.rects) > 0, true, n .. ": changes palette slots or damages a region")
+    w6:set_wallpaper("cube")
+    eq([w6.live, len(w6.pool_free)], [nil, 8], n .. ": slots are freed")
+    w7 = new_wm({animations: {enabled: false}, background: n})
+    eq([w7.live, len(w7.pool_free)], [nil, 8], n .. ": a still first frame without animations")
+for n in ["creeper", "sus"]:
+    w8 = new_wm({animations: {enabled: false}, background: n})
+    c8 = w8.comp.wallpaper:get(153, 85)
+    eq(c8 >= 16 and c8 <= 211, true, n .. ": image from assets")
+
 print("done")
