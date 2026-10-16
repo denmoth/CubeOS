@@ -126,12 +126,15 @@ export class ListView(widget.Widget):
         self.focusable = true
         self.last_click = nil
         self.dragging = nil
+        # положение подсветки выбранной строки в пикселях (анимация), nil: ещё не рисовался
+        self.sel_y = nil
 
     def row_h(self, st):
         return st.line + 2
 
     def set_items(self, items):
         self.items = items
+        self.sel_y = nil
         self.selected = math.min(self.selected, len(items))
         if self.selected == 0 and len(items) > 0:
             self.selected = 1
@@ -164,6 +167,8 @@ export class ListView(widget.Widget):
         self:_ensure_visible(st, i)
         if i != self.selected:
             self.selected = i
+            if self.sel_y != nil:
+                self.ui:tween(self, "sel_y", (i - 1) * self:row_h(st), 0.11, "out_cubic")
             if notify and self.on_select != nil:
                 self.on_select(i, self.items[i])
         self:invalidate()
@@ -179,14 +184,20 @@ export class ListView(widget.Widget):
         rw = self.w - (has_bar and BAR or 0)
         first = math.floor(self.offset / rh) + 1
         last = math.min(len(self.items), math.floor((self.offset + self.h - 1) / rh) + 1)
+        if self.sel_y == nil:
+            self.sel_y = (math.max(1, self.selected) - 1) * rh
+        if self.selected > 0:
+            # подсветка (плывёт к выбранной строке)
+            hy = self.y + math.floor(self.sel_y + 0.5) - self.offset
+            s:push_clip(self.x, self.y, rw, self.h)
+            st:round_fill(s, self.x, hy, rw, rh, self.focused and st.sel or st.ctrl)
+            if self.focused:
+                st:round_fill(s, self.x + 1, hy + 3, 2, rh - 6, st.accent, 1)
+            s:pop_clip()
         for i in range[first, last]:
             it = self.items[i]
             y = self.y + (i - 1) * rh - self.offset
             fg = it.color ?? st.text
-            if i == self.selected:
-                st:round_fill(s, self.x, y, rw, rh, self.focused and st.sel or st.ctrl)
-                if self.focused:
-                    st:round_fill(s, self.x + 1, y + 3, 2, rh - 6, st.accent, 1)
             tx = self.x + 6
             if it.icon != nil:
                 icons.draw(s, it.icon, tx, y + math.floor((rh - 9) / 2), it.icon_color ?? st.accent, st:darker(it.icon_color ?? st.accent))
@@ -272,6 +283,9 @@ export class Tabs(widget.Widget):
         self.index = o.index ?? 1
         self.on_change = o.on_change
         self.focusable = true
+        # подчёркивание активной вкладки (анимация): x и ширина от левого края, nil: ещё не рисовалось
+        self.ux = nil
+        self.uw = nil
         for i, t in self.tabs:
             t.content.visible = i == self.index
             self:add(t.content)
@@ -304,6 +318,10 @@ export class Tabs(widget.Widget):
         i = math.max(1, math.min(len(self.tabs), i))
         if i != self.index:
             self.index = i
+            if self.ux != nil:
+                p = self:_tab_x(self.ui.style)[i]
+                self.ui:tween(self, "ux", p[1] - self.x, 0.15, "out_cubic")
+                self.ui:tween(self, "uw", p[2], 0.15, "out_cubic")
             self:relayout()
             if self.on_change != nil:
                 self.on_change(i, self.tabs[i])
@@ -320,15 +338,23 @@ export class Tabs(widget.Widget):
     def draw(self, s, st):
         hh = self:header_h(st)
         s:hline(self.x, self.y + hh, self.w, st.border)
-        for i, p in self:_tab_x(st):
+        xs = self:_tab_x(st)
+        if self.ux == nil and xs[self.index] != nil:
+            self.ux = xs[self.index][1] - self.x
+            self.uw = xs[self.index][2]
+        for i, p in xs:
             t = self.tabs[i]
             active = i == self.index
             if active:
                 st:round_fill(s, p[1], self.y, p[2], hh, st.ctrl)
-                s:fill_rect(p[1] + 2, self.y + hh - 1, p[2] - 4, 2, st.accent)
             s:text(st.font, p[1] + 6, self.y + math.floor((hh - st.fh) / 2), t.title, active and st.text or st.dim)
             if active and self.focused:
                 st:round_line(s, p[1], self.y, p[2], hh, st.accent)
+        # подчёркивание плывёт к активной вкладке
+        if self.ux != nil:
+            ux = self.x + math.floor(self.ux + 0.5)
+            uw = math.floor(self.uw + 0.5)
+            s:fill_rect(ux + 2, self.y + hh - 1, uw - 4, 2, st.accent)
 
     def handle(self, ev):
         st = self.ui.style

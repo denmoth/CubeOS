@@ -1,0 +1,673 @@
+import t
+import kernel
+import cde
+import cde.fx as fx_mod
+import cde.theme as theme
+import cgl.color as color
+import cdk
+eq = t.eq
+
+# Animations (cde.fx, wm hooks, cdk tweens) with animations ON. The window manager reads opts.clock (ms), cdk tweens read
+# sys.now(): one fake clock drives both. Time moves in 10 ms kernel ticks; while something animates the manager wakes every
+# 50 ms (its own timeout), so the middle of an animation is looked at after ~60 ms and so on.
+
+def make_term():
+    api = {}
+    def get_size(px):
+        if px:
+            return 306, 171
+        return 51, 19
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setGraphicsMode", "setFrozen", "setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "drawPixels"]:
+        api[name] = nothing
+    return api
+
+def breathe():
+    os.queueEvent("t_breathe")
+    os.pullEvent("t_breathe")
+
+# a plain pixel window filled with one colour; closes on win_close; spec.win gets the window
+def pixel_app(sys, ctx):
+    spec = ctx.args[1]
+    win = cde.app.open(sys, ctx, {title: spec.title, w: spec.w, h: spec.h, x: spec.x, y: spec.y})
+    spec.win = win
+    win.canvas:clear(spec.color)
+    win:present()
+    while true:
+        ev = table.pack(win:wait_event())
+        if ev[1] == "win_close":
+            break
+    win:close()
+
+# a scene: own window manager and kernel, one fake clock for both. fx_opts goes to wm opts.animations (nil: defaults, ON)
+def new_scene(fx_opts):
+    clk = {now: 1000}
+    def clk_now():
+        return clk.now
+    wmx = cde.wm.new({animations: fx_opts, term: make_term(), assets: "/repo/assets", clock: clk_now})
+    kx = kernel.new({clock: clk_now})
+    scn = {wm: wmx, k: kx, clock: clk, h: {}}
+    # lets processes talk to each other without moving the clock
+    def pump(pn=8):
+        kx:feed("cubeos_cde")
+        for pi in range[1, pn]:
+            kx:tick()
+            kx:run_ready()
+    # moves the clock by 10 ms ticks; on_step(ms_passed) after each tick
+    def advance(ms, on_step=nil):
+        spent = 0
+        steps = 0
+        while spent < ms:
+            clk.now = clk.now + 10
+            kx:tick()
+            kx:run_ready()
+            spent = spent + 10
+            steps = steps + 1
+            if on_step != nil:
+                on_step(spent)
+            if steps % 25 == 0:
+                breathe()
+    def chord(mods, code):
+        for md in mods:
+            kx:feed("key", md, false)
+        kx:feed("key", code, false)
+        kx:feed("key_up", code)
+        for md2 in mods:
+            kx:feed("key_up", md2)
+        pump()
+    def press(code):
+        kx:feed("key", code, false)
+        kx:feed("key_up", code)
+        pump()
+    def mouse(kind, px, py):
+        kx:feed(kind, 1, px, py)
+        pump()
+    def click_at(px, py):
+        kx:feed("mouse_click", 1, px, py)
+        kx:feed("mouse_up", 1, px, py)
+        pump()
+    # screen coordinates of a cdk widget (single-window scenes)
+    def cx(wd):
+        return wmx.windows[1]:content_x() + wd.x
+    def cy(wd):
+        return wmx.windows[1]:content_y() + wd.y
+    def click_w(wd):
+        click_at(cx(wd) + math.floor(wd.w / 2), cy(wd) + math.floor(wd.h / 2))
+    def add_pixel(spec):
+        wmx:launch(pixel_app, {name: spec.title}, [spec])
+    def add_cdk(build, opts):
+        def cdk_main(sys, ctx):
+            app_ui = cdk.open(sys, ctx, opts)
+            app_ui:set_root(build(app_ui))
+            scn.h.ui = app_ui
+            app_ui:run()
+        wmx:launch(cdk_main, {name: "cdk"})
+    def start():
+        def desk_main(sys, args):
+            wmx:run(sys)
+        kx:spawn(desk_main, [], {name: "cde", ui: true})
+        pump()
+        breathe()
+    scn.pump = pump
+    scn.advance = advance
+    scn.chord = chord
+    scn.press = press
+    scn.mouse = mouse
+    scn.click_at = click_at
+    scn.cx = cx
+    scn.cy = cy
+    scn.click = click_w
+    scn.add_pixel = add_pixel
+    scn.add_cdk = add_cdk
+    scn.start = start
+    breathe()
+    return scn
+
+# ---- measuring helpers
+
+# how many pixels of palette colour c are on the screen in the rectangle
+def count_px(wmx, c, x0, y0, w, h):
+    sfc = wmx.screen.surface
+    cnt = 0
+    for yy in range[y0, y0 + h - 1]:
+        for xx in range[x0, x0 + w - 1]:
+            if sfc:get(xx, yy) == c:
+                cnt += 1
+    return cnt
+
+# how many screen pixels in the rectangle differ from the wallpaper (0: the desktop is clean there)
+def wall_diff(wmx, x0, y0, w, h):
+    sfc = wmx.screen.surface
+    wp = wmx.comp.wallpaper
+    cnt = 0
+    for yy in range[y0, y0 + h - 1]:
+        for xx in range[x0, x0 + w - 1]:
+            if xx >= 0 and xx < 306 and yy >= 0 and yy < 171:
+                if sfc:get(xx, yy) != wp:get(xx, yy):
+                    cnt += 1
+    return cnt
+
+# the window rectangle with its shadow and a margin for the ghost moving around it
+def around(wino):
+    return wino.x - 2, wino.y - 2, wino.w + 8, wino.h + 14
+
+def rgb_of(wmx, slot):
+    r, g, b = wmx.palette:get(slot)
+    return [r, g, b]
+
+def theme_border(wmx):
+    r, g, b = color.parse_hex(wmx.theme.border_active)
+    return [r, g, b]
+
+# a window content of `total` pixels is all on the screen (the two bottom corner pixels belong to the rounded border)
+def content_ok(n, total):
+    return n >= total - 4 and n <= total
+
+def lum(c):
+    return c[1] + c[2] + c[3]
+
+def brighter(c, base):
+    return c[1] >= base[1] and c[2] >= base[2] and c[3] >= base[3] and lum(c) > lum(base) + 30
+
+def has_between(vals, lo, hi):
+    for v in vals:
+        if v > lo and v < hi:
+            return true
+    return false
+
+def non_decreasing(vals):
+    for vi in range[2, len(vals)]:
+        if vals[vi] < vals[vi - 1]:
+            return false
+    return true
+
+def non_increasing(vals):
+    for vj in range[2, len(vals)]:
+        if vals[vj] > vals[vj - 1]:
+            return false
+    return true
+
+def max_of(vals):
+    best = vals[1]
+    for v in vals:
+        if v > best:
+            best = v
+    return best
+
+def min_of(vals):
+    best = vals[1]
+    for v in vals:
+        if v < best:
+            best = v
+    return best
+
+# on_step recorder: pairs of [list, getter]
+def recorder(pairs):
+    def rec(ms):
+        for pr in pairs:
+            lst = pr[1]
+            lst[len(lst) + 1] = pr[2]()
+    return rec
+
+# pixel of a cdk window canvas
+def cpx(cv, x, y):
+    return cv.px[y * cv.w + 1 + x]
+
+# ---------------------------------------------------------------- settings
+eq(fx_mod.make_settings(nil), fx_mod.DEFAULTS, "settings: no config gives the defaults")
+eq(fx_mod.make_settings(nil), {enabled: true, speed: 1, windows: true, glow: true, widgets: true}, "settings: everything is on by default")
+st_a = fx_mod.make_settings({speed: 2, glow: false})
+eq([st_a.enabled, st_a.speed, st_a.windows, st_a.glow, st_a.widgets], [true, 2, true, false, true], "settings: missing keys come from the defaults")
+eq([fx_mod.make_settings({speed: 99}).speed, fx_mod.make_settings({speed: 0}).speed, fx_mod.make_settings({speed: "x"}).speed], [10, 0.1, 1], "settings: speed is clamped to 0.1..10, junk gives 1")
+eq(fx_mod.DEFAULTS.enabled, true, "settings: DEFAULTS is not changed by make_settings")
+
+# ---------------------------------------------------------------- 1. open, 4. close (Ctrl+T)
+s1 = new_scene(nil)
+s1.add_pixel({title: "One", x: 40, y: 30, w: 80, h: 50, color: 196})
+s1.start()
+m1 = s1.wm
+fx1 = m1.fx
+w1 = m1.windows[1]
+eq([len(m1.windows), m1.anim.enabled, m1.anim.speed], [1, true, 1], "open: animations are on by default")
+g1 = fx1.ghosts[1]
+eq([len(fx1.ghosts), g1 != nil and g1.win == w1, w1.fx_hidden, w1:visible()], [1, true, true, false], "open: right after placing there is one ghost and the window is hidden under it")
+eq([g1.hide, g1.r0.level, g1.to.level, g1.r0.y - g1.to.y, g1.to.y], [true, 0, 16, 8, 30], "open: the ghost rises 8 pixels and fades in")
+eq(math.abs(g1.ms - 200) < 0.01, true, "open: 200 ms at speed 1")
+eq(count_px(m1, 196, 0, 0, 306, 171), 0, "open: nothing of the window is painted at the first instant")
+eq(fx1:active(), true, "open: the fx is active")
+s1.advance(60)
+eq([len(fx1.ghosts), w1.fx_hidden], [1, true], "open: still animating after 60 ms")
+eq([g1.cur.level > 0, g1.cur.level < 16, g1.cur.y < 38, g1.cur.y > 30], [true, true, true, true], "open: in the middle the ghost is half faded and half risen")
+mid_n = count_px(m1, 196, 0, 0, 306, 171)
+eq(mid_n > 0 and mid_n < 4000, true, "open: the ghost is painted on the screen, only partly (dither fade)")
+s1.advance(60)
+eq([len(fx1.ghosts), w1.fx_hidden], [1, true], "open: speed 1 is not done at 120 ms")
+s1.advance(140)
+eq([len(fx1.ghosts), w1.fx_hidden, w1:visible()], [0, false, true], "open: after ~250 ms the ghost is gone and the window is visible")
+eq(content_ok(count_px(m1, 196, w1:content_x(), w1:content_y(), 80, 50), 4000), true, "open: the whole content is on the screen")
+eq(m1.screen.surface:get(w1:content_x() + 5, w1:content_y() + 5), 196, "open: the content pixel is on the screen")
+eq(fx1.stats.frames >= 3, true, "open: the manager woke up for the frames by itself")
+eq(fx1.stats.ghosts, 1, "open: one ghost was made")
+s1.advance(300)
+eq([fx1:active(), fx1.glow == nil], [false, true], "open: after the glow the fx is idle")
+
+# Ctrl+T: the window is removed at once, a closing ghost plays
+cx1 = w1.x
+cy1 = w1.y
+s1.chord([keys.leftCtrl], keys.t)
+eq([len(m1.windows), w1.closed], [0, true], "close: the window is removed at once")
+gc = fx1.ghosts[1]
+eq([len(fx1.ghosts), gc != nil and gc.win == w1], [1, true], "close: a closing ghost plays")
+eq([gc.hide, gc.r0.level, gc.to.level, gc.to.y - gc.r0.y], [false, 16, 0, 6], "close: it sinks 6 pixels and fades out")
+eq(content_ok(count_px(m1, 196, 0, 0, 306, 171), 4000), true, "close: the ghost shows the window as it was")
+s1.advance(110)
+eq(len(fx1.ghosts), 1, "close: still playing after 110 ms")
+eq([gc.cur.y > cy1, gc.cur.level < 16], [true, true], "close: the ghost sinks and fades")
+s1.advance(120)
+eq(len(fx1.ghosts), 0, "close: the ghost is gone after ~230 ms")
+ax, ay, aw, ah = around(w1)
+eq(wall_diff(m1, ax, ay, aw, ah), 0, "close: nothing of the window is left on the screen")
+breathe()
+
+# ---------------------------------------------------------------- 2. maximize, drag, 3. minimize, restore; F11
+s2 = new_scene(nil)
+s2.add_pixel({title: "Two", x: 40, y: 30, w: 80, h: 50, color: 196})
+s2.start()
+s2.advance(300)
+m2 = s2.wm
+fx2 = m2.fx
+w2 = m2.windows[1]
+eq([len(fx2.ghosts), w2.fx_hidden, w2.state, w2.w, w2.h], [0, false, "normal", 82, 63], "setup: opened and idle")
+n_g = fx2.stats.ghosts
+
+# Alt+Up
+s2.chord([keys.leftAlt], keys.up)
+eq([w2.state, len(fx2.ghosts), w2.fx_hidden, w2:visible()], ["max", 1, true, false], "maximize: during the morph the window is hidden and there is a ghost")
+eq(fx2.stats.ghosts - n_g, 1, "maximize: one ghost")
+gm = fx2.ghosts[1]
+eq([gm != nil and gm.win == w2, gm.hide], [true, true], "maximize: the ghost hides the window")
+eq([gm.r0.x, gm.r0.y, gm.r0.w, gm.r0.h, gm.r0.level], [40, 30, 82, 63, 16], "maximize: the morph starts from the old rectangle")
+eq([gm.to.x, gm.to.y, gm.to.w, gm.to.h, gm.to.level], [0, 0, 306, 171, 16], "maximize: and ends at the full screen")
+eq([w2.x, w2.y, w2.w, w2.h], [0, 0, 306, 171], "maximize: the window itself already has its new rectangle")
+eq(content_ok(count_px(m2, 196, 0, 0, 306, 171), 4000), true, "maximize: the screen still shows the old picture")
+s2.advance(70)
+eq([len(fx2.ghosts), w2.fx_hidden], [1, true], "maximize: hidden in the middle of the morph")
+eq([gm.cur.w > 82, gm.cur.w < 306, gm.cur.h > 63, gm.cur.h < 171, gm.cur.x < 40], [true, true, true, true, true], "maximize: the ghost is growing")
+s2.advance(200)
+eq([len(fx2.ghosts), w2.fx_hidden, w2:visible(), w2.state], [0, false, true, "max"], "maximize: at the end the window is maximized and visible")
+eq(m2.screen.surface:get(w2:content_x() + 5, w2:content_y() + 5), 196, "maximize: the content is on the screen")
+
+# Alt+Down on a maximized window brings it back with a morph
+s2.chord([keys.leftAlt], keys.down)
+eq([w2.state, w2.minimized, len(fx2.ghosts), w2.fx_hidden], ["normal", false, 1, true], "restore: Alt+Down on a maximized window restores it with a morph")
+gr = fx2.ghosts[1]
+eq([gr.r0.w, gr.r0.h, gr.to.w, gr.to.h], [306, 171, 82, 63], "restore: from the full screen to the old size")
+eq([w2.x, w2.y, w2.w, w2.h], [40, 30, 82, 63], "restore: the old rectangle")
+s2.advance(270)
+eq([len(fx2.ghosts), w2.fx_hidden, content_ok(count_px(m2, 196, 0, 0, 306, 171), 4000)], [0, false, true], "restore: done, the content is back")
+
+# dragging a maximized window by its title restores it WITHOUT a ghost
+s2.chord([keys.leftAlt], keys.up)
+s2.advance(270)
+eq([w2.state, len(fx2.ghosts)], ["max", 0], "drag: maximized again")
+n_d = fx2.stats.ghosts
+s2.mouse("mouse_click", 150, 5)
+s2.mouse("mouse_drag", 170, 25)
+eq([w2.state, len(fx2.ghosts), w2.fx_hidden, w2:visible(), fx2.stats.ghosts], ["normal", 0, false, true, n_d], "drag: the title drag restores the window at once, no ghost")
+eq([w2.w, w2.h], [82, 63], "drag: the old size")
+eq(content_ok(count_px(m2, 196, 0, 0, 306, 171), 4000), true, "drag: the window content is on the screen at once")
+s2.mouse("mouse_up", 170, 25)
+eq([m2.comp.preview == nil, len(fx2.ghosts), fx2.stats.ghosts], [true, 0, n_d], "drag: dropping in the middle makes no ghost either")
+nx = w2.x
+ny = w2.y
+
+# Alt+Down on a normal window minimizes it: the ghost flies to the bottom middle
+s2.chord([keys.leftAlt], keys.down)
+eq([w2.minimized, len(fx2.ghosts), m2.focused == nil], [true, 1, true], "minimize: the window is minimized and a ghost flies")
+gn = fx2.ghosts[1]
+dr = fx2:dock_rect(w2)
+eq([gn != nil and gn.win == w2, gn.hide], [true, false], "minimize: the ghost does not hide the window (it is minimized anyway)")
+eq([gn.to.x, gn.to.y, gn.to.w, gn.to.h, gn.to.level], [dr.x, dr.y, dr.w, dr.h, 2], "minimize: the ghost target is fx:dock_rect")
+eq([gn.r0.x, gn.r0.y, gn.r0.w, gn.r0.h, gn.r0.level], [nx, ny, 82, 63, 16], "minimize: it starts from the window rectangle")
+eq(math.abs(dr.x + dr.w / 2 - m2.W / 2) <= 1 and dr.y + dr.h == m2.H - 1 and dr.w < 82 and dr.h < 63, true, "minimize: the dock place is small, at the bottom middle")
+eq(content_ok(count_px(m2, 196, 0, 0, 306, 171), 4000), true, "minimize: the ghost starts as the window picture")
+s2.advance(110)
+eq(len(fx2.ghosts), 1, "minimize: still flying after 110 ms")
+eq([gn.cur.y > ny, gn.cur.y < dr.y, gn.cur.w < 82, gn.cur.w > dr.w, gn.cur.level < 16, gn.cur.level > 2], [true, true, true, true, true, true], "minimize: the ghost shrinks and flies down")
+min_n = count_px(m2, 196, 0, 0, 306, 171)
+eq(min_n > 0 and min_n < 4000, true, "minimize: the shrinking ghost is painted")
+s2.advance(200)
+eq([len(fx2.ghosts), w2.minimized, w2:visible()], [0, true, false], "minimize: the ghost is gone, the window stays minimized")
+eq(wall_diff(m2, nx - 1, ny - 1, 86, 68), 0, "minimize: the old place is clean")
+eq(wall_diff(m2, dr.x - 1, dr.y - 1, dr.w + 2, dr.h + 2), 0, "minimize: the dock place is clean")
+
+# Alt+Left brings it back with an unminimize ghost
+s2.chord([keys.leftAlt], keys.left)
+eq([w2.minimized, len(fx2.ghosts), w2.fx_hidden, m2.focused == w2], [false, 1, true, true], "unminimize: Alt+Left brings the window back, hidden under a ghost")
+gu = fx2.ghosts[1]
+eq([gu.hide, gu.r0.x, gu.r0.y, gu.r0.w, gu.r0.h, gu.r0.level], [true, dr.x, dr.y, dr.w, dr.h, 2], "unminimize: it grows out of the dock place")
+eq([gu.to.x, gu.to.y, gu.to.w, gu.to.h, gu.to.level], [nx, ny, 82, 63, 16], "unminimize: to the window rectangle")
+dock_n = count_px(m2, 196, dr.x, dr.y, dr.w, dr.h)
+eq(dock_n > 0 and dock_n < dr.w * dr.h, true, "unminimize: a faint small picture is at the dock place")
+s2.advance(270)
+eq([len(fx2.ghosts), w2.fx_hidden, w2:visible(), content_ok(count_px(m2, 196, 0, 0, 306, 171), 4000)], [0, false, true, true], "unminimize: done, the window is back")
+
+# F11: full screen and back, both with a morph
+s2.chord([], keys.f11)
+eq([w2.state, w2.x, w2.y, w2.w, w2.h, len(fx2.ghosts), w2.fx_hidden], ["full", 0, 0, 306, 171, 1, true], "F11: full screen with a morph")
+s2.advance(270)
+eq([len(fx2.ghosts), w2.fx_hidden, w2:visible()], [0, false, true], "F11: the morph is done")
+s2.chord([], keys.f11)
+eq([w2.state, w2.x, w2.y, w2.w, w2.h, len(fx2.ghosts), w2.fx_hidden], ["normal", nx, ny, 82, 63, 1, true], "F11 again: back with a morph")
+s2.advance(270)
+eq([len(fx2.ghosts), w2.fx_hidden, content_ok(count_px(m2, 196, 0, 0, 306, 171), 4000)], [0, false, true], "F11 again: done")
+breathe()
+
+# ---------------------------------------------------------------- 6. focus glow, show desktop (two windows)
+s3 = new_scene(nil)
+s3.add_pixel({title: "A", x: 20, y: 20, w: 70, h: 40, color: 196})
+s3.add_pixel({title: "B", x: 150, y: 70, w: 70, h: 40, color: 21})
+s3.start()
+s3.advance(600)
+m3 = s3.wm
+fx3 = m3.fx
+wa = m3.windows[1]
+wb = m3.windows[2]
+eq([wa.title, wb.title, m3.focused == wb, len(fx3.ghosts)], ["A", "B", true, 0], "glow: two windows, the last one has the focus")
+base3 = theme_border(m3)
+eq(rgb_of(m3, theme.BORDER_ACTIVE), base3, "glow: the first glow is over, the border colour is the theme colour")
+eq([fx3:active(), fx3.glow == nil], [false, true], "glow: idle")
+s3.chord([keys.leftAlt], keys.left)
+eq(m3.focused == wa, true, "glow: Alt+Left focuses the other window")
+peak3 = rgb_of(m3, theme.BORDER_ACTIVE)
+eq(brighter(peak3, base3), true, "glow: right after focusing the border colour is brighter than the theme colour")
+eq(fx3.glow != nil, true, "glow: the glow is running")
+s3.advance(60)
+mid3a = rgb_of(m3, theme.BORDER_ACTIVE)
+s3.advance(100)
+mid3b = rgb_of(m3, theme.BORDER_ACTIVE)
+eq(lum(peak3) > lum(mid3a) and lum(mid3a) > lum(mid3b) and lum(mid3b) > lum(base3), true, "glow: the colour fades back step by step")
+s3.advance(400)
+eq(rgb_of(m3, theme.BORDER_ACTIVE), base3, "glow: after ~500 ms it is exactly the theme colour")
+eq([fx3.glow == nil, fx3:active()], [true, false], "glow: finished")
+s3.chord([keys.leftAlt], keys.right)
+eq([m3.focused == wb, brighter(rgb_of(m3, theme.BORDER_ACTIVE), base3)], [true, true], "glow: every focus change glows")
+s3.advance(500)
+eq(rgb_of(m3, theme.BORDER_ACTIVE), base3, "glow: and settles again")
+
+# Alt+D: every visible window flies down, and comes back
+s3.chord([keys.leftAlt], keys.d)
+eq([len(fx3.ghosts), wa.minimized, wb.minimized, m3.focused == nil], [2, true, true, true], "desktop: Alt+D minimizes both windows with a ghost each")
+eq([content_ok(count_px(m3, 196, 0, 0, 306, 171), 2800), content_ok(count_px(m3, 21, 0, 0, 306, 171), 2800)], [true, true], "desktop: both pictures are still on the screen at the first instant")
+s3.advance(260)
+eq(len(fx3.ghosts), 0, "desktop: the ghosts are gone")
+ax, ay, aw, ah = around(wa)
+eq(wall_diff(m3, ax, ay, aw, ah), 0, "desktop: the place of the first window is clean")
+ax, ay, aw, ah = around(wb)
+eq(wall_diff(m3, ax, ay, aw, ah), 0, "desktop: the place of the second window is clean")
+s3.chord([keys.leftAlt], keys.d)
+eq([len(fx3.ghosts), wa.minimized, wb.minimized, wa.fx_hidden, wb.fx_hidden], [2, false, false, true, true], "desktop: Alt+D again brings both back under ghosts")
+s3.advance(260)
+eq([len(fx3.ghosts), wa.fx_hidden, wb.fx_hidden, wa:visible(), wb:visible()], [0, false, false, true, true], "desktop: both are visible again")
+eq([content_ok(count_px(m3, 196, 0, 0, 306, 171), 2800), content_ok(count_px(m3, 21, 0, 0, 306, 171), 2800)], [true, true], "desktop: both contents are on the screen")
+breathe()
+
+# ---------------------------------------------------------------- 5a. animations disabled
+s4 = new_scene({enabled: false})
+s4.add_pixel({title: "Off", x: 40, y: 30, w: 80, h: 50, color: 196})
+s4.start()
+m4 = s4.wm
+fx4 = m4.fx
+w4 = m4.windows[1]
+eq([m4.anim.enabled, len(fx4.ghosts), w4.fx_hidden, w4:visible(), fx4:active()], [false, 0, false, true, false], "off: no ghost at open, the window is visible at once")
+eq(content_ok(count_px(m4, 196, w4:content_x(), w4:content_y(), 80, 50), 4000), true, "off: the content is on the screen at once")
+eq([fx4.glow == nil, rgb_of(m4, theme.BORDER_ACTIVE)], [true, theme_border(m4)], "off: no glow, the border colour is the theme colour")
+s4.chord([keys.leftAlt], keys.up)
+eq([w4.state, w4.x, w4.y, w4.w, w4.h, len(fx4.ghosts), w4.fx_hidden], ["max", 0, 0, 306, 171, 0, false], "off: maximize is immediate")
+eq(m4.screen.surface:get(w4:content_x() + 5, w4:content_y() + 5), 196, "off: the maximized window is painted at once")
+s4.chord([keys.leftAlt], keys.down)
+eq([w4.state, w4.x, w4.y, w4.w, w4.h, len(fx4.ghosts)], ["normal", 40, 30, 82, 63, 0], "off: restore is immediate")
+eq(content_ok(count_px(m4, 196, 0, 0, 306, 171), 4000), true, "off: the restored window is on the screen at once")
+s4.chord([], keys.f11)
+eq([w4.state, w4.w, w4.h, len(fx4.ghosts), w4.fx_hidden], ["full", 306, 171, 0, false], "off: F11 is immediate")
+s4.chord([], keys.f11)
+eq([w4.state, w4.w, w4.h, len(fx4.ghosts)], ["normal", 82, 63, 0], "off: F11 back is immediate")
+s4.chord([keys.leftAlt], keys.down)
+eq([w4.minimized, len(fx4.ghosts), wall_diff(m4, 39, 29, 86, 68)], [true, 0, 0], "off: minimize is immediate, the place is clean at once")
+s4.chord([keys.leftAlt], keys.left)
+eq([w4.minimized, w4:visible(), len(fx4.ghosts), m4.focused == w4], [false, true, 0, true], "off: unminimize is immediate")
+eq(content_ok(count_px(m4, 196, 0, 0, 306, 171), 4000), true, "off: the window is back at once")
+s4.chord([keys.leftAlt], keys.d)
+eq([w4.minimized, len(fx4.ghosts), m4.focused == nil], [true, 0, true], "off: Alt+D is immediate")
+s4.chord([keys.leftAlt], keys.d)
+eq([w4.minimized, w4:visible(), len(fx4.ghosts), m4.focused == w4], [false, true, 0, true], "off: Alt+D again brings the window back and gives it the focus")
+s4.chord([keys.leftCtrl], keys.t)
+eq([len(m4.windows), len(fx4.ghosts), wall_diff(m4, 39, 29, 86, 68)], [0, 0, 0], "off: close leaves nothing, no closing ghost")
+eq([fx4.stats.ghosts, fx4.stats.frames], [0, 0], "off: not a single ghost or frame in the whole run")
+breathe()
+
+# ---------------------------------------------------------------- 5b. speed 2
+s5 = new_scene({speed: 2})
+s5.add_pixel({title: "Fast", x: 40, y: 30, w: 80, h: 50, color: 196})
+s5.start()
+m5 = s5.wm
+fx5 = m5.fx
+w5 = m5.windows[1]
+g5 = fx5.ghosts[1]
+eq([m5.anim.speed, len(fx5.ghosts), w5.fx_hidden], [2, 1, true], "speed: the window opens with a ghost")
+eq([math.abs(g5.ms - 100) < 0.01, math.abs(fx5:dur(1) - 500) < 0.01, math.abs(fx5.glow.ms - 225) < 0.01], [true, true, true], "speed 2: ghost and glow take half the time")
+s5.advance(40)
+eq([len(fx5.ghosts), w5.fx_hidden], [1, true], "speed 2: not done at 40 ms")
+s5.advance(20)
+eq([len(fx5.ghosts), g5.cur.level > 0, g5.cur.level < 16], [1, true, true], "speed 2: halfway at 60 ms")
+s5.advance(60)
+eq([len(fx5.ghosts), w5.fx_hidden, w5:visible()], [0, false, true], "speed 2: done after ~120 ms")
+eq(content_ok(count_px(m5, 196, w5:content_x(), w5:content_y(), 80, 50), 4000), true, "speed 2: the content is on the screen")
+s5.advance(200)
+eq(rgb_of(m5, theme.BORDER_ACTIVE), theme_border(m5), "speed 2: the glow is over after ~300 ms")
+breathe()
+
+# ---------------------------------------------------------------- 5c. windows: false (glow stays)
+s6 = new_scene({windows: false})
+s6.add_pixel({title: "NoWin", x: 40, y: 30, w: 80, h: 50, color: 196})
+s6.start()
+m6 = s6.wm
+fx6 = m6.fx
+w6 = m6.windows[1]
+base6 = theme_border(m6)
+eq([m6.anim.enabled, m6.anim.windows, len(fx6.ghosts), fx6.stats.ghosts, w6.fx_hidden, w6:visible()], [true, false, 0, 0, false, true], "windows off: no ghost at open")
+eq(content_ok(count_px(m6, 196, w6:content_x(), w6:content_y(), 80, 50), 4000), true, "windows off: the content is on the screen at once")
+eq([fx6.glow != nil, brighter(rgb_of(m6, theme.BORDER_ACTIVE), base6)], [true, true], "windows off: the focus glow still runs")
+s6.advance(60)
+eq(lum(rgb_of(m6, theme.BORDER_ACTIVE)) > lum(base6), true, "windows off: and goes on being brighter for a while")
+s6.advance(500)
+eq([rgb_of(m6, theme.BORDER_ACTIVE), fx6.glow == nil], [base6, true], "windows off: back to the theme colour")
+s6.chord([keys.leftAlt], keys.up)
+eq([w6.state, w6.w, w6.h, len(fx6.ghosts), w6.fx_hidden], ["max", 306, 171, 0, false], "windows off: maximize is immediate")
+s6.chord([keys.leftAlt], keys.down)
+eq([w6.state, w6.w, w6.h, len(fx6.ghosts)], ["normal", 82, 63, 0], "windows off: restore is immediate")
+s6.chord([keys.leftAlt], keys.down)
+eq([w6.minimized, len(fx6.ghosts), wall_diff(m6, 39, 29, 86, 68)], [true, 0, 0], "windows off: minimize is immediate")
+s6.chord([keys.leftAlt], keys.left)
+eq([w6.minimized, w6:visible(), len(fx6.ghosts), m6.focused == w6], [false, true, 0, true], "windows off: unminimize is immediate")
+eq([fx6.glow != nil, brighter(rgb_of(m6, theme.BORDER_ACTIVE), base6)], [true, true], "windows off: focusing glows again")
+eq(fx6.stats.ghosts, 0, "windows off: not a single ghost in the whole run")
+breathe()
+
+# ---------------------------------------------------------------- 5d. glow: false (windows still animate)
+s7 = new_scene({glow: false})
+s7.add_pixel({title: "G1", x: 20, y: 20, w: 70, h: 40, color: 196})
+s7.add_pixel({title: "G2", x: 150, y: 70, w: 70, h: 40, color: 21})
+s7.start()
+m7 = s7.wm
+fx7 = m7.fx
+g7a = m7.windows[1]
+g7b = m7.windows[2]
+base7 = theme_border(m7)
+eq([m7.anim.glow, len(fx7.ghosts), fx7.glow == nil], [false, 2, true], "glow off: the windows still open with ghosts, there is no glow")
+eq(rgb_of(m7, theme.BORDER_ACTIVE), base7, "glow off: the border colour is the theme colour right after focusing")
+s7.advance(60)
+eq([rgb_of(m7, theme.BORDER_ACTIVE), len(fx7.ghosts)], [base7, 2], "glow off: and in the middle of the open animation")
+s7.advance(300)
+eq([rgb_of(m7, theme.BORDER_ACTIVE), len(fx7.ghosts), m7.focused == g7b], [base7, 0, true], "glow off: and after it")
+s7.chord([keys.leftAlt], keys.left)
+eq([m7.focused == g7a, rgb_of(m7, theme.BORDER_ACTIVE), fx7.glow == nil], [true, base7, true], "glow off: a focus change does not touch the colour")
+s7.advance(60)
+eq(rgb_of(m7, theme.BORDER_ACTIVE), base7, "glow off: not later either")
+breathe()
+
+# ---------------------------------------------------------------- 7. cdk tweens
+# one window with a switch, a checkbox, a list, tabs and a button that opens a menu on the free right side
+def build_cdk_parts():
+    cparts = {}
+    cparts.sw = cdk.switch("Wi-Fi")
+    cparts.cb = cdk.checkbox("Sound")
+    its = []
+    for ii in range[1, 8]:
+        its[ii] = {text: "Row " .. ii}
+    cparts.lv = cdk.list_view({items: its, height: 45})
+    cparts.tb = cdk.tabs({tabs: [{title: "One", content: cdk.label("page one")}, {title: "Two", content: cdk.label("page two")},
+        {title: "Three", content: cdk.label("page three")}]})
+    def open_menu(btn):
+        cdk.menu(btn.ui, [{text: "Open"}, {text: "Save"}, {separator: true}, {text: "Quit"}], 130, 30)
+    cparts.mb = cdk.button("Menu", {on_click: open_menu})
+    cparts.root = cdk.column({padding: 4, gap: 4, align: "start"}, [cparts.sw, cparts.cb, cparts.lv, cparts.tb, cparts.mb])
+    return cparts
+
+def cdk_scene(fx_opts):
+    csc = new_scene(fx_opts)
+    cparts2 = build_cdk_parts()
+    csc.add_cdk((u) => cparts2.root, {title: "T", w: 200, h: 150, x: 20, y: 4})
+    csc.start()
+    csc.parts = cparts2
+    return csc
+
+s8 = cdk_scene(nil)
+cp8 = s8.parts
+m8 = s8.wm
+w8 = m8.windows[1]
+eq([len(m8.windows), w8.fx_hidden, len(m8.fx.ghosts)], [1, true, 1], "cdk: the window opens with the window animation")
+s8.advance(320)
+ui8 = s8.h.ui
+eq([w8.fx_hidden, len(m8.fx.ghosts), ui8 != nil], [false, 0, true], "cdk: the window is open and idle")
+eq([cp8.sw.k, cp8.cb.k, cp8.lv.sel_y, cp8.tb.ux, ui8:animating()], [0, 0, 0, 0, false], "cdk: start values")
+
+# switch
+sw_vals = []
+s8.click(cp8.sw)
+eq([cp8.sw.on, cp8.sw.k, ui8:animating()], [true, 0, true], "switch: toggled, the knob has not moved yet")
+s8.advance(250, recorder([[sw_vals, () => cp8.sw.k]]))
+eq([has_between(sw_vals, 0, 1), non_decreasing(sw_vals), max_of(sw_vals) <= 1, min_of(sw_vals) >= 0], [true, true, true, true], "switch: k is strictly between 0 and 1 in the middle and moves up steadily")
+eq([cp8.sw.k, ui8:animating()], [1, false], "switch: k is exactly 1 at the end")
+sw_vals = []
+s8.click(cp8.sw)
+s8.advance(250, recorder([[sw_vals, () => cp8.sw.k]]))
+eq([cp8.sw.on, has_between(sw_vals, 0, 1), non_increasing(sw_vals), cp8.sw.k], [false, true, true, 0], "switch: and back to exactly 0")
+
+# checkbox
+cb_vals = []
+s8.click(cp8.cb)
+eq([cp8.cb.checked, cp8.cb.k < 0.001, ui8:animating()], [true, true, true], "checkbox: checked, the mark has not grown yet")
+s8.advance(250, recorder([[cb_vals, () => cp8.cb.k]]))
+eq([has_between(cb_vals, 0, 1), max_of(cb_vals) <= 1.2, min_of(cb_vals) >= 0], [true, true, true], "checkbox: k is strictly between 0 and 1 in the middle (a small overshoot is allowed)")
+eq([cp8.cb.k, ui8:animating()], [1, false], "checkbox: k is exactly 1 at the end")
+cb_vals = []
+s8.click(cp8.cb)
+s8.advance(250, recorder([[cb_vals, () => cp8.cb.k]]))
+eq([cp8.cb.checked, has_between(cb_vals, 0, 1), min_of(cb_vals) >= -0.2, cp8.cb.k], [false, true, true, 0], "checkbox: and back to exactly 0")
+
+# list: selection highlight
+rh8 = ui8.style.line + 2
+sel_vals = []
+s8.click_at(s8.cx(cp8.lv) + 10, s8.cy(cp8.lv) + 2 * rh8 + 3)
+eq([cp8.lv.selected, cp8.lv.sel_y, ui8:animating()], [3, 0, true], "list: row 3 is selected, the highlight has not moved yet")
+s8.advance(250, recorder([[sel_vals, () => cp8.lv.sel_y]]))
+eq([has_between(sel_vals, 0, 2 * rh8), non_decreasing(sel_vals), cp8.lv.sel_y], [true, true, 2 * rh8], "list: sel_y moves to (row - 1) * row_h")
+sel_vals = []
+s8.press(keys.down)
+eq([cp8.lv.selected, cp8.lv.sel_y], [4, 2 * rh8], "list: Down selects row 4, the highlight starts from the old place")
+s8.advance(250, recorder([[sel_vals, () => cp8.lv.sel_y]]))
+eq([has_between(sel_vals, 2 * rh8, 3 * rh8), non_decreasing(sel_vals), cp8.lv.sel_y], [true, true, 3 * rh8], "list: sel_y reaches row 4")
+sel_vals = []
+s8.press(keys.home)
+s8.advance(250, recorder([[sel_vals, () => cp8.lv.sel_y]]))
+eq([cp8.lv.selected, has_between(sel_vals, 0, 3 * rh8), non_increasing(sel_vals), cp8.lv.sel_y], [1, true, true, 0], "list: Home sends the highlight back to row 1")
+
+# tabs: underline
+xs8 = cp8.tb:_tab_x(ui8.style)
+tx3 = xs8[3][1] - cp8.tb.x
+tw3 = xs8[3][2]
+eq([cp8.tb.ux, cp8.tb.uw, tx3 > 0, tw3 > xs8[1][2]], [0, xs8[1][2], true, true], "tabs: the underline starts under the first tab")
+ux_vals = []
+uw_vals = []
+s8.click_at(s8.cx(cp8.tb) + tx3 + 4, s8.cy(cp8.tb) + 3)
+eq([cp8.tb.index, cp8.tb.ux, ui8:animating()], [3, 0, true], "tabs: the third tab is active, the underline has not moved yet")
+s8.advance(250, recorder([[ux_vals, () => cp8.tb.ux], [uw_vals, () => cp8.tb.uw]]))
+eq([has_between(ux_vals, 0, tx3), non_decreasing(ux_vals), cp8.tb.ux], [true, true, tx3], "tabs: ux moves toward the x of the new tab")
+eq([has_between(uw_vals, xs8[1][2], tw3), non_decreasing(uw_vals), cp8.tb.uw], [true, true, tw3], "tabs: the underline width follows")
+ux_vals = []
+s8.click_at(s8.cx(cp8.tb) + 4, s8.cy(cp8.tb) + 3)
+s8.advance(250, recorder([[ux_vals, () => cp8.tb.ux]]))
+eq([cp8.tb.index, has_between(ux_vals, 0, tx3), non_increasing(ux_vals), cp8.tb.ux, cp8.tb.uw], [1, true, true, 0, xs8[1][2]], "tabs: and back to the first tab")
+
+# menu: the layer reveals
+full8 = ui8.stats.full
+s8.click(cp8.mb)
+eq(len(ui8.layers), 1, "menu: the layer is open")
+lay8 = ui8.layers[1]
+mm8 = lay8.w
+cv8 = ui8.win.canvas
+bg8 = ui8.style.bg
+ct8 = ui8.style.ctrl
+top_x = mm8.x + mm8.w - 4
+top_y = mm8.y + 4
+bot_y = mm8.y + mm8.h - 4
+eq([lay8.reveal, ui8:animating()], [0, true], "menu: the layer starts with reveal 0")
+eq([cpx(cv8, top_x, top_y), cpx(cv8, top_x, bot_y)], [bg8, bg8], "menu: nothing of it is drawn yet")
+rv_vals = []
+s8.advance(60, recorder([[rv_vals, () => lay8.reveal]]))
+eq([has_between(rv_vals, 0, 1), lay8.reveal > 0, lay8.reveal < 1], [true, true, true], "menu: reveal is strictly between 0 and 1 in the middle")
+eq([cpx(cv8, top_x, top_y), cpx(cv8, top_x, bot_y)], [ct8, bg8], "menu: the upper part is drawn, the lower part is not yet")
+s8.advance(250, recorder([[rv_vals, () => lay8.reveal]]))
+eq([non_decreasing(rv_vals), lay8.reveal, ui8:animating()], [true, 1, false], "menu: reveal reaches exactly 1")
+eq([cpx(cv8, top_x, top_y), cpx(cv8, top_x, bot_y)], [ct8, ct8], "menu: fully drawn at the end")
+eq(ui8.stats.full > full8, true, "menu: the end of the reveal redraws everything once (shadow)")
+breathe()
+
+# ---- the same with animations disabled: values jump at once
+s9 = cdk_scene({enabled: false})
+cp9 = s9.parts
+m9 = s9.wm
+w9 = m9.windows[1]
+ui9 = s9.h.ui
+eq([len(m9.fx.ghosts), w9.fx_hidden, ui9 != nil], [0, false, true], "cdk off: the window is open at once")
+rh9 = ui9.style.line + 2
+s9.click(cp9.sw)
+eq([cp9.sw.on, cp9.sw.k, ui9:animating()], [true, 1, false], "cdk off: the switch jumps to 1")
+s9.click(cp9.cb)
+eq([cp9.cb.checked, cp9.cb.k, ui9:animating()], [true, 1, false], "cdk off: the checkbox jumps to 1")
+s9.click_at(s9.cx(cp9.lv) + 10, s9.cy(cp9.lv) + 2 * rh9 + 3)
+eq([cp9.lv.selected, cp9.lv.sel_y, ui9:animating()], [3, 2 * rh9, false], "cdk off: the list highlight jumps to the row")
+xs9 = cp9.tb:_tab_x(ui9.style)
+s9.click_at(s9.cx(cp9.tb) + (xs9[3][1] - cp9.tb.x) + 4, s9.cy(cp9.tb) + 3)
+eq([cp9.tb.index, cp9.tb.ux, cp9.tb.uw, ui9:animating()], [3, xs9[3][1] - cp9.tb.x, xs9[3][2], false], "cdk off: the tab underline jumps")
+s9.click(cp9.mb)
+eq([len(ui9.layers), ui9.layers[1].reveal, ui9:animating()], [1, 1, false], "cdk off: the menu layer is fully revealed at once")
+mm9 = ui9.layers[1].w
+eq(cpx(ui9.win.canvas, mm9.x + mm9.w - 4, mm9.y + mm9.h - 4), ui9.style.ctrl, "cdk off: and fully drawn")
+breathe()
+
+# ---- widgets: false switches off only the widget tweens, windows still animate
+s10 = cdk_scene({widgets: false})
+cp10 = s10.parts
+m10 = s10.wm
+eq([len(m10.fx.ghosts), m10.windows[1].fx_hidden], [1, true], "widgets off: the window still opens with a ghost")
+s10.advance(320)
+ui10 = s10.h.ui
+s10.click(cp10.sw)
+eq([cp10.sw.on, cp10.sw.k, ui10:animating()], [true, 1, false], "widgets off: the switch jumps to 1")
+s10.click(cp10.mb)
+eq([len(ui10.layers), ui10.layers[1].reveal, ui10:animating()], [1, 1, false], "widgets off: the menu layer is revealed at once")
+print("done")

@@ -26,7 +26,7 @@ def scene(build, opts=nil):
     clock = {now: 1000}
     def now():
         return clock.now
-    wm = cde.wm.new({term: make_term(), assets: "/repo/assets", clock: now})
+    wm = cde.wm.new({animations: {enabled: false}, term: make_term(), assets: "/repo/assets", clock: now})
     k = kernel.new({clock: now})
     holder = {}
     def main(sys, ctx):

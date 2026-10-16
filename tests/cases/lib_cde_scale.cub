@@ -42,7 +42,7 @@ size = {w: 984, h: 729}
 clock = {now: 1000}
 def now():
     return clock.now
-wm = cde.wm.new({term: make_term(size, state), assets: "/repo/assets", clock: now})
+wm = cde.wm.new({animations: {enabled: false}, term: make_term(size, state), assets: "/repo/assets", clock: now})
 k = kernel.new({clock: now})
 breathe()
 eq([wm.scale, wm.W, wm.H], [2, 492, 364], "a big monitor gets 2x automatically")

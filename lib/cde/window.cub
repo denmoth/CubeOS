@@ -86,6 +86,7 @@ export class Window:
         self.blink = true
         self.fg = 0
         self.decorated = o.decorations != false
+        self.fx_hidden = false
         self.drag_areas = []
         self.requests = []
         cw = 0
@@ -132,7 +133,11 @@ export class Window:
         return self.y + t
 
     def visible(self):
-        return not self.minimized and not self.closed
+        return not self.minimized and not self.closed and not self.fx_hidden
+
+    # на экране, если не считать анимаций (cde.fx) и закрытия
+    def visible_raw(self):
+        return not self.minimized
 
     # точка экрана внутри внешнего прямоугольника
     def contains(self, px, py):

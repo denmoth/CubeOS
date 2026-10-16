@@ -7,7 +7,7 @@
 # экран, Ctrl+Alt+= и Ctrl+Alt+- крупнее и мельче (масштаб), Ctrl+Alt+K витрина элементов cdk, Ctrl+Alt+Q выход из сессии
 # (панель и «Пуск» на шаге 3).
 # Настройки пользователя $cfg/cde.conf (JSON5): theme (имя темы), scale ("auto" или 1..4); тема и масштаб, выбранные сочетаниями,
-# сохраняются туда же.
+# сохраняются туда же; animations ({enabled, speed, windows, glow, widgets}, cde.fx), Ctrl+Alt+A включает и выключает анимации.
 # opts: term, assets, theme, host, ready(wm) (для тестов), terminal_ready(ctx) (для тестов: ready терминала)
 
 import cde.wm as wm_mod
@@ -44,7 +44,8 @@ export def program(session, opts=nil):
             okw, err = pcall(write_conf)
             if not okw:
                 sys.log("warn", "desktop: cannot save " .. key .. ": " .. tostring(err))
-        wm = wm_mod.new({term: o.term, assets: o.assets ?? "/repo/assets", theme: o.theme ?? conf.theme, scale: conf.scale ?? "auto"})
+        wm = wm_mod.new({term: o.term, assets: o.assets ?? "/repo/assets", theme: o.theme ?? conf.theme, scale: conf.scale ?? "auto",
+            animations: o.animations ?? conf.animations})
         term_opts = {assets: o.assets, host: o.host, ready: o.terminal_ready}
         def open_terminal():
             wm:launch(terminal.main, {name: "terminal"}, [session, term_opts])
@@ -67,6 +68,10 @@ export def program(session, opts=nil):
             wm:set_scale(SCALES[pos])
             save("scale", SCALES[pos])
         wm:hotkey("ctrl+alt+t", next_theme)
+        def toggle_anim():
+            wm.anim.enabled = not wm.anim.enabled
+            save("animations", wm.anim)
+        wm:hotkey("ctrl+alt+a", toggle_anim)
         wm:hotkey("ctrl+alt+k", () => wm:launch(gallery.main, {name: "gallery"}))
         wm:hotkey("ctrl+alt+equals", () => zoom(1))
         wm:hotkey("ctrl+alt+minus", () => zoom(-1))

@@ -36,7 +36,7 @@ def breathe():
     os.queueEvent("t_breathe")
     os.pullEvent("t_breathe")
 
-wm = cde.wm.new({term: make_term(state), assets: "/repo/assets", clock: now})
+wm = cde.wm.new({animations: {enabled: false}, term: make_term(state), assets: "/repo/assets", clock: now})
 k = kernel.new({clock: now})
 breathe()
 

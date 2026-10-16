@@ -41,7 +41,7 @@ breathe()
 clock = {now: 1000}
 def now():
     return clock.now
-wm = cde.wm.new({term: make_term(), assets: "/repo/assets", theme: "light", clock: now})
+wm = cde.wm.new({animations: {enabled: false}, term: make_term(), assets: "/repo/assets", theme: "light", clock: now})
 k = kernel.new({clock: now})
 breathe()
 def settle(n=6):

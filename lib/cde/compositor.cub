@@ -39,6 +39,8 @@ export class Compositor:
         # номер поколения темы: заголовки перерисовываются после смены
         self.gen = 0
         self.stats = {composes: 0, rects: 0, pixels: 0, titles: 0}
+        # анимации окон (cde.fx): рисуются поверх окон
+        self.fx = nil
 
     # логический экран: при масштабе 1 это сама поверхность экрана, иначе своя поверхность (экран / масштаб)
     def set_scale(self, scale):
@@ -185,6 +187,8 @@ export class Compositor:
                 if not (covered and i == start):
                     self:_shadow(win, x0, y0, x1, y1)
                 self:_window(win, x0, y0, x1, y1)
+        if self.fx != nil:
+            self.fx:paint(s, x0, y0, x1, y1)
         if self.preview != nil:
             self:_preview(self.preview)
         s:pop_clip()

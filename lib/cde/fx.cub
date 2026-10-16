@@ -1,0 +1,227 @@
+# cde.fx: анимации окон рабочего стола (шаг 2.5, D251)
+#
+# На время анимации окно заменяется «призраком»: снимком окна (рамка, заголовок, содержимое), который композитор рисует поверх
+# всего с растяжением в нужный прямоугольник и с проявлением через узор Байера 4x4 (уровень 0..16: сколько из 16 пикселей
+# каждого квадрата 4x4 видно). Так получаются появление, исчезание, сворачивание и плавный переход между размерами при 20 кадрах
+# и без смешивания цветов. Свечение рамки окна при получении фокуса это только смена цвета палитры (почти бесплатно).
+#
+# Настройки (wm.anim, из $cfg/cde.conf animations): enabled, speed (множитель скорости: 2 вдвое быстрее), windows (анимации окон),
+# glow (свечение рамки), widgets (анимации элементов cdk). Выключенная анимация срабатывает сразу.
+
+import cgl.anim as anim
+import cgl.surface as surface_mod
+import cgl.color as color
+import cde.theme as theme
+
+const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5]
+
+export const DEFAULTS = {enabled: true, speed: 1, windows: true, glow: true, widgets: true}
+
+# настройки анимаций: недостающее из DEFAULTS
+export def make_settings(conf=nil):
+    out = {}
+    for k, v in DEFAULTS:
+        out[k] = v
+    if type(conf) == "table":
+        for k, v in conf:
+            out[k] = v
+    out.speed = math.max(0.1, math.min(10, tonumber(out.speed) ?? 1))
+    return out
+
+def _lerp(a, b, t):
+    return a + (b - a) * t
+
+export class Fx:
+    def init(self, wm):
+        self.wm = wm
+        self.ghosts = []
+        self.glow = nil
+        self.stats = {ghosts: 0, frames: 0}
+
+    def _on(self, kind):
+        a = self.wm.anim
+        return a.enabled and a[kind] != false
+
+    # длительность с учётом скорости (секунды -> мс)
+    def dur(self, seconds):
+        return seconds * 1000 / self.wm.anim.speed
+
+    def active(self):
+        return len(self.ghosts) > 0 or self.glow != nil
+
+    # ------------------------------------------------------------ призраки окон
+
+    # снимок окна целиком (прозрачные углы остаются прозрачными)
+    def snapshot(self, win):
+        comp = self.wm.comp
+        snap = surface_mod.new(math.max(1, win.w), math.max(1, win.h), surface_mod.CLEAR)
+        saved = comp.s
+        comp.s = snap
+        snap:push_origin(-win.x, -win.y)
+        ok, err = pcall(comp._window, comp, win, win.x, win.y, win.x + win.w - 1, win.y + win.h - 1)
+        snap:pop_origin()
+        comp.s = saved
+        return snap
+
+    # анимация призрака: from/to = {x, y, w, h, level}; hide: окно не рисуется, пока идёт анимация; done(): по окончании
+    def ghost(self, win, from_r, to_r, seconds, ease_name, hide, done=nil, snap=nil):
+        if not self:_on("windows") or seconds <= 0:
+            if done != nil:
+                done()
+            return nil
+        # прежняя анимация этого окна заканчивается сразу
+        for g in self.ghosts:
+            if g.win == win:
+                g.start = -1e12
+        g = {win: win, surf: snap ?? self:snapshot(win), r0: from_r, to: to_r, start: self.wm.clock(), ms: self:dur(seconds),
+            ease: ease_name ?? "out_cubic", hide: hide, done: done}
+        g.cur = {x: from_r.x, y: from_r.y, w: from_r.w, h: from_r.h, level: from_r.level ?? 16}
+        if hide:
+            win.fx_hidden = true
+        self.ghosts[len(self.ghosts) + 1] = g
+        self.stats.ghosts += 1
+        self:_damage(g.cur)
+        return g
+
+    def _damage(self, r):
+        self.wm.comp:damage(math.floor(r.x) - 1, math.floor(r.y) - 1, math.ceil(r.w) + 3, math.ceil(r.h) + 3)
+
+    # новое окно: поднимается на 8 пикселей и проявляется
+    def open(self, win):
+        let me = self
+        r = {x: win.x, y: win.y, w: win.w, h: win.h, level: 16}
+        self:ghost(win, {x: win.x, y: win.y + 8, w: win.w, h: win.h, level: 0}, r, 0.2, "out_cubic", true, () => me:_show(win))
+
+    # закрытое окно: опускается и растворяется (снимок до удаления)
+    def close(self, win):
+        if win.fx_hidden or not win:visible_raw():
+            return
+        snap = self:snapshot(win)
+        self:ghost(win, {x: win.x, y: win.y, w: win.w, h: win.h, level: 16}, {x: win.x, y: win.y + 6, w: win.w, h: win.h, level: 0},
+            0.16, "in_cubic", false, nil, snap)
+
+    # место, куда сворачиваются окна: низ экрана по центру (потом кнопка окна на панели задач)
+    def dock_rect(self, win):
+        w = math.max(8, math.floor(win.w * 0.18))
+        h = math.max(5, math.floor(win.h * 0.18))
+        return {x: math.floor((self.wm.W - w) / 2), y: self.wm.H - h - 1, w: w, h: h}
+
+    def minimize(self, win, snap):
+        to_r = self:dock_rect(win)
+        to_r.level = 2
+        self:ghost(win, {x: win.x, y: win.y, w: win.w, h: win.h, level: 16}, to_r, 0.22, "in_out_cubic", false, nil, snap)
+
+    def unminimize(self, win):
+        let me = self
+        from_r = self:dock_rect(win)
+        from_r.level = 2
+        self:ghost(win, from_r, {x: win.x, y: win.y, w: win.w, h: win.h, level: 16}, 0.22, "out_cubic", true, () => me:_show(win))
+
+    # смена размера (развернуть, половинки, полный экран, обратно): снимок старого вида растягивается в новый прямоугольник
+    def morph(self, win, old_r, snap):
+        let me = self
+        self:ghost(win, {x: old_r.x, y: old_r.y, w: old_r.w, h: old_r.h, level: 16}, {x: win.x, y: win.y, w: win.w, h: win.h, level: 16},
+            0.17, "out_cubic", true, () => me:_show(win), snap)
+
+    def _show(self, win):
+        win.fx_hidden = false
+        if not win.closed:
+            self.wm.comp:damage_window(win)
+
+    # ------------------------------------------------------------ свечение рамки
+
+    def focus_glow(self, win):
+        if not self:_on("glow"):
+            return
+        r, g, b = color.parse_hex(self.wm.theme.border_active)
+        self.glow = {start: self.wm.clock(), ms: self:dur(0.45), base: [r, g, b],
+            peak: [math.floor(_lerp(r, 255, 0.6)), math.floor(_lerp(g, 255, 0.6)), math.floor(_lerp(b, 255, 0.6))]}
+        self:_glow_at(0)
+
+    def _glow_at(self, t):
+        gl = self.glow
+        k = anim.ease("out_quad", t)
+        c = [math.floor(_lerp(gl.peak[1], gl.base[1], k)), math.floor(_lerp(gl.peak[2], gl.base[2], k)), math.floor(_lerp(gl.peak[3], gl.base[3], k))]
+        self.wm.screen:set_colors([[theme.BORDER_ACTIVE, c[1], c[2], c[3]]])
+
+    # ------------------------------------------------------------ кадр
+
+    def step(self):
+        now = self.wm.clock()
+        if self.glow != nil:
+            t = (now - self.glow.start) / math.max(1, self.glow.ms)
+            if t >= 1:
+                self:_glow_at(1)
+                self.glow = nil
+            else:
+                self:_glow_at(t)
+        if len(self.ghosts) == 0:
+            return
+        self.stats.frames += 1
+        keep = []
+        finished = []
+        for g in self.ghosts:
+            self:_damage(g.cur)
+            t = (now - g.start) / math.max(1, g.ms)
+            if t >= 1 or g.win.closed and g.hide:
+                finished[len(finished) + 1] = g
+            else:
+                k = anim.ease(g.ease, t)
+                f = g.r0
+                to_r = g.to
+                g.cur = {x: _lerp(f.x, to_r.x, k), y: _lerp(f.y, to_r.y, k), w: math.max(1, _lerp(f.w, to_r.w, k)),
+                    h: math.max(1, _lerp(f.h, to_r.h, k)), level: _lerp(f.level ?? 16, to_r.level ?? 16, k)}
+                self:_damage(g.cur)
+                keep[len(keep) + 1] = g
+        self.ghosts = keep
+        for g in finished:
+            if g.hide:
+                g.win.fx_hidden = false
+            if g.done != nil:
+                g.done()
+            self.wm.comp:damage_window(g.win)
+
+    # рисует призраки в прямоугольнике сборки (вызывает композитор поверх окон)
+    def paint(self, s, x0, y0, x1, y1):
+        for g in self.ghosts:
+            self:_draw(s, g, x0, y0, x1, y1)
+
+    def _draw(self, s, g, x0, y0, x1, y1):
+        c = g.cur
+        level = math.floor(c.level + 0.5)
+        if level <= 0:
+            return
+        gx = math.floor(c.x)
+        gy = math.floor(c.y)
+        gw = math.max(1, math.floor(c.w + 0.5))
+        gh = math.max(1, math.floor(c.h + 0.5))
+        ax0 = math.max(gx, x0, 0)
+        ay0 = math.max(gy, y0, 0)
+        ax1 = math.min(gx + gw - 1, x1, s.w - 1)
+        ay1 = math.min(gy + gh - 1, y1, s.h - 1)
+        if ax0 > ax1 or ay0 > ay1:
+            return
+        src = g.surf
+        sw = src.w
+        kx = sw / gw
+        ky = src.h / gh
+        spx = src.px
+        px = s.px
+        stride = s.w
+        cols = []
+        for xx in range[ax0, ax1]:
+            cols[xx - ax0 + 1] = math.min(sw - 1, math.floor((xx - gx) * kx))
+        full = level >= 16
+        for yy in range[ay0, ay1]:
+            sy = math.min(src.h - 1, math.floor((yy - gy) * ky))
+            srow = sy * sw + 1
+            drow = yy * stride + 1
+            brow = (yy % 4) * 4 + 1
+            for xx in range[ax0, ax1]:
+                v = spx[srow + cols[xx - ax0 + 1]]
+                if v >= 0 and (full or BAYER[brow + xx % 4] < level):
+                    px[drow + xx] = v
+        s:mark(ax0, ay0, ax1, ay1)
+
+export def new(wm):
+    return Fx(wm)

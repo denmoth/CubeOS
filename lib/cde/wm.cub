@@ -24,6 +24,7 @@ import cde.theme as theme
 import cde.window as window_mod
 import cde.compositor as comp_mod
 import cde.wallpaper as wallpaper_mod
+import cde.fx as fx_mod
 
 const WM_EVENTS = ["key", "key_up", "char", "paste", "mouse_click", "mouse_drag", "mouse_up", "mouse_scroll", "terminate",
     "term_resize", "monitor_resize", "monitor_touch", "cubeos_cde"]
@@ -45,7 +46,8 @@ def _now_ms():
 export class WM:
     # opts: term, screen (готовый экран cgl; иначе cgl.open), assets (папка со шрифтами и темами), font, theme (имя темы или
     #       таблица темы), theme_dirs (папки с файлами .theme; по умолчанию assets/themes), wallpaper (поверхность), clock (мс),
-    #       on_start (левый Alt), scale ("auto" или 1..4: во сколько раз крупнее; логический экран = экран / масштаб)
+    #       on_start (левый Alt), scale ("auto" или 1..4: во сколько раз крупнее; логический экран = экран / масштаб),
+    #       animations ({enabled, speed, windows, glow, widgets}, cde.fx)
     def init(self, opts=nil):
         o = opts ?? {}
         assets = o.assets ?? "/repo/assets"
@@ -71,6 +73,9 @@ export class WM:
         self.comp = comp_mod.new(self.screen, self.font, {wallpaper: o.wallpaper ?? self.make_wallpaper(self.W, self.H),
             deco: self.deco, scale: self.scale})
         self.windows = self.comp.windows
+        self.anim = fx_mod.make_settings(o.animations)
+        self.fx = fx_mod.new(self)
+        self.comp.fx = self.fx
         # свободные места палитры для приложений: номер -> окно, которое его взяло
         self.pool_free = []
         for slot in theme.POOL:
@@ -256,6 +261,9 @@ export class WM:
         until = self.next_reap
         if self:_blinking() and self.next_blink < until:
             until = self.next_blink
+        # идёт анимация: кадр каждые 50 мс (20 кадров, как обновляется экран CC)
+        if self.fx:active() and now + 50 < until:
+            until = now + 50
         return math.max(0, until - now) / 1000
 
     def _blinking(self):
@@ -272,6 +280,8 @@ export class WM:
         if now >= self.next_reap:
             self.next_reap = now + REAP_MS
             self:_reap()
+        if self.fx:active():
+            self.fx:step()
 
     # окна процессов, которых больше нет (убиты, упали мимо обёртки)
     def _reap(self):
@@ -302,6 +312,7 @@ export class WM:
             w = self.windows[i]
             if w.closed:
                 self.comp:damage_window(w)
+                self.fx:close(w)
                 self:_free_colors(w)
                 table.remove(self.windows, i)
                 if self.focused == w:
@@ -351,6 +362,7 @@ export class WM:
         self.windows[len(self.windows) + 1] = win
         self.comp:damage_window(win)
         self:_set_focus(win)
+        self.fx:open(win)
 
     # место для нового окна (как «умная» расстановка KDE): из точек сетки выбирается та, где окно меньше всего закрывает видимые
     # окна; при равенстве ближе к центру экрана
@@ -390,7 +402,8 @@ export class WM:
     def _topmost(self):
         for i in range[len(self.windows), 1] step -1:
             w = self.windows[i]
-            if w:visible():
+            # окно, которое сейчас проявляется или возвращается из свёрнутого (fx_hidden), тоже на экране
+            if w:visible_raw() and not w.closed:
                 return w
         return nil
 
@@ -430,6 +443,7 @@ export class WM:
             self:_post(old, "win_blur")
         if win != nil:
             self.comp:damage_window(win)
+            self.fx:focus_glow(win)
             self.next_blink = self.clock() + BLINK_MS
             win:_blink(true)
             self:_post(win, "win_focus")
@@ -438,6 +452,7 @@ export class WM:
         if win.minimized:
             win.minimized = false
             self.comp:damage_window(win)
+            self.fx:unminimize(win)
         self:_set_focus(win)
 
     # следующее (dir 1) или предыдущее (-1) окно по порядку открытия, свёрнутые разворачиваются
@@ -476,7 +491,8 @@ export class WM:
             return {x: half, y: 0, w: self.W - half, h: self.H}
         return nil
 
-    def set_state(self, win, state):
+    # animate = false: без анимации (окно тянут мышью)
+    def set_state(self, win, state, animate=true):
         # окно постоянного размера не разворачивается и не прилипает (полный экран можно)
         if not win.resizable and state != "normal" and state != "full":
             return
@@ -491,8 +507,12 @@ export class WM:
         if r == nil:
             r = win.normal ?? {x: win.x, y: win.y, w: win.w, h: win.h}
             state = "normal"
+        old = {x: win.x, y: win.y, w: win.w, h: win.h}
+        snap = (animate and win:visible() and self.anim.enabled) and self.fx:snapshot(win) or nil
         win.state = state
         self:move_resize(win, r.x, r.y, r.w, r.h)
+        if snap != nil:
+            self.fx:morph(win, old, snap)
 
     def toggle_max(self, win):
         if win.state == "max":
@@ -504,10 +524,14 @@ export class WM:
     def toggle_full(self, win):
         if win.state == "full":
             back = win.before_full ?? "normal"
-            win.state = "normal"
             if back == "normal":
+                old = {x: win.x, y: win.y, w: win.w, h: win.h}
+                snap = (win:visible() and self.anim.enabled) and self.fx:snapshot(win) or nil
+                win.state = "normal"
                 r = win.normal ?? {x: win.x, y: win.y, w: win.w, h: win.h}
                 self:move_resize(win, r.x, r.y, r.w, r.h)
+                if snap != nil:
+                    self.fx:morph(win, old, snap)
             else:
                 self:set_state(win, back)
         else:
@@ -517,8 +541,11 @@ export class WM:
     def minimize(self, win):
         if win.minimized:
             return
+        snap = (win:visible() and self.anim.enabled) and self.fx:snapshot(win) or nil
         win.minimized = true
         self.comp:damage_window(win)
+        if snap != nil:
+            self.fx:minimize(win, snap)
         if self.focused == win:
             self:_set_focus(nil)
             top = self:_topmost()
@@ -534,6 +561,7 @@ export class WM:
                 if not w.closed and w.minimized:
                     w.minimized = false
                     self.comp:damage_window(w)
+                    self.fx:unminimize(w)
             top = self:_topmost()
             if top != nil:
                 self:_set_focus(top)
@@ -542,8 +570,11 @@ export class WM:
         for w in self.windows:
             if w:visible():
                 self.hidden[len(self.hidden) + 1] = w
+                snap = self.anim.enabled and self.fx:snapshot(w) or nil
                 w.minimized = true
                 self.comp:damage_window(w)
+                if snap != nil:
+                    self.fx:minimize(w, snap)
         self:_set_focus(nil)
 
     def request_close(self, win):
@@ -751,7 +782,7 @@ export class WM:
             if win.state != "normal":
                 # развёрнутое окно, которое тянут за заголовок, возвращается к обычному размеру под мышью
                 ratio = d.ox / math.max(1, win.w)
-                self:set_state(win, "normal")
+                self:set_state(win, "normal", false)
                 d.ox = math.floor(ratio * win.w)
                 d.oy = math.min(d.oy, self.deco.title - 2)
             x = math.max(30 - win.w, math.min(self.W - 30, px - d.ox))
@@ -924,6 +955,8 @@ export class WM:
         self.palette = self.screen.palette
         self.deco = theme.deco(th, self.font)
         self.comp:set_deco(self.deco, theme.dim_map(self.palette, self.deco.shadow_strength))
+        # свечение рамки, начатое при старой теме, кончилось бы её цветом: гасим, цвет рамки уже новый
+        self.fx.glow = nil
         for w in self.windows:
             r = self:area_for(w.state)
             if r != nil:

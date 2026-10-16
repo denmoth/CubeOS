@@ -13,6 +13,18 @@ import cdk.widget as widget
 import cdk.icons as icons
 import unicode
 
+const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5]
+
+# перекрашивает пиксели цвета c_from в прямоугольнике в c_to с долей k (0..1) узором Байера: плавный переход цвета без смешивания
+def _blend(s, x, y, w, h, c_from, c_to, k):
+    level = math.floor(k * 16 + 0.5)
+    if level <= 0:
+        return
+    for yy in range[y, y + h - 1]:
+        for xx in range[x, x + w - 1]:
+            if s:get(xx, yy) == c_from and (level >= 16 or BAYER[(yy % 4) * 4 + xx % 4 + 1] < level):
+                s:set(xx, yy, c_to)
+
 def _text_y(self, st, scale=1):
     return self.y + math.floor((self.h - st.fh * scale) / 2)
 
@@ -201,6 +213,8 @@ export class Checkbox(widget.Widget):
         self.checked = o.checked ?? false
         self.on_change = o.on_change
         self.focusable = true
+        # доля «отмеченности» для анимации (0..1)
+        self.k = self.checked and 1 or 0
 
     def measure(self, st):
         return 9 + (self.text != "" and (5 + st:text_w(self.text)) or 0), st.line
@@ -208,18 +222,30 @@ export class Checkbox(widget.Widget):
     def set(self, v):
         if v != self.checked:
             self.checked = v
+            if self.ui != nil:
+                self.ui:tween(self, "k", v and 1 or 0, 0.14, "out_back")
+            else:
+                self.k = v and 1 or 0
             self:invalidate()
             if self.on_change != nil:
                 self.on_change(v, self)
 
     def draw(self, s, st):
         by = self.y + math.floor((self.h - 9) / 2)
-        if self.checked:
+        k = math.max(0, math.min(1.2, self.k))
+        if k >= 0.999 and self.checked:
             st:round_fill(s, self.x, by, 9, 9, self.enabled and st.accent or st.dim, 2)
             icons.draw(s, "check", self.x, by, st.on_accent)
         else:
             st:round_fill(s, self.x, by, 9, 9, st.well, 2)
             st:round_line(s, self.x, by, 9, 9, st.dim, 2)
+            # отметка вырастает из середины
+            size = math.min(9, math.floor(9 * k + 0.5))
+            if size >= 2:
+                o = math.floor((9 - size) / 2)
+                st:round_fill(s, self.x + o, by + o, size, size, self.enabled and st.accent or st.dim, 2)
+                if k > 0.7:
+                    icons.draw(s, "check", self.x, by, st.on_accent)
         if self.text != "":
             s:text(st.font, self.x + 14, _text_y(self, st), self.text, self.enabled and st.text or st.dim)
         if self.focused:
@@ -247,6 +273,8 @@ export class Switch(widget.Widget):
         self.on = o.on ?? false
         self.on_change = o.on_change
         self.focusable = true
+        # положение ручки для анимации (0 выключено, 1 включено)
+        self.k = self.on and 1 or 0
 
     def measure(self, st):
         return 19 + (self.text != "" and (5 + st:text_w(self.text)) or 0), st.line
@@ -254,20 +282,33 @@ export class Switch(widget.Widget):
     def set(self, v):
         if v != self.on:
             self.on = v
+            if self.ui != nil:
+                self.ui:tween(self, "k", v and 1 or 0, 0.16, "out_cubic")
+            else:
+                self.k = v and 1 or 0
             self:invalidate()
             if self.on_change != nil:
                 self.on_change(v, self)
 
     def draw(self, s, st):
         ty = self.y + math.floor((self.h - 10) / 2)
-        track = self.on and (self.enabled and st.accent or st.dim) or st.track
-        st:round_fill(s, self.x, ty, 19, 10, track, 4)
-        if not self.on:
+        k = math.max(0, math.min(1, self.k))
+        on_c = self.enabled and st.accent or st.dim
+        st:round_fill(s, self.x, ty, 19, 10, st.track, 4)
+        if k < 0.5:
             st:round_line(s, self.x, ty, 19, 10, st.border, 4)
-        kx = self.on and (self.x + 14) or (self.x + 4)
-        s:circle(kx, ty + 4, 3, self.on and 0 or st.dim, true)
-        s:fill_rect(kx - 3, ty + 4, 7, 2, self.on and 0 or st.dim)
-        s:circle(kx, ty + 5, 3, self.on and 0 or st.dim, true)
+        # дорожка перетекает в акцентный цвет вместе с ручкой
+        if k > 0:
+            if k >= 1:
+                st:round_fill(s, self.x, ty, 19, 10, on_c, 4)
+            else:
+                _blend(s, self.x, ty, 19, 10, st.track, on_c, k)
+                _blend(s, self.x, ty, 19, 10, st.border, on_c, k)
+        kx = self.x + 4 + math.floor(10 * k + 0.5)
+        knob = k >= 0.5 and 0 or st.dim
+        s:circle(kx, ty + 4, 3, knob, true)
+        s:fill_rect(kx - 3, ty + 4, 7, 2, knob)
+        s:circle(kx, ty + 5, 3, knob, true)
         if self.text != "":
             s:text(st.font, self.x + 24, _text_y(self, st), self.text, self.enabled and st.text or st.dim)
         if self.focused:
@@ -375,6 +416,7 @@ export class Progress(widget.Widget):
         super.init(self, o)
         self.kind = "progress"
         self.value = o.value ?? 0
+        self.shown = self.value
         self.indeterminate = o.indeterminate ?? false
         self.phase = 0
         self.timer = nil
@@ -386,6 +428,10 @@ export class Progress(widget.Widget):
         v = math.max(0, math.min(1, v))
         if v != self.value:
             self.value = v
+            if self.ui != nil:
+                self.ui:tween(self, "shown", v, 0.3, "out_cubic")
+            else:
+                self.shown = v
             self:invalidate()
 
     def _attach(self, ui):
@@ -410,7 +456,7 @@ export class Progress(widget.Widget):
                 st:round_fill(s, a, y, b - a, 5, st.accent, 2)
                 s:hline(a + 2, y, math.max(0, b - a - 4), st.accent_hi)
             return
-        fw = math.floor(self.w * self.value + 0.5)
+        fw = math.floor(self.w * math.max(0, math.min(1, self.shown ?? self.value)) + 0.5)
         if fw >= 2:
             st:round_fill(s, self.x, y, fw, 5, st.accent, 2)
             s:hline(self.x + 2, y, math.max(0, fw - 4), st.accent_hi)

@@ -17,6 +17,7 @@ import cde.app as app
 import cdk.style as style_mod
 import input.layout as layout_mod
 import json5
+import cgl.anim as anim
 
 export class UI:
     def init(self, sys, win, opts=nil):
@@ -36,6 +37,9 @@ export class UI:
         self.on_key = o.on_key
         self.pending = nil
         self.layers = []
+        self.layers_dirty = false
+        # плавные переходы полей элементов (ui:tween), по настройкам анимаций рабочего стола (wm.anim)
+        self.tweens = []
         self.stats = {layouts: 0, redraws: 0, full: 0}
         self.kbd = layout_mod.new(nil, nil, {mode: "auto", keyboard: o.keyboard ?? self:_keyboard(), dirs: o.layout_dirs})
 
@@ -83,8 +87,11 @@ export class UI:
             y = math.floor((cv.h - ph) / 2)
         x = math.max(2, math.min(x, cv.w - pw - 2))
         y = math.max(2, math.min(y, cv.h - ph - 2))
-        layer = {w: w, modal: o.modal ?? false, dismiss: o.dismiss ?? true, on_close: o.on_close, focus_before: self.focus}
+        layer = {w: w, modal: o.modal ?? false, dismiss: o.dismiss ?? true, on_close: o.on_close, focus_before: self.focus,
+            reveal: 0, center: o.center ?? false}
         self.layers[len(self.layers) + 1] = layer
+        let me = self
+        self:tween(layer, "reveal", 1, 0.13, "out_cubic", () => me:_reveal_step(layer))
         w:layout(x, y, pw, ph)
         chain = []
         self:_chain(w, chain)
@@ -106,6 +113,13 @@ export class UI:
                     layer.on_close()
                 return true
         return false
+
+    # шаг раскрытия слоя: дорисовать подросшую часть; в конце полная перерисовка (тень)
+    def _reveal_step(self, layer):
+        if layer.reveal >= 1:
+            self:relayout()
+        else:
+            self.layers_dirty = true
 
     def top_layer(self):
         return self.layers[len(self.layers)]
@@ -164,6 +178,8 @@ export class UI:
         for t in self.timers:
             if best == nil or t.at < best:
                 best = t.at
+        if len(self.tweens) > 0 and (best == nil or best > self:now() + 0.05):
+            best = self:now() + 0.05
         if best == nil:
             return nil
         return math.max(0, best - self:now())
@@ -180,6 +196,40 @@ export class UI:
             else:
                 self:cancel(t)
             t.fn()
+
+    # ------------------------------------------------------------ переходы
+
+    # target[field] плавно идёт к to за seconds (с учётом скорости из настроек); выключенные анимации ставят значение сразу.
+    # on_step: что делать на каждом шаге (по умолчанию target:invalidate())
+    def tween(self, target, field, to, seconds, ease_name="out_cubic", on_step=nil):
+        for i, t in self.tweens:
+            if t.target == target and t.field == field:
+                table.remove(self.tweens, i)
+                break
+        a = self.win.wm.anim
+        step = on_step ?? (() => target:invalidate())
+        if a == nil or not a.enabled or a.widgets == false or seconds <= 0 or target[field] == nil:
+            target[field] = to
+            step()
+            return
+        self.tweens[len(self.tweens) + 1] = {target: target, field: field, v0: target[field], to: to, start: self:now(),
+            dur: seconds / (a.speed ?? 1), ease: ease_name, step: step}
+
+    def animating(self):
+        return len(self.tweens) > 0
+
+    def _step_tweens(self):
+        if len(self.tweens) == 0:
+            return
+        now = self:now()
+        keep = []
+        for t in self.tweens:
+            k = math.min(1, (now - t.start) / math.max(0.001, t.dur))
+            t.target[t.field] = t.v0 + (t.to - t.v0) * anim.ease(t.ease, k)
+            t.step()
+            if k < 1:
+                keep[len(keep) + 1] = t
+        self.tweens = keep
 
     # ------------------------------------------------------------ фокус
 
@@ -391,8 +441,15 @@ export class UI:
             self.stats.full += 1
             self.win:present()
             return
+        if self.layers_dirty and len(self.dirty) == 0:
+            self.layers_dirty = false
+            for layer in self.layers:
+                self:_draw_layer(cv, st, layer, true)
+            self.win:present()
+            return
         if len(self.dirty) == 0:
             return
+        self.layers_dirty = false
         list = self.dirty
         self.dirty = []
         for w in list:
@@ -448,10 +505,18 @@ export class UI:
         w = layer.w
         if layer.modal and not again:
             self:_dim(cv, st.shadow, 0, 0, cv.w, cv.h)
-        if not again:
+        r = layer.reveal ?? 1
+        if not again and r >= 1:
             self:_dim(cv, st.shadow, w.x + 2, w.y + w.h, w.w, 2)
             self:_dim(cv, st.shadow, w.x + w.w, w.y + 2, 2, w.h - 2)
-        cv:push_clip(w.x - 1, w.y - 1, w.w + 2, w.h + 2)
+        if r <= 0:
+            return
+        # раскрытие: меню вниз от верха, диалог от середины
+        vh = math.max(1, math.floor((w.h + 2) * r + 0.5))
+        vy = w.y - 1
+        if layer.center:
+            vy = w.y - 1 + math.floor((w.h + 2 - vh) / 2)
+        cv:push_clip(w.x - 1, vy, w.w + 2, vh)
         w:draw_tree(cv, st)
         cv:pop_clip()
 
@@ -478,6 +543,7 @@ export class UI:
             elif name != nil:
                 self:dispatch(name, ev[2], ev[3], ev[4])
             self:_run_timers()
+            self:_step_tweens()
             self:flush()
         self.win:close()
 
