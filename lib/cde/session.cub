@@ -1,0 +1,33 @@
+# cde.session: рабочий стол как программа сессии после входа (вместо полноэкранного терминала)
+#
+#   shell = (session) => cde_session.program(session, {assets: "/repo/assets"})      для boot.new({shell: ...})
+#
+# Процесс сессии становится оконным менеджером (держит фокус ввода ядра), приложения запускаются его потомками с правами и видом CFS
+# пользователя. Первым открывается терминал. Alt+Enter новый терминал, Ctrl+Alt+Q выход из сессии (панель и «Пуск» на шаге 3).
+# opts: term, assets, theme, host, ready(wm) (для тестов), terminal_ready(ctx) (для тестов: ready терминала)
+
+import cde.wm as wm_mod
+import cde.terminal as terminal
+
+export def program(session, opts=nil):
+    o = opts ?? {}
+
+    def main(sys, args):
+        wm = wm_mod.new({term: o.term, assets: o.assets ?? "/repo/assets", theme: o.theme})
+        term_opts = {assets: o.assets, host: o.host, ready: o.terminal_ready}
+        def open_terminal():
+            wm:launch(terminal.main, {name: "terminal"}, [session, term_opts])
+        def logout():
+            wm:stop()
+        wm:hotkey("alt+enter", open_terminal)
+        wm:hotkey("ctrl+alt+q", logout)
+        open_terminal()
+        sys.log("info", "desktop started for " .. tostring(session.user))
+        if o.ready != nil:
+            o.ready(wm)
+        wm:run(sys)
+        # приложения сессии закрываются вместе с ней
+        for w in wm.windows:
+            pcall(sys.kill, w.pid, "kill")
+        pcall(() => wm.screen:close())
+    return main

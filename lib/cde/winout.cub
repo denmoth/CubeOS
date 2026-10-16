@@ -1,0 +1,118 @@
+# cde.winout: вывод библиотеки ui (тот же интерфейс, что у ui.out_pixel) в текстовое окно CDE. Так в окне работает любая программа
+# на ui.runtime, в том числе терминал (term.session с opts.window).
+#
+#   out = winout.new(win, ui.theme.get("cubeos"))
+#   u = ui.runtime.new(out, {...})          клетки ui с цветами ролей темы 0..15 и цветами терминала 32..47
+#
+# Цвета: клетки ui хранят роли темы (0..15) и цвета терминала CC (32..47); здесь они переводятся в номера общей палитры экрана
+# (ближайший цвет). Палитра терминала по умолчанию (term.palette "cubeos") совпадает с цветами CC темы CDE 0..15.
+
+import ui.theme as theme_mod
+
+export class WinOut:
+    def init(self, win, th=nil):
+        self.win = win
+        self.theme = th ?? theme_mod.get("cubeos")
+        self.kind = "pixel"
+        self.cell_w = win.font.width
+        self.cell_h = win.font.height
+        self.map = {}
+        self.term_palette = nil
+        self.stats = {frames: 0, cells: 0}
+        self.opened = false
+        self.screen = nil
+
+    def size(self):
+        return self.win:cols(), self.win:rows()
+
+    def _nearest(self, c):
+        return self.win.wm.palette:nearest(c[1], c[2], c[3])
+
+    def _build(self):
+        m = {}
+        for i in range[0, 15]:
+            m[i] = self:_nearest(self.theme.palette[i + 1])
+            # строки развёртки (16..31) в окне не рисуются
+            m[i + 16] = m[i]
+        for i in range[0, 15]:
+            if self.term_palette != nil:
+                m[32 + i] = self:_nearest(self.term_palette[i + 1])
+            else:
+                m[32 + i] = i
+            m[48 + i] = m[32 + i]
+        self.map = m
+
+    def open(self):
+        self:_build()
+        self.opened = true
+        self:invalidate()
+
+    def set_theme(self, th):
+        self.theme = th
+        self:_build()
+        self:invalidate()
+
+    def set_term_palette(self, list16):
+        self.term_palette = list16
+        self:_build()
+        self:invalidate()
+
+    def invalidate(self):
+        self.prev = nil
+
+    # события текстового окна приходят в клетках с единицы
+    def to_cell(self, x, y):
+        return x - 1, y - 1
+
+    def tick(self, dt):
+        pass
+
+    def suspend(self):
+        pass
+
+    def resume(self):
+        self:invalidate()
+
+    def close(self):
+        self.opened = false
+
+    # переносит изменённые клетки в окно и показывает их
+    def present(self, c):
+        win = self.win
+        wc = win.cells
+        cols = math.min(wc.w, c.w)
+        rows = math.min(wc.h, c.h)
+        full = self.prev == nil
+        x_lo = 0
+        y_lo = 0
+        x_hi = cols - 1
+        y_hi = rows - 1
+        if not full:
+            x_lo = math.max(0, c.dx0)
+            y_lo = math.max(0, c.dy0)
+            x_hi = math.min(cols - 1, c.dx1)
+            y_hi = math.min(rows - 1, c.dy1)
+        c:clean()
+        self.prev = true
+        if x_lo > x_hi or y_lo > y_hi:
+            return 0
+        m = self.map
+        changed = 0
+        for y in range[y_lo, y_hi]:
+            for x in range[x_lo, x_hi]:
+                i = y * c.w + x + 1
+                j = y * wc.w + x + 1
+                cp = c.cp[i]
+                fg = m[c.fg[i]] ?? c.fg[i]
+                bg = m[c.bg[i]] ?? c.bg[i]
+                if full or wc.cp[j] != cp or wc.fg[j] != fg or wc.bg[j] != bg:
+                    wc:set(x, y, cp, fg, bg)
+                    changed += 1
+        if changed > 0:
+            win:present()
+        self.stats.frames += 1
+        self.stats.cells += changed
+        return changed
+
+export def new(win, th=nil):
+    return WinOut(win, th)

@@ -16,12 +16,47 @@
 
 import cgl.surface as surface_mod
 import ui.cells as cells_mod
+import term.chars as chars
 import cde.theme as theme
 
 # высота заголовка вместе с верхней линией рамки; рамка 1 пиксель с остальных сторон
 export const TITLE = 12
 # тень справа и снизу
 export const SHADOW = 2
+
+const TELE = {}
+
+# картинка телетекст-символа (байты CC 128..159) в клетке fw x fh: шесть блоков, правый нижний всегда фоновый (как в ui.out_pixel)
+def _teletext_rows(cp, fw, fh):
+    key = cp * 10000 + fw * 100 + fh
+    cached = TELE[key]
+    if cached != nil:
+        return cached
+    bits = cp - 0xE080
+    rows = []
+    for y in range[1, fh]:
+        row = []
+        band = math.floor((y - 1) / (fh / 3))
+        for x in range[1, fw]:
+            col = x <= fw / 2 and 0 or 1
+            mask = 2 ** (band * 2 + col)
+            on = mask < 32 and math.floor(bits / mask) % 2 == 1
+            row[x] = on and 1 or 0
+        rows[y] = row
+    TELE[key] = rows
+    return rows
+
+# строки глифа клетки или nil (пробел)
+def _glyph(f, cp):
+    if cp == 32:
+        return nil
+    if chars.is_teletext(cp):
+        return _teletext_rows(cp, f.width, f.height)
+    if cp >= 0xE000 and cp < 0xE100:
+        cp = chars.low_glyph(cp) ?? 32
+        if cp == 32:
+            return nil
+    return f:glyph_bits(cp)
 
 export class Window:
     def init(self, wm, id, pid, opts):
@@ -174,7 +209,7 @@ export class Window:
                 cp = c.cp[i]
                 fg = c.fg[i]
                 bg = c.bg[i]
-                rows = cp != 32 and f:glyph_bits(cp) or nil
+                rows = _glyph(f, cp)
                 cursor = show_cursor and x == self.cursor_x and y == self.cursor_y
                 x0 = x * fw
                 for gy in range[1, fh]:

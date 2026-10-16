@@ -9,7 +9,8 @@
 # если службы нет, всё работает локально. Настройки пользователя: $cfg/cush.conf, история команд $cfg/cush_history.
 #
 # opts: term (по умолчанию настоящий), backend ("auto", "pixel", "text"), assets (папка assets для шрифта), host (имя компьютера),
-#   ready(ctx) (для тестов: {vterm, env, ui, proc, out} сразу после запуска), history (строк прокрутки, 2000)
+#   ready(ctx) (для тестов: {vterm, env, ui, proc, out} сразу после запуска), history (строк прокрутки, 2000),
+#   window (текстовое окно CDE: терминал рисуется в него, ввод приходит событиями окна; блокировка тогда у рабочего стола)
 
 import ui
 import cfs
@@ -25,6 +26,7 @@ import svc.rpc as rpc
 import svc.timeclient as timeclient
 import boot.console as console_mod
 import boot.greeter as greeter_mod
+import cde.winout as winout
 
 # события ввода идут через интерфейс (раскладка, мышь), остальные программе напрямую
 const INPUT = {key: true, key_up: true, char: true, paste: true, mouse_click: true, mouse_drag: true, mouse_up: true,
@@ -42,7 +44,9 @@ export def program(session, opts=nil):
             open_opts.assets = o.assets
         # шрифт пиксельного терминала (D239): настройки системы и пользователя ($cfg/fonts.conf), запасные шрифты для недостающих букв
         font_name = nil
-        if o.font == nil:
+        if o.window != nil:
+            pass
+        elif o.font == nil:
             def read_conf(path):
                 if path != nil and view:exists(path):
                     return view:read(path)
@@ -54,7 +58,7 @@ export def program(session, opts=nil):
                 font_name = fname
         else:
             open_opts.font = o.font
-        out = ui.open_out(open_opts)
+        out = o.window != nil and winout.new(o.window, ui.theme.get("cubeos")) or ui.open_out(open_opts)
         u = ui.runtime.new(out, {theme: ui.theme.get("cubeos")})
         cols, rows = out:size()
         vt = vterm.new(cols, rows, {palette: palette.get("cubeos"), history: o.history ?? 2000})
@@ -192,6 +196,8 @@ export def program(session, opts=nil):
             view:write_atomic(lock_conf, json5.patch(text, ["lock_after"], m))
             return {after: m}
         def lock_screen():
+            if o.window != nil:
+                return false, "in the desktop, lock the screen from the desktop"
             mgr = session.manager
             if mgr == nil or session.id == nil:
                 return false, "locking is not available here"
@@ -316,7 +322,7 @@ export def program(session, opts=nil):
             serve_pending()
             sync_secret()
             wait = nil
-            if locked.after > 0 and not locked.on and session.manager != nil:
+            if locked.after > 0 and not locked.on and session.manager != nil and o.window == nil:
                 wait = math.max(0.5, (locked.last_input + locked.after * 60000 - sys.now()) / 1000)
             ev, a, b, c, d, e = sys.wait_event(nil, wait)
             if ev == nil:
@@ -327,6 +333,14 @@ export def program(session, opts=nil):
                 locked.last_input = sys.now()
             # удержание Ctrl+T (через секунду CC сам шлёт terminate; короткое нажатие терминал обрабатывает сам): программу убить без
             # вопросов, а если программы нет, перезапустить оболочку (D222)
+            # окно CDE: новый размер, просьба закрыть (кнопка ×, Ctrl+T), фокус
+            if ev == "win_resize":
+                return "term_resize"
+            if ev == "win_close":
+                u.quit = true
+                return "none"
+            if ev == "win_focus" or ev == "win_blur":
+                return "none"
             if ev == "cubeos_keyboard":
                 tv:set_keyboard(a, b)
                 return "none"

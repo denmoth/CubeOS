@@ -169,8 +169,21 @@ local function main()
   -- модули служб подгружаются заранее: иначе они компилировались бы в процессе init одним куском
   load("system", "Loading system services", { "svc.logd", "svc.timed", "svc.devd", "svc.powerd", "svc.crashd", "svc.permd", "svc.notifyd",
     "svc.clipboard", "svc.stub", "svc.fontd", "svc.inputd", "svc.audiod", "svc.netd" })
+  -- рабочий стол CDE после входа (boot.conf: de: "cde", D249), если есть CC: Graphics; иначе полноэкранный терминал
+  local want_cde = false
+  pcall(function()
+    local f = fs.open((ctx.root or "") .. "/cubeos/sys/cfg/boot.conf", "r")
+    local text = f and f.readAll() or ""
+    if f then f.close() end
+    want_cde = term.setGraphicsMode ~= nil and text:find("de%s*:%s*[\"']cde[\"']") ~= nil
+  end)
   if not ctx.shell then
-    load("shell", "Loading the terminal", { "ui", "term.session" })
+    if want_cde then
+      load("shell", "Loading the desktop", { "ui", "term.session", "cde.theme", "cde.window", "cde.wallpaper", "cde.compositor",
+        "cde.wm", "cde.app", "cde.winout", "cde.terminal", "cde.session" })
+    else
+      load("shell", "Loading the terminal", { "ui", "term.session" })
+    end
   end
 
   report("setup", 0, "Preparing the system")
@@ -198,6 +211,9 @@ local function main()
     mode = ctx.mode,
     import = rt.import,
     shell = ctx.shell or function(session)
+      if want_cde and session.env and session.env.de == "cde" then
+        return import("cde.session").program(session, { assets = rt.source .. "/assets" })
+      end
       return import("term.session").program(session, { assets = rt.source .. "/assets" })
     end,
     kernel = { rt = rt.cubic.rt, cubic = rt.cubic, pull = cckernel.pull },

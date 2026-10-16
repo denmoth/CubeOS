@@ -8,7 +8,7 @@ from lang_strings import strings, ROOT
 from lang_data import T
 
 # подписи экрана загрузки (sys/boot/stage2.lua report(...), lib/boot/splash.cub)
-BOOT = ["Loading libraries", "Loading the filesystem", "Loading the kernel", "Loading system services", "Loading the terminal",
+BOOT = ["Loading libraries", "Loading the filesystem", "Loading the kernel", "Loading system services", "Loading the terminal", "Loading the desktop",
         "Preparing the system", "Starting services", "Ready", "Boot failed"]
 
 def q(s):
