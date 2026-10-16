@@ -25,10 +25,10 @@ export const theme = theme_mod
 export def open(sys, ctx, opts=nil):
     return ctx.wm:_new_window(sys.getpid(), opts ?? {})
 
-# номер палитры экрана, ближайший к цвету (для пиксельных приложений; ищется по всей палитре, включая цвета темы)
+# номер палитры экрана, ближайший к цвету (для пиксельных приложений; ищется среди цветов CC и общих цветов 0..211: цвета интерфейса и обоев могут меняться на ходу)
 export def rgb(ctx, r, g, b):
-    return ctx.wm.palette:nearest(r, g, b)
+    return ctx.wm.palette:nearest(r, g, b, 0, 211)
 
 # n номеров вдоль ломаной через цвета [r, g, b] (градиенты, освещение)
 export def ramp(ctx, stops, n):
-    return ctx.wm.palette:ramp(stops, n)
+    return ctx.wm.palette:ramp(stops, n, 0, 211)

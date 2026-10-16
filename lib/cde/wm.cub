@@ -208,21 +208,41 @@ export class WM:
             self.screen:set_colors(mine)
         return len(mine)
 
-    # окно закрыто: его места палитры свободны и снова цвета фона темы
+    # n мест палитры для живых обоев: сначала ступени обоев темы (они нужны только статичным обоям), потом места запаса
+    def _alloc_wide(self, win, n):
+        list = []
+        for i in range[0, theme.DESK_N - 1]:
+            if len(list) < n and self.owned[theme.DESK0 + i] == nil:
+                list[len(list) + 1] = theme.DESK0 + i
+        rest = n - len(list)
+        extra = rest > 0 and self:_alloc(win, rest) or []
+        if rest > 0 and len(extra) == 0:
+            return nil
+        for slot in list:
+            self.owned[slot] = win
+        for slot in extra:
+            list[len(list) + 1] = slot
+        return list
+
+    # окно закрыто: его места палитры свободны и снова цвета фона темы (ступени обоев: цвета обоев темы)
     def _free_colors(self, win):
         back = []
-        r, g, b = theme.palette(self.theme):get(theme.WIN_BG)
+        pal = theme.palette(self.theme)
+        r, g, b = pal:get(theme.WIN_BG)
         for slot, owner in self.owned:
             if owner == win:
                 back[len(back) + 1] = slot
+        entries = []
         for slot in back:
             self.owned[slot] = nil
-            self.pool_free[len(self.pool_free) + 1] = slot
+            if slot >= theme.DESK0 and slot < theme.DESK0 + theme.DESK_N:
+                dr, dg, db = pal:get(slot)
+                entries[len(entries) + 1] = [slot, dr, dg, db]
+            else:
+                self.pool_free[len(self.pool_free) + 1] = slot
+                entries[len(entries) + 1] = [slot, r, g, b]
         if len(back) > 0:
             table.sort(self.pool_free)
-            entries = []
-            for slot in back:
-                entries[len(entries) + 1] = [slot, r, g, b]
             self.screen:set_colors(entries)
 
     def _title_changed(self, win):
@@ -1006,6 +1026,7 @@ export class WM:
         ctx = {palette: self.palette, theme: () => me.theme, read: read_image, now: () => me.clock(), animated: animated,
             damage: (x, y, w, h) => me.comp:damage(x, y, w, h),
             alloc: (n) => animated and me:_alloc(me.wall_owner, n) or nil,
+            alloc_wide: (n) => animated and me:_alloc_wide(me.wall_owner, n) or nil,
             set_colors: (list) => me:_set_colors(me.wall_owner, list)}
         surf, live = wallpaper_mod.make(self.background, self.W, self.H, ctx)
         self.live = live

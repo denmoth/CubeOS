@@ -1,4 +1,4 @@
-# cde.wallpaper_live: живые обои (шаг 3.4): boot-wave, nyan, matrix, vaporwave
+# cde.wallpaper_live: живые обои (шаг 3.4): wave, nyan, matrix, vaporwave
 #
 #   surface, live = live.build("nyan", W, H, ctx)       nil, nil: такого живого обоя нет
 #
@@ -7,14 +7,13 @@
 #               (ничего не перерисовывается, почти бесплатно): мерцание звёзд, бегущий свет, дождь «матрицы»;
 #   пиксельные: маленький прямоугольник (куб с волной, кот с радугой) перерисовывается и сообщается композитору (ctx.damage).
 # Если анимаций нет (ctx.animated == false) или мест палитры не хватило, рисуется первый кадр без движения.
-# ctx: palette, theme(), alloc(n), set_colors(list), damage(x, y, w, h), now(), animated.
+# ctx: palette, theme(), alloc(n), alloc_wide(n) (в том числе ступени обоев темы), set_colors(list), damage(x, y, w, h), now(), animated.
 # Анимация: live.next (когда вызвать в следующий раз, мс), live:step(now, speed).
 
 import cgl.surface as surface_mod
 import cgl.color as color
 import cde.theme as theme
 
-const FPS_BOOT = 70
 const FPS_NYAN = 130
 const FPS_PAL = 80
 
@@ -78,105 +77,59 @@ class Anim:
                 self.ctx.damage(x, y, w, h)
         self.next = now + self.ms / math.max(0.1, speed)
 
-# ------------------------------------------------------------ boot-wave: куб загрузки с бегущей волной света
+# ------------------------------------------------------------ wave: бегущие полосы света на всём экране
 
-const TONE_RGB = [[125, 207, 255], [122, 162, 247], [61, 89, 161]]
-const LEVELS = 16
+const WAVE_SLOTS = 12
 
-def _inside(poly, x, y):
-    sign = 0
-    n = len(poly)
-    for i in range[1, n]:
-        a = poly[i]
-        b = poly[i % n + 1]
-        cross = (b[1] - a[1]) * (y - a[2]) - (b[2] - a[2]) * (x - a[1])
-        if cross != 0:
-            sg = cross > 0 and 1 or -1
-            if sign == 0:
-                sign = sg
-            elif sign != sg:
-                return false
-    return true
+# цвет места палитры номер j из n в момент t: тёмный синий фон, по нему идут две полосы света (голубая быстрая с белой
+# сердцевиной и фиолетовая медленная в другую сторону), как переливы на экране загрузки
+def _wave_color(j, n, t):
+    phi = j / n
+    dark = 0.5 + 0.5 * math.sin(phi * 6.2832)
+    r = _mix(8, 20, dark)
+    g = _mix(10, 24, dark)
+    b = _mix(30, 62, dark)
+    da = ((phi - t * 0.12) % 1) - 0.5
+    ga = math.exp(-(da / 0.1) ** 2)
+    db = ((phi + t * 0.05 + 0.3) % 1) - 0.5
+    gb = math.exp(-(db / 0.13) ** 2)
+    core = math.max(0, ga - 0.72) * 3.2
+    r = r + ga * 70 + gb * 80 + core * 160
+    g = g + ga * 190 + gb * 30 + core * 70
+    b = b + ga * 235 + gb * 150 + core * 20
+    return _clamp(math.floor(r), 0, 255), _clamp(math.floor(g), 0, 255), _clamp(math.floor(b), 0, 255)
 
-def _boot_wave(ctx, W, H):
+def _wave(ctx, W, H):
     s = surface_mod.new(W, H, theme.DESK0)
-    _vgradient(ctx, s, 0, 0, W, H, [[0, 6, 8, 20], [1, 34, 40, 86]])
-    # куб логотипа CubeOS (32x33 единицы, как на экране загрузки) в центре
-    unit = H * 0.42 / 33
-    cw = math.floor(32 * unit)
-    ch = math.floor(33 * unit)
-    ox = math.floor((W - cw) / 2)
-    oy = math.floor(H * 0.46 - ch / 2)
-    polys = [[[16, 0], [32, 8], [16, 16], [0, 8]], [[0, 8], [16, 16], [16, 32], [0, 24]], [[16, 16], [32, 8], [32, 24], [16, 32]]]
-    tone = []
-    for y in range[0, ch - 1]:
-        for x in range[0, cw - 1]:
-            u = (x + 0.5) / unit
-            v = (y + 0.5) / unit
-            tn = 0
-            for k in range[1, 3]:
-                if tn == 0 and _inside(polys[k], u, v):
-                    tn = k
-            tone[y * cw + x + 1] = tn
-    # номера цветов: тон x уровень (0 призрак, средний обычный, выше блик)
-    shade = []
-    for tn in range[1, 3]:
-        c = TONE_RGB[tn]
-        row = []
-        for lv in range[0, LEVELS - 1]:
-            if lv == 0:
-                row[1] = _near(ctx, _mix(34, c[1], 0.12), _mix(40, c[2], 0.12), _mix(86, c[3], 0.12))
-            else:
-                k = lv / (LEVELS - 1)
-                base = 0.78 + 0.22 * math.min(1, k * 2)
-                glow = math.max(0, (k - 0.5) * 2)
-                row[lv + 1] = _near(ctx, _mix(c[1] * base, 255, glow), _mix(c[2] * base, 255, glow), _mix(c[3] * base, 255, glow))
-        shade[tn] = row
-    # звёзды: места палитры мерцают
-    slots = ctx.animated and ctx.alloc(4) or nil
-    rnd = _rng(5)
-    stars = []
-    for i in range[1, 46]:
-        x = rnd(W)
-        y = rnd(H)
-        if x < ox - 2 or x > ox + cw + 2 or y < oy - 2 or y > oy + ch + 2:
-            stars[len(stars) + 1] = [x, y, i % 4 + 1]
-    for st in stars:
-        s:set(st[1], st[2], slots != nil and slots[st[3]] or _near(ctx, 150, 160, 200))
-    def paint(t):
-        # волна света: фронт идёт слева направо, на фронте блик, позади перелив
-        period = 4.2
-        fade = cw * 0.3
-        front = ((t % period) / period) * (cw + 2 * fade) - fade
-        lvl = []
-        for x in range[0, cw - 1]:
-            d = front - x
-            glow = math.max(0, 1 - math.abs(d) / (fade * 0.55))
-            glow = glow * glow
-            shim = 0.5 + 0.5 * math.sin(t * 2.4 - x * 0.16)
-            k = 0.45 + 0.1 * shim + 0.45 * glow
-            lvl[x + 1] = _clamp(math.floor(k * (LEVELS - 1) + 0.5), 1, LEVELS - 1)
-        px = s.px
-        for y in range[0, ch - 1]:
-            base = (oy + y) * W + ox + 1
-            row = y * cw + 1
-            for x in range[0, cw - 1]:
-                tn = tone[row + x]
-                if tn > 0:
-                    px[base + x] = shade[tn][lvl[x + 1] + 1]
-        s:mark(ox, oy, ox + cw - 1, oy + ch - 1)
-        return ox, oy, cw, ch
-    paint(1.5)
-    if not ctx.animated:
+    slots = ctx.animated and ctx.alloc_wide(WAVE_SLOTS) or nil
+    n = WAVE_SLOTS
+    live_slots = slots != nil
+    if slots == nil:
+        slots = []
+        for j in range[0, n - 1]:
+            r, g, b = _wave_color(j, n, 1.4)
+            slots[j + 1] = _near(ctx, r, g, b)
+    span = (W * 0.9 + H * 0.55) * 0.9
+    px = s.px
+    for y in range[0, H - 1]:
+        base = y * W + 1
+        for x in range[0, W - 1]:
+            u = (x * 0.9 + y * 0.55) / span * n
+            i = math.floor(u)
+            k = i % n
+            if color.dither(u - i, x, y):
+                k = (k + 1) % n
+            px[base + x] = slots[k + 1]
+    s:touch()
+    if not live_slots:
         return s, nil
     def pal(sl, t):
         out = []
         for j in range[1, len(sl)]:
-            a = 0.25 + 0.75 * (0.5 + 0.5 * math.sin(t * (1.1 + j * 0.45) + j * 1.9))
-            a = a * a
-            out[len(out) + 1] = [sl[j], math.floor(_mix(20, 215, a)), math.floor(_mix(24, 225, a)), math.floor(_mix(44, 255, a))]
+            r, g, b = _wave_color(j - 1, n, t)
+            out[len(out) + 1] = [sl[j], r, g, b]
         return out
-    return s, Anim(ctx, slots, slots != nil and pal or nil, paint, FPS_BOOT)
+    return s, Anim(ctx, slots, pal, nil, FPS_PAL)
 
 # ------------------------------------------------------------ nyan: кот и радуга
 
@@ -370,9 +323,9 @@ def _vapor(ctx, W, H):
         return out
     return s, Anim(ctx, slots, pal, nil, FPS_PAL)
 
-export const BUILD = {"boot-wave": _boot_wave, nyan: _nyan, matrix: _matrix, vaporwave: _vapor}
+export const BUILD = {wave: _wave, nyan: _nyan, matrix: _matrix, vaporwave: _vapor}
 
-export const NAMES = ["boot-wave", "nyan", "matrix", "vaporwave"]
+export const NAMES = ["wave", "nyan", "matrix", "vaporwave"]
 
 export def build(name, W, H, ctx):
     fn = BUILD[name]
