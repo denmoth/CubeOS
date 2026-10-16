@@ -9,7 +9,7 @@
 --   NAME.luahasnot: строки, которых там быть не должно
 --   NAME.loader   : наличие файла включает настоящий загрузчик модулей (lib/ и tests/modules/)
 -- Каждый тест без .err и .rterr дополнительно прогоняется с минификацией (имя "min:NAME").
--- Результат пишется в /repo/build/test-result.txt
+-- Результат пишется в /repo/build/test-result.txt (второй аргумент раннера: другое имя файла в build/, для одновременных прогонов)
 
 local ROOT = "/repo"
 -- В игре (CUBIC_GAME_TEST = true): компьютер не выключается, между тестами есть yield (иначе CC убьёт долгий код),
@@ -165,7 +165,7 @@ end
 table.sort(names)
 
 -- аргумент: подстрока имени, либо «=имя1,имя2,...» (точный список; «=unit» это только unit-тесты, «=:» ничего из cases)
-local only = ...
+local only, out_name = ...
 local exact
 if only and only:sub(1, 1) == "=" then
   exact = {}
@@ -214,7 +214,7 @@ if tf then
   tf.close()
 end
 
-local out = fs.open(ROOT .. "/build/test-result.txt", "w")
+local out = fs.open(ROOT .. "/build/" .. (out_name or "test-result.txt"), "w")
 out.write(table.concat(results, "\n") .. "\n\n" .. passed .. " passed, " .. failed .. " failed\n")
 out.close()
 if not IN_GAME then os.shutdown() end
