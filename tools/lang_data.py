@@ -696,7 +696,7 @@ T = {
 "Your key floppies (the default)": ("Ваши ключи-дискеты (по умолчанию)", "Ваші ключі-дискети (типово)"),
 "Make the inserted floppy a key that replaces the password": ("Сделать вставленную дискету ключом вместо пароля", "Зробити вставлену дискету ключем замість пароля"),
 "A key that works together with your PIN": ("Ключ, который работает вместе с PIN", "Ключ, що працює разом із PIN"),
-"The floppy with this number stops being a key": ("Дискета с этим номером перестаёт быть ключом", "Дискета з цим номером перестає бути ключем"),
+"The floppy with this number (or the one in the drive) stops being a key": ("Дискета с этим номером (или та, что в дисководе) перестаёт быть ключом", "Дискета з цим номером (або та, що в дисководі) перестає бути ключем"),
 "Make a key": ("Сделать ключ", "Зробити ключ"),
 "A lost key stops working": ("Потерянный ключ перестаёт работать", "Загублений ключ перестає працювати"),
 "No key floppies. Insert a floppy into a drive attached to this computer and run key add.": ("Ключей-дискет нет. Вставьте дискету в дисковод этого компьютера и выполните key add.", "Ключів-дискет немає. Вставте дискету в дисковод цього комп'ютера й виконайте key add."),
@@ -711,4 +711,9 @@ T = {
 "Someone tried to sign in with an old copy of your key floppy ({when}): make a new key (key add) and remove the old one (key remove)": ("Кто-то пытался войти старой копией вашей ключа-дискеты ({when}): сделайте новый ключ (key add) и уберите старый (key remove)", "Хтось намагався увійти старою копією вашого ключа-дискети ({when}): зробіть новий ключ (key add) і приберіть старий (key remove)"),
 "update CubeOS on both computers (pairing needs the key exchange)": ("обновите CubeOS на обоих компьютерах (сопряжению нужен обмен ключами)", "оновіть CubeOS на обох комп'ютерах (сполученню потрібен обмін ключами)"),
 "bad key exchange": ("ошибка обмена ключами", "помилка обміну ключами"),
+"last used {when}": ("последний вход {when}", "останній вхід {when}"),
+"in the drive now": ("сейчас в дисководе", "зараз у дисководі"),
+"The number is printed on the floppy's tooltip in the game (Disk ID). key remove without a number removes the key in the drive.": ("Номер виден в подсказке дискеты в игре (Disk ID). key remove без номера убирает ключ, который в дисководе.", "Номер видно в підказці дискети в грі (Disk ID). key remove без номера прибирає ключ, що в дисководі."),
+"The key floppy in the drive no longer works.": ("Ключ-дискета в дисководе больше не работает.", "Ключ-дискета в дисководі більше не працює."),
+"insert the key floppy or give its number (key list)": ("вставьте ключ-дискету или укажите её номер (key list)", "вставте ключ-дискету або вкажіть її номер (key list)"),
 }

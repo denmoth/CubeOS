@@ -930,8 +930,8 @@ msgstr "Зробити вставлену дискету ключем заміс
 msgid "A key that works together with your PIN"
 msgstr "Ключ, що працює разом із PIN"
 
-msgid "The floppy with this number stops being a key"
-msgstr "Дискета з цим номером перестає бути ключем"
+msgid "The floppy with this number (or the one in the drive) stops being a key"
+msgstr "Дискета з цим номером (або та, що в дисководі) перестає бути ключем"
 
 msgid "Make a key"
 msgstr "Зробити ключ"
@@ -1371,6 +1371,9 @@ msgstr "режим ключа: key або key+pin"
 msgid "no such key floppy"
 msgstr "немає такого ключа-дискети"
 
+msgid "insert the key floppy or give its number (key list)"
+msgstr "вставте ключ-дискету або вкажіть її номер (key list)"
+
 msgid "Someone tried to sign in with an old copy of your key floppy ({when}): make a new key (key add) and remove the old one (key remove)"
 msgstr "Хтось намагався увійти старою копією вашого ключа-дискети ({when}): зробіть новий ключ (key add) і приберіть старий (key remove)"
 
@@ -1509,6 +1512,15 @@ msgstr "разом із PIN"
 msgid "instead of the password"
 msgstr "замість пароля"
 
+msgid "last used {when}"
+msgstr "останній вхід {when}"
+
+msgid "in the drive now"
+msgstr "зараз у дисководі"
+
+msgid "The number is printed on the floppy's tooltip in the game (Disk ID). key remove without a number removes the key in the drive."
+msgstr "Номер видно в підказці дискети в грі (Disk ID). key remove без номера прибирає ключ, що в дисководі."
+
 msgid "Floppy #{id} is now your key: sign in with it and your PIN. Keep it somewhere safe (an ender chest)."
 msgstr "Дискета №{id} тепер ваш ключ: входьте нею й PIN. Зберігайте її надійно (в ендер-скрині)."
 
@@ -1517,6 +1529,9 @@ msgstr "Дискета №{id} тепер ваш ключ: на екрані в�
 
 msgid "Key floppy #{id} no longer works."
 msgstr "Ключ-дискета №{id} більше не працює."
+
+msgid "The key floppy in the drive no longer works."
+msgstr "Ключ-дискета в дисководі більше не працює."
 
 msgid "Every login asks for the password or PIN."
 msgstr "Кожен вхід питає пароль або PIN."

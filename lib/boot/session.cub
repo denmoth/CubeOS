@@ -355,7 +355,13 @@ export class SessionManager:
                 return false, why
             return pcall(() => self.auth:set_field(s.user, "remember_minutes", args.minutes))
         if op == "key_list":
-            return self.auth:list_disk_keys(s.user)
+            list = self.auth:list_disk_keys(s.user)
+            here = {}
+            for fl in diskkey.floppies(self.periph, self.fsapi):
+                here[fl.id] = true
+            for k in list:
+                k.inserted = here[k.id] == true
+            return list
         if op == "key_add":
             ok, why = own_password()
             if not ok:
@@ -382,6 +388,14 @@ export class SessionManager:
             if not ok:
                 return false, why
             id = tonumber(args.id)
+            # без номера: ключ, который сейчас в дисководе
+            if args.id == nil:
+                for fl in diskkey.floppies(self.periph, self.fsapi):
+                    for k in self.auth:list_disk_keys(s.user):
+                        if id == nil and k.id == fl.id:
+                            id = fl.id
+                if id == nil:
+                    return false, "insert the key floppy or give its number (key list)"
             if id == nil or not self.auth:remove_disk_key(s.user, id):
                 return false, "no such key floppy"
             for fl in diskkey.floppies(self.periph, self.fsapi):

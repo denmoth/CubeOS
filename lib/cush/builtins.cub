@@ -956,13 +956,21 @@ def b_key(sh, args):
         if len(list) == 0:
             sh:println(sh:t("No key floppies. Insert a floppy into a drive attached to this computer and run key add."))
         for k in list:
-            sh:println("#" .. tostring(k.id) .. "  " .. tostring(k.label ?? "") .. "  " .. (k.mode == "key+pin" and sh:t("with the PIN") or sh:t("instead of the password")))
+            line = "#" .. tostring(k.id) .. "  " .. tostring(k.label ?? "") .. "  " .. (k.mode == "key+pin" and sh:t("with the PIN") or sh:t("instead of the password"))
+            if k.used != nil and sh.time != nil:
+                okw, when_ = pcall(() => sh.time:date_text(k.used) .. " " .. sh.time:time_text(k.used))
+                if okw:
+                    line = line .. "  " .. sh:t("last used {when}", {when: when_})
+            sh:println(line)
+            if k.inserted:
+                sh:write_color("5", "    " .. sh:t("in the drive now"))
+                sh:println("")
+        if len(list) > 0:
+            sh:write_color("8", sh:t("The number is printed on the floppy's tooltip in the game (Disk ID). key remove without a number removes the key in the drive."))
+            sh:println("")
         return 0
     if sub != "add" and sub != "remove":
-        sh:eprint("usage: key [list | add [--pin] | remove ID]")
-        return 2
-    if sub == "remove" and args[2] == nil:
-        sh:eprint("usage: key remove ID")
+        sh:eprint("usage: key [list | add [--pin] | remove [ID]]")
         return 2
     st = sh.account("status")
     pw = nil
@@ -983,7 +991,10 @@ def b_key(sh, args):
     if not ok:
         sh:eprint("key: " .. sh:t(tostring(why)))
         return 1
-    sh:println(sh:t("Key floppy #{id} no longer works.", {id: args[2]}))
+    if args[2] != nil:
+        sh:println(sh:t("Key floppy #{id} no longer works.", {id: args[2]}))
+    else:
+        sh:println(sh:t("The key floppy in the drive no longer works."))
     return 0
 add("key", b_key)
 

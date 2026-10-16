@@ -930,8 +930,8 @@ msgstr "Сделать вставленную дискету ключом вме
 msgid "A key that works together with your PIN"
 msgstr "Ключ, который работает вместе с PIN"
 
-msgid "The floppy with this number stops being a key"
-msgstr "Дискета с этим номером перестаёт быть ключом"
+msgid "The floppy with this number (or the one in the drive) stops being a key"
+msgstr "Дискета с этим номером (или та, что в дисководе) перестаёт быть ключом"
 
 msgid "Make a key"
 msgstr "Сделать ключ"
@@ -1371,6 +1371,9 @@ msgstr "режим ключа: key или key+pin"
 msgid "no such key floppy"
 msgstr "нет такой ключа-дискеты"
 
+msgid "insert the key floppy or give its number (key list)"
+msgstr "вставьте ключ-дискету или укажите её номер (key list)"
+
 msgid "Someone tried to sign in with an old copy of your key floppy ({when}): make a new key (key add) and remove the old one (key remove)"
 msgstr "Кто-то пытался войти старой копией вашей ключа-дискеты ({when}): сделайте новый ключ (key add) и уберите старый (key remove)"
 
@@ -1509,6 +1512,15 @@ msgstr "вместе с PIN"
 msgid "instead of the password"
 msgstr "вместо пароля"
 
+msgid "last used {when}"
+msgstr "последний вход {when}"
+
+msgid "in the drive now"
+msgstr "сейчас в дисководе"
+
+msgid "The number is printed on the floppy's tooltip in the game (Disk ID). key remove without a number removes the key in the drive."
+msgstr "Номер виден в подсказке дискеты в игре (Disk ID). key remove без номера убирает ключ, который в дисководе."
+
 msgid "Floppy #{id} is now your key: sign in with it and your PIN. Keep it somewhere safe (an ender chest)."
 msgstr "Дискета №{id} теперь ваш ключ: входите ею и PIN. Храните её надёжно (в эндер-сундуке)."
 
@@ -1517,6 +1529,9 @@ msgstr "Дискета №{id} теперь ваш ключ: на экране �
 
 msgid "Key floppy #{id} no longer works."
 msgstr "Ключ-дискета №{id} больше не работает."
+
+msgid "The key floppy in the drive no longer works."
+msgstr "Ключ-дискета в дисководе больше не работает."
 
 msgid "Every login asks for the password or PIN."
 msgstr "Каждый вход спрашивает пароль или PIN."

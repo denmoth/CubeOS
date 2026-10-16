@@ -129,7 +129,8 @@ eq(greeter_mod.new(con2, auth, sessions, {}):unlock(s), true, "the floppy and th
 # ------------------------------------------------------------ отзыв
 list = sessions:account(s.id, "key_list")
 eq(len(list), 1, "one key in the list")
-eq(sessions:account(s.id, "key_remove", {password: "long-password", id: 7}), true, "remove the key")
+eq([list[1].id, list[1].inserted, list[1].used != nil], [7, true, true], "with its number, whether it is in the drive and when it was used")
+eq(sessions:account(s.id, "key_remove", {password: "long-password"}), true, "remove the key in the drive without its number")
 r, why = sessions:key_login()
 eq(r, nil, "a removed key does not sign in")
 eq(files["disk/.cubeos_key"], nil, "and its file is gone from the floppy")
