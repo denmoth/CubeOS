@@ -709,4 +709,6 @@ T = {
 "the key mode is key or key+pin": ("режим ключа: key или key+pin", "режим ключа: key або key+pin"),
 "no such key floppy": ("нет такой ключа-дискеты", "немає такого ключа-дискети"),
 "Someone tried to sign in with an old copy of your key floppy ({when}): make a new key (key add) and remove the old one (key remove)": ("Кто-то пытался войти старой копией вашей ключа-дискеты ({when}): сделайте новый ключ (key add) и уберите старый (key remove)", "Хтось намагався увійти старою копією вашого ключа-дискети ({when}): зробіть новий ключ (key add) і приберіть старий (key remove)"),
+"update CubeOS on both computers (pairing needs the key exchange)": ("обновите CubeOS на обоих компьютерах (сопряжению нужен обмен ключами)", "оновіть CubeOS на обох комп'ютерах (сполученню потрібен обмін ключами)"),
+"bad key exchange": ("ошибка обмена ключами", "помилка обміну ключами"),
 }

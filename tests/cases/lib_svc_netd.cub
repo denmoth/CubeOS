@@ -4,6 +4,7 @@ import cfs
 import cfs.rules as rules
 import compat.proc as compat_proc
 import net.proto as proto
+import sha256
 import svc.netd as netd
 import svc.rpc as rpc
 eq = t.eq
@@ -113,6 +114,18 @@ r = call(desk, "pair", {host: "base", code: string.lower(code)}, "pair")
 eq(r[1] != nil and r[1].name, "base", "the right code pairs (case and dash do not matter)")
 eq(base.view:exists(netd.KEYS_PATH), true, "the host keeps the key in /cubeos/sys/sec")
 eq(string.find(base.view:read(netd.KEYS_PATH), code, 1, true) == nil, true, "the code itself is not stored")
+# подслушавший сопряжение знает код (худший случай), соль и случайные числа, но не общий секрет X25519: ключ у него не тот
+req_ = nil
+chal_ = nil
+for msg in world.sent[1]:
+    if msg.type == "pair_req":
+        req_ = msg
+for msg in world.sent[2]:
+    if msg.type == "pair_chal":
+        chal_ = msg
+eq(req_ != nil and chal_ != nil and req_.body.pub != nil and chal_.body.pub != nil, true, "both sides send X25519 public keys")
+guess = sha256.to_hex(proto.pair_key(netd.normalize_code(code), chal_.body.salt, req_.body.nonce, chal_.body.nonce, chal_.body.rounds))
+eq(string.find(base.view:read(netd.KEYS_PATH), guess, 1, true), nil, "even with the code an eavesdropper cannot compute the pair key")
 r = call(desk, "pair", {host: "base", code: code}, "again")
 eq(err_has(r, "not waiting for pairing"), true, "the code works only once")
 

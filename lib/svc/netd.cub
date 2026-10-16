@@ -6,7 +6,8 @@
 # Содержимое файлов не шифруется: кто подключён к тому же кабелю, может его прочитать (D242).
 #
 # Сопряжение: на хозяине `net pair` даёт код из 10 знаков (действует 5 минут, 3 неверные попытки его гасят); на другом компьютере
-# `net pair ХОСТ КОД`. Ключ выводится из кода и случайных чисел обеих сторон (PBKDF2), сам код по сети не идёт. Ключи лежат в
+# `net pair ХОСТ КОД`. Компьютеры обмениваются ключами X25519 (D248); ключ пары выводится из кода, случайных чисел и общего секрета
+# (PBKDF2), сам код по сети не идёт, и подслушавший сопряжение не может подобрать его перебором. Ключи лежат в
 # /cubeos/sys/sec/net_keys.lock (читает только система).
 #
 # Общая папка: `net share ИМЯ ПУТЬ [--ro]`; всё, что запрашивает сопряжённый компьютер, выполняется только внутри этой папки
@@ -24,6 +25,7 @@ import sha256
 import cfs.path as paths
 import cfs.errors as errors
 import net.proto as proto
+import x25519
 import net.link as link_mod
 import net.remote as remote
 import svc.rpc as rpc
@@ -309,9 +311,18 @@ export def main(sys, args):
             reply(m, side, "denied", {err: "pairing works only over a wired modem"})
             return
         body = type(m.body) == "table" and m.body or {}
-        c = {nc: tostring(body.nonce), nh: _random_hex("host"), name: _short(body.name) ?? ("pc-" .. tostring(m.src))}
+        their = proto.unhex(body.pub)
+        if their == nil or len(their) != 32:
+            reply(m, side, "denied", {err: "update CubeOS on both computers (pairing needs the key exchange)"})
+            return
+        sk = sha256.digest(_random_hex("dh-host"))
+        okx, shared = pcall(() => x25519.shared(sk, their))
+        if not okx:
+            reply(m, side, "denied", {err: "bad key exchange"})
+            return
+        c = {nc: tostring(body.nonce), nh: _random_hex("host"), name: _short(body.name) ?? ("pc-" .. tostring(m.src)), shared: sha256.to_hex(shared)}
         p.chal[m.src] = c
-        reply(m, side, "pair_chal", {salt: p.salt, nonce: c.nh, rounds: rounds})
+        reply(m, side, "pair_chal", {salt: p.salt, nonce: c.nh, rounds: rounds, pub: sha256.to_hex(x25519.public_key(sk))})
     incoming.pair_req = on_pair_req
 
     def on_pair_proof(m, side, wired):
@@ -322,7 +333,7 @@ export def main(sys, args):
             return
         if c.key == nil:
             sys.busy("pairing")
-            c.key = sha256.to_hex(proto.pair_key(p.code, p.salt, c.nc, c.nh, rounds))
+            c.key = sha256.to_hex(proto.pair_key(p.code, p.salt, c.nc, c.nh, rounds, c.shared))
             sys.busy(nil)
         if proto.open(m, c.key) and proto.fresh(m, nil, clock()):
             peer_keys[tostring(m.src)] = {key: c.key, name: c.name, paired: clock()}
@@ -533,13 +544,16 @@ export def main(sys, args):
         need_admin(sender)
         id = resolve(q.host)
         nc = _random_hex("client")
-        m, why = link:request(id, "pair_req", {nonce: nc, name: my_name()}, {timeout: 3})
+        sk = sha256.digest(_random_hex("dh-client"))
+        m, why = link:request(id, "pair_req", {nonce: nc, name: my_name(), pub: sha256.to_hex(x25519.public_key(sk))}, {timeout: 3})
         b = answer(m, why, q.host)
-        if m.type != "pair_chal" or b.salt == nil or b.nonce == nil:
+        their = proto.unhex(b.pub)
+        if m.type != "pair_chal" or b.salt == nil or b.nonce == nil or their == nil or len(their) != 32:
             raise Error("unexpected answer from {host}")
+        shared = sha256.to_hex(x25519.shared(sk, their))
         r = math.min(math.max(math.floor(tonumber(b.rounds) ?? ROUNDS), 1), 5000)
         sys.busy("pairing")
-        key = sha256.to_hex(proto.pair_key(normalize_code(q.code), b.salt, nc, b.nonce, r))
+        key = sha256.to_hex(proto.pair_key(normalize_code(q.code), b.salt, nc, b.nonce, r, shared))
         sys.busy(nil)
         m2, why2 = link:request(id, "pair_proof", {name: my_name()}, {key: key, timeout: 10})
         b2 = answer(m2, why2, q.host)

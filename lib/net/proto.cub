@@ -11,13 +11,13 @@
 #   proto.seal(msg, key, encrypt)   (D246) с encrypt тело шифруется ChaCha20 (поле enc вместо body), потом подпись поверх
 #   proto.open(msg, key)            подпись верна; если тело зашифровано, расшифровывает его обратно в body (msg.was_enc = true)
 # Ключ шифрования это HMAC(ключ пары, "cubenet:enc"), nonce: номер отправителя (4 байта) и его счётчик seq (8 байт): у каждого
-# сообщения свой. Версия 2: сообщения версии 1 не принимаются.
+# сообщения свой. Версия 3 (D248): сопряжение с обменом ключами X25519, старые версии не принимаются.
 
 import sha256
 import chacha20
 
 export const NAME = "cubenet"
-export const VERSION = 2
+export const VERSION = 3
 export const CHANNEL = 47100
 export const WINDOW_MS = 60000
 
@@ -154,6 +154,12 @@ export def valid(msg):
 export def id_of(msg):
     return tostring(msg.src) .. ":" .. tostring(msg.seq)
 
-# общий ключ пары по коду сопряжения и случайным числам обеих сторон (PBKDF2, раунды задаёт хозяин)
-export def pair_key(code, salt, client_nonce, host_nonce, rounds):
-    return sha256.pbkdf2(tostring(code), tostring(salt) .. ":" .. tostring(client_nonce) .. ":" .. tostring(host_nonce), rounds)
+# общий ключ пары: код сопряжения, случайные числа обеих сторон и общий секрет X25519 (shared, hex). Без shared (его знают только
+# два компьютера) подслушавший сопряжение не может подобрать код перебором (D248)
+export def pair_key(code, salt, client_nonce, host_nonce, rounds, shared=""):
+    return sha256.pbkdf2(tostring(code), tostring(salt) .. ":" .. tostring(client_nonce) .. ":" .. tostring(host_nonce) .. ":" .. tostring(shared), rounds)
+
+export def unhex(h):
+    if type(h) != "string" or len(h) % 2 != 0 or string.find(h, "[^%x]") != nil:
+        return nil
+    return (string.gsub(h, "..", (x) => string.char(tonumber(x, 16))))

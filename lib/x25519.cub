@@ -1,0 +1,159 @@
+# x25519: обмен ключами Диффи-Хеллмана на кривой Curve25519 (RFC 7748), по образцу TweetNaCl. Числа поля 2^255-19 хранятся
+# как 16 частей по 16 бит в числах Lua (произведения до 2^44 точны в double).
+#
+#   pub = x25519.public_key(secret)          secret: 32 случайных байта, pub: 32 байта (его можно показывать всем)
+#   key = x25519.shared(my_secret, their_pub) 32 байта общего секрета: у обеих сторон один и тот же, подслушавший его не узнает
+#   x25519.scalarmult(n, p)                  сама операция (для проверки по RFC)
+
+band = bit32.band
+bor = bit32.bor
+
+def _gf(init=nil):
+    o = []
+    for i in range[1, 16]:
+        o[i] = 0
+    if init != nil:
+        for i, v in init:
+            o[i] = v
+    return o
+
+const C121665 = [0xDB41, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+def _car(o):
+    for i in range[1, 16]:
+        o[i] = o[i] + 65536
+        c = math.floor(o[i] / 65536)
+        if i < 16:
+            o[i + 1] = o[i + 1] + c - 1
+        else:
+            o[1] = o[1] + 38 * (c - 1)
+        o[i] = o[i] - c * 65536
+
+def _sel(p, q, b):
+    if b == 1:
+        for i in range[1, 16]:
+            t = p[i]
+            p[i] = q[i]
+            q[i] = t
+
+def _add(o, a, b):
+    for i in range[1, 16]:
+        o[i] = a[i] + b[i]
+
+def _sub(o, a, b):
+    for i in range[1, 16]:
+        o[i] = a[i] - b[i]
+
+def _mul(o, a, b):
+    t = []
+    for i in range[1, 31]:
+        t[i] = 0
+    for i in range[1, 16]:
+        ai = a[i]
+        if ai != 0:
+            for j in range[1, 16]:
+                t[i + j - 1] = t[i + j - 1] + ai * b[j]
+    for i in range[1, 15]:
+        t[i] = t[i] + 38 * t[i + 16]
+    for i in range[1, 16]:
+        o[i] = t[i]
+    _car(o)
+    _car(o)
+
+def _sq(o, a):
+    _mul(o, a, a)
+
+def _inv(o, i_):
+    c = _gf(i_)
+    a = 253
+    while a >= 0:
+        _sq(c, c)
+        if a != 2 and a != 4:
+            _mul(c, c, i_)
+        a -= 1
+    for k in range[1, 16]:
+        o[k] = c[k]
+
+def _unpack(n):
+    o = _gf()
+    for i in range[1, 16]:
+        o[i] = string.byte(n, 2 * i - 1) + string.byte(n, 2 * i) * 256
+    o[16] = band(o[16], 0x7fff)
+    return o
+
+def _pack(n):
+    t = _gf(n)
+    _car(t)
+    _car(t)
+    _car(t)
+    m = _gf()
+    for j in range[1, 2]:
+        m[1] = t[1] - 0xffed
+        for i in range[2, 15]:
+            m[i] = t[i] - 0xffff - (m[i - 1] < 0 and 1 or 0)
+            m[i - 1] = m[i - 1] % 65536
+        m[16] = t[16] - 0x7fff - (m[15] < 0 and 1 or 0)
+        b = m[16] < 0 and 1 or 0
+        m[15] = m[15] % 65536
+        _sel(t, m, 1 - b)
+    out = []
+    for i in range[1, 16]:
+        out[i] = string.char(t[i] % 256, math.floor(t[i] / 256) % 256)
+    return table.concat(out)
+
+export def scalarmult(n, p):
+    if type(n) != "string" or len(n) != 32 or type(p) != "string" or len(p) != 32:
+        raise Error("x25519: the secret and the point must be 32 bytes")
+    z = []
+    for i in range[1, 32]:
+        z[i] = string.byte(n, i)
+    z[32] = bor(band(z[32], 127), 64)
+    z[1] = band(z[1], 248)
+    x = _unpack(p)
+    a = _gf([1])
+    b = _gf(x)
+    c = _gf()
+    d = _gf([1])
+    e = _gf()
+    f = _gf()
+    i = 254
+    while i >= 0:
+        r = band(math.floor(z[math.floor(i / 8) + 1] / 2 ** (i % 8)), 1)
+        _sel(a, b, r)
+        _sel(c, d, r)
+        _add(e, a, c)
+        _sub(a, a, c)
+        _add(c, b, d)
+        _sub(b, b, d)
+        _sq(d, e)
+        _sq(f, a)
+        _mul(a, c, a)
+        _mul(c, b, e)
+        _add(e, a, c)
+        _sub(a, a, c)
+        _sq(b, a)
+        _sub(c, d, f)
+        _mul(a, c, C121665)
+        _add(a, a, d)
+        _mul(c, c, a)
+        _mul(a, d, f)
+        _mul(d, b, x)
+        _sq(b, e)
+        _sel(a, b, r)
+        _sel(c, d, r)
+        i -= 1
+    _inv(c, c)
+    _mul(a, a, c)
+    return _pack(a)
+
+const BASE = string.char(9) .. string.rep(string.char(0), 31)
+
+export def public_key(secret):
+    return scalarmult(secret, BASE)
+
+# общий секрет; точка «малого порядка» (подсунутая злоумышленником) даёт нули: такой обмен отклоняется
+export def shared(secret, their_public):
+    k = scalarmult(secret, their_public)
+    if k == string.rep(string.char(0), 32):
+        raise Error("x25519: bad public key")
+    return k

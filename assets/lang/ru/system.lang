@@ -1344,6 +1344,12 @@ msgstr "неверный код сопряжения"
 msgid "this computer is not paired with you"
 msgstr "этот компьютер не сопряжён с вами"
 
+msgid "update CubeOS on both computers (pairing needs the key exchange)"
+msgstr "обновите CubeOS на обоих компьютерах (сопряжению нужен обмен ключами)"
+
+msgid "bad key exchange"
+msgstr "ошибка обмена ключами"
+
 msgid "this computer accepts only encrypted requests (net encrypt on there)"
 msgstr "этот компьютер принимает только зашифрованные запросы (net encrypt on на вашем)"
 
