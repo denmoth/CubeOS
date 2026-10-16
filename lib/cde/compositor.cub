@@ -1,0 +1,257 @@
+# cde.compositor: собирает кадр рабочего стола из обоев и окон и показывает только изменённые места
+#
+#   comp = compositor.new(screen, font, {wallpaper: surface})    screen из cgl.open, обои размером с экран
+#   comp.windows                         список окон снизу вверх (последнее сверху)
+#   comp:damage(x, y, w, h)              это место экрана надо пересобрать
+#   comp:damage_window(win)              весь прямоугольник окна с тенью
+#   n = comp:compose()                   пересобирает изменённые места (слияние близких прямоугольников) и показывает кадр
+#
+# Пересборка прямоугольника: ищется самое верхнее окно, которое закрывает его целиком (тогда нижние слои не рисуются вовсе),
+# иначе кладутся обои; дальше снизу вверх окна, которые его задевают: тень (затемнение того, что под ней, по таблице), рамка
+# с заголовком и кнопками, содержимое (blit из win.canvas). Всё рисуется с отсечением по прямоугольнику, так что набор текста
+# в окне пересобирает несколько клеток, а перетаскивание окна только старое и новое место.
+
+import cgl.surface as surface_mod
+import cde.theme as theme
+import cde.window as window_mod
+
+const TITLE = window_mod.TITLE
+const SHADOW = window_mod.SHADOW
+# ширина кнопки заголовка
+export const BUTTON_W = 13
+const MAX_RECTS = 24
+
+export class Compositor:
+    def init(self, screen, font, opts=nil):
+        o = opts ?? {}
+        self.screen = screen
+        self.s = screen.surface
+        self.W = screen.w
+        self.H = screen.h
+        self.font = font
+        self.wallpaper = o.wallpaper ?? surface_mod.new(self.W, self.H, theme.DESK0)
+        self.dim = o.dim ?? theme.dim_map(screen.palette)
+        self.windows = []
+        self.rects = []
+        self.focused = nil
+        # нажатая кнопка заголовка {win, which} (подсветка, пока держат мышь)
+        self.pressed = nil
+        # предпросмотр прилипания при перетаскивании: {x, y, w, h} или nil
+        self.preview = nil
+        self.stats = {composes: 0, rects: 0, pixels: 0}
+
+    # ------------------------------------------------------------ изменённые места
+
+    def damage(self, x, y, w, h):
+        x0 = math.max(0, x)
+        y0 = math.max(0, y)
+        x1 = math.min(self.W - 1, x + w - 1)
+        y1 = math.min(self.H - 1, y + h - 1)
+        if x0 > x1 or y0 > y1:
+            return
+        self.rects[len(self.rects) + 1] = [x0, y0, x1, y1]
+
+    def damage_window(self, win):
+        self:damage(win.x, win.y, win.w + SHADOW, win.h + SHADOW)
+
+    def damage_all(self):
+        self.rects = [[0, 0, self.W - 1, self.H - 1]]
+
+    def set_preview(self, r):
+        if self.preview != nil:
+            p = self.preview
+            self:damage(p.x, p.y, p.w, p.h)
+        self.preview = r
+        if r != nil:
+            self:damage(r.x, r.y, r.w, r.h)
+
+    # сливает пересекающиеся и почти соседние прямоугольники (если объединение не больше суммы площадей)
+    def _merged(self):
+        list = self.rects
+        self.rects = []
+        if len(list) > MAX_RECTS * 2:
+            u = list[1]
+            for r in list:
+                u = [math.min(u[1], r[1]), math.min(u[2], r[2]), math.max(u[3], r[3]), math.max(u[4], r[4])]
+            return [u]
+        changed = true
+        while changed:
+            changed = false
+            n = len(list)
+            i = 1
+            while i <= n and not changed:
+                a = list[i]
+                j = i + 1
+                while j <= n:
+                    b = list[j]
+                    ux0 = math.min(a[1], b[1])
+                    uy0 = math.min(a[2], b[2])
+                    ux1 = math.max(a[3], b[3])
+                    uy1 = math.max(a[4], b[4])
+                    ua = (ux1 - ux0 + 1) * (uy1 - uy0 + 1)
+                    sa = (a[3] - a[1] + 1) * (a[4] - a[2] + 1) + (b[3] - b[1] + 1) * (b[4] - b[2] + 1)
+                    if ua <= sa:
+                        list[i] = [ux0, uy0, ux1, uy1]
+                        table.remove(list, j)
+                        changed = true
+                        break
+                    j += 1
+                i += 1
+        if len(list) > MAX_RECTS:
+            u = list[1]
+            for r in list:
+                u = [math.min(u[1], r[1]), math.min(u[2], r[2]), math.max(u[3], r[3]), math.max(u[4], r[4])]
+            return [u]
+        return list
+
+    # ------------------------------------------------------------ сборка кадра
+
+    # пересобирает изменённые места и показывает кадр; возвращает число прямоугольников
+    def compose(self):
+        if len(self.rects) == 0:
+            return 0
+        list = self:_merged()
+        for r in list:
+            self:_paint(r[1], r[2], r[3], r[4])
+            self.stats.pixels += (r[3] - r[1] + 1) * (r[4] - r[2] + 1)
+        self.stats.composes += 1
+        self.stats.rects += len(list)
+        self.screen:present()
+        return len(list)
+
+    # окно закрывает прямоугольник целиком (без скруглённых углов)
+    def _covers(self, win, x0, y0, x1, y1):
+        if not win:visible():
+            return false
+        if x0 < win.x or x1 > win.x + win.w - 1 or y0 < win.y or y1 > win.y + win.h - 1:
+            return false
+        if y0 >= win.y + 2 and y1 <= win.y + win.h - 3:
+            return true
+        return x0 >= win.x + 2 and x1 <= win.x + win.w - 3
+
+    def _touches(self, win, x0, y0, x1, y1):
+        return win:visible() and x0 <= win.x + win.w - 1 + SHADOW and x1 >= win.x and y0 <= win.y + win.h - 1 + SHADOW and y1 >= win.y
+
+    def _paint(self, x0, y0, x1, y1):
+        s = self.s
+        wins = self.windows
+        n = len(wins)
+        start = 1
+        covered = false
+        for i in range[n, 1] step -1:
+            if self:_covers(wins[i], x0, y0, x1, y1):
+                start = i
+                covered = true
+                break
+        s:push_clip(x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+        if not covered:
+            s:blit(self.wallpaper, x0, y0, {sx: x0, sy: y0, sw: x1 - x0 + 1, sh: y1 - y0 + 1, transparent: false})
+        for i in range[start, n]:
+            win = wins[i]
+            if self:_touches(win, x0, y0, x1, y1):
+                if not (covered and i == start):
+                    self:_shadow(win, x0, y0, x1, y1)
+                self:_window(win)
+        if self.preview != nil:
+            self:_preview(self.preview)
+        s:pop_clip()
+
+    # затемняет пиксели под тенью окна (только внутри прямоугольника сборки)
+    def _shadow(self, win, x0, y0, x1, y1):
+        self:_dim_rect(win.x + win.w, win.y + 3, SHADOW, win.h - 2, x0, y0, x1, y1)
+        self:_dim_rect(win.x + 3, win.y + win.h, win.w - 3, SHADOW, x0, y0, x1, y1)
+
+    def _dim_rect(self, x, y, w, h, x0, y0, x1, y1):
+        ax0 = math.max(x, x0)
+        ay0 = math.max(y, y0)
+        ax1 = math.min(x + w - 1, x1)
+        ay1 = math.min(y + h - 1, y1)
+        if ax0 > ax1 or ay0 > ay1:
+            return
+        s = self.s
+        px = s.px
+        sw = s.w
+        dim = self.dim
+        for yy in range[ay0, ay1]:
+            base = yy * sw + 1
+            for xx in range[ax0, ax1]:
+                v = px[base + xx]
+                px[base + xx] = dim[v] ?? v
+        s:mark(ax0, ay0, ax1, ay1)
+
+    def _window(self, win):
+        s = self.s
+        active = self.focused == win
+        x = win.x
+        y = win.y
+        w = win.w
+        h = win.h
+        bc = active and theme.BORDER_ACTIVE or theme.BORDER_INACTIVE
+        tb = active and theme.TITLE_ACTIVE or theme.TITLE_INACTIVE
+        # заголовок
+        s:fill_rect(x + 1, y + 1, w - 2, TITLE - 1, tb)
+        # содержимое
+        s:blit(win.canvas, x + 1, y + TITLE, {transparent: false})
+        # рамка со скруглёнными углами (угловые пиксели не рисуются: там видно то, что под окном)
+        s:hline(x + 2, y, w - 4, bc)
+        s:hline(x + 2, y + h - 1, w - 4, bc)
+        s:vline(x, y + 2, h - 4, bc)
+        s:vline(x + w - 1, y + 2, h - 4, bc)
+        s:set(x + 1, y + 1, bc)
+        s:set(x + w - 2, y + 1, bc)
+        s:set(x + 1, y + h - 2, bc)
+        s:set(x + w - 2, y + h - 2, bc)
+        # кнопки справа: свернуть, развернуть, закрыть
+        fg = active and theme.TITLE_TEXT or theme.TITLE_DIM
+        buttons = self:buttons(win)
+        for b in buttons:
+            down = self.pressed != nil and self.pressed.win == win and self.pressed.which == b.which
+            icon = fg
+            if down:
+                s:fill_rect(b.x, y + 1, BUTTON_W, TITLE - 1, b.which == "close" and theme.CLOSE or theme.BUTTON_DOWN)
+                if b.which == "close":
+                    icon = theme.TITLE_TEXT
+            self:_icon(b.which, b.x + 6, y + 6, icon, win.state == "max", tb)
+        # название
+        left = x + 5
+        room = buttons[1].x - left - 3
+        if room > self.font.width:
+            title = surface_mod.ellipsize(self.font, win.title, room, "..")
+            s:text(self.font, left, y + 2, title, fg)
+
+    # кнопки заголовка: список {which, x} слева направо
+    def buttons(self, win):
+        right = win.x + win.w - 1
+        list = []
+        if win.resizable:
+            list[1] = {which: "min", x: right - BUTTON_W * 3}
+            list[2] = {which: "max", x: right - BUTTON_W * 2}
+            list[3] = {which: "close", x: right - BUTTON_W}
+        else:
+            list[1] = {which: "min", x: right - BUTTON_W * 2}
+            list[2] = {which: "close", x: right - BUTTON_W}
+        return list
+
+    def _icon(self, which, cx, cy, c, maximized, bg):
+        s = self.s
+        if which == "close":
+            s:line(cx - 2, cy - 2, cx + 2, cy + 2, c)
+            s:line(cx + 2, cy - 2, cx - 2, cy + 2, c)
+        elif which == "max":
+            if maximized:
+                s:rect(cx - 1, cy - 3, 5, 5, c)
+                s:fill_rect(cx - 3, cy - 1, 5, 5, bg)
+                s:rect(cx - 3, cy - 1, 5, 5, c)
+            else:
+                s:rect(cx - 2, cy - 2, 5, 5, c)
+        else:
+            s:hline(cx - 2, cy + 2, 5, c)
+
+    # рамка предпросмотра прилипания (куда встанет окно, если отпустить)
+    def _preview(self, r):
+        s = self.s
+        s:round_rect(r.x + 2, r.y + 2, r.w - 4, r.h - 4, 3, theme.PREVIEW)
+        s:round_rect(r.x + 3, r.y + 3, r.w - 6, r.h - 6, 2, theme.PREVIEW)
+
+export def new(screen, font, opts=nil):
+    return Compositor(screen, font, opts)

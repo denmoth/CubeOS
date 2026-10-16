@@ -81,6 +81,11 @@ export def busy(reason):
 export def broadcast(name, *args):
     return _check(_call({op: "broadcast", name: name, args: args}))
 
+# событие одному процессу (как событие CC: его получит sys.wait_event). Предку можно слать своим потомкам любые события (рабочий стол
+# передаёт окну ввод в его координатах), потомку предкам только cubeos_* (окно будит рабочий стол). Система может слать кому угодно
+export def post(pid, name, *args):
+    return _check(_call({op: "post", to: pid, name: name, args: args})).ok
+
 export def info():
     return _check(_call({op: "info"}))
 

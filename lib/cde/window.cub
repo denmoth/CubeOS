@@ -1,0 +1,228 @@
+# cde.window: окно рабочего стола. Один объект на окно, общий для приложения и оконного менеджера (все процессы живут в одной
+# Lua-машине, поэтому картинка окна не пересылается: приложение рисует прямо в win.canvas, менеджер забирает изменённую область).
+#
+# Приложению (процесс ядра) окно отдаёт cde.app.open; дальше:
+#   win.canvas                         поверхность cgl размером с содержимое окна (пиксели); после win_resize это новая поверхность
+#   win.cells                          у текстового окна: сетка клеток ui.cells (символ, цвет текста, цвет фона; цвета CC 0..15)
+#   win:text(x, y, "Привет", fg, bg)   текст в клетки (с нуля), то же что win.cells:text
+#   win:set_cursor(x, y, true)         курсор текстового окна (мигает, пока окно в фокусе)
+#   win:present()                      показать нарисованное (текстовое окно сначала рисует изменённые клетки шрифтом)
+#   win:set_title("...")               заголовок
+#   name, a, b, c, d = win:wait_event(0.5)   следующее событие окна (или nil по таймауту), см. cde.app
+#   win:close()                        закрыть окно
+#
+# Геометрия: x, y, w, h это внешний прямоугольник окна (рамка и заголовок) на экране; содержимое начинается с (x + 1, y + TITLE)
+# и имеет размер cw x ch. Состояние state: "normal", "max" (на весь экран), "left", "right" (половинки); minimized отдельно.
+
+import cgl.surface as surface_mod
+import ui.cells as cells_mod
+import cde.theme as theme
+
+# высота заголовка вместе с верхней линией рамки; рамка 1 пиксель с остальных сторон
+export const TITLE = 12
+# тень справа и снизу
+export const SHADOW = 2
+
+export class Window:
+    def init(self, wm, id, pid, opts):
+        o = opts ?? {}
+        self.wm = wm
+        self.id = id
+        self.pid = pid
+        self.title = o.title ?? "Window"
+        self.kind = o.kind ?? "pixel"
+        self.font = wm.font
+        self.resizable = o.resizable ?? true
+        self.bg = o.bg ?? (self.kind == "text" and 15 or theme.WIN_BG)
+        self.state = "normal"
+        self.minimized = false
+        self.closed = false
+        self.wake_pending = false
+        self.normal = nil
+        self.cells = nil
+        self.cursor_x = 0
+        self.cursor_y = 0
+        self.cursor_on = false
+        self.blink = true
+        self.fg = 0
+        cw = 0
+        ch = 0
+        if self.kind == "text":
+            cols = o.cols ?? 40
+            rows = o.rows ?? 12
+            cw = cols * self.font.width
+            ch = rows * self.font.height
+            self.min_w = o.min_cols != nil and o.min_cols * self.font.width or self.font.width * 10
+            self.min_h = o.min_rows != nil and o.min_rows * self.font.height or self.font.height * 2
+        else:
+            cw = o.w ?? 120
+            ch = o.h ?? 80
+            self.min_w = o.min_w ?? 40
+            self.min_h = o.min_h ?? 16
+        self.x = o.x ?? 0
+        self.y = o.y ?? 0
+        self.w = cw + 2
+        self.h = ch + TITLE + 1
+        self.cw = 0
+        self.ch = 0
+        self.canvas = nil
+        self:_make_content(cw, ch)
+
+    # ------------------------------------------------------------ геометрия
+
+    def content_x(self):
+        return self.x + 1
+
+    def content_y(self):
+        return self.y + TITLE
+
+    def visible(self):
+        return not self.minimized and not self.closed
+
+    # точка экрана внутри внешнего прямоугольника
+    def contains(self, px, py):
+        return px >= self.x and px < self.x + self.w and py >= self.y and py < self.y + self.h
+
+    def in_content(self, px, py):
+        return px >= self.x + 1 and px < self.x + 1 + self.cw and py >= self.y + TITLE and py < self.y + TITLE + self.ch
+
+    # размер содержимого для внешнего размера (текстовое окно в обычном состоянии подгоняется под целые клетки)
+    def content_for(self, ow, oh):
+        return math.max(1, ow - 2), math.max(1, oh - TITLE - 1)
+
+    # создаёт поверхность (и клетки) нужного размера, сохраняя нарисованное в общей части; true, если размер изменился
+    def _make_content(self, cw, ch):
+        if cw == self.cw and ch == self.ch and self.canvas != nil:
+            return false
+        old = self.canvas
+        cv = surface_mod.new(cw, ch, self.bg)
+        if old != nil:
+            cv:blit(old, 0, 0, {transparent: false})
+        self.canvas = cv
+        self.cw = cw
+        self.ch = ch
+        if self.kind == "text":
+            cols = math.max(1, math.floor(cw / self.font.width))
+            rows = math.max(1, math.floor(ch / self.font.height))
+            if self.cells == nil:
+                self.cells = cells_mod.new(cols, rows)
+                self.cells:clear(self.fg, self.bg)
+            elif cols != self.cells.w or rows != self.cells.h:
+                ow = self.cells.w
+                oh = self.cells.h
+                self.cells:resize(cols, rows)
+                for y in range[0, rows - 1]:
+                    for x in range[0, cols - 1]:
+                        if x >= ow or y >= oh:
+                            self.cells:set(x, y, 32, self.fg, self.bg)
+            self.cells:touch()
+            self:_render()
+        return true
+
+    # ------------------------------------------------------------ текст
+
+    def cols(self):
+        return self.cells != nil and self.cells.w or 0
+
+    def rows(self):
+        return self.cells != nil and self.cells.h or 0
+
+    def text(self, x, y, s, fg=nil, bg=nil):
+        return self.cells:text(x, y, s, fg ?? self.fg, bg ?? self.bg)
+
+    def fill(self, x, y, w, h, fg=nil, bg=nil):
+        self.cells:fill(x, y, w, h, 32, fg ?? self.fg, bg ?? self.bg)
+
+    def clear(self, fg=nil, bg=nil):
+        if self.cells != nil:
+            self.cells:clear(fg ?? self.fg, bg ?? self.bg)
+        else:
+            self.canvas:clear(bg ?? self.bg)
+
+    def set_cursor(self, x, y, on=true):
+        if self.cells == nil:
+            return
+        self.cells:mark(self.cursor_x, self.cursor_y, self.cursor_x, self.cursor_y)
+        self.cursor_x = x
+        self.cursor_y = y
+        self.cursor_on = on
+        self.blink = true
+        self.cells:mark(x, y, x, y)
+
+    # рисует изменённые клетки шрифтом в canvas (цвета клеток это номера палитры 0..15)
+    def _render(self):
+        c = self.cells
+        if c == nil or not c:is_dirty():
+            return
+        x_lo = math.max(0, c.dx0)
+        y_lo = math.max(0, c.dy0)
+        x_hi = math.min(c.w - 1, c.dx1)
+        y_hi = math.min(c.h - 1, c.dy1)
+        c:clean()
+        if x_lo > x_hi or y_lo > y_hi:
+            return
+        f = self.font
+        fw = f.width
+        fh = f.height
+        cv = self.canvas
+        px = cv.px
+        sw = cv.w
+        show_cursor = self.cursor_on and self.blink and self.wm.focused == self
+        for y in range[y_lo, y_hi]:
+            for x in range[x_lo, x_hi]:
+                i = y * c.w + x + 1
+                cp = c.cp[i]
+                fg = c.fg[i]
+                bg = c.bg[i]
+                rows = cp != 32 and f:glyph_bits(cp) or nil
+                cursor = show_cursor and x == self.cursor_x and y == self.cursor_y
+                x0 = x * fw
+                for gy in range[1, fh]:
+                    base = (y * fh + gy - 1) * sw + x0 + 1
+                    r = rows != nil and rows[gy] or nil
+                    if cursor and gy >= fh - 1:
+                        for gx in range[0, fw - 1]:
+                            px[base + gx] = fg
+                    elif r == nil:
+                        for gx in range[0, fw - 1]:
+                            px[base + gx] = bg
+                    else:
+                        for gx in range[0, fw - 1]:
+                            px[base + gx] = r[gx + 1] == 1 and fg or bg
+        cv:mark(x_lo * fw, y_lo * fh, (x_hi + 1) * fw - 1, (y_hi + 1) * fh - 1)
+
+    # мигание курсора (вызывает менеджер, пока окно в фокусе)
+    def _blink(self, on):
+        if self.cells == nil or not self.cursor_on:
+            return false
+        self.blink = on
+        self.cells:mark(self.cursor_x, self.cursor_y, self.cursor_x, self.cursor_y)
+        self:_render()
+        return true
+
+    # ------------------------------------------------------------ для приложения
+
+    # показать нарисованное: менеджер заберёт изменённую область canvas при следующем проходе
+    def present(self):
+        if self.closed:
+            return
+        self:_render()
+        if not self.wake_pending:
+            self.wake_pending = true
+            self.wm:_wake(self)
+
+    def set_title(self, title):
+        self.title = tostring(title)
+        self.wm:_title_changed(self)
+
+    def close(self):
+        if not self.closed:
+            self.closed = true
+            self.wm:_wake(self)
+
+    # следующее событие окна; timeout в секундах (nil ждать сколько угодно). Возвращает имя и аргументы или nil
+    def wait_event(self, timeout=nil, extra=nil):
+        return self.wm:_client_wait(self, timeout, extra)
+
+export def new(wm, id, pid, opts):
+    return Window(wm, id, pid, opts)

@@ -537,6 +537,17 @@ export class Kernel:
         table.sort(out, (a, b) => a.pid < b.pid)
         return out
 
+    # a предок b (родитель, родитель родителя, ...)
+    def is_ancestor(self, a, b):
+        p = self.procs[b]
+        n = 0
+        while p != nil and p.parent != nil and n < 64:
+            if p.parent == a:
+                return true
+            p = self.procs[p.parent]
+            n += 1
+        return false
+
     def exit_info(self, pid):
         return self.exited[pid]
 
@@ -703,6 +714,21 @@ export class Kernel:
             k:feed(name, args[1], args[2], args[3], args[4])
             return "value", {ok: true}
         h.broadcast = broadcast
+
+        # событие одному процессу: предок потомку любое, потомок предку только cubeos_*, система кому угодно
+        def post(proc, req):
+            target = k.procs[req.to]
+            if target == nil or target.state == "dead":
+                return "value", {ok: false}
+            name = tostring(req.name)
+            allowed = rules_mod.is_system(proc.subject) or k:is_ancestor(proc.pid, target.pid)
+            if not allowed and k:is_ancestor(target.pid, proc.pid) and string.sub(name, 1, 7) == "cubeos_":
+                allowed = true
+            if not allowed:
+                return "value", {error: "permission denied"}
+            k:_enqueue(target, {name: name, args: req.args ?? [], at: k.clock()})
+            return "value", {ok: true}
+        h.post = post
 
         def klog(proc, req):
             k:log(tostring(req.text), req.level ?? "info")

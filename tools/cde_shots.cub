@@ -1,0 +1,104 @@
+# Снимки рабочего стола CDE без игры: демо (examples/cde_demo) в подставном терминале CC: Graphics на настоящем ядре,
+# кадры сохраняются как PPM (build/ui_cde_*.ppm). Запуск: tools/cde_shots.sh (он же делает PNG).
+
+import kernel
+import cde_demo as demo
+
+def make_term(cols, rows):
+    api = {}
+    def get_size(px):
+        if px:
+            return cols * 6, rows * 9
+        return cols, rows
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "setGraphicsMode", "drawPixels", "setFrozen"]:
+        api[name] = nothing
+    return api
+
+def dump(wm, name):
+    s = wm.screen.surface
+    pal = wm.screen.palette
+    f = fs.open("/repo/build/" .. name .. ".ppm", "wb")
+    f.write("P6\n" .. s.w .. " " .. s.h .. "\n255\n")
+    for y in range[0, s.h - 1]:
+        parts = []
+        for x in range[0, s.w - 1]:
+            v = s.px[y * s.w + x + 1]
+            r, g, b = pal:get(v < 0 and 0 or v)
+            parts[x + 1] = string.char(r, g, b)
+        f.write(table.concat(parts))
+    f.close()
+    os.queueEvent("shot")
+    os.pullEvent("shot")
+
+clock = {now: 1000}
+def now():
+    return clock.now
+
+def settle(k, n=8):
+    for i in range[1, n]:
+        clock.now = clock.now + 50
+        k:tick()
+        k:run_ready()
+    os.queueEvent("shot")
+    os.pullEvent("shot")
+
+def shoot(cols, rows, tag, theme_name):
+    wm = demo.build({term: make_term(cols, rows), assets: "/repo/assets", clock: now, theme: theme_name})
+    k = kernel.new({clock: now})
+    def desk(sys, args):
+        wm:run(sys)
+    k:spawn(desk, [], {name: "cde", ui: true})
+    settle(k)
+    dump(wm, "ui_cde_" .. tag .. "_1_start")
+    # щёлкнуть по заметкам и набрать строку
+    notes = nil
+    for w in wm.windows:
+        if w.title == "Notes":
+            notes = w
+    if notes != nil:
+        k:feed("mouse_click", 1, notes.x + 8, notes.y + 30)
+        k:feed("mouse_up", 1, notes.x + 8, notes.y + 30)
+        for ch in ["H", "i", " ", "C", "D", "E", "!"]:
+            k:feed("char", ch)
+        k:feed("key", keys.enter, false)
+        for ch in ["n", "e", "w"]:
+            k:feed("char", ch)
+    settle(k)
+    # перетащить куб за заголовок
+    cube = nil
+    for w in wm.windows:
+        if w.title == "Cube":
+            cube = w
+    if cube != nil:
+        k:feed("mouse_click", 1, cube.x + 20, cube.y + 5)
+        k:feed("mouse_drag", 1, cube.x + 10, cube.y + 2)
+        k:feed("mouse_drag", 1, 12, 8)
+        k:feed("mouse_up", 1, 12, 8)
+        settle(k)
+    dump(wm, "ui_cde_" .. tag .. "_2_moved")
+    # предпросмотр половинки при перетаскивании к правому краю
+    if cube != nil:
+        k:feed("mouse_click", 1, cube.x + 20, cube.y + 5)
+        k:feed("mouse_drag", 1, cube.x + 40, cube.y + 30)
+        k:feed("mouse_drag", 1, wm.W - 1, 60)
+        settle(k)
+        dump(wm, "ui_cde_" .. tag .. "_3_snap_preview")
+        k:feed("mouse_up", 1, wm.W - 1, 60)
+        settle(k)
+        dump(wm, "ui_cde_" .. tag .. "_4_right_half")
+    # Alt+↑ на заметках: на весь экран
+    if notes != nil:
+        k:feed("mouse_click", 1, notes.x + 30, notes.y + 5)
+        k:feed("mouse_up", 1, notes.x + 30, notes.y + 5)
+    k:feed("key", keys.leftAlt, false)
+    k:feed("key", keys.up, false)
+    k:feed("key_up", keys.leftAlt)
+    settle(k)
+    dump(wm, "ui_cde_" .. tag .. "_5_max")
+
+shoot(51, 19, "small", "tokyo-night")
+shoot(51, 19, "light", "light")
+shoot(82, 40, "monitor", "tokyo-night")

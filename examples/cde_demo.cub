@@ -1,0 +1,129 @@
+# Демонстрация рабочего стола CDE (шаг 1): три окна-процесса ядра. «Cube» рисует пикселями (вращающийся куб), «Notes»
+# текстовое окно (клетки со шрифтом, ввод с клавиатуры), «Clock» маленькое пиксельное окно с часами.
+# Запуск в CC: /repo/game/cde_demo.lua. Alt+Enter открывает ещё одно окно заметок. Выход: Ctrl+Alt+Q.
+
+import cde
+import cgl.g3d as g3d
+import kernel
+import kernel.cc as cc
+
+const app = cde.app
+
+# ---------------------------------------------------------------- пиксельное окно: куб
+
+export def cube_app(sys, ctx):
+    win = app.open(sys, ctx, {title: "Cube", kind: "pixel", w: 132, h: 92})
+    ramp = app.ramp(ctx, [[40, 50, 110], [90, 110, 220], [150, 120, 240], [230, 200, 255]], 10)
+    bg = app.theme.WIN_BG
+    mesh = g3d.cube(1)
+    t = ctx.args[1] ?? 0
+    spin = true
+    while true:
+        cv = win.canvas
+        cv:clear(bg)
+        g3d.render(cv, mesh, {rx: t * 0.7, ry: t, rz: 0, z: 3.4, mode: "flat", ramp: ramp, fov: math.min(cv.w, cv.h) * 1.1})
+        win:present()
+        ev = table.pack(win:wait_event(0.05))
+        if ev[1] == "win_close":
+            break
+        if ev[1] == "mouse_click" or (ev[1] == "key" and ev[2] == keys.space):
+            spin = not spin
+        if spin:
+            t += 0.05
+    win:close()
+
+# ---------------------------------------------------------------- текстовое окно: заметки
+
+export def notes_app(sys, ctx):
+    win = app.open(sys, ctx, {title: ctx.args[1] ?? "Notes", kind: "text", cols: 30, rows: 9})
+    lines = ["Welcome to CDE.", "Drag the title, resize the", "edges, Alt+Up maximizes."]
+    input = ""
+    def draw():
+        win:clear(0, 15)
+        win:fill(0, 0, win:cols(), 1, 15, 11)
+        win:text(1, 0, "CubeOS notes", 15, 11)
+        y = 2
+        for l in lines:
+            if y < win:rows() - 2:
+                win:text(1, y, l, 0, 15)
+            y += 1
+        for i in range[0, 15]:
+            win.cells:set(1 + i, win:rows() - 2, 0x2588, i, 15)
+        win:text(0, win:rows() - 1, "> " .. input, 5, 15)
+        win:set_cursor(2 + string.len(input), win:rows() - 1, true)
+        win:present()
+    draw()
+    while true:
+        ev = table.pack(win:wait_event())
+        name = ev[1]
+        if name == "win_close":
+            break
+        if name == "char":
+            input = input .. ev[2]
+            draw()
+        elif name == "key" and ev[2] == keys.backspace:
+            input = string.sub(input, 1, -2)
+            draw()
+        elif name == "key" and ev[2] == keys.enter:
+            lines[len(lines) + 1] = input
+            if len(lines) > 5:
+                table.remove(lines, 1)
+            input = ""
+            draw()
+        elif name == "win_resize":
+            draw()
+    win:close()
+
+# ---------------------------------------------------------------- маленькое окно: часы
+
+export def clock_app(sys, ctx):
+    win = app.open(sys, ctx, {title: "Clock", kind: "pixel", w: 104, h: 40, resizable: false})
+    bg = app.theme.WIN_BG
+    bar = app.ramp(ctx, [[122, 162, 247], [187, 154, 247], [247, 118, 142]], 12)
+    f = ctx.wm.font
+    while true:
+        cv = win.canvas
+        cv:clear(bg)
+        now = os.epoch("utc") / 1000
+        text = os.date("%H:%M:%S", math.floor(now))
+        tw = string.len(text) * f.width * 2
+        cv:text(f, math.floor((cv.w - tw) / 2), 4, text, app.theme.TITLE_TEXT, {scale: 2, shadow: {color: app.theme.TITLE_DIM, dx: 1, dy: 1}})
+        frac = now % 60 / 60
+        cv:fill_rect(6, 30, cv.w - 12, 3, app.theme.BORDER_INACTIVE)
+        filled = math.floor((cv.w - 12) * frac)
+        for i in range[0, filled - 1]:
+            cv:fill_rect(6 + i, 30, 1, 3, bar[math.floor(i / math.max(1, cv.w - 12) * 11) + 1])
+        win:present()
+        ev = table.pack(win:wait_event(0.5))
+        if ev[1] == "win_close":
+            break
+    win:close()
+
+# ---------------------------------------------------------------- запуск
+
+# собирает рабочий стол: менеджер и три окна (для игры и снимков). opts: term, assets
+export def build(opts=nil):
+    o = opts ?? {}
+    wm = cde.wm.new({term: o.term, assets: o.assets ?? "/repo/assets", theme: o.theme, clock: o.clock})
+    wm:launch(cube_app, {name: "cube"})
+    wm:launch(notes_app, {name: "notes"})
+    wm:launch(clock_app, {name: "clock"})
+    n = {count: 1}
+    def more():
+        n.count += 1
+        wm:launch(notes_app, {name: "notes"}, ["Notes " .. n.count])
+    wm:hotkey("alt+enter", more)
+    return wm
+
+export def main(opts=nil):
+    wm = build(opts)
+    k = kernel.new({pull: cc.pull})
+    def desk(sys, args):
+        wm:run(sys)
+    k:spawn(desk, [], {name: "cde", ui: true})
+    def quit():
+        wm:stop()
+        k:stop()
+    wm:hotkey("ctrl+alt+q", quit)
+    k:run()
+    wm.screen:close()

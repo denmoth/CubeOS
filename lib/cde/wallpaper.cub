@@ -1,0 +1,34 @@
+# cde.wallpaper: обои рабочего стола (шаг 1: статичная картинка из цветов темы; обои-файлы и живые обои это шаг 3)
+#
+#   wp = wallpaper.default(w, h)       поверхность w x h: диагональный градиент с узором Байера и контур куба
+
+import cgl.surface as surface_mod
+import cde.theme as theme
+
+# изометрический куб контуром: центр (cx, cy), ребро r
+def _cube(s, cx, cy, r, c, glow):
+    dx = math.floor(r * 0.866)
+    dy = math.floor(r / 2)
+    top = [cx, cy - r]
+    lt = [cx - dx, cy - dy]
+    rt = [cx + dx, cy - dy]
+    mid = [cx, cy]
+    lb = [cx - dx, cy + dy]
+    rb = [cx + dx, cy + dy]
+    bot = [cx, cy + r]
+    edges = [[top, lt], [top, rt], [lt, mid], [rt, mid], [lt, lb], [rt, rb], [mid, bot], [lb, bot], [rb, bot]]
+    for e in edges:
+        s:line(e[1][1], e[1][2], e[2][1], e[2][2], c)
+    for p in [top, lt, rt, mid, lb, rb, bot]:
+        s:set(p[1], p[2], glow)
+
+export def default(w, h):
+    s = surface_mod.new(w, h, theme.DESK0)
+    steps = []
+    for i in range[0, theme.DESK_N - 1]:
+        steps[i + 1] = theme.DESK0 + i
+    s:fill_gradient(0, 0, w, h, steps, "d", {dither: true})
+    r = math.floor(math.min(w, h) * 0.3)
+    _cube(s, math.floor(w * 0.72), math.floor(h * 0.48), r, theme.DESK_LINE, theme.DESK_GLOW)
+    _cube(s, math.floor(w * 0.72), math.floor(h * 0.48), math.floor(r * 0.55), theme.DESK_LINE, theme.DESK_GLOW)
+    return s

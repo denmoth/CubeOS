@@ -1,0 +1,106 @@
+# cde.theme: палитра рабочего стола и цвета окон (шаг 1; темы файлами сделает cdk, шаг 2)
+#
+#   th = theme.get("tokyo-night")
+#   pal = theme.palette(th)            палитра cgl на 256 цветов для cgl.open({palette: pal})
+#   dim = theme.dim_map(pal, 0.55)     номер цвета -> номер того же цвета потемнее (тени окон)
+#
+# Раскладка палитры (одна на весь экран, её видят все приложения):
+#   0..15     16 цветов CC в тонах темы (белый, оранжевый, ... чёрный): текстовые окна и программы, рисующие цветами CC
+#   16..231   куб 6x6x6, как в стандартной палитре cgl: общие цвета для пиксельных приложений
+#   232..255  цвета интерфейса (роли ниже): обои, рамки, заголовки, тени
+# Серые 232..255 стандартной палитры заняты интерфейсом; серые для приложений есть в кубе (16, 59, 102, 145, 188, 231).
+
+import cgl.color as color
+
+export const DESK0 = 232
+export const DESK_N = 8
+export const WIN_BG = 240
+export const TITLE_ACTIVE = 241
+export const TITLE_INACTIVE = 242
+export const TITLE_TEXT = 243
+export const TITLE_DIM = 244
+export const BORDER_ACTIVE = 245
+export const BORDER_INACTIVE = 246
+export const CLOSE = 247
+export const BUTTON_DOWN = 248
+export const ACCENT = 249
+export const PREVIEW = 250
+export const DESK_LINE = 251
+export const DESK_GLOW = 252
+export const SPARE0 = 253
+
+const ROLES = ["win_bg", "title_active", "title_inactive", "title_text", "title_dim", "border_active", "border_inactive", "close",
+    "button_down", "accent", "preview", "desk_line", "desk_glow"]
+
+const THEMES = {
+    "tokyo-night": {
+        name: "tokyo-night",
+        # 16 цветов CC по номерам: white orange magenta lightBlue yellow lime pink gray lightGray cyan purple blue brown green red black
+        text: ["#c0caf5", "#ff9e64", "#bb9af7", "#7dcfff", "#e0af68", "#9ece6a", "#f7a8c8", "#414868", "#787c99", "#2ac3de",
+            "#9d7cd8", "#7aa2f7", "#b4916a", "#73daca", "#f7768e", "#16161e"],
+        desk: ["#11121a", "#161825", "#1b1e30", "#20253c", "#262c48", "#2d3456", "#353d66", "#3f4878"],
+        win_bg: "#1a1b26", title_active: "#24283b", title_inactive: "#1c1e2b", title_text: "#c0caf5", title_dim: "#565f89",
+        border_active: "#7aa2f7", border_inactive: "#2f344d", close: "#f7768e", button_down: "#3b4261", accent: "#7aa2f7",
+        preview: "#bb9af7", desk_line: "#3d4670", desk_glow: "#7aa2f7"
+    },
+    "dark": {
+        name: "dark",
+        text: ["#f0f0f0", "#f2a14a", "#d98ad0", "#8cb4f0", "#e8d870", "#8ccf4a", "#f0b0c8", "#4c4c4c", "#999999", "#4cb0c8",
+            "#a070e0", "#4c7ad8", "#9a7656", "#5aa65a", "#e05050", "#141414"],
+        desk: ["#0c0c0e", "#121216", "#18181e", "#1e1e26", "#24242e", "#2a2a36", "#30303e", "#363646"],
+        win_bg: "#1c1c1c", title_active: "#2b2b2b", title_inactive: "#202020", title_text: "#f0f0f0", title_dim: "#7a7a7a",
+        border_active: "#5a8dee", border_inactive: "#333333", close: "#e04848", button_down: "#444444", accent: "#5a8dee",
+        preview: "#5a8dee", desk_line: "#3a3a48", desk_glow: "#5a8dee"
+    },
+    "light": {
+        name: "light",
+        text: ["#ffffff", "#d9822b", "#b04fb0", "#2f8fd8", "#c9a227", "#5aa02c", "#e07aa0", "#808080", "#b0b0b0", "#1f9aaa",
+            "#7a4fc8", "#2a62c9", "#8a6440", "#3f8f3f", "#d03b3b", "#202020"],
+        desk: ["#c8d4e8", "#cdd8eb", "#d2dcee", "#d7e0f1", "#dce4f3", "#e1e8f5", "#e6ecf7", "#ebf0f9"],
+        win_bg: "#f6f6f6", title_active: "#e4e8ef", title_inactive: "#eeeeee", title_text: "#202020", title_dim: "#8a8a8a",
+        border_active: "#2a62c9", border_inactive: "#c4c4c4", close: "#e04848", button_down: "#c8ccd4", accent: "#2a62c9",
+        preview: "#2a62c9", desk_line: "#b4c2dc", desk_glow: "#ffffff"
+    }
+}
+
+export def names():
+    return ["tokyo-night", "dark", "light"]
+
+# тема по имени (неизвестное имя даёт tokyo-night)
+export def get(name=nil):
+    return THEMES[name ?? "tokyo-night"] ?? THEMES["tokyo-night"]
+
+def _set_hex(p, index, hex):
+    r, g, b = color.parse_hex(hex)
+    p:set(index, r, g, b)
+
+# палитра рабочего стола: стандартная палитра cgl, поверх цвета CC в тонах темы и цвета интерфейса
+export def palette(th):
+    p = color.default_palette()
+    for i in range[0, 15]:
+        _set_hex(p, i, th.text[i + 1])
+    for i in range[0, DESK_N - 1]:
+        _set_hex(p, DESK0 + i, th.desk[i + 1])
+    for i, role in ROLES:
+        _set_hex(p, WIN_BG + i - 1, th[role])
+    _set_hex(p, SPARE0, th.win_bg)
+    for i in range[SPARE0 + 1, 255]:
+        _set_hex(p, i, th.win_bg)
+    return p
+
+# список [номер, r, g, b] для screen:set_colors: смена темы на ходу (пиксели не перерисовываются)
+export def entries(th):
+    p = palette(th)
+    out = []
+    for i in range[0, 255]:
+        r, g, b = p:get(i)
+        out[len(out) + 1] = [i, r, g, b]
+    return out
+
+# номер цвета -> номер ближайшего к тому же цвету, умноженному на factor (тени, затемнение под диалогом)
+export def dim_map(p, factor=0.55):
+    map = {}
+    for i in range[0, 255]:
+        r, g, b = p:get(i)
+        map[i] = p:nearest(math.floor(r * factor), math.floor(g * factor), math.floor(b * factor))
+    return map

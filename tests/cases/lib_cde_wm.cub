@@ -1,0 +1,290 @@
+import t
+import kernel
+import cde
+import cde.theme as theme
+import cde.window as window_mod
+eq = t.eq
+
+const TITLE = window_mod.TITLE
+
+# подставной терминал CC: Graphics 51x19 клеток (306x171 пикселей); считает вызовы, которые доходят до экрана
+def make_term(state):
+    api = {}
+    def get_size(px):
+        if px:
+            return 306, 171
+        return 51, 19
+    def set_pal(i, r, g, b):
+        state.pal[i] = [r, g, b]
+    def draw(x, y, rows):
+        state.draws += 1
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    api.setPaletteColor = set_pal
+    api.drawPixels = draw
+    for name in ["setGraphicsMode", "setFrozen", "setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit"]:
+        api[name] = nothing
+    return api
+
+state = {pal: {}, draws: 0}
+clock = {now: 1000}
+def now():
+    return clock.now
+
+def breathe():
+    os.queueEvent("t_breathe")
+    os.pullEvent("t_breathe")
+
+wm = cde.wm.new({term: make_term(state), assets: "/repo/assets", clock: now})
+k = kernel.new({clock: now})
+breathe()
+
+def settle(n=6):
+    # вызовы менеджера из теста (не из его процесса) не будят его сами
+    k:feed("cubeos_cde")
+    for i in range[1, n]:
+        clock.now = clock.now + 20
+        k:tick()
+        k:run_ready()
+
+# ---------------------------------------------------------------- палитра
+r, g, b = wm.palette:get(0)
+eq([r, g, b], [0xc0, 0xca, 0xf5], "slot 0 is the theme white")
+eq(math.floor(state.pal[theme.WIN_BG][1] * 255 + 0.5), 0x1a, "UI colors reach the terminal palette")
+dr, dg, db = wm.palette:get(wm.comp.dim[theme.DESK0 + 7])
+eq(dr < 0x3f and db < 0x78, true, "shadow map darkens")
+
+# ---------------------------------------------------------------- приложения
+log = []
+def pixel_app(sys, ctx):
+    win = cde.app.open(sys, ctx, {title: "Pix", kind: "pixel", w: 50, h: 30, x: 10, y: 10})
+    win.canvas:fill_rect(0, 0, 50, 30, 196)
+    win:present()
+    while true:
+        ev = table.pack(win:wait_event())
+        log[len(log) + 1] = ev
+        if ev[1] == "win_close":
+            break
+        if ev[1] == "char":
+            win.canvas:set(0, 0, 21)
+            win:present()
+    win:close()
+
+texts = []
+def text_app(sys, ctx):
+    win = cde.app.open(sys, ctx, {title: "Txt", kind: "text", cols: 10, rows: 3, x: 150, y: 20})
+    texts[1] = win
+    win:text(0, 0, "Hi", 0, 15)
+    win:present()
+    while true:
+        ev = table.pack(win:wait_event())
+        if ev[1] == "win_close":
+            break
+        if ev[1] == "char":
+            win:text(5, 1, ev[2], 4, 15)
+            win:present()
+    win:close()
+
+wm:launch(pixel_app, {name: "pix"})
+wm:launch(text_app, {name: "txt"})
+def desk(sys, args):
+    wm:run(sys)
+k:spawn(desk, [], {name: "cde", ui: true})
+settle()
+breathe()
+
+s = wm.screen.surface
+eq(len(wm.windows), 2, "two windows placed")
+pw = wm.windows[1]
+tw = wm.windows[2]
+eq([pw.title, tw.title], ["Pix", "Txt"], "order: last opened on top")
+eq(wm.focused == tw, true, "the last opened window has the focus")
+eq(s:get(11 + 5, 10 + TITLE + 5), 196, "pixel content is on the screen")
+eq(s:get(12, 13), theme.TITLE_INACTIVE, "inactive title bar color")
+eq(s:get(152, 23), theme.TITLE_ACTIVE, "active title bar color")
+eq(s:get(10, 10) != theme.BORDER_INACTIVE, true, "rounded corner pixel shows what is below")
+eq(s:get(pw.x + pw.w, pw.y + 10) != wm.comp.wallpaper:get(pw.x + pw.w, pw.y + 10), true, "shadow darkens the desktop")
+# «H» шрифтом: в клетке есть пиксели цвета текста и фона
+seen = {}
+for yy in range[0, 8]:
+    for xx in range[0, 5]:
+        seen[s:get(151 + xx, 20 + TITLE + yy)] = true
+eq([seen[0] == true, seen[15] == true], [true, true], "text cell is drawn with the font")
+eq(state.draws > 0, true, "frames reach drawPixels")
+
+# ---------------------------------------------------------------- ввод: клик, клавиши
+k:feed("mouse_click", 1, 11 + 5, 10 + TITLE + 3)
+settle()
+eq(wm.focused == pw, true, "click focuses the window")
+eq(wm.windows[2] == pw, true, "click raises the window")
+last = log[len(log)]
+eq([last[1], last[2], last[3], last[4], last[5]], ["mouse_click", 1, 5, 3, pw.id], "click in content coordinates")
+k:feed("mouse_up", 1, 11 + 5, 10 + TITLE + 3)
+k:feed("char", "a")
+settle()
+last = log[len(log)]
+eq([last[1], last[2], last[3]], ["char", "a", pw.id], "char goes to the focused window")
+eq(s:get(11, 10 + TITLE), 21, "app redraw reaches the screen")
+
+# только изменённое место пересобирается: один символ в текстовом окне
+wm:focus(tw)
+settle()
+before = wm.comp.stats.pixels
+k:feed("char", "z")
+settle()
+eq(wm.comp.stats.pixels - before <= 6 * 9 * 2, true, "one changed cell recomposes one cell")
+
+# ---------------------------------------------------------------- перетаскивание
+wm:focus(pw)
+settle()
+k:feed("mouse_click", 1, 20, 14)
+k:feed("mouse_drag", 1, 30, 20)
+k:feed("mouse_drag", 1, 40, 34)
+k:feed("mouse_up", 1, 40, 34)
+settle()
+eq([pw.x, pw.y], [30, 30], "dragging the title moves the window")
+eq(s:get(12, 12), wm.comp.wallpaper:get(12, 12), "old place shows the wallpaper again")
+eq(s:get(31, 30 + TITLE), 21, "content moved with the window")
+
+# ---------------------------------------------------------------- развернуть и вернуть (Alt+↑, Alt+↓)
+k:feed("key", keys.leftAlt, false)
+k:feed("key", keys.up, false)
+settle()
+eq([pw.state, pw.x, pw.y, pw.w, pw.h], ["max", 0, 0, 306, 171], "Alt+Up maximizes")
+last = log[len(log)]
+eq([last[1], last[2], last[3]], ["win_resize", 304, 171 - TITLE - 1], "app is told the new size")
+eq(pw.canvas.w, 304, "canvas has the new size")
+k:feed("key", keys.down, false)
+k:feed("key_up", keys.leftAlt)
+settle()
+eq([pw.state, pw.x, pw.y, pw.w, pw.h], ["normal", 30, 30, 52, 30 + TITLE + 1], "Alt+Down restores")
+
+# ---------------------------------------------------------------- прилипание к краю
+k:feed("mouse_click", 1, 40, 34)
+k:feed("mouse_drag", 1, 20, 40)
+k:feed("mouse_drag", 1, 0, 40)
+settle()
+eq(wm.comp.preview != nil and wm.comp.preview.w == 153, true, "preview of the left half")
+k:feed("mouse_up", 1, 0, 40)
+settle()
+eq([pw.state, pw.x, pw.w, pw.h], ["left", 0, 153, 171], "drop at the left edge snaps to the left half")
+eq(wm.comp.preview, nil, "preview is gone")
+k:feed("key", keys.leftAlt, false)
+k:feed("key", keys.leftShift, false)
+k:feed("key", keys.right, false)
+k:feed("key_up", keys.leftShift)
+k:feed("key_up", keys.leftAlt)
+settle()
+eq([pw.state, pw.x], ["right", 153], "Alt+Shift+Right: right half")
+k:feed("mouse_click", 1, 160, 5)
+k:feed("mouse_drag", 1, 150, 60)
+k:feed("mouse_up", 1, 150, 60)
+settle()
+eq([pw.state, pw.w], ["normal", 52], "dragging a snapped window restores its size")
+
+# ---------------------------------------------------------------- изменение размера за угол
+x1 = pw.x + pw.w - 1
+y1 = pw.y + pw.h - 1
+k:feed("mouse_click", 1, x1, y1)
+k:feed("mouse_drag", 1, x1 + 20, y1 + 10)
+k:feed("mouse_up", 1, x1 + 20, y1 + 10)
+settle()
+eq([pw.w, pw.h, pw.cw, pw.ch], [72, 30 + TITLE + 11, 70, 40], "corner resize")
+# текстовое окно подгоняется под целые клетки
+wm:focus(tw)
+settle()
+k:feed("mouse_click", 1, tw.x + tw.w - 1, tw.y + 20)
+k:feed("mouse_drag", 1, tw.x + tw.w + 13, tw.y + 20)
+k:feed("mouse_up", 1, tw.x + tw.w + 13, tw.y + 20)
+settle()
+eq([tw:cols(), tw.cw], [12, 72], "text window resizes in whole cells")
+
+# ---------------------------------------------------------------- свернуть, переключение окон
+wm:focus(pw)
+settle()
+k:feed("mouse_click", 1, pw.x + pw.w - 1 - 13 * 3 + 4, pw.y + 5)
+k:feed("mouse_up", 1, pw.x + pw.w - 1 - 13 * 3 + 4, pw.y + 5)
+settle()
+eq([pw.minimized, wm.focused == tw], [true, true], "minimize button")
+k:feed("key", keys.leftAlt, false)
+k:feed("key", keys.left, false)
+k:feed("key_up", keys.leftAlt)
+settle()
+eq([pw.minimized, wm.focused == pw], [false, true], "Alt+Left brings back the minimized window")
+k:feed("key", keys.leftAlt, false)
+k:feed("key", keys.d, false)
+settle()
+eq([pw.minimized, tw.minimized, wm.focused], [true, true, nil], "Alt+D shows the desktop")
+k:feed("key", keys.d, false)
+k:feed("key_up", keys.leftAlt)
+settle()
+eq([pw.minimized, tw.minimized], [false, false], "Alt+D again restores")
+
+# ---------------------------------------------------------------- левый Alt нажать и отпустить
+started = {n: 0}
+def on_start():
+    started.n += 1
+wm.on_start = on_start
+k:feed("key", keys.leftAlt, false)
+k:feed("key_up", keys.leftAlt)
+k:feed("key", keys.leftAlt, false)
+k:feed("key", keys.left, false)
+k:feed("key_up", keys.leftAlt)
+settle()
+eq(started.n, 1, "a lone left Alt tap opens Start, Alt+key does not")
+
+# ---------------------------------------------------------------- закрытие: Ctrl+T и удержание Ctrl+T
+wm:focus(pw)
+settle()
+k:feed("key", keys.leftCtrl, false)
+k:feed("key", keys.t, false)
+k:feed("char", "t")
+k:feed("key_up", keys.leftCtrl)
+settle()
+eq(log[len(log)][1], "win_close", "Ctrl+T asks the app to close")
+eq(len(wm.windows), 1, "the closed window is gone")
+eq(wm.focused == tw, true, "focus moves to the next window")
+eq(s:get(pw.x + 5, pw.y + 20), wm.comp.wallpaper:get(pw.x + 5, pw.y + 20), "desktop is redrawn under it")
+k:feed("terminate")
+settle()
+eq([len(wm.windows), k:count()], [0, 1], "held Ctrl+T kills the focused app, the desktop stays")
+
+# ---------------------------------------------------------------- приложение упало: окно закрывается
+def bad_app(sys, ctx):
+    win = cde.app.open(sys, ctx, {title: "Bad", w: 20, h: 10})
+    win:present()
+    sys.sleep(0.01)
+    error("boom")
+wm:launch(bad_app, {name: "bad"})
+clock.now = clock.now + 1100
+settle(10)
+eq([len(wm.windows), len(wm.exits)], [0, 1], "crashed app loses its window")
+eq(string.find(wm.exits[1].err, "boom") != nil, true, "crash is recorded")
+
+# ---------------------------------------------------------------- sys.post: кто кому может слать
+user = {name: "alice", roles: []}
+other = {name: "bob", roles: []}
+res = {}
+def victim(sys, a):
+    ev = table.pack(sys.wait_event(["key", "cubeos_x"], 1))
+    res.victim = ev[1]
+def parent(sys, a):
+    def child(sys2, a2):
+        res.child_up = pcall(sys2.post, a2[1], "cubeos_ping")
+        res.child_fake = pcall(sys2.post, a2[1], "key", 30)
+    me = sys.getpid()
+    cp = sys.spawn(child, [me])
+    res.foreign = pcall(sys.post, a[1], "key", 30)
+    ev = table.pack(sys.wait_event(["cubeos_ping"], 1))
+    res.parent_got = ev[1]
+vp = k:spawn(victim, [], {name: "victim", subject: other})
+k:spawn(parent, [vp], {name: "parent", subject: user})
+settle(4)
+clock.now = clock.now + 1500
+k:tick()
+k:run_ready()
+eq([res.foreign, res.child_up, res.child_fake, res.parent_got], [false, true, false, "cubeos_ping"], "post rules")
+eq(res.victim, nil, "unrelated process gets nothing")
+
+print("done")

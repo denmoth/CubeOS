@@ -1,0 +1,756 @@
+# cde.wm: оконный менеджер рабочего стола. Работает в процессе ядра (сессия CDE), держит фокус ввода ядра и раздаёт ввод окнам.
+#
+#   wm = cde.wm.new({term: term, assets: "/repo/assets", theme: "tokyo-night"})
+#   wm:launch(program, {name: "clock"}, args)      program(sys, ctx): процесс ядра, потомок менеджера; окно: cde.app.open(sys, ctx, {...})
+#   wm:hotkey("alt+enter", () => ...)              своё сочетание (поверх стандартных)
+#   kernel:spawn((sys, a) => wm:run(sys), [], {name: "cde", ui: true})
+#
+# Мышь: клик поднимает окно и даёт ему фокус; заголовок тянет окно (у края экрана рамка предпросмотра: вверх на весь экран,
+# влево и вправо половинки), двойной клик по заголовку разворачивает; края и углы меняют размер; кнопки свернуть, развернуть,
+# закрыть. Колесо идёт окну под мышью. Клавиши (D249): Alt+←/→ предыдущее и следующее окно, Alt+↑ развернуть, Alt+↓ вернуть
+# или свернуть, Alt+Shift+←/→ половинки, Ctrl+T закрыть окно (удержание Ctrl+T закрывает принудительно), Alt+D рабочий стол,
+# одиночное нажатие левого Alt вызывает on_start («Пуск», шаг 3).
+#
+# Окну приходят события (последний аргумент номер окна):
+#   key(код, held, id), key_up(код, id), char(символ, id), paste(текст, id)
+#   mouse_click/mouse_drag/mouse_up(кнопка, x, y, id), mouse_scroll(направление, x, y, id): у пиксельного окна x, y это пиксели
+#     содержимого с нуля, у текстового клетки с единицы (как в терминале CC)
+#   win_resize(ширина, высота, id): пиксели или столбцы и строки; win.canvas уже новая поверхность, нарисовать заново
+#   win_close(id): просьба закрыть (кнопка ×, Ctrl+T); win_focus(id), win_blur(id)
+
+import cgl
+import font as font_lib
+import cde.theme as theme
+import cde.window as window_mod
+import cde.compositor as comp_mod
+import cde.wallpaper as wallpaper_mod
+
+const TITLE = window_mod.TITLE
+const WM_EVENTS = ["key", "key_up", "char", "paste", "mouse_click", "mouse_drag", "mouse_up", "mouse_scroll", "terminate",
+    "term_resize", "cubeos_cde"]
+export const APP_EVENTS = ["key", "key_up", "char", "paste", "mouse_click", "mouse_drag", "mouse_up", "mouse_scroll",
+    "win_resize", "win_close", "win_focus", "win_blur"]
+# полоса у края окна, за которую меняют размер (пикселей внутрь и наружу)
+const GRIP = 2
+const DOUBLE_MS = 450
+const BLINK_MS = 500
+const REAP_MS = 1000
+
+def _now_ms():
+    return os.epoch("utc")
+
+export class WM:
+    # opts: term, screen (готовый экран cgl; иначе cgl.open), assets (папка со шрифтами), font, theme (имя), wallpaper (поверхность),
+    #       clock (мс), on_start (левый Alt)
+    def init(self, opts=nil):
+        o = opts ?? {}
+        self.theme = theme.get(o.theme)
+        self.palette = theme.palette(self.theme)
+        if o.screen != nil:
+            self.screen = o.screen
+            self.screen:set_colors(theme.entries(self.theme))
+            self.palette = self.screen.palette
+        else:
+            open_opts = {palette: self.palette}
+            if o.term != nil:
+                open_opts.term = o.term
+            self.screen = cgl.open(open_opts)
+        self.font = o.font ?? font_lib.default(o.assets ?? "/repo/assets")
+        self.W = self.screen.w
+        self.H = self.screen.h
+        self.make_wallpaper = o.wallpaper_fn ?? wallpaper_mod.default
+        self.comp = comp_mod.new(self.screen, self.font, {wallpaper: o.wallpaper ?? self.make_wallpaper(self.W, self.H)})
+        self.windows = self.comp.windows
+        self.focused = nil
+        self.next_id = 1
+        self.pending = []
+        self.to_launch = []
+        self.hotkeys = {}
+        self.mods = {}
+        self.drag = nil
+        self.last_click = nil
+        self.alt_tap = false
+        self.swallow_char = false
+        self.hidden = nil
+        self.sys = nil
+        self.pid = nil
+        self.clock = o.clock ?? _now_ms
+        self.on_start = o.on_start
+        self.running = false
+        self.waiting = false
+        self.wake_sent = false
+        self.next_blink = 0
+        self.next_reap = 0
+        self.cascade = 0
+        self.exits = []
+        self.co = nil
+        self:_default_hotkeys()
+
+    # ------------------------------------------------------------ приложения
+
+    # запускает приложение процессом ядра (потомком менеджера). program(sys, ctx): ctx.wm, ctx.args. Вне процесса менеджера
+    # (до run или из чужого кода) запуск ставится в очередь и выполняется на ближайшем проходе менеджера
+    def launch(self, program, opts=nil, args=nil):
+        self.to_launch[len(self.to_launch) + 1] = {program: program, opts: opts ?? {}, args: args ?? []}
+        if self.running and coroutine.running() == self.co:
+            self:_spawn_pending()
+
+    def _spawn_pending(self):
+        list = self.to_launch
+        self.to_launch = []
+        for entry in list:
+            self:_spawn(entry)
+
+    def _spawn(self, entry):
+        let me = self
+        ctx = {wm: self, args: entry.args}
+        prog = entry.program
+        def app_main(sys, a):
+            app_ok, app_err = pcall(prog, sys, a[1])
+            me:_app_exited(sys.getpid(), app_ok, app_err)
+        ok, res = pcall(self.sys.spawn, app_main, [ctx], {name: entry.opts.name ?? "app"})
+        if not ok:
+            self:_log("error", "cannot start " .. tostring(entry.opts.name) .. ": " .. tostring(res))
+
+    # процесс приложения закончился (сам или с ошибкой): его окна закрываются
+    def _app_exited(self, pid, ok, err):
+        for w in self.windows:
+            if w.pid == pid:
+                w.closed = true
+        for w in self.pending:
+            if w.pid == pid:
+                w.closed = true
+        if not ok:
+            self.exits[len(self.exits) + 1] = {pid: pid, err: tostring(err)}
+            pcall(self.sys.log, "error", "app " .. pid .. " crashed: " .. tostring(err))
+        self:_wake(nil)
+
+    def _log(self, level, text):
+        if self.sys != nil:
+            pcall(self.sys.log, level, text)
+
+    # ------------------------------------------------------------ вызовы из окон (из процессов приложений)
+
+    def _new_window(self, pid, opts):
+        id = self.next_id
+        self.next_id = id + 1
+        win = window_mod.new(self, id, pid, opts)
+        win.placed = opts != nil and opts.x != nil
+        self.pending[len(self.pending) + 1] = win
+        self:_wake(win)
+        return win
+
+    # будит менеджер, если он ждёт событий (иначе он и так увидит изменения на следующем проходе)
+    def _wake(self, win):
+        if self.waiting and not self.wake_sent and self.sys != nil and coroutine.running() != self.co:
+            self.wake_sent = true
+            pcall(self.sys.post, self.pid, "cubeos_cde")
+
+    def _title_changed(self, win):
+        win.title_dirty = true
+        self:_wake(win)
+
+    def _client_wait(self, win, timeout, extra):
+        filter = APP_EVENTS
+        if extra != nil:
+            filter = []
+            for n in APP_EVENTS:
+                filter[len(filter) + 1] = n
+            for n in extra:
+                filter[len(filter) + 1] = n
+        res = table.pack(self.sys.wait_event(filter, timeout))
+        return unpack(res, 1, res.n)
+
+    # ------------------------------------------------------------ главный цикл
+
+    def run(self, sys):
+        self.sys = sys
+        self.pid = sys.getpid()
+        self.co = coroutine.running()
+        self.running = true
+        self.comp:damage_all()
+        now = self.clock()
+        self.next_reap = now + REAP_MS
+        self.next_blink = now + BLINK_MS
+        self:_spawn_pending()
+        while self.running:
+            self:service()
+            # флаг ожидания ставится до проверки: окно, нарисованное после неё, разбудит менеджер событием
+            self.waiting = true
+            self.wake_sent = false
+            if not self:_has_work():
+                ev = table.pack(sys.wait_event(WM_EVENTS, self:_timeout()))
+                self.waiting = false
+                if ev[1] != nil:
+                    self:handle(ev)
+            self.waiting = false
+            self:_timers()
+        self.running = false
+
+    def stop(self):
+        self.running = false
+
+    def _has_work(self):
+        if len(self.pending) > 0 or len(self.to_launch) > 0 or len(self.comp.rects) > 0:
+            return true
+        for w in self.windows:
+            if w.wake_pending or w.closed or w.title_dirty:
+                return true
+        return false
+
+    def _timeout(self):
+        now = self.clock()
+        until = self.next_reap
+        if self:_blinking() and self.next_blink < until:
+            until = self.next_blink
+        return math.max(0, until - now) / 1000
+
+    def _blinking(self):
+        f = self.focused
+        return f != nil and f.kind == "text" and f.cursor_on and f:visible()
+
+    def _timers(self):
+        now = self.clock()
+        if now >= self.next_blink:
+            self.next_blink = now + BLINK_MS
+            f = self.focused
+            if self:_blinking():
+                f:_blink(not f.blink)
+        if now >= self.next_reap:
+            self.next_reap = now + REAP_MS
+            self:_reap()
+
+    # окна процессов, которых больше нет (убиты, упали мимо обёртки)
+    def _reap(self):
+        if self.sys == nil or len(self.windows) == 0:
+            return
+        ok, list = pcall(self.sys.ps)
+        if not ok or list == nil:
+            return
+        alive = {}
+        for p in list:
+            alive[p.pid] = true
+        for w in self.windows:
+            if not alive[w.pid]:
+                w.closed = true
+
+    # один проход: новые окна, закрытые окна, нарисованное приложениями, сборка кадра
+    def service(self):
+        if len(self.to_launch) > 0 and self.sys != nil:
+            self:_spawn_pending()
+        if len(self.pending) > 0:
+            list = self.pending
+            self.pending = []
+            for win in list:
+                if not win.closed:
+                    self:_place(win)
+        i = 1
+        while i <= len(self.windows):
+            w = self.windows[i]
+            if w.closed:
+                self.comp:damage_window(w)
+                table.remove(self.windows, i)
+                if self.focused == w:
+                    self:_set_focus(self:_topmost())
+                if self.drag != nil and self.drag.win == w:
+                    self.drag = nil
+                    self.comp:set_preview(nil)
+            else:
+                if w.title_dirty:
+                    w.title_dirty = false
+                    self.comp:damage(w.x, w.y, w.w, TITLE)
+                cv = w.canvas
+                if cv.dx0 <= cv.dx1 and cv.dy0 <= cv.dy1:
+                    if w:visible():
+                        self.comp:damage(w.x + 1 + cv.dx0, w.y + TITLE + cv.dy0, cv.dx1 - cv.dx0 + 1, cv.dy1 - cv.dy0 + 1)
+                    cv:clean()
+                w.wake_pending = false
+                i += 1
+        self.comp:compose()
+
+    # новое окно: место (лесенкой от центра, если приложение не задало), поверх всех, фокус
+    def _place(self, win):
+        if not win.placed:
+            x = math.floor((self.W - win.w) / 2) + (self.cascade % 6) * 12 - 30
+            y = math.floor((self.H - win.h) / 2) + (self.cascade % 6) * 10 - 25
+            self.cascade += 1
+            win.x = math.max(0, math.min(self.W - win.w, x))
+            win.y = math.max(0, math.min(self.H - win.h, y))
+        win.canvas:clean()
+        self.windows[len(self.windows) + 1] = win
+        self.comp:damage_window(win)
+        self:_set_focus(win)
+
+    # ------------------------------------------------------------ фокус и порядок
+
+    def _topmost(self):
+        for i in range[len(self.windows), 1] step -1:
+            w = self.windows[i]
+            if w:visible():
+                return w
+        return nil
+
+    def _raise(self, win):
+        for i, w in self.windows:
+            if w == win:
+                if i != len(self.windows):
+                    table.remove(self.windows, i)
+                    self.windows[len(self.windows) + 1] = win
+                    self.comp:damage_window(win)
+                return
+
+    # события окнам шлёт только сам процесс менеджера (вызов ядра из чужого места ушёл бы не туда)
+    def _post(self, win, name, a, b, c):
+        if self.sys == nil or win == nil or win.closed or coroutine.running() != self.co:
+            return
+        if c != nil:
+            pcall(self.sys.post, win.pid, name, a, b, c, win.id)
+        elif b != nil:
+            pcall(self.sys.post, win.pid, name, a, b, win.id)
+        elif a != nil:
+            pcall(self.sys.post, win.pid, name, a, win.id)
+        else:
+            pcall(self.sys.post, win.pid, name, win.id)
+
+    def _set_focus(self, win):
+        old = self.focused
+        if win != nil:
+            self:_raise(win)
+        if old == win:
+            return
+        self.focused = win
+        self.comp.focused = win
+        if old != nil and not old.closed:
+            self.comp:damage(old.x, old.y, old.w, TITLE)
+            old:_blink(true)
+            self:_post(old, "win_blur")
+        if win != nil:
+            self.comp:damage_window(win)
+            self.next_blink = self.clock() + BLINK_MS
+            win:_blink(true)
+            self:_post(win, "win_focus")
+
+    def focus(self, win):
+        if win.minimized:
+            win.minimized = false
+            self.comp:damage_window(win)
+        self:_set_focus(win)
+
+    # следующее (dir 1) или предыдущее (-1) окно по порядку открытия, свёрнутые разворачиваются
+    def cycle(self, dir):
+        list = []
+        for w in self.windows:
+            if not w.closed:
+                list[len(list) + 1] = w
+        if len(list) == 0:
+            return
+        table.sort(list, (a, b) => a.id < b.id)
+        pos = 0
+        for i, w in list:
+            if w == self.focused:
+                pos = i
+        n = len(list)
+        nxt = pos + dir
+        if pos == 0:
+            nxt = dir > 0 and 1 or n
+        if nxt < 1:
+            nxt = n
+        if nxt > n:
+            nxt = 1
+        self:focus(list[nxt])
+
+    # ------------------------------------------------------------ состояния окна
+
+    # прямоугольник для состояния: max, left, right
+    def area_for(self, state):
+        half = math.floor(self.W / 2)
+        if state == "max":
+            return {x: 0, y: 0, w: self.W, h: self.H}
+        if state == "left":
+            return {x: 0, y: 0, w: half, h: self.H}
+        if state == "right":
+            return {x: half, y: 0, w: self.W - half, h: self.H}
+        return nil
+
+    def set_state(self, win, state):
+        # окно постоянного размера не разворачивается и не прилипает
+        if not win.resizable and state != "normal":
+            return
+        if win.minimized:
+            win.minimized = false
+        if state == win.state:
+            self.comp:damage_window(win)
+            return
+        if win.state == "normal":
+            win.normal = {x: win.x, y: win.y, w: win.w, h: win.h}
+        r = self:area_for(state)
+        if r == nil:
+            r = win.normal ?? {x: win.x, y: win.y, w: win.w, h: win.h}
+            state = "normal"
+        win.state = state
+        self:move_resize(win, r.x, r.y, r.w, r.h)
+
+    def toggle_max(self, win):
+        if win.state == "max":
+            self:set_state(win, "normal")
+        else:
+            self:set_state(win, "max")
+
+    def minimize(self, win):
+        if win.minimized:
+            return
+        win.minimized = true
+        self.comp:damage_window(win)
+        if self.focused == win:
+            self:_set_focus(nil)
+            top = self:_topmost()
+            if top != nil:
+                self:_set_focus(top)
+
+    # Alt+D: свернуть всё, повторно вернуть как было
+    def toggle_desktop(self):
+        if self.hidden != nil:
+            list = self.hidden
+            self.hidden = nil
+            for w in list:
+                if not w.closed and w.minimized:
+                    w.minimized = false
+                    self.comp:damage_window(w)
+            top = self:_topmost()
+            if top != nil:
+                self:_set_focus(top)
+            return
+        self.hidden = []
+        for w in self.windows:
+            if w:visible():
+                self.hidden[len(self.hidden) + 1] = w
+                w.minimized = true
+                self.comp:damage_window(w)
+        self:_set_focus(nil)
+
+    def request_close(self, win):
+        if win != nil:
+            self:_post(win, "win_close")
+
+    # принудительно: процесс окна убивается, все его окна закрываются
+    def force_close(self, win):
+        if win == nil:
+            return
+        if self.sys != nil and coroutine.running() == self.co:
+            pcall(self.sys.kill, win.pid, "kill")
+        for w in self.windows:
+            if w.pid == win.pid:
+                w.closed = true
+
+    # новое место и размер (внешний прямоугольник); содержимое пересоздаётся, если его размер изменился
+    def move_resize(self, win, x, y, w, h):
+        self.comp:damage_window(win)
+        cw, ch = win:content_for(w, h)
+        if win.kind == "text" and win.state == "normal":
+            cw = math.max(win.font.width, math.floor(cw / win.font.width) * win.font.width)
+            ch = math.max(win.font.height, math.floor(ch / win.font.height) * win.font.height)
+            w = cw + 2
+            h = ch + TITLE + 1
+        win.x = x
+        win.y = y
+        win.w = w
+        win.h = h
+        changed = win:_make_content(cw, ch)
+        win.canvas:clean()
+        self.comp:damage_window(win)
+        if changed:
+            if win.kind == "text":
+                self:_post(win, "win_resize", win:cols(), win:rows())
+            else:
+                self:_post(win, "win_resize", cw, ch)
+
+    # ------------------------------------------------------------ клавиши
+
+    def _default_hotkeys(self):
+        let me = self
+        def prev():
+            me:cycle(-1)
+        def nxt():
+            me:cycle(1)
+        def up():
+            if me.focused != nil:
+                me:set_state(me.focused, "max")
+        def down():
+            f = me.focused
+            if f != nil:
+                if f.state != "normal":
+                    me:set_state(f, "normal")
+                else:
+                    me:minimize(f)
+        def left():
+            if me.focused != nil:
+                me:set_state(me.focused, me.focused.state == "left" and "normal" or "left")
+        def right():
+            if me.focused != nil:
+                me:set_state(me.focused, me.focused.state == "right" and "normal" or "right")
+        def close():
+            me:request_close(me.focused)
+        def desk():
+            me:toggle_desktop()
+        self.hotkeys["alt+left"] = prev
+        self.hotkeys["alt+right"] = nxt
+        self.hotkeys["alt+up"] = up
+        self.hotkeys["alt+down"] = down
+        self.hotkeys["alt+shift+left"] = left
+        self.hotkeys["alt+shift+right"] = right
+        self.hotkeys["ctrl+t"] = close
+        self.hotkeys["alt+d"] = desk
+
+    # своё сочетание: "ctrl+alt+shift+имя" (имя клавиши как в keys.getName); fn = nil снимает
+    def hotkey(self, combo, fn):
+        self.hotkeys[string.lower(combo)] = fn
+
+    def _mod(self, name):
+        if name == "ctrl":
+            return self.mods[keys.leftCtrl] or self.mods[keys.rightCtrl]
+        if name == "alt":
+            return self.mods[keys.leftAlt]
+        return self.mods[keys.leftShift] or self.mods[keys.rightShift]
+
+    def _is_mod(self, code):
+        return code == keys.leftCtrl or code == keys.rightCtrl or code == keys.leftAlt or code == keys.rightAlt or code == keys.leftShift or code == keys.rightShift
+
+    def _combo(self, code):
+        name = keys.getName(code) ?? tostring(code)
+        parts = []
+        if self:_mod("ctrl"):
+            parts[len(parts) + 1] = "ctrl"
+        if self:_mod("alt"):
+            parts[len(parts) + 1] = "alt"
+        if self:_mod("shift"):
+            parts[len(parts) + 1] = "shift"
+        parts[len(parts) + 1] = name
+        return table.concat(parts, "+")
+
+    def _key(self, code, held):
+        self.swallow_char = false
+        if self:_is_mod(code):
+            if code == keys.leftAlt and not held:
+                self.alt_tap = true
+            elif code != keys.leftAlt:
+                self.alt_tap = false
+            self.mods[code] = true
+            self:_post(self.focused, "key", code, held == true)
+            return
+        self.alt_tap = false
+        if self:_mod("ctrl") or self:_mod("alt"):
+            fn = self.hotkeys[self:_combo(code)]
+            if fn != nil:
+                self.swallow_char = true
+                fn()
+                return
+        self:_post(self.focused, "key", code, held == true)
+
+    def _key_up(self, code):
+        was_tap = code == keys.leftAlt and self.alt_tap
+        self.mods[code] = nil
+        self.alt_tap = false
+        self:_post(self.focused, "key_up", code)
+        if was_tap and self.on_start != nil:
+            self.on_start()
+
+    # ------------------------------------------------------------ мышь
+
+    # окно под точкой и часть окна: "title", "button" (which), "content", "border", "resize" (края)
+    def hit(self, px, py):
+        for i in range[len(self.windows), 1] step -1:
+            w = self.windows[i]
+            if w:visible() and px >= w.x - GRIP and px < w.x + w.w + GRIP and py >= w.y - GRIP and py < w.y + w.h + GRIP:
+                inside = w:contains(px, py)
+                if w.resizable and w.state == "normal":
+                    edges = {left: px < w.x + GRIP, right: px >= w.x + w.w - GRIP, top: py < w.y + 1,
+                        bottom: py >= w.y + w.h - GRIP}
+                    if edges.left or edges.right or edges.top or edges.bottom:
+                        return w, "resize", edges
+                if inside:
+                    if py < w.y + TITLE:
+                        for b in self.comp:buttons(w):
+                            if px >= b.x and px < b.x + comp_mod.BUTTON_W and py >= w.y + 1:
+                                return w, "button", b.which
+                        return w, "title", nil
+                    if w:in_content(px, py):
+                        return w, "content", nil
+                    return w, "border", nil
+        return nil, "desktop", nil
+
+    # координаты события для окна: пиксели с нуля или клетки с единицы
+    def _local(self, win, px, py):
+        lx = px - win.x - 1
+        ly = py - win.y - TITLE
+        if win.kind == "text":
+            return math.floor(lx / win.font.width) + 1, math.floor(ly / win.font.height) + 1
+        return lx, ly
+
+    def _click(self, btn, px, py):
+        win, part, extra = self:hit(px, py)
+        if win == nil:
+            self:_set_focus(nil)
+            return
+        self:focus(win)
+        if part == "resize":
+            self.drag = {kind: "resize", win: win, edges: extra, sx: px, sy: py, r: {x: win.x, y: win.y, w: win.w, h: win.h}}
+        elif part == "button":
+            self.comp.pressed = {win: win, which: extra}
+            self.comp:damage(win.x, win.y, win.w, TITLE)
+            self.drag = {kind: "button", win: win, which: extra}
+        elif part == "title":
+            now = self.clock()
+            lc = self.last_click
+            if lc != nil and lc.win == win and now - lc.at <= DOUBLE_MS and math.abs(px - lc.x) + math.abs(py - lc.y) <= 4 and win.resizable:
+                self.last_click = nil
+                self:toggle_max(win)
+                return
+            self.last_click = {win: win, at: now, x: px, y: py}
+            self.drag = {kind: "move", win: win, ox: px - win.x, oy: py - win.y, sx: px, sy: py, moved: false}
+        elif part == "content":
+            self.drag = {kind: "content", win: win, btn: btn}
+            lx, ly = self:_local(win, px, py)
+            self:_post(win, "mouse_click", btn, lx, ly)
+
+    def _drag(self, btn, px, py):
+        d = self.drag
+        if d == nil:
+            return
+        win = d.win
+        if d.kind == "move":
+            if not d.moved and math.abs(px - d.sx) + math.abs(py - d.sy) < 2:
+                return
+            d.moved = true
+            self.last_click = nil
+            if win.state != "normal":
+                # развёрнутое окно, которое тянут за заголовок, возвращается к обычному размеру под мышью
+                ratio = d.ox / math.max(1, win.w)
+                self:set_state(win, "normal")
+                d.ox = math.floor(ratio * win.w)
+                d.oy = math.min(d.oy, TITLE - 2)
+            x = math.max(30 - win.w, math.min(self.W - 30, px - d.ox))
+            y = math.max(0, math.min(self.H - TITLE, py - d.oy))
+            if x != win.x or y != win.y:
+                self:move_resize(win, x, y, win.w, win.h)
+            snap = nil
+            if win.resizable:
+                if py <= 0:
+                    snap = "max"
+                elif px <= 0:
+                    snap = "left"
+                elif px >= self.W - 1:
+                    snap = "right"
+            d.snap = snap
+            self.comp:set_preview(snap != nil and self:area_for(snap) or nil)
+        elif d.kind == "resize":
+            r = d.r
+            e = d.edges
+            dx = px - d.sx
+            dy = py - d.sy
+            min_w = win.min_w + 2
+            min_h = win.min_h + TITLE + 1
+            x = r.x
+            y = r.y
+            w = r.w
+            h = r.h
+            if e.right:
+                w = math.max(min_w, r.w + dx)
+            if e.bottom:
+                h = math.max(min_h, r.h + dy)
+            if e.left:
+                w = math.max(min_w, r.w - dx)
+                x = r.x + r.w - w
+            if e.top:
+                h = math.max(min_h, r.h - dy)
+                y = r.y + r.h - h
+            if x != win.x or y != win.y or w != win.w or h != win.h:
+                self:move_resize(win, x, y, w, h)
+                if e.left:
+                    win.x = r.x + r.w - win.w
+                if e.top:
+                    win.y = r.y + r.h - win.h
+        elif d.kind == "content":
+            lx, ly = self:_local(win, px, py)
+            self:_post(win, "mouse_drag", btn, lx, ly)
+
+    def _up(self, btn, px, py):
+        d = self.drag
+        self.drag = nil
+        if d == nil:
+            return
+        win = d.win
+        if d.kind == "button":
+            self.comp.pressed = nil
+            self.comp:damage(win.x, win.y, win.w, TITLE)
+            w2, part, which = self:hit(px, py)
+            if w2 == win and part == "button" and which == d.which:
+                if which == "close":
+                    self:request_close(win)
+                elif which == "max":
+                    self:toggle_max(win)
+                else:
+                    self:minimize(win)
+        elif d.kind == "move":
+            self.comp:set_preview(nil)
+            if d.snap != nil:
+                self:set_state(win, d.snap)
+        elif d.kind == "content":
+            lx, ly = self:_local(win, px, py)
+            self:_post(win, "mouse_up", btn, lx, ly)
+
+    def _scroll(self, dir, px, py):
+        win, part, extra = self:hit(px, py)
+        if win != nil and part == "content":
+            lx, ly = self:_local(win, px, py)
+            self:_post(win, "mouse_scroll", dir, lx, ly)
+
+    # ------------------------------------------------------------ события
+
+    def handle(self, ev):
+        name = ev[1]
+        if name == "mouse_click" or name == "mouse_drag" or name == "mouse_up" or name == "mouse_scroll":
+            px, py = self.screen:to_pixel(ev[3], ev[4])
+            if name == "mouse_click":
+                self:_click(ev[2], px, py)
+            elif name == "mouse_drag":
+                self:_drag(ev[2], px, py)
+            elif name == "mouse_up":
+                self:_up(ev[2], px, py)
+            else:
+                self:_scroll(ev[2], px, py)
+        elif name == "key":
+            self:_key(ev[2], ev[3])
+        elif name == "key_up":
+            self:_key_up(ev[2])
+        elif name == "char":
+            if self.swallow_char:
+                self.swallow_char = false
+            else:
+                self:_post(self.focused, "char", ev[2])
+        elif name == "paste":
+            self:_post(self.focused, "paste", ev[2])
+        elif name == "terminate":
+            # удержание Ctrl+T: CC сам шлёт terminate; окно в фокусе закрывается без вопросов (D222)
+            self:force_close(self.focused)
+        elif name == "term_resize":
+            self:_resized()
+
+    # экран поменял размер: новые обои, развёрнутые окна по новому размеру, видимые окна в пределах экрана
+    def _resized(self):
+        self.screen:resize()
+        self.W = self.screen.w
+        self.H = self.screen.h
+        self.comp.s = self.screen.surface
+        self.comp.W = self.W
+        self.comp.H = self.H
+        self.comp.wallpaper = self.make_wallpaper(self.W, self.H)
+        for w in self.windows:
+            r = self:area_for(w.state)
+            if r != nil:
+                self:move_resize(w, r.x, r.y, r.w, r.h)
+            else:
+                self:move_resize(w, math.max(0, math.min(self.W - w.w, w.x)), math.max(0, math.min(self.H - TITLE, w.y)), w.w, w.h)
+        self.comp:damage_all()
+
+export def new(opts=nil):
+    return WM(opts)

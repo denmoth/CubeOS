@@ -1,0 +1,21 @@
+# cde: Cube Desktop Environment, графический рабочий стол CubeOS (D183, D249). Подробности в docs/19-cde.md.
+#
+#   import cde
+#   wm = cde.wm.new({term: term, assets: "/repo/assets"})
+#   wm:launch(my_app, {name: "my app"})
+#   kernel:spawn((sys, a) => wm:run(sys), [], {name: "cde", ui: true})
+#
+# Части: cde.wm (оконный менеджер, ввод, клавиши), cde.compositor (сборка кадра по изменённым местам), cde.window (окно),
+# cde.app (API для приложений), cde.theme (палитра и цвета окон), cde.wallpaper (обои).
+
+import cde.wm as wm_mod
+import cde.app as app_mod
+import cde.theme as theme_mod
+import cde.window as window_mod
+import cde.compositor as compositor_mod
+
+export const wm = wm_mod
+export const app = app_mod
+export const theme = theme_mod
+export const window = window_mod
+export const compositor = compositor_mod

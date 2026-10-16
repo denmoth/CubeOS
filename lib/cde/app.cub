@@ -1,0 +1,34 @@
+# cde.app: API окон для приложений рабочего стола
+#
+#   def main(sys, ctx):                                   ctx приходит от wm:launch
+#       win = app.open(sys, ctx, {title: "Cube", kind: "pixel", w: 120, h: 90})
+#       while true:
+#           ev = table.pack(win:wait_event(0.05))         событие окна или nil через 0.05 с (кадр анимации)
+#           if ev[1] == "win_close":
+#               break
+#           win.canvas:fill_rect(0, 0, win.cw, win.ch, 16)   рисовать в win.canvas (cgl.surface)
+#           win:present()
+#       win:close()
+#
+# Текстовое окно: app.open(sys, ctx, {kind: "text", cols: 40, rows: 12}); win:text(x, y, "строка", fg, bg) с цветами CC 0..15
+# (0 белый ... 15 чёрный, в тонах темы), win:set_cursor(x, y, true), win:present().
+# opts окна: title, kind ("pixel" | "text"), w, h (пиксели содержимого) или cols, rows, x, y (иначе лесенкой от центра),
+#   resizable (по умолчанию true), min_w, min_h или min_cols, min_rows, bg (цвет фона содержимого).
+# События окна и их аргументы описаны в cde.wm. Палитра экрана общая (cde.theme): 0..15 цвета CC, 16..231 куб 6x6x6.
+
+import cde.wm as wm_mod
+import cde.theme as theme_mod
+
+export const EVENTS = wm_mod.APP_EVENTS
+export const theme = theme_mod
+
+export def open(sys, ctx, opts=nil):
+    return ctx.wm:_new_window(sys.getpid(), opts ?? {})
+
+# номер палитры экрана, ближайший к цвету (для пиксельных приложений; ищется по всей палитре, включая цвета темы)
+export def rgb(ctx, r, g, b):
+    return ctx.wm.palette:nearest(r, g, b)
+
+# n номеров вдоль ломаной через цвета [r, g, b] (градиенты, освещение)
+export def ramp(ctx, stops, n):
+    return ctx.wm.palette:ramp(stops, n)
