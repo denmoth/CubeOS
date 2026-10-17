@@ -1,0 +1,238 @@
+# apps.axo.ops: операции Axo с файлами (копировать, перенести, в корзину, удалить навсегда), общий буфер обмена всех окон Axo и
+# список открытых окон (для перетаскивания между ними)
+#
+#   eng = ops.engine(view)
+#   op = eng:start("copy", ["/a/x.txt", "/a/dir"], "/b")     "copy" | "move" | "trash" | "delete"
+#   eng:step(budget_ms)          немного работы (вызывает окно по таймеру): копирование идёт по одному файлу, перенос по одному пункту
+#   op.state                     "run", "ask" (совпало имя: op.conflict = {name, path, dir}, ответ op:answer("replace" | "skip" | "rename",
+#                                для всех) ), "done", "cancelled"; op.done / op.total, op.current (имя), op.errors (список текстов)
+#   op:cancel()
+#   ops.clip                     {mode: "copy" | "cut", paths: [...]} общий для всех окон Axo
+#
+# Папки при копировании раскладываются на файлы (прогресс по файлам). Совпало имя у папки: «replace» значит слить содержимое (внутри
+# снова спросит про совпавшие файлы), «rename» кладёт рядом «имя (2)». Перенос внутри одного диска это переименование, между
+# дисками CFS сама копирует и удаляет оригинал.
+
+import cfs.path as paths
+
+export const clip = {mode: nil, paths: []}
+export const windows = {}
+
+export def set_clip(mode, list):
+    clip.mode = mode
+    clip.paths = list
+
+# свободное имя рядом: «name (2).txt», «name (3).txt», ...
+export def free_name(view, dir, name):
+    base = name
+    ext = ""
+    dot = string.match(name, "^.+()%.[^%.]+$")
+    if dot != nil:
+        base = string.sub(name, 1, dot - 1)
+        ext = string.sub(name, dot)
+    n = 2
+    while true:
+        cand = base .. " (" .. n .. ")" .. ext
+        ok, st = pcall(() => view:stat(paths.join(dir, cand)))
+        if not ok or st == nil:
+            return cand
+        n += 1
+
+class Op:
+    def init(self, eng, kind, list, dest):
+        self.eng = eng
+        self.kind = kind
+        self.items = list
+        self.dest = dest
+        self.queue = []
+        self.state = "run"
+        self.done = 0
+        self.total = 0
+        self.current = ""
+        self.errors = []
+        self.policy = nil
+        self.conflict = nil
+        self.decision = nil
+        self.touched = {}
+        for p in list:
+            self.queue[len(self.queue) + 1] = {src: p, dir: dest}
+            self.total += kind == "copy" and eng:_count(p) or 1
+        self.total = math.max(1, self.total)
+
+    def cancel(self):
+        if self.state == "run" or self.state == "ask":
+            self.state = "cancelled"
+
+    # ответ на совпадение имени; all: так же для остальных совпадений этой операции
+    def answer(self, choice, all=false):
+        if self.state != "ask":
+            return
+        self.decision = choice
+        if all:
+            self.policy = choice
+        self.state = "run"
+
+    def title(self):
+        if self.kind == "copy":
+            return "Copying"
+        if self.kind == "move":
+            return "Moving"
+        if self.kind == "trash":
+            return "Moving to trash"
+        return "Deleting"
+
+class Engine:
+    def init(self, view):
+        self.view = view
+        self.ops = []
+
+    def _count(self, p):
+        ok, st = pcall(() => self.view:stat(p))
+        if not ok or st == nil:
+            return 1
+        if st.type != "dir":
+            return 1
+        n = 0
+        okl, list = pcall(() => self.view:list(p, {hidden: true}))
+        if okl:
+            for e in list:
+                n += self:_count(paths.join(p, e.name))
+        return math.max(1, n)
+
+    def start(self, kind, list, dest=nil):
+        op = Op(self, kind, list, dest)
+        self.ops[len(self.ops) + 1] = op
+        return op
+
+    def active(self):
+        out = []
+        for op in self.ops:
+            if op.state == "run" or op.state == "ask":
+                out[len(out) + 1] = op
+        return out
+
+    # убрать законченные (окно показывает их ещё немного)
+    def forget(self, op):
+        for i, o in self.ops:
+            if o == op:
+                table.remove(self.ops, i)
+                return
+
+    # немного работы по всем операциям, пока не кончится время (мс)
+    def step(self, budget=25):
+        t0 = os.epoch("utc")
+        changed = false
+        for op in self.ops:
+            while op.state == "run" and os.epoch("utc") - t0 < budget:
+                if len(op.queue) == 0:
+                    op.state = "done"
+                    op.current = ""
+                    changed = true
+                    break
+                self:_one(op)
+                changed = true
+        return changed
+
+    def _exists(self, p):
+        ok, st = pcall(() => self.view:stat(p))
+        return ok and st != nil, ok and st or nil
+
+    def _fail(self, op, item, err):
+        text = tostring(err)
+        text = string.gsub(text, "^.-: ", "", 1)
+        op.errors[len(op.errors) + 1] = paths.basename(item.src) .. ": " .. text
+
+    # один шаг операции: верхний пункт очереди
+    def _one(self, op):
+        item = op.queue[1]
+        v = self.view
+        name = paths.basename(item.src)
+        op.current = name
+        if op.kind == "trash" or op.kind == "delete":
+            table.remove(op.queue, 1)
+            ok, err = pcall(() => v:remove(item.src, {recursive: true, permanent: op.kind == "delete"}))
+            if not ok:
+                self:_fail(op, item, err)
+            op.touched[paths.parent(item.src)] = true
+            op.done += 1
+            return
+        if item.cleanup:
+            # папка, слитая при переносе: убрать, если опустела
+            table.remove(op.queue, 1)
+            pcall(() => v:remove(item.src, {recursive: false, permanent: true}))
+            return
+        target = paths.join(item.dir, item.name ?? name)
+        if paths.is_inside(target, item.src) and target != item.src:
+            table.remove(op.queue, 1)
+            self:_fail(op, item, "cannot put a folder into itself")
+            op.done += 1
+            return
+        exists, tst = self:_exists(target)
+        if exists and target == item.src:
+            # перенос на то же место ничего не делает; копия на то же место: рядом «имя (2)»
+            if op.kind == "move":
+                table.remove(op.queue, 1)
+                op.done += 1
+                return
+            item.name = free_name(v, item.dir, name)
+            return
+        choice = nil
+        if exists:
+            choice = op.policy ?? op.decision
+            if choice == nil:
+                op.state = "ask"
+                ok_s, sst = pcall(() => v:stat(item.src))
+                op.conflict = {name: name, path: target, dir: tst.type == "dir" and ok_s and sst != nil and sst.type == "dir"}
+                return
+            op.decision = nil
+            op.conflict = nil
+            if choice == "skip":
+                table.remove(op.queue, 1)
+                op.done += op.kind == "copy" and self:_count(item.src) or 1
+                return
+            if choice == "rename":
+                item.name = free_name(v, item.dir, name)
+                return
+        table.remove(op.queue, 1)
+        ok_s, sst = pcall(() => v:stat(item.src))
+        is_dir = ok_s and sst != nil and sst.type == "dir"
+        op.touched[item.dir] = true
+        if op.kind == "move":
+            op.touched[paths.parent(item.src)] = true
+            if exists and is_dir and tst.type == "dir":
+                # слить папки: содержимое переносится внутрь по одному, потом пустая папка удаляется
+                okl, list = pcall(() => v:list(item.src, {hidden: true}))
+                if okl:
+                    for i, e in list:
+                        table.insert(op.queue, i, {src: paths.join(item.src, e.name), dir: target})
+                    op.total += len(list)
+                table.insert(op.queue, (okl and len(list) or 0) + 1, {src: item.src, dir: nil, cleanup: true})
+                op.done += 1
+                return
+            ok, err = pcall(() => v:move(item.src, target, {overwrite: exists}))
+            if not ok:
+                self:_fail(op, item, err)
+            op.done += 1
+            return
+        # копирование
+        if is_dir:
+            if not exists:
+                okm, err = pcall(() => v:mkdir(target))
+                if not okm:
+                    self:_fail(op, item, err)
+                    op.done += self:_count(item.src)
+                    return
+            okl, list = pcall(() => v:list(item.src, {hidden: true}))
+            if okl:
+                for i, e in list:
+                    table.insert(op.queue, i, {src: paths.join(item.src, e.name), dir: target})
+            else:
+                self:_fail(op, item, list)
+            return
+        ok, err = pcall(() => v:copy(item.src, target, {overwrite: exists}))
+        if not ok:
+            self:_fail(op, item, err)
+        op.done += 1
+
+export def engine(view):
+    return Engine(view)

@@ -30,6 +30,13 @@ export class Table(widget.Widget):
         self.on_activate = o.on_activate
         self.on_select = o.on_select
         self.on_menu = o.on_menu
+        # перетаскивание строк: on_drag_start(выбранные), on_drag(ev), on_drop(ev); drop_row: строка, подсвеченная как цель
+        self.on_drag_start = o.on_drag_start
+        self.on_drag = o.on_drag
+        self.on_drop = o.on_drop
+        self.drop_row = nil
+        self.press = nil
+        self.moving = false
         self.empty = o.empty ?? ""
         self.sel = {}
         self.cursor = len(self.rows) > 0 and 1 or 0
@@ -150,6 +157,14 @@ export class Table(widget.Widget):
             out[i] = c.width ?? math.floor(rest * (c.grow ?? 1) / math.max(1, grow))
         return out
 
+    # строка под точкой холста или nil
+    def row_at(self, px, py):
+        st = self.ui.style
+        if px < self.x or px >= self.x + self.w or py < self:_body_y(st) or py >= self.y + self.h:
+            return nil
+        i = self:_row_at(st, py)
+        return (i >= 1 and i <= len(self.rows)) and i or nil
+
     def _row_at(self, st, py):
         return math.floor((py - self:_body_y(st) + self.offset) / self:row_h(st)) + 1
 
@@ -203,6 +218,8 @@ export class Table(widget.Widget):
                 s:fill_rect(self.x, y, rw, rh, self.focused and st.sel or st.ctrl)
             if i == self.cursor and self.focused:
                 s:fill_rect(self.x, y + 2, 2, rh - 4, st.accent)
+            if i == self.drop_row:
+                st:round_line(s, self.x, y, rw, rh, st.accent, 1)
             fg = row.dim and st.dim or (row.color ?? st.text)
             x = self.x
             for ci, c in self.columns:
@@ -316,11 +333,26 @@ export class Table(widget.Widget):
                 self:invalidate()
                 self:_notify()
             elif not double:
-                self:select_only(i)
+                if self.sel[i] and self.on_drag_start != nil:
+                    self.pending_only = i
+                else:
+                    self:select_only(i)
             if double:
                 self.last_click = nil
+                self.pending_only = nil
                 if self.on_activate != nil:
                     self.on_activate(i, self.rows[i], ev)
+            elif ev.button == 1 and not ev.shift and not ev.ctrl:
+                self.press = {i: i, x: ev.x, y: ev.y}
+            return true
+        if ev.name == "drag" and self.press != nil and self.dragging == nil:
+            if not self.moving and math.abs(ev.x - self.press.x) + math.abs(ev.y - self.press.y) >= 4 and self.on_drag_start != nil:
+                self.moving = true
+                self.pending_only = nil
+                self.last_click = nil
+                self.on_drag_start(self:selected())
+            if self.moving and self.on_drag != nil:
+                self.on_drag(ev)
             return true
         if ev.name == "drag" and self.dragging != nil:
             k = len(self.rows) * rh / math.max(1, self:_body_h(st))
@@ -329,6 +361,19 @@ export class Table(widget.Widget):
             return true
         if ev.name == "up":
             self.dragging = nil
+            if self.moving:
+                self.moving = false
+                self.press = nil
+                if self.on_drop != nil:
+                    self.on_drop(ev)
+                self.drop_row = nil
+                self:invalidate()
+                return true
+            self.press = nil
+            if self.pending_only != nil:
+                i = self.pending_only
+                self.pending_only = nil
+                self:select_only(i)
             return true
         if ev.name == "key":
             page = math.max(1, math.floor(self:_body_h(st) / rh) - 1)

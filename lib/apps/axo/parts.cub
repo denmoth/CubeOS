@@ -266,3 +266,92 @@ export class TabBar(widget.Widget):
 
 export def tab_bar(opts=nil):
     return TabBar(opts)
+
+# ------------------------------------------------------------ полоса операций у нижнего края окна
+
+# ops(): список операций движка (apps.axo.ops); несколько: одна строка «N operations» и кнопка развернуть, развёрнуто по строке на
+# операцию; у строки крестик отмены. on_cancel(op), on_toggle()
+export class OpsStrip(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "ops"
+        self.list = []
+        self.expanded = false
+        self.on_cancel = o.on_cancel
+        self.hits = []
+
+    def set(self, list):
+        self.list = list
+        self:set_visible(len(list) > 0)
+        self:relayout()
+        self:invalidate()
+
+    def _rows(self):
+        if len(self.list) <= 1 or self.expanded:
+            return self.list
+        return [nil]
+
+    def measure(self, st):
+        return 60, math.max(1, len(self:_rows())) * 12 + 2
+
+    def _bar(self, s, st, x, y, w, frac):
+        s:fill_rect(x, y, w, 3, st.track)
+        n = math.floor(w * math.max(0, math.min(1, frac)))
+        if n > 0:
+            s:fill_rect(x, y, n, 3, st.accent)
+
+    def draw(self, s, st):
+        f = st.font
+        s:hline(self.x, self.y, self.w, st.border)
+        self.hits = []
+        rows = self:_rows()
+        y = self.y + 2
+        for op in rows:
+            ty = y + math.floor((12 - st.fh) / 2)
+            if op == nil:
+                done = 0
+                total = 0
+                for o in self.list:
+                    done += o.done
+                    total += o.total
+                text = len(self.list) .. " operations"
+                s:text(f, self.x + 4, ty, text, st.text)
+                self:_bar(s, st, self.x + 6 + st:text_w(text) + 4, y + 5, math.max(10, self.w - st:text_w(text) - 34), done / math.max(1, total))
+                icons.draw(s, "up", self.x + self.w - 12, y + 1, st.dim, st.dim)
+                self.hits[len(self.hits) + 1] = {y: y, kind: "toggle"}
+            else:
+                label = op:title()
+                if op.state == "ask":
+                    label = "Waiting: same name"
+                elif op.state == "done":
+                    label = len(op.errors) > 0 and ("Done, " .. len(op.errors) .. " errors") or "Done"
+                text = label .. " " .. math.min(op.done, op.total) .. "/" .. op.total
+                s:text(f, self.x + 4, ty, text, op.state == "ask" and st.warn or (len(op.errors) > 0 and st.danger or st.text))
+                bx = self.x + 8 + st:text_w(text)
+                bw = math.max(10, self.w - (bx - self.x) - 30)
+                self:_bar(s, st, bx, y + 5, bw, op.done / math.max(1, op.total))
+                name = surface_mod.ellipsize(f, op.current ?? "", math.max(0, self.w - (bx - self.x) - bw - 20), "..")
+                if op.state == "run" or op.state == "ask":
+                    icons.draw(s, "close", self.x + self.w - 12, y + 1, st.dim, st.dim)
+                self.hits[len(self.hits) + 1] = {y: y, kind: "op", op: op}
+                if len(self.list) > 1 and self.expanded and op == self.list[1]:
+                    pass
+            y += 12
+
+    def handle(self, ev):
+        if ev.name == "click":
+            for h in self.hits:
+                if ev.y >= h.y and ev.y < h.y + 12:
+                    if h.kind == "toggle" or (ev.x < self.x + self.w - 16 and len(self.list) > 1):
+                        self.expanded = not self.expanded
+                        self:relayout()
+                        self:invalidate()
+                    elif h.kind == "op" and ev.x >= self.x + self.w - 16 and self.on_cancel != nil:
+                        self.on_cancel(h.op)
+                    return true
+            return true
+        return ev.name == "down" or ev.name == "up"
+
+export def ops_strip(opts=nil):
+    return OpsStrip(opts)

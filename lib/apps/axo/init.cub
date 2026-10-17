@@ -5,13 +5,17 @@
 #
 # Клавиши: Enter и двойной клик открывают папку, Backspace назад, Ctrl+↑ вверх, Ctrl+N новая вкладка, Ctrl+W закрыть вкладку,
 # Ctrl+←/→ и правый Alt+←/→ между вкладками, Ctrl+H скрытые файлы, Ctrl+L и F6 ввести путь, F5 обновить, буквы прыгают к имени.
-# Настройки $cfg/axo.conf: show_hidden.
+# Подшаг 2: Ctrl+C, Ctrl+X, Ctrl+V (общий буфер всех окон Axo), F2 переименовать, Ctrl+Shift+N новая папка, Del в корзину и
+# Shift+Del навсегда (оба спрашивают), правая кнопка: меню, перетаскивание строк на папку, место слева, вкладку или другое окно Axo
+# (Ctrl: копия). Прогресс полоской у нижнего края окна, совпадение имён спрашивает (заменить/слить, пропустить, оставить оба, для всех).
+# Настройки $cfg/axo.conf: show_hidden, confirm_trash, confirm_delete.
 
 import cdk
 import cfs.path as paths
 import json5
 import apps.axo.types as types
 import apps.axo.parts as parts
+import apps.axo.ops as ops
 
 export const NAME = "Axo"
 export const FULL_NAME = "Axolotl file manager"
@@ -32,6 +36,12 @@ export class Axo:
         self.tabs = [self:_new_tab(self:_expand(start))]
         self.cur = 1
         self.ui = cdk.open(sys, ctx, {title: NAME, w: 282, h: 158, min_w: 170, min_h: 96, icon: "axo"})
+        self.eng = ops.engine(self.view)
+        self.inbox = []
+        self.asking = nil
+        self.drag = nil
+        self.note_until = 0
+        ops.windows[self.ui.win] = self
         self:_build()
         self:refresh()
         if o != nil and o.ready != nil:
@@ -110,13 +120,21 @@ export class Axo:
         self.table = cdk.data_table({grow: 1, empty: "Nothing here",
             columns: [{key: "name", title: "Name", grow: 1}, {key: "size", title: "Size", width: 42, align: "right"},
                 {key: "modified", title: "Date", width: 58, align: "right"}],
-            on_sort: (key, dir) => me:_sorted(key, dir), on_activate: (i, row, ev) => me:activate(row, ev), on_select: (t) => me:_status()})
+            on_sort: (key, dir) => me:_sorted(key, dir), on_activate: (i, row, ev) => me:activate(row, ev), on_select: (t) => me:_status(),
+            on_menu: (i, row, ev) => me:context_menu(row, ev), on_drag_start: (sel) => me:_drag_start(sel), on_drag: (ev) => me:_drag_move(ev),
+            on_drop: (ev) => me:_drop(ev)})
         body = cdk.row({grow: 1, gap: 2}, [self.places, self.table])
         self.status = cdk.label("", {variant: "dim"})
-        root = cdk.column({padding: 0, gap: 1}, [toolbar, self.tabrow, body, cdk.row({padding: 2}, [self.status])])
+        self.strip = parts.ops_strip({visible: false, on_cancel: (op) => op:cancel()})
+        root = cdk.column({padding: 0, gap: 1}, [toolbar, self.tabrow, body, self.strip, cdk.row({padding: 2}, [self.status])])
         ui:set_root(root)
         ui:set_focus(self.table)
         ui.on_key = (ev) => me:key(ev)
+        def closing():
+            ops.windows[me.ui.win] = nil
+            return true
+        ui.on_close = closing
+        ui:every(0.05, () => me:_tick())
 
     def _kind_color(self, kind):
         st = self.ui.style
@@ -146,10 +164,14 @@ export class Axo:
                 shown[len(shown) + 1] = e
         types.sort(shown, t.sort.key, t.sort.dir)
         now = os.epoch("local")
+        cut = {}
+        if ops.clip.mode == "cut":
+            for c in ops.clip.paths:
+                cut[c] = true
         for e in shown:
             kind = types.kind(e, path)
             rows[len(rows) + 1] = {cells: {name: e.name, size: e.type == "dir" and "" or types.human_size(e.size), modified: types.date_text(e.modified, now)},
-                icon: types.icon(kind), icon_color: self:_kind_color(kind), dim: e.hidden, data: e}
+                icon: types.icon(kind), icon_color: self:_kind_color(kind), dim: e.hidden or cut[paths.join(path, e.name)] == true, data: e}
         self.table.sort = t.sort
         self.table:set_rows(rows, (r) => r.data.name, cursor_name ?? t.cursor)
         alias, root = self:_alias(path)
@@ -165,7 +187,13 @@ export class Axo:
         self:_tabs_changed()
         self:_status()
 
+    def _note(self, text):
+        self.status:set_text(text)
+        self.note_until = os.epoch("utc") + 2500
+
     def _status(self):
+        if os.epoch("utc") < self.note_until:
+            return
         rows = self.table.rows
         dirs = 0
         for r in rows:
@@ -297,7 +325,10 @@ export class Axo:
 
     def menu(self, b):
         let me = self
-        items = [{text: "New tab", icon: "plus", shortcut: "Ctrl+N", on_select: (it) => me:new_tab()},
+        items = [{text: "New folder", icon: "folder", shortcut: "Ctrl+Shift+N", on_select: (it) => me:new_folder()},
+            {text: "Paste", icon: "file", shortcut: "Ctrl+V", disabled: len(ops.clip.paths) == 0, on_select: (it) => me:paste()},
+            {separator: true},
+            {text: "New tab", icon: "plus", shortcut: "Ctrl+N", on_select: (it) => me:new_tab()},
             {text: "Close tab", icon: "close", shortcut: "Ctrl+W", disabled: len(self.tabs) <= 1, on_select: (it) => me:close_tab()},
             {separator: true},
             {text: "Show hidden files", icon: "eye", shortcut: "Ctrl+H", checked: self.show_hidden, on_select: (it) => me:toggle_hidden()},
@@ -313,7 +344,19 @@ export class Axo:
                 self.path:edit(false)
                 self.ui:set_focus(self.table)
             return
-        if k == keys.backspace:
+        if k == keys.n and ev.ctrl and ev.shift:
+            self:new_folder()
+        elif k == keys.c and ev.ctrl:
+            self:copy_sel(false)
+        elif k == keys.x and ev.ctrl:
+            self:copy_sel(true)
+        elif k == keys.v and ev.ctrl:
+            self:paste()
+        elif k == keys.f2:
+            self:rename()
+        elif k == keys.delete:
+            self:delete_sel(ev.shift)
+        elif k == keys.backspace:
             self:back()
         elif k == keys.up and ev.ctrl:
             self:up()
@@ -329,6 +372,286 @@ export class Axo:
             self.path:edit(true)
         elif k == keys.f5:
             self:refresh()
+
+    # ------------------------------------------------------------ действия с файлами
+
+    def _selected_paths(self):
+        out = []
+        base = self:tab().path
+        for pr in self.table:selected():
+            out[len(out) + 1] = paths.join(base, pr[2].data.name)
+        return out
+
+    def copy_sel(self, cut):
+        list = self:_selected_paths()
+        if len(list) == 0:
+            return
+        ops.set_clip(cut and "cut" or "copy", list)
+        self:_note((cut and "Cut " or "Copied ") .. len(list) .. (len(list) == 1 and " item" or " items"))
+        cur = self.table.rows[self.table.cursor]
+        self:refresh(cur != nil and cur.data.name or nil)
+
+    def paste(self):
+        if len(ops.clip.paths) == 0:
+            return
+        kind = ops.clip.mode == "cut" and "move" or "copy"
+        list = []
+        for p in ops.clip.paths:
+            list[len(list) + 1] = p
+        self:_run(kind, list, self:tab().path)
+        if kind == "move":
+            ops.set_clip(nil, [])
+
+    def _run(self, kind, list, dest):
+        op = self.eng:start(kind, list, dest)
+        self.strip:set(self.eng.ops)
+        return op
+
+    def delete_sel(self, forever):
+        list = self:_selected_paths()
+        if len(list) == 0:
+            return
+        let me = self
+        what = len(list) == 1 and ("\"" .. paths.basename(list[1]) .. "\"") or (len(list) .. " items")
+        def go(v):
+            if v == true:
+                me:_run(forever and "delete" or "trash", list, nil)
+        ask = forever and self.conf.confirm_delete != false or (not forever and self.conf.confirm_trash != false)
+        if not ask:
+            go(true)
+            return
+        if forever:
+            cdk.dialog(self.ui, {title: "Delete forever?", icon: "warn", text: "Delete " .. what .. " forever? This cannot be undone.",
+                buttons: [{text: "Cancel", value: false}, {text: "Delete", variant: "danger", icon: "trash", value: true}], on_result: go})
+        else:
+            cdk.dialog(self.ui, {title: "Move to trash?", icon: "trash", text: "Move " .. what .. " to the trash?",
+                buttons: [{text: "Cancel", value: false}, {text: "Move", variant: "primary", icon: "trash", value: true}], on_result: go})
+
+    # окошко с полем ввода: on_ok(text); select_to: сколько символов выделить сначала
+    def _ask_text(self, title, value, ok_text, on_ok, select_to=nil):
+        ui = self.ui
+        let me = self
+        card = nil
+        def done(text):
+            ui:close_layer(card)
+            ui:set_focus(me.table)
+            if text != nil:
+                on_ok(text)
+        field = cdk.text_input({width: 150, text: value, on_submit: (t) => done(t)})
+        card = cdk.card({padding: 6, gap: 5}, [cdk.label(title, {variant: "accent"}), field,
+            cdk.row({gap: 4}, [cdk.spacer(), cdk.button("Cancel", {on_click: (b) => done(nil)}),
+                cdk.button(ok_text, {variant: "primary", on_click: (b) => done(field.text)})])])
+        card.on_escape = () => done(nil)
+        ui:open_layer(card, {center: true, modal: true, dismiss: false})
+        ui:set_focus(field)
+        if select_to != nil:
+            field.anchor = 0
+            field.cursor = select_to
+            field:invalidate()
+
+    def rename(self):
+        sel = self.table:selected()
+        if len(sel) != 1:
+            return
+        e = sel[1][2].data
+        old = paths.join(self:tab().path, e.name)
+        dot = string.match(e.name, "^.+()%.[^%.]+$")
+        let me = self
+        def ok(text):
+            if text == e.name or text == "":
+                return
+            problem = paths.name_problem(text)
+            if problem != nil:
+                me:_note("Cannot rename: " .. problem)
+                return
+            okm, err = pcall(() => me.view:move(old, paths.join(me:tab().path, text)))
+            if not okm:
+                me:_note("Cannot rename: " .. string.gsub(tostring(err), "^.-: ", "", 1))
+                return
+            me:refresh(text)
+        self:_ask_text("Rename", e.name, "Rename", ok, e.type == "dir" and len(e.name) or ((dot ?? (len(e.name) + 1)) - 1))
+
+    def new_folder(self):
+        base = self:tab().path
+        let me = self
+        def ok(text):
+            problem = paths.name_problem(text)
+            if problem != nil:
+                me:_note("Cannot create: " .. problem)
+                return
+            okm, err = pcall(() => me.view:mkdir(paths.join(base, text)))
+            if not okm:
+                me:_note("Cannot create: " .. string.gsub(tostring(err), "^.-: ", "", 1))
+                return
+            me:refresh(text)
+        name = "New folder"
+        okx, st = pcall(() => self.view:stat(paths.join(base, name)))
+        if okx and st != nil:
+            name = ops.free_name(self.view, base, name)
+        self:_ask_text("New folder", name, "Create", ok, len(name))
+
+    def context_menu(self, row, ev):
+        let me = self
+        items = []
+        if row != nil:
+            e = row.data
+            items = [{text: e.type == "dir" and "Open" or "Open (step 3)", icon: e.type == "dir" and "folder" or "file", shortcut: "Enter",
+                    disabled: e.type != "dir", on_select: (it) => me:activate(row, {})},
+                {text: "Open in new tab", icon: "plus", disabled: e.type != "dir", on_select: (it) => me:_open_tab(e)},
+                {separator: true},
+                {text: "Cut", icon: "minus", shortcut: "Ctrl+X", on_select: (it) => me:copy_sel(true)},
+                {text: "Copy", icon: "file", shortcut: "Ctrl+C", on_select: (it) => me:copy_sel(false)},
+                {text: "Paste", icon: "file", shortcut: "Ctrl+V", disabled: len(ops.clip.paths) == 0, on_select: (it) => me:paste()},
+                {separator: true},
+                {text: "Rename", icon: "script", shortcut: "F2", disabled: len(self.table:selected()) != 1, on_select: (it) => me:rename()},
+                {text: "Move to trash", icon: "trash", shortcut: "Del", on_select: (it) => me:delete_sel(false)},
+                {text: "Delete forever", icon: "warn", shortcut: "Shift+Del", on_select: (it) => me:delete_sel(true)}]
+        else:
+            items = [{text: "New folder", icon: "folder", shortcut: "Ctrl+Shift+N", on_select: (it) => me:new_folder()},
+                {text: "Paste", icon: "file", shortcut: "Ctrl+V", disabled: len(ops.clip.paths) == 0, on_select: (it) => me:paste()},
+                {separator: true},
+                {text: "Show hidden files", icon: "eye", shortcut: "Ctrl+H", checked: self.show_hidden, on_select: (it) => me:toggle_hidden()},
+                {text: "Refresh", icon: "restart", shortcut: "F5", on_select: (it) => me:refresh()}]
+        cdk.menu(self.ui, items, ev.x, ev.y)
+
+    def _open_tab(self, e):
+        path = paths.join(self:tab().path, e.name)
+        self:new_tab()
+        self:go(path)
+
+    # ------------------------------------------------------------ перетаскивание
+
+    def _drag_start(self, sel):
+        list = []
+        base = self:tab().path
+        for pr in sel:
+            list[len(list) + 1] = paths.join(base, pr[2].data.name)
+        self.drag = {paths: list, target: nil}
+
+    # папка под точкой окна (x, y на холсте): строка-папка таблицы, место слева, вкладка; nil: не цель
+    def _target_at(self, x, y):
+        t = self.table
+        i = t:row_at(x, y)
+        if i != nil:
+            e = t.rows[i].data
+            full = paths.join(self:tab().path, e.name)
+            if e.type == "dir":
+                for p in self.drag.paths:
+                    if p == full:
+                        return nil, nil
+                return full, i
+            return nil, nil
+        if t:contains(x, y):
+            return self:tab().path, nil
+        pl = self.places
+        if pl:contains(x, y):
+            k = math.floor((y - pl.y + pl.offset) / pl:row_h(self.ui.style)) + 1
+            it = pl.items[k]
+            if it != nil:
+                return self:_expand(it.path), nil
+        tb = self.tabbar
+        if self.tabrow.visible and tb:contains(x, y):
+            k = math.floor((x - tb.x) / tb:_chip_w(self.ui.style)) + 1
+            if self.tabs[k] != nil:
+                return self.tabs[k].path, nil
+        return nil, nil
+
+    def _drag_move(self, ev):
+        if self.drag == nil:
+            return
+        target, row = self:_target_at(ev.x, ev.y)
+        if self.table.drop_row != row:
+            self.table.drop_row = row
+            self.table:invalidate()
+        self.drag.target = target
+        n = len(self.drag.paths)
+        what = n == 1 and paths.basename(self.drag.paths[1]) or (n .. " items")
+        if target != nil and target != self:tab().path:
+            self:_note((self.ui.mods.ctrl and "Copy " or "Move ") .. what .. " to " .. (target == "/" and "/" or paths.basename(target)))
+        else:
+            self:_note("Drag " .. what .. " onto a folder (Ctrl: copy)")
+
+    def _drop(self, ev):
+        d = self.drag
+        self.drag = nil
+        self.note_until = 0
+        if d == nil:
+            return
+        kind = self.ui.mods.ctrl and "copy" or "move"
+        target, row = self:_target_at(ev.x, ev.y)
+        if target == nil and not self.table:contains(ev.x, ev.y):
+            # другое окно Axo под мышью
+            win = self.ui.win
+            px = win:content_x() + ev.x
+            py = win:content_y() + ev.y
+            other, part = self.wm:hit(px, py)
+            app = other != nil and ops.windows[other] or nil
+            if app != nil and app != self:
+                app.inbox[len(app.inbox) + 1] = {kind: kind, paths: d.paths}
+                self:_note((kind == "copy" and "Copying " or "Moving ") .. "to another Axo window")
+            self:_status()
+            return
+        if target == nil or (target == self:tab().path and kind == "move"):
+            self:_status()
+            return
+        self:_run(kind, d.paths, target)
+
+    # ------------------------------------------------------------ таймер: операции, вопросы, входящие
+
+    def _tick(self):
+        while len(self.inbox) > 0:
+            req = table.remove(self.inbox, 1)
+            self:_run(req.kind, req.paths, self:tab().path)
+        if len(self.eng.ops) == 0:
+            return
+        changed = self.eng:step(25)
+        now = os.epoch("utc")
+        here = self:tab().path
+        refresh = false
+        for op in self.eng.ops:
+            if op.state == "ask" and self.asking == nil:
+                self:_ask_conflict(op)
+            if (op.state == "done" or op.state == "cancelled") and op.finished_at == nil:
+                op.finished_at = now
+                refresh = refresh or op.touched[here] == true
+                if len(op.errors) > 0:
+                    cdk.message(self.ui, "Some items failed", table.concat(op.errors, "\n"))
+            if op.touched[here] and changed and (self.last_refresh == nil or now - self.last_refresh > 400):
+                refresh = true
+        keep = []
+        for op in self.eng.ops:
+            if op.finished_at == nil or now - op.finished_at < 1500:
+                keep[len(keep) + 1] = op
+        if len(keep) != len(self.eng.ops):
+            self.eng.ops = keep
+        if refresh:
+            self.last_refresh = now
+            cur = self.table.rows[self.table.cursor]
+            self:refresh(cur != nil and cur.data.name or nil)
+        self.strip:set(self.eng.ops)
+
+    def _ask_conflict(self, op):
+        ui = self.ui
+        c = op.conflict
+        self.asking = op
+        let me = self
+        card = nil
+        all = cdk.checkbox("Do the same for the rest")
+        def pick(choice):
+            ui:close_layer(card)
+            me.asking = nil
+            if choice == "cancel":
+                op:cancel()
+            else:
+                op:answer(choice, all.checked == true)
+            ui:set_focus(me.table)
+        replace = c.dir and "Merge" or "Replace"
+        card = cdk.card({padding: 6, gap: 5}, [cdk.label("\"" .. c.name .. "\" already exists", {variant: "accent"}), all,
+            cdk.row({gap: 3}, [cdk.button(replace, {variant: "danger", on_click: (b) => pick("replace")}),
+                cdk.button("Skip", {on_click: (b) => pick("skip")}),
+                cdk.button("Keep both", {variant: "primary", on_click: (b) => pick("rename")})])])
+        card.on_escape = () => pick("cancel")
+        ui:open_layer(card, {center: true, modal: true, dismiss: false})
 
     def run(self):
         self.ui:run()
