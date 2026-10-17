@@ -324,6 +324,8 @@ export class OpsStrip(widget.Widget):
                 label = op:title()
                 if op.state == "ask":
                     label = "Waiting: same name"
+                elif op.state == "cancelled":
+                    label = "Cancelled"
                 elif op.state == "done":
                     label = len(op.errors) > 0 and ("Done, " .. len(op.errors) .. " errors") or "Done"
                 text = label .. " " .. math.min(op.done, op.total) .. "/" .. op.total
