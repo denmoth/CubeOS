@@ -11,5 +11,6 @@ rm -f "$REPO/build/login_shots_term_only"
 rm -f "$REPO"/build/ui_login_*.ppm "$REPO"/build/ui_login_*.png
 timeout 300 "$EMU/CraftOS-PC_console.exe" --headless -d "$EMU/data" --mount-rw "/repo=$ROOT_WIN" \
   --exec "local f = loadfile('/repo/tests/run.lua'); f('dbg_lshots')" >/dev/null 2>&1 || true
+rm -f "$REPO/tests/cases/lib_dbg_lshots.cub" "$REPO/tests/cases/lib_dbg_lshots.loader"
 grep -A20 "dbg_lshots" "$REPO/build/test-result.txt" | head -20 || true
 python "$REPO/tools/ppm2png.py"
