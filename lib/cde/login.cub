@@ -1,64 +1,45 @@
-# cde.login: экран входа и блокировки рабочего стола (шаг 4): вращающийся куб, аватары пользователей, поле PIN или пароля,
-# часы и кнопки питания на живом фоне из переливов света. Один и тот же экран работает в загрузке (cde.greeter, до рабочего стола)
-# и как блокировка внутри CDE (cde.lock): он ничего не знает ни о том, ни о другом, а говорит только с хозяином (host).
+# cde.login: экран входа и блокировки рабочего стола (шаг 4): обои, большие часы с датой, «стеклянная» карточка с кольцом аватаров
+# (как выбор машины в гонках: выбранный впереди и крупный, остальные по кругу мельче и темнее), имя, поле PIN или пароля,
+# кнопки питания. Один и тот же экран работает при загрузке (cde.greeter, до рабочего стола) и как блокировка внутри CDE
+# (cde.lock): он ничего не знает ни о том, ни о другом, а говорит только с хозяином (host).
 #
-#   scr = login.new(host, {users: [{name, display, guest}], index: 1, fixed: false, title: "Welcome", verify: fn, time_text: fn,
-#                          date_text: fn, layout: раскладка, key_floppy: false, power: true, note: "текст под полем"})
+#   scr = login.new(host, {users: [{name, display, guest, image}], index: 1, fixed: false, title: "Locked", verify: fn,
+#                          time_text: fn, date_text: fn, layout: раскладка, key_floppy: false, power: true, note: "...",
+#                          wallpaper: "aurora" | {name, mode}, shape: "circle" | "square", hint_for: (user) => "Password"})
 #   while scr.result == nil:
 #       scr:event(имя, a, b, c, d)         события: char, key, key_up, paste, click (x, y в пикселях хозяина), terminate
-#       scr:tick(now)                      раз в 0,05..0,1 с (now в секундах)
+#       scr:tick(now)                      часто (now в секундах)
 #   scr.result                              {value: ...} (то, что вернул verify) или {action: "shutdown" | "reboot"}
 #
-# host: surface (поверхность cgl в пикселях хозяина), font, palette (палитра cde.theme), slots (номера палитры для анимации: чем
-# больше, тем плавнее фон; нужно от 6), set_colors(список [номер, r, g, b]), present().
-# verify(user, secret, flags) -> {ok: true, value: ...} или {ok: false, message: "...", wait: секунд, tries: число}; он может долго
-# думать (PBKDF2): экран перед вызовом рисует «Checking...». flags.key: проверить ключ-дискету (Enter на пустом поле).
+# host: surface (поверхность cgl в пикселях хозяина), font, palette (палитра cde.theme), slots (свободные места палитры для живых
+# обоев и «дыхания» рамки аватара; можно пустой список), set_colors(список [номер, r, g, b]), present(), read(имя обоев) (текст
+# файла .cimg или nil; иначе ищется в assets), assets, animated (false: без живых обоев).
+# user.image: текст файла .cimg (свой аватар или встроенный из assets/avatars); без него первая буква на цветном градиенте.
+# verify(user, secret, flags) -> {ok: true, value: ...} или {ok: false, message: "...", wait: секунд, keep_key: true}; он может
+# долго думать (PBKDF2): экран перед вызовом рисует крутилку. flags.key: проверить ключ-дискету (Enter на пустом поле).
 # Рисование идёт в логический экран (хозяин / масштаб: на большом мониторе тот же рисунок крупнее), в хозяина копируются только
-# изменённые места. Анимация: фон и мерцание звёзд это только смена цветов мест палитры (пиксели не трогаются), куб, аватары, поле,
-# часы перерисовываются по своим прямоугольникам.
+# изменённые места. «Стекло» это затемнение того, что под карточкой, таблицей цветов (без смешивания, одна палитра на экран).
 
 import cgl.surface as surface_mod
 import cgl.color as color
-import cgl.g3d as g3d
+import cgl.cimg as cimg
 import cde.theme as theme
 import cde.icons as icons
+import cde.wallpaper as wallpaper_mod
 import unicode
 
 const DESIGN_W = 300
 const DESIGN_H = 168
-const CUBE = 48
-const FRAME = 0.07
-const WAVE_MAX = 12
+const FACE = 32
+const FRAME = 0.06
+const RING_RX = 58
+const RING_RY = 8
 
 def _clamp(v, lo, hi):
     return math.max(lo, math.min(hi, v))
 
 def _mix(a, b, k):
     return a + (b - a) * k
-
-# простой повторяемый генератор случайных чисел (звёзды на одних и тех же местах)
-def _rng(seed):
-    st = {v: seed}
-    def roll(n):
-        st.v = (st.v * 75 + 74) % 65537
-        return st.v % n
-    return roll
-
-# цвет места палитры для фона: тёмная синева, по ней идёт полоса света и фиолетовая вторая (приглушены, чтобы текст читался)
-def _bg_color(j, n, t):
-    phi = j / n
-    dark = 0.5 + 0.5 * math.sin(phi * 6.2832)
-    r = _mix(6, 15, dark)
-    g = _mix(8, 19, dark)
-    b = _mix(24, 52, dark)
-    da = ((phi - t * 0.07) % 1) - 0.5
-    ga = math.exp(-(da / 0.11) ** 2)
-    db = ((phi + t * 0.031 + 0.3) % 1) - 0.5
-    gb = math.exp(-(db / 0.15) ** 2)
-    r = r + ga * 34 + gb * 46
-    g = g + ga * 92 + gb * 20
-    b = b + ga * 118 + gb * 86
-    return _clamp(math.floor(r), 0, 255), _clamp(math.floor(g), 0, 255), _clamp(math.floor(b), 0, 255)
 
 export class LoginScreen:
     def init(self, host, opts):
@@ -74,8 +55,9 @@ export class LoginScreen:
         self.ls = self.unit == 1 and host.surface or surface_mod.new(self.W, self.H, theme.WIN_BG)
         self.users = o.users ?? []
         self.index = _clamp(o.index ?? 1, 1, math.max(1, len(self.users)))
+        self.pos = self.index
         self.fixed = o.fixed == true or len(self.users) <= 1
-        self.title = o.title ?? "Welcome"
+        self.shape = o.shape == "square" and "square" or "circle"
         self.layout = o.layout
         self.result = nil
         self.secret = []
@@ -88,16 +70,25 @@ export class LoginScreen:
         self.shift = false
         self.pending = nil
         self.wait_until = nil
+        self.wait_note = ""
         self.now = 0
         self.t0 = nil
         self.next_frame = 0
         self.last_clock = ""
         self.dirty = []
         self.key_ok = false
+        self.live = nil
         self.cx = math.floor(self.W / 2)
-        self.top = math.max(0, math.floor((self.H - DESIGN_H) / 2))
+        self.ty = math.max(0, math.floor((self.H - DESIGN_H) / 2))
+        self.free_slots = []
+        for s in host.slots ?? []:
+            self.free_slots[len(self.free_slots) + 1] = s
         self:_colors()
+        self:_layout()
         self:_build_bg()
+        rs = self:_take(1)
+        self.ring_slot = rs != nil and rs[1] or nil
+        self:_faces()
         self:draw_all()
 
     # ------------------------------------------------------------ подготовка
@@ -105,255 +96,339 @@ export class LoginScreen:
     def _near(self, r, g, b):
         return self.host.palette:nearest(_clamp(math.floor(r + 0.5), 0, 255), _clamp(math.floor(g + 0.5), 0, 255), _clamp(math.floor(b + 0.5), 0, 255), 16, 211)
 
-    def _colors(self):
-        self.c = {text: theme.TITLE_TEXT, dim: theme.TITLE_DIM, accent: theme.ACCENT, danger: theme.CLOSE, ok: theme.BTN_MAX,
-            plate: theme.CTRL_BG, hi: theme.CTRL_HI, border: theme.BORDER_INACTIVE, on_accent: theme.ACCENT_TEXT, bg: theme.WIN_BG}
-        # шесть оттенков куба: от тёмного к светлому
-        ramp = []
-        for i in range[0, 7]:
-            k = i / 7
-            ramp[i + 1] = self:_near(_mix(14, 190, k), _mix(26, 240, k), _mix(74, 255, k))
-        self.cube_ramp = ramp
-        self.cube_mesh = g3d.cube(1)
-        self.cube_cv = surface_mod.new(CUBE, CUBE, surface_mod.CLEAR)
+    # таблица «номер цвета -> тот же цвет, умноженный на k» по общим цветам (стекло, задние аватары, светлая кромка)
+    def _map(self, k, add=0):
+        pal = self.host.palette
+        m = {}
+        for i in range[0, 255]:
+            r, g, b = pal:get(i)
+            m[i] = self:_near(r * k + add, g * k + add, b * k + add * 1.3)
+        return m
 
-    # фон: поле из мест палитры (диагональные полосы света), звёзды, кнопки питания; рисуется один раз
-    def _build_bg(self):
-        W = self.W
-        H = self.H
-        slots = self.host.slots
-        n = len(slots)
-        self.star_slots = []
-        self.ring_slot = nil
-        nwave = math.min(WAVE_MAX, n)
-        if n >= 8:
-            nwave = math.min(WAVE_MAX, n - 4)
-            self.star_slots = [slots[nwave + 1], slots[nwave + 2], slots[nwave + 3]]
-            self.ring_slot = slots[nwave + 4]
-        self.wave_slots = []
-        for j in range[1, nwave]:
-            self.wave_slots[j] = slots[j]
-        self.bg = surface_mod.new(W, H, theme.WIN_BG)
-        px = self.bg.px
-        span = (W * 0.9 + H * 0.55) * 0.95
-        for y in range[0, H - 1]:
-            base = y * W + 1
-            for x in range[0, W - 1]:
-                u = (x * 0.9 + y * 0.55) / span * nwave
-                i = math.floor(u)
-                k = i % nwave
-                if color.dither(u - i, x, y):
-                    k = (k + 1) % nwave
-                px[base + x] = self.wave_slots[k + 1]
-        rnd = _rng(17)
-        for i in range[1, 44]:
-            x = rnd(W - 2) + 1
-            y = rnd(H - 2) + 1
-            c = len(self.star_slots) > 0 and self.star_slots[i % 3 + 1] or self:_near(200, 210, 255)
-            self.bg:set(x, y, c)
-            if i % 7 == 0:
-                self.bg:set(x - 1, y, c)
-                self.bg:set(x + 1, y, c)
-                self.bg:set(x, y - 1, c)
-                self.bg:set(x, y + 1, c)
+    def _colors(self):
+        self.c = {text: self:_near(240, 242, 250), soft: self:_near(190, 196, 220), dim: self:_near(130, 138, 168),
+            accent: theme.ACCENT, danger: self:_near(255, 110, 120), ok: self:_near(140, 230, 150), field: self:_near(14, 16, 30),
+            edge: self:_near(86, 94, 130), shadow: self:_near(6, 6, 12)}
+        self.glass = self:_map(0.36, 3)
+        self.lift = self:_map(1.35, 18)
+        self.back = self:_map(0.55)
+
+    # места палитры: живым обоям, потом рамке аватара
+    def _take(self, n):
+        if n <= 0 or n > len(self.free_slots):
+            return nil
+        out = []
+        for i in range[1, n]:
+            out[i] = table.remove(self.free_slots, 1)
+        return out
+
+    def _layout(self):
+        cx = self.cx
+        ty = self.ty
+        self.r_clock = {x: cx - 100, y: ty + 4, w: 200, h: 52}
+        self.r_card = {x: cx - 86, y: ty + 64, w: 172, h: 100}
+        self.ring_cy = self.r_card.y + 30
+        self.name_y = self.r_card.y + 58
+        self.field = {x: cx - 62, y: self.r_card.y + 70, w: 124, h: 14}
+        self.msg_y = self.r_card.y + 88
         self.power_rects = []
         if self.o.power != false:
             labels = [["restart", "reboot"], ["power", "shutdown"]]
             for i, e in labels:
-                x = W - 18 - (2 - i) * 19
-                y = H - 20
-                self.power_rects[i] = {x: x, y: y, w: 15, h: 15, icon: e[1], action: e[2]}
-                self.bg:round_rect(x, y, 15, 15, 3, self.c.plate, true)
-                self.bg:round_rect(x, y, 15, 15, 3, self.c.border)
-                icons.draw(self.bg, e[1], x + 3, y + 3, self.c.text, self.c.text)
-        self:_update_colors(0)
+                self.power_rects[i] = {x: self.W - 40 + (i - 1) * 19, y: self.H - 19, w: 15, h: 15, icon: e[1], action: e[2]}
+        self.r_power = {x: self.W - 44, y: self.H - 22, w: 44, h: 22}
+        self.r_logo = {x: 0, y: self.H - 18, w: 70, h: 18}
 
-    # ------------------------------------------------------------ палитра (анимация)
+    # фон: обои (картинка, встроенные или живые); живые получают места палитры хозяина
+    def _build_bg(self):
+        let me = self
+        host = self.host
+        def read(name):
+            if host.read != nil:
+                data = host.read(name)
+                if data != nil:
+                    return data
+            path = (host.assets ?? "/repo/assets") .. "/wallpapers/" .. name .. ".cimg"
+            if fs.exists(path):
+                f = fs.open(path, "rb")
+                if f != nil:
+                    data = f.readAll()
+                    f.close()
+                    return data
+            return nil
+        animated = host.animated != false
+        ctx = {palette: host.palette, theme: () => theme.get(), read: read, now: () => me.now * 1000, animated: animated,
+            alloc: (n) => animated and me:_take(n) or nil, alloc_wide: (n) => animated and me:_take(math.min(n, len(me.free_slots))) or nil,
+            set_colors: (list) => host.set_colors(list), damage: (x, y, w, h) => me:_repaint(x, y, w, h)}
+        surf, live = wallpaper_mod.make(self.o.wallpaper ?? "aurora", self.W, self.H, ctx)
+        self.bg = surf
+        self.live = live
 
-    def _update_colors(self, t):
-        list = []
-        n = len(self.wave_slots)
-        for j in range[1, n]:
-            r, g, b = _bg_color(j - 1, n, t)
-            list[len(list) + 1] = [self.wave_slots[j], r, g, b]
-        for i, s in self.star_slots:
-            a = 0.25 + 0.75 * (0.5 + 0.5 * math.sin(t * (1.4 + i * 0.6) + i * 2.1))
-            a = a * a
-            list[len(list) + 1] = [s, math.floor(_mix(20, 215, a)), math.floor(_mix(26, 225, a)), math.floor(_mix(48, 255, a))]
-        if self.ring_slot != nil:
-            a = 0.5 + 0.5 * math.sin(t * 2.2)
-            ar, ag, ab = self.host.palette:get(theme.ACCENT)
-            fade = self.mode == "ok" and _clamp((self.now - self.mode_at) / 0.8, 0, 1) or 0
-            list[len(list) + 1] = [self.ring_slot, math.floor(_mix(ar, 255, a * 0.5 + fade * 0.5)), math.floor(_mix(ag, 255, a * 0.5 + fade * 0.5)),
-                math.floor(_mix(ab, 255, a * 0.5 + fade * 0.5))]
-        self.host.set_colors(list)
+    # лица пользователей FACE x FACE: картинка или буква на градиенте, по форме (круг или скруглённый квадрат)
+    def _faces(self):
+        self.faces = []
+        for i, u in self.users:
+            self.faces[i] = self:_face(u)
 
-    # ------------------------------------------------------------ рисование
+    def _inside_shape(self, x, y, s):
+        if self.shape == "circle":
+            c = (s - 1) / 2
+            return (x - c) * (x - c) + (y - c) * (y - c) <= (s / 2) * (s / 2)
+        r = math.floor(s * 0.24)
+        qx = x < r and r or (x > s - 1 - r and s - 1 - r or x)
+        qy = y < r and r or (y > s - 1 - r and s - 1 - r or y)
+        return (x - qx) * (x - qx) + (y - qy) * (y - qy) <= r * r + 0.5
+
+    def _face(self, u):
+        f = nil
+        if u.image != nil:
+            ok, src, spal = pcall(cimg.decode, u.image)
+            if ok:
+                f = wallpaper_mod.fit_image(src, spal ?? color.default_palette(), FACE, FACE, "fill", self.host.palette)
+        if f == nil:
+            f = surface_mod.new(FACE, FACE, surface_mod.CLEAR)
+            hash = 11
+            for i in range[1, string.len(u.name)]:
+                hash = (hash * 31 + string.byte(u.name, i)) % 9973
+            hue = (hash % 12) * 30 + 8
+            r1, g1, b1 = color.hsv_to_rgb(hue, 0.45, 1)
+            r2, g2, b2 = color.hsv_to_rgb((hue + 25) % 360, 0.7, 0.62)
+            steps = []
+            for k in range[0, 5]:
+                t = k / 5
+                steps[k + 1] = self:_near(_mix(r1, r2, t), _mix(g1, g2, t), _mix(b1, b2, t))
+            f:fill_gradient(0, 0, FACE, FACE, steps, "d", {dither: true})
+            letter = unicode.upper(unicode.sub(tostring(u.display ?? u.name), 1, 1))
+            lw = surface_mod.measure(self.font, letter, 0, 2)
+            lx = math.floor((FACE - lw) / 2) + 1
+            ly = math.floor((FACE - self.font.height * 2) / 2) + 1
+            f:text(self.font, lx + 1, ly + 1, letter, self:_near(r2 * 0.5, g2 * 0.5, b2 * 0.5), {scale: 2})
+            f:text(self.font, lx, ly, letter, self.c.text, {scale: 2})
+        for y in range[0, FACE - 1]:
+            for x in range[0, FACE - 1]:
+                if not self:_inside_shape(x, y, FACE):
+                    f:set(x, y, surface_mod.CLEAR)
+        return f
+
+    # ------------------------------------------------------------ рисование: основа
 
     def _damage(self, x, y, w, h):
         self.dirty[len(self.dirty) + 1] = [math.max(0, x), math.max(0, y), math.min(self.W - 1, x + w - 1), math.min(self.H - 1, y + h - 1)]
 
-    # фон под прямоугольником
-    def _clear(self, x, y, w, h):
-        x0 = math.max(0, x)
-        y0 = math.max(0, y)
-        x1 = math.min(self.W - 1, x + w - 1)
-        y1 = math.min(self.H - 1, y + h - 1)
+    def _restore(self, r):
+        x0 = math.max(0, r.x)
+        y0 = math.max(0, r.y)
+        x1 = math.min(self.W - 1, r.x + r.w - 1)
+        y1 = math.min(self.H - 1, r.y + r.h - 1)
         if x0 <= x1 and y0 <= y1:
             self.ls:blit(self.bg, x0, y0, {sx: x0, sy: y0, sw: x1 - x0 + 1, sh: y1 - y0 + 1, transparent: false})
-        self:_damage(x, y, w, h)
+        self:_damage(r.x, r.y, r.w, r.h)
 
     def _text(self, x, y, str, c, scale=1):
         self.ls:text(self.font, x, y, str, c, {scale: scale})
 
-    def _centered(self, y, str, c, scale=1):
+    def _centered(self, y, str, c, scale=1, shadow=false):
         w = surface_mod.measure(self.font, str, 0, scale)
-        self:_text(self.cx - math.floor(w / 2), y, str, c, scale)
+        x = self.cx - math.floor(w / 2)
+        if shadow:
+            self:_text(x + 1, y + 1, str, self.c.shadow, scale)
+        self:_text(x, y, str, c, scale)
 
-    def _y(self, v):
-        return self.top + v
+    # отступ скругления в строке i (с нуля) для радиуса r
+    def _inset(self, r, i):
+        if i >= r:
+            return 0
+        d = r - i - 0.5
+        return r - math.floor(math.sqrt(math.max(0, r * r - d * d)) + 0.5)
 
-    # аватар: круг цвета пользователя с бликом и первой буквой
-    def _avatar(self, cx, cy, r, user, selected):
-        hash = 11
-        for i in range[1, string.len(user.name)]:
-            hash = (hash * 31 + string.byte(user.name, i)) % 9973
-        hue = (hash % 12) * 30 + 8
-        dim = selected and 1 or 0.55
-        r1, g1, b1 = color.hsv_to_rgb(hue, 0.55, 0.95 * dim)
-        r2, g2, b2 = color.hsv_to_rgb(hue, 0.5, 1 * dim)
-        base = self:_near(r1 * 0.78, g1 * 0.78, b1 * 0.78)
-        mid = self:_near(r1, g1, b1)
-        top = self:_near(r2 + (255 - r2) * 0.25, g2 + (255 - g2) * 0.25, b2 + (255 - b2) * 0.25)
-        self.ls:circle(cx, cy, r, base, true)
-        self.ls:circle(cx - math.floor(r * 0.12), cy - math.floor(r * 0.14), math.floor(r * 0.82), mid, true)
-        self.ls:circle(cx - math.floor(r * 0.3), cy - math.floor(r * 0.36), math.floor(r * 0.34), top, true)
-        letter = unicode.upper(unicode.sub(tostring(user.display ?? user.name), 1, 1))
-        sc = r > 12 and 2 or 1
-        lw = surface_mod.measure(self.font, letter, 0, sc)
-        self:_text(cx - math.floor(lw / 2) + 1, cy - math.floor(self.font.height * sc / 2) + 1, letter, self.c.bg, sc)
-
-    def _draw_avatars(self):
-        top = self:_y(60)
-        self:_clear(0, top, self.W, 56)
-        n = len(self.users)
-        if n == 0:
-            return
-        cy = self:_y(82)
-        pop = 0
-        if self.mode == "ok":
-            pop = math.min(1, (self.now - self.mode_at) / 0.25) * 3
-        for k in range[-2, 2]:
-            i = self.index + k
-            if i >= 1 and i <= n:
-                x = self.cx + k * 44
-                if k == 0:
-                    r = math.floor(17 + pop)
-                    self:_avatar(x, cy, r, self.users[i], true)
-                    # кольцо выбора: место палитры дышит; при входе расходится
-                    ring = self.ring_slot ?? self.c.accent
-                    if self.mode == "ok":
-                        grow = _clamp((self.now - self.mode_at) / 0.8, 0, 1)
-                        self.ls:circle(x, cy, r + 3 + math.floor(grow * 14), ring)
+    # «стекло»: всё под скруглённым прямоугольником темнеет по таблице, кромка светлее
+    def _glass(self, x, y, w, h, r):
+        px = self.ls.px
+        W = self.W
+        glass = self.glass
+        lift = self.lift
+        for row in range[0, h - 1]:
+            yy = y + row
+            if yy >= 0 and yy < self.H:
+                ins = math.max(self:_inset(r, row), self:_inset(r, h - 1 - row))
+                x0 = math.max(0, x + ins)
+                x1 = math.min(W - 1, x + w - 1 - ins)
+                base = yy * W + 1
+                edge = row == 0 or row == h - 1
+                for xx in range[x0, x1]:
+                    v = px[base + xx]
+                    if edge or xx == x0 or xx == x1:
+                        px[base + xx] = lift[v] ?? v
                     else:
-                        self.ls:circle(x, cy, r + 3, ring)
-                        self.ls:circle(x, cy, r + 4, ring)
-                else:
-                    self:_avatar(x, cy, 11, self.users[i], false)
-        shown = self.users[self.index]
-        name = tostring(shown.display ?? shown.name)
-        if shown.guest:
-            name = name .. " (guest)"
-        self:_centered(self:_y(106), name, self.c.text)
-        if not self.fixed:
-            if self.index > 1:
-                icons.draw(self.ls, "play", self.cx - 90, cy - 4, self.c.dim, self.c.dim)
-            if self.index < n:
-                icons.draw(self.ls, "play", self.cx + 82, cy - 4, self.c.dim, self.c.dim)
+                        px[base + xx] = glass[v] ?? v
+        self.ls:mark(x, y, x + w - 1, y + h - 1)
 
-    # поле PIN или пароля: точки, подсказка, круглая кнопка входа; shake сдвигает его при ошибке
-    def _draw_field(self):
-        y = self:_y(118)
-        self:_clear(self.cx - 76, y - 2, 152, 21)
-        dx = self.shake != nil and self.shake or 0
-        x = self.cx - 60 + dx
-        w = 120
-        danger = self.shake != nil
-        self.ls:round_rect(x, y, w, 16, 7, self.c.plate, true)
-        self.ls:round_rect(x, y, w, 16, 7, danger and self.c.danger or (self.mode == "busy" and self.c.hi or self.c.accent))
-        n = len(self.dots)
-        if n == 0:
-            self:_text(x + 8, y + 4, self:_hint(), self.c.dim)
-        else:
-            first = math.max(1, n - 11)
-            for i in range[first, n]:
-                age = self.now - self.dots[i]
-                r = age < 0.1 and 1 or 2
-                dxp = x + 10 + (i - first) * 7
-                self.ls:circle(dxp, y + 8, r, self.c.text, true)
-        bx = x + w - 9
-        by = y + 8
-        busy = self.mode == "busy"
-        self.ls:circle(bx, by, 6, busy and self.c.hi or self.c.accent, true)
-        if busy:
-            ph = math.floor(self.now * 10) % 8
-            for i in range[0, 7]:
-                a = i * 0.7854
-                s = math.floor(math.sin(a) * 4 + 0.5)
-                c = math.floor(math.cos(a) * 4 + 0.5)
-                self.ls:set(bx + c, by + s, i == ph and self.c.text or self.c.dim)
-        else:
-            self.ls:line(bx - 2, by, bx + 2, by, self.c.on_accent)
-            self.ls:line(bx + 0, by - 2, bx + 2, by, self.c.on_accent)
-            self.ls:line(bx + 0, by + 2, bx + 2, by, self.c.on_accent)
+    # лицо размером sz (ближайший пиксель) в (x, y); map: таблица затемнения или nil
+    def _blit_face(self, face, x, y, sz, map):
+        px = self.ls.px
+        fpx = face.px
+        W = self.W
+        for j in range[0, sz - 1]:
+            yy = y + j
+            if yy >= 0 and yy < self.H:
+                sy = math.floor(j * FACE / sz)
+                srow = sy * FACE + 1
+                base = yy * W + 1
+                for i in range[0, sz - 1]:
+                    xx = x + i
+                    if xx >= 0 and xx < W:
+                        v = fpx[srow + math.floor(i * FACE / sz)]
+                        if v >= 0:
+                            px[base + xx] = map != nil and (map[v] ?? v) or v
+        self.ls:mark(x, y, x + sz - 1, y + sz - 1)
 
-    # подсказка в пустом поле: для выбранного пользователя
+    def _outline(self, x, y, sz, c):
+        if self.shape == "circle":
+            self.ls:circle(x + math.floor(sz / 2), y + math.floor(sz / 2), math.floor(sz / 2) + 1, c)
+        else:
+            self.ls:round_rect(x - 1, y - 1, sz + 2, sz + 2, math.floor(sz * 0.24) + 1, c)
+
+    # ------------------------------------------------------------ части экрана
+
+    def _draw_clock(self):
+        r = self.r_clock
+        self:_restore(r)
+        text = self.o.time_text != nil and self.o.time_text() or ""
+        date = self.o.date_text != nil and self.o.date_text() or ""
+        sc = surface_mod.measure(self.font, text, 0, 3) <= r.w and 3 or 2
+        self:_centered(r.y + 6, text, self.c.text, sc, true)
+        self:_centered(r.y + 8 + self.font.height * sc + 3, date, self.c.soft, 1, true)
+        self.last_clock = text .. "|" .. date
+
+    # положение пользователя i на кольце: x, y центра, размер, глубина 0..1 (1 впереди)
+    def _ring_spot(self, i):
+        n = len(self.users)
+        step = 6.2832 / math.max(n, 5)
+        a = (i - self.pos) * step
+        depth = (math.cos(a) + 1) / 2
+        sz = math.floor(14 + 18 * depth + 0.5)
+        x = self.cx + math.sin(a) * RING_RX
+        y = self.ring_cy + math.cos(a) * RING_RY
+        return math.floor(x + 0.5), math.floor(y + 0.5), sz, depth
+
+    def _draw_card(self):
+        r = self.r_card
+        self:_restore(r)
+        self:_glass(r.x, r.y, r.w, r.h, 6)
+        n = len(self.users)
+        if n > 0:
+            # дальние раньше: передний рисуется последним
+            order = []
+            for i in range[1, n]:
+                x, y, sz, depth = self:_ring_spot(i)
+                if depth > 0.05 or n <= 2:
+                    order[len(order) + 1] = {i: i, x: x, y: y, sz: sz, depth: depth}
+            table.sort(order, (a, b) => a.depth < b.depth)
+            for e in order:
+                sz = e.sz
+                front = e.i == self.index and math.abs(self.pos - self.index) < 0.3
+                if front and self.mode == "ok":
+                    sz = sz + math.floor(math.min(1, (self.now - self.mode_at) / 0.25) * 4)
+                fx = e.x - math.floor(sz / 2)
+                fy = e.y - math.floor(sz / 2)
+                self:_blit_face(self.faces[e.i], fx, fy, sz, e.depth < 0.9 and self.back or nil)
+                if front:
+                    self:_outline(fx, fy, sz, self.ring_slot ?? self.c.accent)
+                    if self.mode == "ok":
+                        grow = math.floor(_clamp((self.now - self.mode_at) / 0.7, 0, 1) * 8)
+                        self:_outline(fx - grow, fy - grow, sz + grow * 2, self.c.ok)
+            u = self.users[self.index]
+            name = tostring(u.display ?? u.name)
+            if u.guest:
+                name = name .. " (guest)"
+            self:_centered(self.name_y, name, self.c.text, 1, true)
+            if self.o.title != nil and self.o.title != "":
+                self:_text(r.x + 6, r.y + 5, self.o.title, self.c.dim)
+        self:_draw_field()
+        self:_draw_message()
+
     def _hint(self):
         if self.o.hint_for != nil and self.users[self.index] != nil:
             return self.o.hint_for(self.users[self.index])
         return self.o.hint ?? "Password"
 
+    def _draw_field(self):
+        f = self.field
+        dx = self.shake ?? 0
+        x = f.x + dx
+        y = f.y
+        border = self.c.edge
+        if self.shake != nil:
+            border = self.c.danger
+        elif len(self.dots) > 0 or self.mode == "busy":
+            border = self.c.accent
+        self.ls:round_rect(x, y, f.w, f.h, 6, self.c.field, true)
+        self.ls:round_rect(x, y, f.w, f.h, 6, border)
+        n = len(self.dots)
+        if n == 0:
+            self:_text(x + 9, y + 3, self:_hint(), self.c.dim)
+        else:
+            first = math.max(1, n - 13)
+            for i in range[first, n]:
+                age = self.now - self.dots[i]
+                rr = age < 0.08 and 1 or 2
+                self.ls:circle(x + 10 + (i - first) * 7, y + 7, rr, self.c.text, true)
+        bx = x + f.w - 10
+        by = y + 7
+        if self.mode == "busy":
+            ph = math.floor(self.now * 12) % 8
+            for i in range[0, 7]:
+                a = i * 0.7854
+                self.ls:set(bx + math.floor(math.cos(a) * 3 + 0.5), by + math.floor(math.sin(a) * 3 + 0.5), i == ph and self.c.text or self.c.dim)
+        else:
+            c = n > 0 and self.c.text or self.c.dim
+            self.ls:line(bx - 1, by - 3, bx + 2, by, c)
+            self.ls:line(bx + 2, by, bx - 1, by + 3, c)
+
     def _draw_message(self):
-        y = self:_y(138)
-        self:_clear(0, y, self.W, 12)
-        if self.message != nil and self.message != "":
-            c = self.message_kind == "error" and self.c.danger or (self.message_kind == "ok" and self.c.ok or self.c.dim)
-            self:_centered(y, self.message, c)
+        if self.message == nil or self.message == "":
+            return
+        c = self.message_kind == "error" and self.c.danger or (self.message_kind == "ok" and self.c.ok or self.c.soft)
+        text = surface_mod.ellipsize(self.font, self.message, self.r_card.w - 10, "..")
+        self:_centered(self.msg_y, text, c, 1, true)
 
-    def _draw_clock(self):
-        text = self.o.time_text != nil and self.o.time_text() or ""
-        date = self.o.date_text != nil and self.o.date_text() or ""
-        y = 8
-        self:_clear(0, y - 2, 120, 32)
-        self:_text(8, y, text, self.c.text, 2)
-        self:_text(9, y + 19, date, self.c.dim)
-        self.last_clock = text .. date
+    def _draw_power(self):
+        self:_restore(self.r_power)
+        for r in self.power_rects:
+            self:_glass(r.x, r.y, r.w, r.h, 7)
+            icons.draw(self.ls, r.icon, r.x + 3, r.y + 3, self.c.soft, self.c.soft)
 
-    def _draw_title(self):
-        self:_clear(self.cx - 70, self:_y(49), 140, 10)
-        self:_centered(self:_y(50), self.title, self.c.text)
-
-    def _draw_cube(self, t):
-        x = self.cx - math.floor(CUBE / 2)
-        y = self:_y(0)
-        self:_clear(x - 4, y, CUBE + 8, CUBE + 1)
-        cv = self.cube_cv
-        cv:clear(surface_mod.CLEAR)
-        speed = self.mode == "ok" and 4 or 1
-        g3d.render(cv, self.cube_mesh, {rx: 0.55 + 0.12 * math.sin(t * 0.7), ry: t * 0.9 * speed, rz: 0.12, z: 3.5, mode: "flat",
-            ramp: self.cube_ramp, fov: CUBE * 1.05, light: [-0.6, -0.8, -0.45]})
-        self.ls:blit(cv, x, y, {})
+    def _draw_logo(self):
+        r = self.r_logo
+        self:_restore(r)
+        icons.draw(self.ls, "cube", 7, self.H - 13, self.c.soft, self.c.dim)
+        self:_text(19, self.H - 12, "CubeOS", self.c.soft)
 
     def draw_all(self):
         self.ls:blit(self.bg, 0, 0, {transparent: false})
-        self:_draw_title()
-        self:_draw_cube(self.now)
-        self:_draw_avatars()
-        self:_draw_field()
-        self:_draw_message()
         self:_draw_clock()
+        self:_draw_card()
+        self:_draw_power()
+        self:_draw_logo()
         self.dirty = [[0, 0, self.W - 1, self.H - 1]]
         self:_flush()
+
+    # живые обои перерисовали место: фон и всё, что на нём
+    def _repaint(self, x, y, w, h):
+        if self.r_card == nil or self.bg == nil:
+            return
+        self:_restore({x: x, y: y, w: w, h: h})
+        for pair in [[self.r_clock, "clock"], [self.r_card, "card"], [self.r_power, "power"], [self.r_logo, "logo"]]:
+            rr = pair[1]
+            if x < rr.x + rr.w and x + w > rr.x and y < rr.y + rr.h and y + h > rr.y:
+                if pair[2] == "clock":
+                    self:_draw_clock()
+                elif pair[2] == "card":
+                    self:_draw_card()
+                elif pair[2] == "power":
+                    self:_draw_power()
+                else:
+                    self:_draw_logo()
 
     # копирует изменённые места в поверхность хозяина (при масштабе больше 1 увеличивая) и показывает кадр
     def _flush(self):
@@ -369,16 +444,15 @@ export class LoginScreen:
 
     # ------------------------------------------------------------ состояние
 
-    def _set_message(self, text, kind):
+    def _set_message(self, text, kind=nil):
         self.message = text
         self.message_kind = kind ?? "info"
-        self:_draw_message()
 
     def current(self):
         return self.users[self.index]
 
     def _select(self, i):
-        if self.fixed or i < 1 or i > len(self.users) or i == self.index:
+        if self.fixed or i < 1 or i > len(self.users) or i == self.index or self.mode != "idle":
             return
         self.index = i
         self.secret = []
@@ -386,8 +460,7 @@ export class LoginScreen:
         self.key_ok = false
         self.wait_until = nil
         self:_set_message(nil)
-        self:_draw_avatars()
-        self:_draw_field()
+        self:_draw_card()
         self:_flush()
 
     def _submit(self, flags=nil):
@@ -398,8 +471,8 @@ export class LoginScreen:
             return
         text = table.concat(self.secret)
         self.mode = "busy"
-        self:_set_message("Checking...", "info")
-        self:_draw_field()
+        self:_set_message(nil)
+        self:_draw_card()
         self:_flush()
         res = self.o.verify(user, text, flags ?? {key: false})
         self.mode = "idle"
@@ -409,25 +482,26 @@ export class LoginScreen:
             self.mode = "ok"
             self.mode_at = self.now
             self.value = res.value
-            self.key_ok = false
             self:_set_message("Welcome, " .. tostring(user.display ?? user.name), "ok")
-            self:_draw_field()
+            self:_draw_card()
             self:_flush()
             return
         msg = res != nil and res.message or "Wrong password"
-        if res != nil and res.keep_key:
+        keep = res != nil and res.keep_key == true
+        if keep:
             self.key_ok = true
         if res != nil and res.wait != nil:
             self.wait_until = self.now + res.wait
             self.wait_note = msg
-        self:_set_message(msg, "error")
-        self.shake_at = self.now
-        self.shake = 0
-        self:_draw_field()
+        self:_set_message(msg, keep and "info" or "error")
+        if not keep:
+            self.shake_at = self.now
+            self.shake = 0
+        self:_draw_card()
         self:_flush()
 
     def _type(self, text):
-        if self.mode != "idle":
+        if self.mode != "idle" or text == nil:
             return
         for ch in unicode.chars(text):
             if len(self.secret) < 64:
@@ -435,7 +509,7 @@ export class LoginScreen:
                 self.dots[len(self.dots) + 1] = self.now
         if self.message_kind == "error" and self.wait_until == nil:
             self:_set_message(nil)
-        self:_draw_field()
+        self:_draw_card()
         self:_flush()
 
     # ------------------------------------------------------------ события
@@ -456,8 +530,6 @@ export class LoginScreen:
             self:_key(a)
         elif name == "click":
             self:_click(a, b)
-        elif name == "terminate":
-            pass
 
     def _key(self, code):
         if code == keys.leftShift or code == keys.rightShift:
@@ -473,13 +545,13 @@ export class LoginScreen:
             if len(self.secret) > 0 and self.mode == "idle":
                 table.remove(self.secret)
                 table.remove(self.dots)
-                self:_draw_field()
+                self:_draw_card()
                 self:_flush()
         elif code == 256 or code == 1:
             if len(self.secret) > 0 and self.mode == "idle":
                 self.secret = []
                 self.dots = []
-                self:_draw_field()
+                self:_draw_card()
                 self:_flush()
         elif code == keys.left:
             self:_select(self.index - 1)
@@ -497,70 +569,81 @@ export class LoginScreen:
             if x >= r.x and x < r.x + r.w and y >= r.y and y < r.y + r.h:
                 self.result = {action: r.action}
                 return
-        cy = self:_y(82)
-        if not self.fixed and y > cy - 20 and y < cy + 20:
-            for k in range[-2, 2]:
-                if k != 0 and math.abs(x - (self.cx + k * 44)) < 13:
-                    self:_select(self.index + k)
-                    return
-        # круглая кнопка входа
-        fy = self:_y(118)
-        if y >= fy and y < fy + 16 and x >= self.cx + 43 and x < self.cx + 62:
+        if not self.fixed:
+            best = nil
+            for i in range[1, len(self.users)]:
+                ax, ay, sz, depth = self:_ring_spot(i)
+                if math.abs(x - ax) <= sz / 2 and math.abs(y - ay) <= sz / 2 and depth > 0.05:
+                    if best == nil or depth > best.depth:
+                        best = {i: i, depth: depth}
+            if best != nil and best.i != self.index:
+                self:_select(best.i)
+                return
+        f = self.field
+        if y >= f.y and y < f.y + f.h and x >= f.x + f.w - 18 and x < f.x + f.w:
             self:_submit({key: false, key_ok: self.key_ok})
 
     # ------------------------------------------------------------ время
 
     def tick(self, now):
+        dt = math.max(0, now - self.now)
         self.now = now
         if self.t0 == nil:
             self.t0 = now
         if self.result != nil:
             return
-        # клавиша без символа: буква второго языка
         pd = self.pending
         if pd != nil and now - pd.at > 0.1:
             self.pending = nil
-            miss = self.layout:missing(pd.code, pd.shift)
-            if miss != nil:
-                self:_type(miss)
-        if self.mode == "ok":
-            if now - self.mode_at > 0.9:
-                self.result = {value: self.value}
-                return
-        # встряхивание поля при ошибке
+            if self.layout != nil:
+                self:_type(self.layout:missing(pd.code, pd.shift))
+        if self.mode == "ok" and now - self.mode_at > 0.85:
+            self.result = {value: self.value}
+            return
+        if self.live != nil and now * 1000 >= self.live.next:
+            self.live:step(now * 1000, 1)
+        if self.wait_until != nil:
+            left = math.ceil(self.wait_until - now)
+            if left <= 0:
+                self.wait_until = nil
+                self:_set_message(nil)
+                self:_draw_card()
+            elif self.message != self.wait_note .. " " .. left .. " s":
+                self.message = self.wait_note .. " " .. left .. " s"
+                self:_draw_card()
+        if now < self.next_frame:
+            self:_flush()
+            return
+        self.next_frame = now + FRAME
+        # «дыхание» рамки выбранного аватара: только цвет одного места палитры
+        if self.ring_slot != nil:
+            a = 0.5 + 0.5 * math.sin((now - self.t0) * 2.2)
+            ar, ag, ab = self.host.palette:get(theme.ACCENT)
+            self.host.set_colors([[self.ring_slot, math.floor(_mix(ar, 255, a * 0.45)), math.floor(_mix(ag, 255, a * 0.45)), math.floor(_mix(ab, 255, a * 0.45))]])
+        busy_card = false
+        if math.abs(self.pos - self.index) > 0.002:
+            self.pos = self.pos + (self.index - self.pos) * math.min(1, dt * 10)
+            if math.abs(self.pos - self.index) <= 0.002:
+                self.pos = self.index
+            busy_card = true
         if self.shake != nil:
-            k = (now - self.shake_at) / 0.04
+            k = (now - self.shake_at) / 0.035
             offs = [-5, 5, -4, 4, -3, 3, -2, 2, -1, 1, 0]
             i = math.floor(k) + 1
             if i > len(offs):
                 self.shake = nil
             else:
                 self.shake = offs[i]
-            self:_draw_field()
-        # ожидание после слишком многих попыток
-        if self.wait_until != nil:
-            left = math.ceil(self.wait_until - now)
-            if left <= 0:
-                self.wait_until = nil
-                self:_set_message(nil)
-            elif self.message != self.wait_note .. " " .. left .. " s":
-                self.message = self.wait_note .. " " .. left .. " s"
-                self:_draw_message()
-        if now < self.next_frame:
-            if len(self.dirty) > 0:
-                self:_flush()
-            return
-        self.next_frame = now + FRAME
-        t = now - self.t0
-        self:_update_colors(t)
-        self:_draw_cube(t)
-        if self.mode == "ok" or self.mode == "busy" or len(self.dots) > 0:
-            self:_draw_field()
-        if self.mode == "ok":
-            self:_draw_avatars()
+            busy_card = true
+        if self.mode == "ok" or self.mode == "busy":
+            busy_card = true
+        if len(self.dots) > 0 and now - self.dots[len(self.dots)] < 0.2:
+            busy_card = true
+        if busy_card:
+            self:_draw_card()
         text = self.o.time_text != nil and self.o.time_text() or ""
         date = self.o.date_text != nil and self.o.date_text() or ""
-        if text .. date != self.last_clock:
+        if text .. "|" .. date != self.last_clock:
             self:_draw_clock()
         self:_flush()
 

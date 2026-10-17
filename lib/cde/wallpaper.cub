@@ -149,8 +149,8 @@ def _mapper(spal, pal):
         share[v + 1] = (d1 < 40 or d1 + d2 == 0) and 0 or math.min(0.5, d1 / (d1 + d2))
     return main, alt, share
 
-# картинка src (поверхность с палитрой spal) на поверхность W x H в режиме mode
-def _image(src, spal, W, H, mode, pal):
+# картинка src (поверхность с палитрой spal) на поверхность W x H в режиме mode, цветами 16..211 палитры pal (аватары, обои)
+export def fit_image(src, spal, W, H, mode, pal):
     main, alt, share = _mapper(spal, pal)
     out = surface_mod.new(W, H, theme.DESK0 + 2)
     sw = src.w
@@ -232,7 +232,7 @@ export def make(spec, W, H, ctx):
     if data != nil:
         ok, src, spal = pcall(cimg.decode, data)
         if ok:
-            return _image(src, spal ?? color.default_palette(), W, H, mode, ctx.palette), nil
+            return fit_image(src, spal ?? color.default_palette(), W, H, mode, ctx.palette), nil
     _gradient(s, W, H)
     return s, nil
 

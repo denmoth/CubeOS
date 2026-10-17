@@ -52,6 +52,16 @@ export def program(session, opts=nil):
             okw, err = pcall(write_conf)
             if not okw:
                 sys.log("warn", "desktop: cannot save " .. key .. ": " .. tostring(err))
+            conf[key] = value
+        # настройки экрана входа всей системы (/cubeos/sys/cfg/login.conf): менять может только администратор
+        def save_login(key, value):
+            path = "/cubeos/sys/cfg/login.conf"
+            def write_login():
+                text = view:exists(path) and view:read(path) or "{}\n"
+                view:write_atomic(path, json5.patch(text, [key], value))
+            okl, err = pcall(write_login)
+            if not okl:
+                sys.log("warn", "desktop: cannot change the login screen: " .. tostring(err))
         # часы панели: настройки времени системы (time.conf), без файла UTC
         clock_obj = {}
         def make_time():
@@ -199,9 +209,62 @@ export def program(session, opts=nil):
             out[len(out) + 1] = logout_entry()
             return out
         reg:provider(commands)
+        # экран блокировки и входа: обои, аватар, форма аватаров (пока нет «Настроек»)
+        def avatar_names():
+            out = ["letter", "custom"]
+            okl, files = pcall(fs.list, (o.assets ?? "/repo/assets") .. "/avatars")
+            if okl and files != nil:
+                table.sort(files)
+                for f in files:
+                    n = string.match(f, "^(.+)%.cimg$")
+                    if n != nil:
+                        out[len(out) + 1] = n
+            return out
+        def run_pref(key, value, login_key=nil):
+            def run(w):
+                save(key, value)
+                if login_key != nil:
+                    save_login(login_key, value)
+            return run
+        def screen_commands():
+            out = []
+            for name in wallpaper_mod.names(wm.wallpaper_dirs, user_wallpapers()):
+                out[len(out) + 1] = command("lockwp:" .. name, "Lock screen wallpaper: " .. name, "lock", ["lock", "background", "блокировка", "обои"],
+                    run_pref("lock_wallpaper", name))
+                out[len(out) + 1] = command("loginwp:" .. name, "Login screen wallpaper: " .. name, "user", ["login", "background", "вход", "обои"],
+                    run_login(name))
+            for name in avatar_names():
+                out[len(out) + 1] = command("avatar:" .. name, "Avatar: " .. name, "user", ["avatar", "picture", "аватар", "иконка"],
+                    run_pref("avatar", name))
+            for shape in ["circle", "square"]:
+                out[len(out) + 1] = command("shape:" .. shape, "Avatar shape: " .. shape, "user", ["avatar", "round", "square", "аватар", "форма"],
+                    run_pref("avatar_shape", shape, "shape"))
+            return out
+        def run_login(name):
+            def run(w):
+                save_login("wallpaper", name)
+            return run
+        reg:provider(screen_commands)
         # блокировка экрана: Ctrl+Alt+L, «Пуск» (команда и кнопка внизу)
+        # аватар пользователя для экрана блокировки: встроенный (assets/avatars), свой ($cfg/avatar.cimg) или буква
+        def avatar_image():
+            name = conf.avatar
+            cfgd = view != nil and view:expand("$cfg") or nil
+            if cfgd != nil and (name == nil or name == "custom"):
+                okr, data = pcall(view.read, view, cfgd .. "/avatar.cimg")
+                if okr and data != nil:
+                    return data
+            if name != nil and name != "letter" and name != "custom":
+                path = (o.assets ?? "/repo/assets") .. "/avatars/" .. name .. ".cimg"
+                if fs.exists(path):
+                    f = fs.open(path, "rb")
+                    data = f.readAll()
+                    f.close()
+                    return data
+            return nil
         def lock_screen():
-            lock_mod.start(wm, session, {time: clock_obj.c})
+            lock_mod.start(wm, session, {time: clock_obj.c, wallpaper: conf.lock_wallpaper ?? "aurora", shape: conf.avatar_shape,
+                image: avatar_image(), read: wallpaper_loader, assets: o.assets ?? "/repo/assets"})
         wm:hotkey("ctrl+alt+l", lock_screen)
         reg:add({id: "lock", name: "Lock screen", icon: "lock", kind: "action", keywords: ["lock", "secure", "заблокировать", "блокировка"],
             run: (w) => lock_screen()})

@@ -24,12 +24,41 @@ const EVENTS = ["char", "key", "key_up", "paste", "mouse_click", "monitor_touch"
 def _read(path):
     if not fs.exists(path):
         return nil
-    f = fs.open(path, "r")
+    f = fs.open(path, "rb")
     if f == nil:
         return nil
     text = f.readAll()
     f.close()
     return text
+
+# настройки экрана входа (/cubeos/sys/cfg/login.conf): wallpaper (обои, по умолчанию aurora), shape (circle | square)
+export def login_conf():
+    raw = _read("/cubeos/sys/cfg/login.conf")
+    if raw != nil:
+        ok, data = pcall(() => json5.parse(raw))
+        if ok and type(data) == "table":
+            return data
+    return {}
+
+# аватар пользователя (текст .cimg или nil): conf.avatar из его cde.conf: имя встроенного (assets/avatars), "custom" (свой файл
+# $cfg/avatar.cimg), "letter" (буква); без настройки свой файл, если он есть
+export def avatar_image(user, assets, read=nil):
+    rd = read ?? _read
+    cfg = "/cubeos/users/" .. user .. "/cfg"
+    conf = {}
+    raw = rd(cfg .. "/cde.conf")
+    if raw != nil:
+        ok, data = pcall(() => json5.parse(raw))
+        if ok and type(data) == "table":
+            conf = data
+    name = conf.avatar
+    if name == nil or name == "custom":
+        own = rd(cfg .. "/avatar.cimg")
+        if own != nil or name == "custom":
+            return own
+    if name != nil and name != "letter":
+        return _read((assets ?? "/repo/assets") .. "/avatars/" .. name .. ".cimg")
+    return nil
 
 # места палитры для анимации экрана: ступени обоев темы и запас приложений (здесь они все свободны)
 export def slot_list():
@@ -90,7 +119,7 @@ export class GfxGreeter:
             return nil
         self.gscreen = gscreen
         font = font_lib.default(self.o.assets ?? "/repo/assets")
-        host = {surface: gscreen.surface, font: font, palette: gscreen.palette, slots: slot_list(),
+        host = {surface: gscreen.surface, font: font, palette: gscreen.palette, slots: slot_list(), assets: self.o.assets,
             set_colors: (list) => gscreen:set_colors(list), present: () => gscreen:present()}
         c = self.clock
         opts.layout = self:_layout()
@@ -167,7 +196,9 @@ export class GfxGreeter:
         if why == "locked":
             return {ok: false, message: "Too many attempts. Wait", wait: wait ?? 5}
         if has_pin:
-            return {ok: false, message: self.text:_wrong(why, left, wait)}
+            if left == 0:
+                return {ok: false, message: "Now only the password works"}
+            return {ok: false, message: left != nil and ("Wrong, " .. left .. " PIN tries left") or "Wrong PIN or password"}
         return {ok: false, message: "Wrong password."}
 
     # подсказка в пустом поле для пользователя
@@ -189,9 +220,13 @@ export class GfxGreeter:
             return self.text:login()
         users = []
         for u in self.auth:list():
-            users[len(users) + 1] = {name: u.name, display: u.display ?? u.name, guest: u.temp == true}
+            okimg, img = pcall(avatar_image, u.name, self.o.assets)
+            if not okimg:
+                img = nil
+            users[len(users) + 1] = {name: u.name, display: u.display ?? u.name, guest: u.temp == true, image: img}
         let me = self
-        opts = {users: users, index: 1, title: self.title, verify: (u, s, f) => me:_verify(u, s, f), hint_for: (u) => me:_hint(u),
+        lc = login_conf()
+        opts = {users: users, index: 1, title: nil, wallpaper: lc.wallpaper, shape: lc.shape, verify: (u, s, f) => me:_verify(u, s, f), hint_for: (u) => me:_hint(u),
             key_floppy: self.auth.has_disk_keys != nil and self.auth:has_disk_keys(), note: self.o.notice}
         result = self:_show(opts)
         if result == nil:

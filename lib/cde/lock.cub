@@ -37,9 +37,9 @@ def main(sys, ctx):
     if len(slots) < 2:
         slots = [220, 221]
     host = {surface: win.canvas, font: wm.font, palette: wm.palette, slots: slots, set_colors: (list) => wm:_set_colors(owner, list),
-        present: () => win:present()}
+        present: () => win:present(), read: o.read, assets: o.assets, animated: wm.anim.enabled}
     c = o.time
-    user = {name: session.user, display: session.display ?? session.user}
+    user = {name: session.user, display: session.display ?? session.user, image: o.image}
     has_pin = mgr.auth.has_pin != nil and mgr.auth:has_pin(session.user)
     key_ok = {on: false}
     def verify(u, secret, flags):
@@ -68,6 +68,7 @@ def main(sys, ctx):
             conf = data
     lay = layout_mod.new(nil, nil, {mode: "auto", keyboard: conf.keyboard ?? "ru"})
     scr = login_mod.new(host, {users: [user], index: 1, fixed: true, title: "Locked", verify: verify, power: false, layout: lay,
+        wallpaper: o.wallpaper, shape: o.shape,
         hint_for: (u) => "PIN or password", key_floppy: mgr.auth.has_disk_keys != nil and mgr.auth:has_disk_keys(),
         time_text: () => c != nil and c:time_text() or "", date_text: () => c != nil and c:format("%a %e %b") or ""})
     start = wm.clock()
