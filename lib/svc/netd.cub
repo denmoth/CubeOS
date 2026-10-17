@@ -156,9 +156,18 @@ export def main(sys, args):
         auth = a.system != nil and a.system.auth or nil
         return auth != nil and auth:is_admin(sub.name)
 
-    def need_admin(sender):
-        if not is_admin(sender):
-            raise Error("only an administrator can change network settings")
+    # не администратор может подтвердить действие именем и паролем администратора (q.admin_user, q.admin_password), как в UAC
+    def need_admin(sender, q=nil):
+        if is_admin(sender):
+            return
+        auth = a.system != nil and a.system.auth or nil
+        if q != nil and q.admin_password != nil and auth != nil:
+            p = kernel != nil and kernel.procs[sender] or nil
+            user = q.admin_user ?? (p != nil and p.subject != nil and p.subject.name or nil)
+            if user != nil and auth:is_admin(user) and auth:verify(user, q.admin_password):
+                return
+            raise Error("wrong administrator name or password")
+        raise Error("only an administrator can change network settings")
 
     # ------------------------------------------------------------ модемы
 
@@ -508,7 +517,7 @@ export def main(sys, args):
     handlers.peers = list_peers
 
     def set_name(q, sender):
-        need_admin(sender)
+        need_admin(sender, q)
         name = tostring(q and q.name or "")
         if name != "" and not string.match(name, "^[%w_%-%.]+$"):
             raise Error("a computer name uses letters, digits, - _ and .")
@@ -520,7 +529,7 @@ export def main(sys, args):
     # шифрование (D246, D247): mode "on" (по умолчанию: своё шифруем, принимаем любое), "require" (принимаем только
     # зашифрованное), "off" (всё открытым текстом, зашифрованное всё равно понимаем)
     def set_encrypt(q, sender):
-        need_admin(sender)
+        need_admin(sender, q)
         o = q ?? {}
         mode = o.mode ?? (o.on == true and "on" or (o.on == false and "off" or nil))
         if mode != "on" and mode != "off" and mode != "require":
@@ -533,7 +542,7 @@ export def main(sys, args):
     handlers.encrypt = set_encrypt
 
     def pair_code(q, sender):
-        need_admin(sender)
+        need_admin(sender, q)
         code = new_code()
         st.pairing = {code: normalize_code(code), salt: _random_hex("salt"), expires: clock() + CODE_TTL, tries: 0, chal: {}}
         sys.log("info", "a pairing code was issued (valid 5 minutes)")
@@ -541,7 +550,7 @@ export def main(sys, args):
     handlers.pair_code = pair_code
 
     def pair(q, sender):
-        need_admin(sender)
+        need_admin(sender, q)
         id = resolve(q.host)
         nc = _random_hex("client")
         sk = sha256.digest(_random_hex("dh-client"))
@@ -577,7 +586,7 @@ export def main(sys, args):
         conf.mounts = keep
 
     def forget(q, sender):
-        need_admin(sender)
+        need_admin(sender, q)
         id = resolve(q.host)
         if peer_keys[tostring(id)] == nil:
             raise Error("not paired with {host}")
@@ -592,7 +601,7 @@ export def main(sys, args):
     handlers.forget = forget
 
     def share(q, sender):
-        need_admin(sender)
+        need_admin(sender, q)
         name = tostring(q.name ?? "")
         if not string.match(name, "^[%w_%-]+$") or len(name) > 32:
             raise Error("a share name uses letters, digits, - and _ (up to 32)")
@@ -610,7 +619,7 @@ export def main(sys, args):
     handlers.share = share
 
     def unshare(q, sender):
-        need_admin(sender)
+        need_admin(sender, q)
         if conf.shares[tostring(q.name)] == nil:
             raise Error("no such shared folder: {share}")
         conf.shares[tostring(q.name)] = nil
@@ -643,7 +652,7 @@ export def main(sys, args):
         return true
 
     def mount(q, sender):
-        need_admin(sender)
+        need_admin(sender, q)
         id = resolve(q.host)
         key = key_of(id, q.host)
         m, why = link:request(id, "shares?", nil, {key: key, timeout: 3})
@@ -666,7 +675,7 @@ export def main(sys, args):
     handlers.mount = mount
 
     def unmount(q, sender):
-        need_admin(sender)
+        need_admin(sender, q)
         point = paths.normalize(tostring(q.point ?? ""))
         if mounted[point] == nil:
             raise Error("not a network folder: {point}")

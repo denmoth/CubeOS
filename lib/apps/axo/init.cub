@@ -13,6 +13,9 @@
 # Подшаг 4: пробел быстрый просмотр (текст, картинка; ↑↓ листают файлы), Ctrl+I панель сведений, F9 панель мест, F3 две панели
 # (у каждой своя папка и история; вкладки относятся к левой), Ctrl+F поиск по именам в папке и вложенных (результаты по мере
 # поиска, Esc назад), «Settings...» в меню (минимальный режим без анимаций).
+# Подшаг 5: место «Network» (сопряжённые компьютеры, их общие папки, подключение одним кликом: netd mount), «Share on the network»
+# и «Stop sharing» в меню папки (netd share), Ctrl+P свойства (размер папки, права, действующее правило; «Change access» пишет своё
+# правило через permd). Не администратору действие подтверждается именем и паролем администратора (окно в духе UAC).
 # Настройки $cfg/axo.conf: show_hidden, show_places, show_info, confirm_trash, confirm_delete, minimal.
 
 import cdk
@@ -27,12 +30,13 @@ import apps.axo.parts as parts
 import apps.axo.ops as ops
 import apps.axo.assoc as assoc
 import cde.terminal as terminal_app
+import svc.rpc as rpc
 
 export const NAME = "Axo"
 export const FULL_NAME = "Axolotl file manager"
 
 const PLACES = [["Home", "home", "$home"], ["Desktop", "desktop", "$desktop"], ["Documents", "file", "$docs"], ["Pictures", "image", "$pictures"],
-    ["Trash", "trash", "$trash"], ["Drives", "drive", "$mnt"], ["Network", "netfolder", "/cubeos/net"], ["Root", "folder", "/"]]
+    ["Trash", "trash", "$trash"], ["Drives", "drive", "$mnt"], ["Network", "netfolder", "network:"], ["Root", "folder", "/"]]
 const KIND_NAMES = {folder: "Folder", drive: "Drive", netfolder: "Network folder", lua: "Lua program", cubic: "Cubic program", text: "Text file",
     image: "Picture", music: "Music", archive: "Archive", script: "Script", file: "File"}
 const PREVIEW_BYTES = 4096
@@ -94,6 +98,8 @@ export class Axo:
 
     def _expand(self, p):
         p = tostring(p ?? "/")
+        if string.sub(p, 1, 8) == "network:":
+            return p
         if string.sub(p, 1, 1) != "/" and string.sub(p, 1, 1) != "$":
             cur = self.tabs != nil and self:tab() != nil and self:tab().path or "/"
             p = paths.join(cur, p)
@@ -149,7 +155,10 @@ export class Axo:
         self.b_search = parts.tool("search", "Search (Ctrl+F)", (b) => me:start_search())
         self.b_hidden = parts.tool("eye", "Hidden files (Ctrl+H)", (b) => me:toggle_hidden())
         self.b_menu = parts.tool("menu", "Menu", (b) => me:menu(b))
-        self.path = parts.path_bar({on_go: (p) => me:go(p)})
+        def path_go(p):
+            me:go(p)
+            me.ui:set_focus(me.table)
+        self.path = parts.path_bar({on_go: path_go})
         self.search_box = cdk.text_input({grow: 1, visible: false, placeholder: "Search by name", on_change: (t) => me:_search_changed(t),
             on_submit: (t) => me.ui:set_focus(me.table)})
         toolbar = cdk.row({padding: 2, gap: 1, align: "center"}, [self.b_back, self.b_fwd, self.b_up, self.path, self.search_box, self.b_search,
@@ -215,6 +224,9 @@ export class Axo:
         t = self:_state(i)
         tbl = self:_table(i)
         path = t.path
+        if string.sub(path, 1, 8) == "network:":
+            self:_net_rows(i, tbl, string.sub(path, 9))
+            return
         ok, list = pcall(() => self.view:list(path, {hidden: true}))
         rows = []
         tbl.empty = "Nothing here"
@@ -251,9 +263,13 @@ export class Axo:
     def _chrome(self):
         t = self:tab()
         path = t.path
-        alias, root = self:_alias(path)
-        self.path:set(path, alias, root)
-        name = path == "/" and "/" or paths.basename(path)
+        net = string.sub(path, 1, 8) == "network:"
+        alias = nil
+        root = nil
+        if not net:
+            alias, root = self:_alias(path)
+        self.path:set(net and ("/Network" .. (path != "network:" and ("/" .. string.sub(path, 9)) or "")) or path, alias, root)
+        name = net and (path == "network:" and "Network" or string.sub(path, 9)) or (path == "/" and "/" or paths.basename(path))
         self.ui.win:set_title(NAME .. " - " .. name)
         self.b_back.enabled = len(t.back) > 0
         self.b_fwd.enabled = len(t.fwd) > 0
@@ -317,7 +333,13 @@ export class Axo:
     # ------------------------------------------------------------ навигация
 
     def go(self, p):
+        if p == "/Network":
+            p = "network:"
+        elif string.sub(tostring(p), 1, 9) == "/Network/":
+            p = "network:" .. string.sub(p, 10)
         path = self:_expand(p)
+        if string.sub(path, 1, 8) == "network:":
+            return self:_go_to(path)
         ok, st = pcall(() => self.view:stat(path))
         if not ok or st == nil:
             self:_note("No such folder: " .. path)
@@ -325,6 +347,9 @@ export class Axo:
         if st.type != "dir":
             self:_note("Not a folder: " .. path)
             return false
+        return self:_go_to(path)
+
+    def _go_to(self, path):
         self:stop_search(false)
         t = self:tab()
         if path == t.path:
@@ -363,7 +388,10 @@ export class Axo:
 
     def up(self):
         t = self:tab()
-        if t.path == "/":
+        if t.path == "/" or t.path == "network:":
+            return
+        if string.sub(t.path, 1, 8) == "network:":
+            self:go("network:")
             return
         self:go(paths.parent(t.path))
 
@@ -372,6 +400,9 @@ export class Axo:
 
     def activate(self, row, ev):
         e = row.data
+        if e.type == "peer" or e.type == "share":
+            self:_net_open(e)
+            return
         if e.type == "dir":
             if ev != nil and ev.ctrl:
                 self:_open_tab(e)
@@ -599,6 +630,9 @@ export class Axo:
     # ------------------------------------------------------------ поиск
 
     def start_search(self):
+        if string.sub(self:tab().path, 1, 8) == "network:":
+            self:_note("Search works in folders")
+            return
         if self.search != nil:
             self.ui:set_focus(self.search_box)
             return
@@ -780,6 +814,8 @@ export class Axo:
             self:paste()
         elif k == keys.f and ev.ctrl:
             self:start_search()
+        elif k == keys.p and ev.ctrl:
+            self:properties()
         elif k == keys.i and ev.ctrl:
             self:toggle_info()
         elif k == keys.f9:
@@ -829,6 +865,9 @@ export class Axo:
 
     def paste(self):
         if len(ops.clip.paths) == 0:
+            return
+        if string.sub(self:tab().path, 1, 8) == "network:":
+            self:_note("Open a connected network folder to paste there")
             return
         kind = ops.clip.mode == "cut" and "move" or "copy"
         list = []
@@ -958,6 +997,10 @@ export class Axo:
                 {text: "Move to trash", icon: "trash", shortcut: "Del", on_select: (it) => me:delete_sel(false)},
                 {text: "Delete forever", icon: "warn", shortcut: "Shift+Del", on_select: (it) => me:delete_sel(true)}]:
                 items[len(items) + 1] = it
+            items[len(items) + 1] = {separator: true}
+            if e.type == "dir":
+                items[len(items) + 1] = {text: "Share on the network...", icon: "netfolder", on_select: (it) => me:share_dialog(e)}
+            items[len(items) + 1] = {text: "Properties", icon: "info", shortcut: "Ctrl+P", on_select: (it) => me:properties()}
         else:
             items = [{text: "New folder", icon: "folder", shortcut: "Ctrl+Shift+N", on_select: (it) => me:new_folder()},
                 {text: "Paste", icon: "file", shortcut: "Ctrl+V", disabled: len(ops.clip.paths) == 0, on_select: (it) => me:paste()},
@@ -1115,6 +1158,282 @@ export class Axo:
                 cdk.button("Skip", {on_click: (b) => pick("skip")}),
                 cdk.button("Keep both", {variant: "primary", on_click: (b) => pick("rename")})])])
         card.on_escape = () => pick("cancel")
+        ui:open_layer(card, {center: true, modal: true, dismiss: false})
+
+    # ------------------------------------------------------------ сеть
+
+    def _rpc(self, service, op, args=nil, timeout=4):
+        ok, res, err = pcall(() => rpc.call(self.sys, service, op, args, timeout))
+        if not ok:
+            return nil, tostring(res)
+        return res, err
+
+    # выполнить запрос к службе, которой нужен администратор: сначала как есть, при отказе окно подтверждения и снова с паролем
+    def _admin_call(self, service, op, args, reason, done):
+        res, err = self:_rpc(service, op, args)
+        if err == nil:
+            done(res, nil)
+            return
+        if string.find(tostring(err), "administrator", 1, true) == nil:
+            done(nil, err)
+            return
+        let me = self
+        def with_creds(creds):
+            if creds == nil:
+                done(nil, "cancelled")
+                return
+            q = {}
+            for k, v in args ?? {}:
+                q[k] = v
+            q.admin_user = creds.user
+            q.admin_password = creds.password
+            res2, err2 = me:_rpc(service, op, q)
+            done(res2, err2)
+        self:ask_admin(reason, with_creds)
+
+    # окно подтверждения администратора: имя (если сам пользователь не администратор) и пароль
+    def ask_admin(self, reason, on_done):
+        ui = self.ui
+        let me = self
+        card = nil
+        user = self.session != nil and self.session.user or nil
+        is_admin = false
+        if user != nil and self.session.manager != nil and self.session.manager.auth != nil:
+            is_admin = self.session.manager.auth:is_admin(user)
+        name = cdk.text_input({width: 140, placeholder: "Administrator name", visible: not is_admin})
+        pw = cdk.text_input({width: 140, placeholder: "Password", password: true})
+        def done(ok):
+            ui:close_layer(card)
+            ui:set_focus(me.table)
+            if not ok:
+                on_done(nil)
+                return
+            on_done({user: is_admin and user or name.text, password: pw.text})
+        pw.on_submit = (t) => done(true)
+        card = cdk.card({padding: 6, gap: 4}, [cdk.row({gap: 4, align: "center"}, [cdk.icon("lock", {color: ui.style.warn}),
+                cdk.label("Administrator permission", {variant: "accent"})]),
+            cdk.label(reason, {variant: "dim"}), name, pw,
+            cdk.row({gap: 4}, [cdk.spacer(), cdk.button("Cancel", {on_click: (b) => done(false)}),
+                cdk.button("Allow", {variant: "danger", icon: "lock", on_click: (b) => done(true)})])])
+        card.on_escape = () => done(false)
+        ui:open_layer(card, {center: true, modal: true, dismiss: false})
+        ui:set_focus(is_admin and pw or name)
+
+    def _net_rows(self, i, tbl, host):
+        rows = []
+        if host == "":
+            peers, err = self:_rpc("netd", "peers")
+            if peers == nil:
+                tbl.empty = "Network service is not running"
+            else:
+                tbl.empty = "No computers seen yet (net scan)"
+                table.sort(peers, (a, b) => (a.paired and 0 or 1) < (b.paired and 0 or 1))
+                for p in peers:
+                    nm = tostring(p.name ?? p.id)
+                    rows[len(rows) + 1] = {cells: {name: nm, size: "", modified: p.paired and "paired" or ""}, icon: p.paired and "netfolder" or "user",
+                        icon_color: p.paired and self.ui.style.accent or self.ui.style.dim, dim: not p.paired, kind: "netfolder",
+                        data: {name: nm, type: "peer", host: tostring(p.name ?? p.id), paired: p.paired}}
+        else:
+            shares, err = self:_rpc("netd", "remote_shares", {host: host}, 6)
+            if shares == nil:
+                tbl.empty = "Cannot reach " .. host .. ": " .. string.gsub(tostring(err), "^.-: ", "", 1)
+            else:
+                tbl.empty = host .. " shares nothing"
+                for sh in shares:
+                    nm = tostring(sh.name)
+                    rows[len(rows) + 1] = {cells: {name: nm, size: sh.readonly and "read" or "", modified: ""}, icon: "netfolder",
+                        icon_color: self.ui.style.warn, kind: "netfolder", data: {name: nm, type: "share", host: host, readonly: sh.readonly}}
+        tbl.sort = {key: "name", dir: 1}
+        tbl:set_rows(rows, (r) => r.data.name)
+
+    def _net_open(self, e):
+        if e.type == "peer":
+            if not e.paired:
+                self:_note("Pair first: net pair " .. e.host .. " CODE")
+                return
+            self:go("network:" .. e.host)
+            return
+        # общая папка: уже подключена: туда; иначе подключить (netd mount) и открыть
+        mounts = self:_rpc("netd", "mounts") ?? []
+        for m in mounts:
+            if tostring(m.host) == e.host and tostring(m.share) == e.name and m.point != nil:
+                self:go(m.point)
+                return
+        let me = self
+        def mounted(res, err):
+            if err != nil:
+                me:_note("Cannot connect: " .. string.gsub(tostring(err), "^.-: ", "", 1))
+                return
+            me:go(res.point ?? ("/cubeos/net/" .. e.host .. "/" .. e.name))
+        self:_admin_call("netd", "mount", {host: e.host, share: e.name}, "Connect \"" .. e.name .. "\" from " .. e.host .. ".", mounted)
+
+    def share_dialog(self, e):
+        path = self:_full(e)
+        shares = self:_rpc("netd", "shares") ?? []
+        current = nil
+        for sh in shares:
+            if sh.path == path:
+                current = sh
+        let me = self
+        if current != nil:
+            def stopped(res, err):
+                me:_note(err == nil and ("Stopped sharing " .. current.name) or ("Cannot stop: " .. tostring(err)))
+            cdk.dialog(self.ui, {title: "Shared as \"" .. current.name .. "\"", icon: "netfolder", text: "Paired computers can open this folder.",
+                buttons: [{text: "Close", value: false}, {text: "Stop sharing", variant: "danger", value: true}],
+                on_result: (v) => v == true and me:_admin_call("netd", "unshare", {name: current.name}, "Stop sharing \"" .. current.name .. "\".", stopped)})
+            return
+        ui = self.ui
+        card = nil
+        name = cdk.text_input({width: 140, text: paths.basename(path)})
+        ro = cdk.checkbox("Read only for others", {checked: true})
+        def done(ok):
+            ui:close_layer(card)
+            ui:set_focus(me.table)
+            if not ok:
+                return
+            def shared(res, err):
+                me:_note(err == nil and ("Shared as " .. name.text) or ("Cannot share: " .. string.gsub(tostring(err), "^.-: ", "", 1)))
+            me:_admin_call("netd", "share", {name: name.text, path: path, readonly: ro.checked}, "Share \"" .. paths.basename(path) .. "\" on the network.", shared)
+        name.on_submit = (t) => done(true)
+        card = cdk.card({padding: 6, gap: 4}, [cdk.label("Share on the network", {variant: "accent"}), cdk.label("Name for other computers", {variant: "dim"}),
+            name, ro, cdk.row({gap: 4}, [cdk.spacer(), cdk.button("Cancel", {on_click: (b) => done(false)}),
+                cdk.button("Share", {variant: "primary", icon: "netfolder", on_click: (b) => done(true)})])])
+        card.on_escape = () => done(false)
+        ui:open_layer(card, {center: true, modal: true, dismiss: false})
+        ui:set_focus(name)
+
+    # ------------------------------------------------------------ свойства
+
+    # размер папки с ограничением по времени: (байты, файлы, всё ли посчитано)
+    def _tree_size(self, path):
+        t0 = os.epoch("utc")
+        total = 0
+        files = 0
+        queue = [path]
+        while len(queue) > 0:
+            if os.epoch("utc") - t0 > 300:
+                return total, files, false
+            dir = table.remove(queue, 1)
+            ok, list = pcall(() => self.view:list(dir, {hidden: true}))
+            if ok:
+                for e in list:
+                    if e.type == "dir":
+                        if not e.mount:
+                            queue[len(queue) + 1] = paths.join(dir, e.name)
+                    else:
+                        total += e.size ?? 0
+                        files += 1
+        return total, files, true
+
+    def _rights_words(self, r):
+        words = []
+        for pair in [["r", "read"], ["w", "write"], ["x", "run"], ["l", "list"]]:
+            if string.find(r, pair[1], 1, true) != nil:
+                words[len(words) + 1] = pair[2]
+        return len(words) > 0 and table.concat(words, ", ") or "no access"
+
+    def properties(self):
+        sel = self.table:selected()
+        if len(sel) != 1 or sel[1][2].data.type == "peer" or sel[1][2].data.type == "share":
+            return
+        row = sel[1][2]
+        e = row.data
+        path = self:_full(e)
+        ui = self.ui
+        let me = self
+        lines = [["Kind", KIND_NAMES[row.kind] ?? "File"], ["Location", paths.parent(path)]]
+        if e.type == "dir":
+            size, files, all = self:_tree_size(path)
+            lines[len(lines) + 1] = ["Size", (all and "" or "more than ") .. types.human_size(size) .. ", " .. files .. " files"]
+        else:
+            lines[len(lines) + 1] = ["Size", types.human_size(e.size) .. " (" .. tostring(e.size ?? 0) .. " bytes)"]
+        if (e.modified ?? 0) > 0:
+            lines[len(lines) + 1] = ["Modified", os.date("%d.%m.%Y %H:%M", math.floor(e.modified / 1000))]
+        acc = self:_rpc("permd", "access", {path: path})
+        rights = acc != nil and acc.rights or nil
+        if rights == nil:
+            okr, rv = pcall(() => self.view:rights(path))
+            rights = okr and rv or ""
+        lines[len(lines) + 1] = ["Access", self:_rights_words(rights)]
+        if acc != nil and acc.rule != nil:
+            who = []
+            for k, v in acc.rule.allow:
+                who[len(who) + 1] = k .. ": " .. v
+            table.sort(who)
+            lines[len(lines) + 1] = ["Rule", acc.rule.path .. (acc.custom and " (own)" or "")]
+            lines[len(lines) + 1] = ["Who", table.concat(who, ", ")]
+        flags = []
+        if e.hidden:
+            flags[len(flags) + 1] = "hidden"
+        if e.readonly:
+            flags[len(flags) + 1] = "read-only drive"
+        if e.important:
+            flags[len(flags) + 1] = "important (!)"
+        if len(flags) > 0:
+            lines[len(lines) + 1] = ["Flags", table.concat(flags, ", ")]
+        kids = [cdk.row({gap: 4, align: "center"}, [cdk.icon(row.icon, {color: row.icon_color}), cdk.label(paths.basename(e.name), {variant: "accent"})])]
+        for ln in lines:
+            kids[len(kids) + 1] = cdk.row({gap: 4}, [cdk.label(ln[1], {variant: "dim", width: 54}), cdk.label(ln[2], {grow: 1})])
+        card = nil
+        def close():
+            ui:close_layer(card)
+            ui:set_focus(me.table)
+        kids[len(kids) + 1] = cdk.row({gap: 4}, [cdk.spacer(),
+            cdk.button("Change access...", {icon: "lock", on_click: (b) => me:_access_editor(path, e, acc, close)}),
+            cdk.button("Close", {variant: "primary", on_click: (b) => close()})])
+        card = cdk.card({padding: 6, gap: 2}, kids)
+        card.on_escape = () => close()
+        ui:open_layer(card, {center: true, modal: true, dismiss: false})
+
+    # кто и что может: строки «субъект r w x l» и новая строка; сохранение своим правилом через permd
+    def _access_editor(self, path, e, acc, close_props):
+        close_props()
+        ui = self.ui
+        let me = self
+        target = e.type == "dir" and (path .. "/**") or path
+        allow = {}
+        if acc != nil and acc.rule != nil:
+            for k, v in acc.rule.allow:
+                allow[k] = v
+        rows = []
+        kids = [cdk.label("Access to " .. paths.basename(path), {variant: "accent"}), cdk.label(e.type == "dir" and "The folder and everything inside" or "This file", {variant: "dim"})]
+        def add_row(who, r):
+            boxes = []
+            for ch in ["r", "w", "x", "l"]:
+                boxes[len(boxes) + 1] = cdk.checkbox(ch, {checked: string.find(r, ch, 1, true) != nil})
+            rows[len(rows) + 1] = {who: who, boxes: boxes}
+            kids[len(kids) + 1] = cdk.row({gap: 3, align: "center"}, [cdk.label(who, {width: 48}), boxes[1], boxes[2], boxes[3], boxes[4]])
+        names = []
+        for k, v in allow:
+            names[len(names) + 1] = k
+        table.sort(names)
+        for k in names:
+            add_row(k, allow[k])
+        extra = cdk.text_input({width: 70, placeholder: "user or role"})
+        kids[len(kids) + 1] = cdk.row({gap: 3, align: "center"}, [cdk.label("Add", {variant: "dim", width: 24}), extra])
+        card = nil
+        def done(ok):
+            ui:close_layer(card)
+            ui:set_focus(me.table)
+            if not ok:
+                return
+            out = {}
+            for r in rows:
+                v = ""
+                for i, ch in ["r", "w", "x", "l"]:
+                    if r.boxes[i].checked:
+                        v = v .. ch
+                if v != "":
+                    out[r.who] = v
+            if extra.text != "":
+                out[extra.text] = "rl"
+            def saved(res, err):
+                me:_note(err == nil and "Access changed" or ("Cannot change access: " .. string.gsub(tostring(err), "^.-: ", "", 1)))
+            me:_admin_call("permd", "set_access", {path: target, allow: out}, "Change who can open \"" .. paths.basename(path) .. "\".", saved)
+        kids[len(kids) + 1] = cdk.row({gap: 4}, [cdk.spacer(), cdk.button("Cancel", {on_click: (b) => done(false)}),
+            cdk.button("Save", {variant: "primary", icon: "lock", on_click: (b) => done(true)})])
+        card = cdk.card({padding: 6, gap: 2}, kids)
+        card.on_escape = () => done(false)
         ui:open_layer(card, {center: true, modal: true, dismiss: false})
 
     def run(self):

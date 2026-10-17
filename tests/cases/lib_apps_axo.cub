@@ -237,4 +237,56 @@ keys_ctrl(keys.i)
 eq(app.info.visible and app.info.info != nil, true, "Ctrl+I shows the information panel")
 keys_ctrl(keys.i)
 
+# ---------------------------------------------------------------- подшаг 5: сеть, подтверждение администратора, свойства
+import svc.rpc as rpc
+def service(name, handlers):
+    def run(sys, a):
+        sys.register(name)
+        rpc.serve(sys, handlers)
+    return run
+calls5 = []
+nh = {}
+nh.peers = (q, f) => [{id: 3, name: "farm", paired: false}, {id: 2, name: "cube2", paired: true}]
+nh.remote_shares = (q, f) => [{name: "games", readonly: true}]
+nh.mounts = (q, f) => []
+nh.shares = (q, f) => []
+def fake_mount(q, f):
+    calls5[len(calls5) + 1] = tostring(q.admin_user) .. "/" .. tostring(q.admin_password)
+    if q.admin_password != "pw":
+        raise Error("only an administrator can change network settings")
+    return {point: "/cubeos/net/cube2/games", readonly: true}
+nh.mount = fake_mount
+ph = {}
+ph.access = (q, f) => {rights: "rwxl", rule: {path: "/cubeos/users/$user/**", allow: {"*": "rwxl"}}, custom: false}
+k:spawn(service("netd", nh), [], {name: "netd"})
+k:spawn(service("permd", ph), [], {name: "permd"})
+fsys:mkdir(nil, "/cubeos/net/cube2/games", {parents: true})
+settle(10)
+key(keys.l, true)
+key(keys.a, true)
+for ch in ["n", "e", "t", "w", "o", "r", "k", ":"]:
+    k:feed("char", ch)
+key(keys.enter)
+settle(20)
+eq([app:tab().path, names_now()], ["network:", ["cube2", "farm"]], "the network place lists computers, paired first")
+key(keys.enter)
+settle(20)
+eq([app:tab().path, names_now()], ["network:cube2", ["games"]], "a paired computer shows its shared folders")
+key(keys.enter)
+settle(20)
+eq(app.ui:top_layer() != nil, true, "connecting asks for an administrator")
+for ch in ["a", "d", "m"]:
+    k:feed("char", ch)
+key(keys.tab)
+for ch in ["p", "w"]:
+    k:feed("char", ch)
+key(keys.enter)
+settle(30)
+eq([calls5[len(calls5)], app:tab().path], ["adm/pw", "/cubeos/net/cube2/games"], "with the password the folder is connected and opened")
+key(keys.up, true)
+key(keys.up, true)
+key(keys.up, true)
+key(keys.up, true)
+settle(20)
+
 print("done")

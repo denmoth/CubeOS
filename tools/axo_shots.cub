@@ -162,3 +162,45 @@ for ch in ["s", "n"]:
     k:feed("char", ch)
 settle(30)
 dump(wm, "ui_axo_8_search")
+# сеть: компьютеры, общие папки, подтверждение администратора; свойства
+import svc.rpc as rpc
+def service(name, handlers):
+    def run(sys, a):
+        sys.register(name)
+        rpc.serve(sys, handlers)
+    return run
+nh = {}
+nh.peers = (q, f) => [{id: 3, name: "farm-3", paired: false}, {id: 2, name: "cube-2", paired: true}, {id: 4, name: "tower", paired: true}]
+nh.remote_shares = (q, f) => [{name: "games", readonly: true}, {name: "music", readonly: false}]
+nh.mounts = (q, f) => []
+nh.shares = (q, f) => []
+nh.mount = (q, f) => error("only an administrator can change network settings")
+ph = {}
+ph.access = (q, f) => {rights: "rwxl", rule: {path: "/cubeos/users/$user/**", allow: {"*": "rwxl", admin: "rl"}}, custom: false}
+k:spawn(service("netd", nh), [], {name: "netd"})
+k:spawn(service("permd", ph), [], {name: "permd"})
+press(256)
+press(keys.l, true)
+press(keys.a, true)
+for ch in ["n", "e", "t", "w", "o", "r", "k", ":"]:
+    k:feed("char", ch)
+press(keys.enter)
+settle(20)
+dump(wm, "ui_axo_9_network")
+press(keys.enter)
+settle(20)
+press(keys.enter)
+settle(20)
+dump(wm, "ui_axo_10_admin")
+press(256)
+press(keys.l, true)
+press(keys.a, true)
+for ch in ["$", "h", "o", "m", "e"]:
+    k:feed("char", ch)
+press(keys.enter)
+settle(20)
+k:feed("char", "n")
+settle(5)
+press(keys.p, true)
+settle(10)
+dump(wm, "ui_axo_11_props")

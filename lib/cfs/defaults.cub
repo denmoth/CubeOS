@@ -2,6 +2,8 @@
 
 import cfs.memory as memory
 
+export const ACCESS_PATH = "/cubeos/sys/cfg/access.conf"
+
 # правила доступа по умолчанию (формат: cfs.rules)
 export const RULES_TEXT = """[
   {path: '/', allow: {'*': 'rl'}},
@@ -27,6 +29,8 @@ export def install(fsys, opts=nil):
     o = opts ?? {}
     fsys.rules:clear()
     fsys.rules:load(RULES_TEXT)
+    # свои правила администратора (окно свойств Axo через permd): /cubeos/sys/cfg/access.conf, тот же формат, поверх стандартных
+    pcall(() => fsys.rules:load(fsys:read_file(nil, ACCESS_PATH)))
     fsys.no_trash = ["/cubeos/tmp", "/cubeos/sys", "/cubeos/var", "/cubeos/proc", "/cubeos/run", "/cubeos/net"]
     fsys:schedule_clean("/cubeos/tmp", o.tmp_interval ?? 600000, o.tmp_max_age ?? 3600000)
 

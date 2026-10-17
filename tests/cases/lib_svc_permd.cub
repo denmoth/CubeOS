@@ -1,0 +1,50 @@
+import t
+import kernel
+import cfs
+import cfs.rules as rules
+import svc.permd as permd
+import svc.rpc as rpc
+eq = t.eq
+
+clock = {now: 1000}
+def now():
+    return clock.now
+fsys = cfs.new({clock: now})
+fsys:mount("/", cfs.memory({now: now}))
+cfs.install_defaults(fsys)
+fsys:mkdir(nil, "/cubeos/users/bob/home/box", {parents: true})
+fsys:mkdir(nil, "/cubeos/sys/cfg", {parents: true})
+auth = {}
+auth.is_admin = (me, name) => name == "root"
+auth.verify = (me, name, pw) => name == "root" and pw == "secret"
+k = kernel.new({clock: now})
+system = {kernel: k, auth: auth, fsys: fsys}
+k:spawn(permd.main, {system: system}, {name: "permd"})
+out = {}
+def client(sys, args):
+    a, e1 = rpc.call(sys, "permd", "access", {path: "/cubeos/users/bob/home/box"})
+    out.access = a
+    r1, e2 = rpc.call(sys, "permd", "set_access", {path: "/cubeos/users/bob/home/box/**", allow: {bob: "rwxl", alice: "rl"}})
+    out.plain = e2
+    r2, e3 = rpc.call(sys, "permd", "set_access", {path: "/cubeos/users/bob/home/box/**", allow: {bob: "rwxl", alice: "rl"}, admin_user: "root", admin_password: "nope"})
+    out.wrong = e3
+    r3, e4 = rpc.call(sys, "permd", "set_access", {path: "/cubeos/users/bob/home/box/**", allow: {bob: "rwxl", alice: "rl"}, admin_user: "root", admin_password: "secret"})
+    out.ok = r3
+    out.ok_err = e4
+    r4, e5 = rpc.call(sys, "permd", "set_access", {path: "/cubeos/sys/cfg/**", allow: {bob: "rwxl"}, admin_user: "root", admin_password: "secret"})
+    out.sys_err = e5
+k:spawn(client, [], {name: "axo", subject: rules.subject("bob")})
+for i in range[1, 40]:
+    clock.now = clock.now + 20
+    k:tick()
+    k:run_ready()
+eq([out.access != nil and out.access.rights, out.access != nil and out.access.rule.path], ["rwxl", "/cubeos/users/$user/**"], "access shows rights and the rule")
+eq(string.find(tostring(out.plain), "administrator", 1, true) != nil, true, "a normal user is refused")
+eq(string.find(tostring(out.wrong), "wrong", 1, true) != nil, true, "a wrong admin password is refused")
+eq([out.ok, out.ok_err], [true, nil], "the admin password allows the change")
+eq(fsys.rules:rights(rules.subject("alice"), "/cubeos/users/bob/home/box/x.txt"), "rl", "the new rule works at once")
+eq(fsys:exists(nil, "/cubeos/sys/cfg/access.conf"), true, "it is saved")
+cfs.install_defaults(fsys)
+eq(fsys.rules:rights(rules.subject("alice"), "/cubeos/users/bob/home/box/x.txt"), "rl", "and loaded again with the defaults")
+eq(string.find(tostring(out.sys_err), "system places", 1, true) != nil, true, "system places are refused")
+print("done")

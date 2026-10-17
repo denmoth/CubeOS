@@ -2,10 +2,19 @@
 # администраторам, остальным отказывает, и записывает отказ в журнал. Настоящая модель (манифесты, caps, диалог повышения) придёт позже.
 #
 # Запросы (svc.rpc): check {pid, cap} -> {allow, reason}. pid: чьи права проверять (по умолчанию вызывающий).
-# main(sys, args): args.system (контекст; kernel).
+#   access {path} -> {rights (права вызывающего), rule: {path, allow} (правило, которое действует), custom (своё ли оно)}
+#   set_access {path, allow, admin_user, admin_password} -> true: своё правило на путь (окно свойств Axo). Нужен администратор: сам
+#     вызывающий или имя и пароль администратора (как UAC). Пишется в /cubeos/sys/cfg/access.conf и сразу действует. Системные места
+#     (/cubeos/sys, /cubeos/var, /cubeos/boot, /rom, корень) не трогаются. allow = {} убирает своё правило.
+# main(sys, args): args.system (контекст; kernel, auth, fsys).
 
 import cfs.rules as rules
+import cfs.path as paths
+import cfs.defaults as defaults
+import json5
 import svc.rpc as rpc
+
+const PROTECTED = ["/cubeos/sys", "/cubeos/var", "/cubeos/boot", "/rom"]
 
 export def main(sys, args):
     a = args ?? {}
@@ -25,6 +34,79 @@ export def main(sys, args):
         sys.log("warn", "denied " .. tostring(o.cap) .. " to " .. tostring(proc.name) .. " (" .. tostring(pid) .. ")")
         return {allow: false, reason: "only the system and administrators may do this for now"}
     handlers.check = check
+
+    fsys = a.system != nil and a.system.fsys or nil
+    auth = a.system != nil and a.system.auth or nil
+
+    def subject_of(pid):
+        proc = kernel != nil and kernel:proc(pid) or nil
+        return proc != nil and proc.subject or nil
+
+    def custom_list():
+        if fsys == nil:
+            return []
+        ok, data = pcall(() => json5.parse(fsys:read_file(nil, defaults.ACCESS_PATH)))
+        return ok and type(data) == "table" and data or []
+
+    # правило, которое действует для пути (самое конкретное); для показа в свойствах
+    def access(q, sender):
+        path = paths.normalize(tostring(q and q.path or "/"))
+        sub = subject_of(sender)
+        if fsys == nil:
+            return {rights: "", rule: nil, custom: false}
+        best = nil
+        for r in fsys.rules.list:
+            pattern = string.gsub(r.path, "%$user", sub != nil and sub.name or "system")
+            if paths.match(pattern, path) and (best == nil or r.score > best.score):
+                best = r
+        custom = false
+        if best != nil:
+            for c in custom_list():
+                if c.path == best.path:
+                    custom = true
+        return {rights: fsys.rules:rights(sub, path), rule: best != nil and {path: best.path, allow: best.allow} or nil, custom: custom}
+    handlers.access = access
+
+    def admin_ok(sender, q):
+        sub = subject_of(sender)
+        if rules.is_admin(sub) or (sub != nil and auth != nil and auth:is_admin(sub.name)):
+            return true
+        if q.admin_password != nil and auth != nil:
+            user = q.admin_user ?? (sub != nil and sub.name or nil)
+            return user != nil and auth:is_admin(user) and auth:verify(user, q.admin_password) == true
+        return false
+
+    def set_access(q, sender):
+        o = q ?? {}
+        path = paths.normalize(tostring(o.path ?? ""))
+        if path == "/" or path == "":
+            raise Error("the root cannot get its own access rule")
+        for pre in PROTECTED:
+            if paths.is_inside(path, pre):
+                raise Error("system places keep their access rules")
+        if not admin_ok(sender, o):
+            raise Error(o.admin_password != nil and "wrong administrator name or password" or "only an administrator can change access")
+        if type(o.allow) != "table":
+            raise Error("allow must be a table")
+        list = custom_list()
+        keep = []
+        for c in list:
+            if c.path != path:
+                keep[len(keep) + 1] = c
+        empty = true
+        for k, v in o.allow:
+            empty = false
+        if not empty:
+            keep[len(keep) + 1] = {path: path, allow: o.allow}
+        text = json5.stringify(keep, {json5: true, indent: 2}) .. "\n"
+        fsys:write_file(nil, defaults.ACCESS_PATH, text)
+        # правила сразу: стандартные заново и свои поверх
+        fsys.rules:clear()
+        fsys.rules:load(defaults.RULES_TEXT)
+        fsys.rules:load(text)
+        sys.log("info", "access rule for " .. path .. (empty and " removed" or " set"))
+        return true
+    handlers.set_access = set_access
 
     sys.register("permd")
     rpc.serve(sys, handlers)
