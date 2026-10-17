@@ -223,6 +223,9 @@ export class GfxGreeter:
             okimg, img = pcall(avatar_image, u.name, self.o.assets)
             if not okimg:
                 img = nil
+            # гость без своей картинки: кубик CubeOS
+            if img == nil and u.temp == true:
+                img = _read((self.o.assets ?? "/repo/assets") .. "/avatars/cube.cimg")
             users[len(users) + 1] = {name: u.name, display: u.display ?? u.name, guest: u.temp == true, image: img}
         let me = self
         lc = login_conf()

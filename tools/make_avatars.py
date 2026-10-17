@@ -110,11 +110,23 @@ def astronaut():
     return im
 
 
+def cube():
+    # логотип CubeOS: три грани куба в тонах экрана загрузки на тёмно-синем
+    im, d = base((24, 30, 64), (12, 14, 34))
+    top, left, right = (125, 207, 255), (122, 162, 247), (61, 89, 161)
+    c, s = (16, 16), 11
+    d.polygon([(16, 5), (26, 10), (16, 15), (6, 10)], fill=top)
+    d.polygon([(6, 10), (16, 15), (16, 27), (6, 22)], fill=left)
+    d.polygon([(16, 15), (26, 10), (26, 22), (16, 27)], fill=right)
+    d.line((16, 15, 16, 27), fill=(40, 60, 120))
+    return im
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(SRC, exist_ok=True)
     tool = os.path.join(ROOT, "tools", "png2cimg.py")
-    for name, fn in [("cat", cat), ("fox", fox), ("robot", robot), ("creeper", creeper), ("ghost", ghost), ("astronaut", astronaut)]:
+    for name, fn in [("cat", cat), ("fox", fox), ("robot", robot), ("creeper", creeper), ("ghost", ghost), ("astronaut", astronaut), ("cube", cube)]:
         png = os.path.join(SRC, name + ".png")
         fn().save(png)
         subprocess.check_call([sys.executable, tool, png, os.path.join(OUT, name + ".cimg"), "--palette", "adaptive"], stdout=subprocess.DEVNULL)
