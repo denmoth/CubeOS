@@ -1,0 +1,338 @@
+# apps.axo: Axo (Axolotl), файловый менеджер CDE (docs/21-axo.md, D260). Подшаг 1: окно, места, путь с алиасом, таблица файлов,
+# навигация, скрытые файлы, вкладки, панель инструментов с подсказками удержанием.
+#
+#   wm:launch(axo.main, {name: "axo"}, ["$home"])          ctx.args[1]: папка (по умолчанию $home); ctx.args[2]: {view, ready(app)} для тестов
+#
+# Клавиши: Enter и двойной клик открывают папку, Backspace назад, Ctrl+↑ вверх, Ctrl+N новая вкладка, Ctrl+W закрыть вкладку,
+# Ctrl+←/→ и правый Alt+←/→ между вкладками, Ctrl+H скрытые файлы, Ctrl+L и F6 ввести путь, F5 обновить, буквы прыгают к имени.
+# Настройки $cfg/axo.conf: show_hidden.
+
+import cdk
+import cfs.path as paths
+import json5
+import apps.axo.types as types
+import apps.axo.parts as parts
+
+export const NAME = "Axo"
+export const FULL_NAME = "Axolotl file manager"
+
+const PLACES = [["Home", "home", "$home"], ["Desktop", "desktop", "$desktop"], ["Documents", "file", "$docs"], ["Pictures", "image", "$pictures"],
+    ["Trash", "trash", "$trash"], ["Drives", "drive", "$mnt"], ["Network", "netfolder", "/cubeos/net"], ["Root", "folder", "/"]]
+
+export class Axo:
+    def init(self, sys, ctx):
+        o = ctx.args != nil and ctx.args[2] or nil
+        self.sys = sys
+        self.ctx = ctx
+        self.wm = ctx.wm
+        self.view = (o != nil and o.view) or sys.view()
+        self.conf = self:_read_conf()
+        self.show_hidden = self.conf.show_hidden == true
+        start = ctx.args != nil and ctx.args[1] or "$home"
+        self.tabs = [self:_new_tab(self:_expand(start))]
+        self.cur = 1
+        self.ui = cdk.open(sys, ctx, {title: NAME, w: 282, h: 158, min_w: 170, min_h: 96, icon: "axo"})
+        self:_build()
+        self:refresh()
+        if o != nil and o.ready != nil:
+            o.ready(self)
+
+    # ------------------------------------------------------------ настройки и пути
+
+    def _conf_path(self):
+        return self.view != nil and (self.view:expand("$cfg") .. "/axo.conf") or nil
+
+    def _read_conf(self):
+        p = self:_conf_path()
+        if p == nil:
+            return {}
+        ok, data = pcall(() => self.view:exists(p) and json5.parse(self.view:read(p)) or {})
+        return ok and type(data) == "table" and data or {}
+
+    def _save(self, key, value):
+        p = self:_conf_path()
+        if p == nil:
+            return
+        self.conf[key] = value
+        def write():
+            text = self.view:exists(p) and self.view:read(p) or "{}\n"
+            self.view:write_atomic(p, json5.patch(text, [key], value))
+        pcall(write)
+
+    def _expand(self, p):
+        p = tostring(p ?? "/")
+        if string.sub(p, 1, 1) != "/" and string.sub(p, 1, 1) != "$":
+            cur = self.tabs != nil and self.tabs[self.cur] != nil and self.tabs[self.cur].path or "/"
+            p = paths.join(cur, p)
+        ok, e = pcall(() => self.view:expand(p))
+        return paths.normalize(ok and e or p)
+
+    # самый длинный алиас, в котором лежит путь: "$home/games", путь алиаса
+    def _alias(self, path):
+        best = nil
+        best_len = 0
+        for name, v in self.view.aliases ?? {}:
+            ok, full = pcall(() => paths.normalize(self.view:expand("$" .. name)))
+            if ok and full != "/" and paths.is_inside(path, full) and string.len(full) > best_len:
+                best = name
+                best_len = string.len(full)
+                rest = string.sub(path, string.len(full) + 1)
+                self._alias_root = full
+                self._alias_text = "$" .. name .. rest
+        if best == nil:
+            return nil, nil
+        return self._alias_text, self._alias_root
+
+    def _new_tab(self, path):
+        return {path: path, back: [], fwd: [], sort: {key: "name", dir: 1}, cursor: nil}
+
+    def tab(self):
+        return self.tabs[self.cur]
+
+    # ------------------------------------------------------------ окно
+
+    def _build(self):
+        ui = self.ui
+        let me = self
+        self.b_back = parts.tool("back", "Back (Backspace)", (b) => me:back())
+        self.b_fwd = parts.tool("forward", "Forward", (b) => me:forward())
+        self.b_up = parts.tool("up", "Parent folder (Ctrl+Up)", (b) => me:up())
+        self.b_hidden = parts.tool("eye", "Hidden files (Ctrl+H)", (b) => me:toggle_hidden())
+        self.b_menu = parts.tool("menu", "Menu", (b) => me:menu(b))
+        self.path = parts.path_bar({on_go: (p) => me:go(p)})
+        toolbar = cdk.row({padding: 2, gap: 1, align: "center"}, [self.b_back, self.b_fwd, self.b_up, self.path, self.b_hidden, self.b_menu])
+        self.tabbar = parts.tab_bar({grow: 1, height: 13, on_pick: (i) => me:switch(i), on_close: (i) => me:close_tab(i), on_new: () => me:new_tab()})
+        self.tabrow = cdk.row({padding: 2, visible: false}, [self.tabbar])
+        items = []
+        for p in PLACES:
+            items[len(items) + 1] = {text: p[1], icon: p[2], path: p[3]}
+        self.places = cdk.list_view({width: 70, height: 26, items: items, on_activate: (i, it) => me:go(it.path), on_select: (i, it) => me:go(it.path)})
+        self.table = cdk.data_table({grow: 1, empty: "Nothing here",
+            columns: [{key: "name", title: "Name", grow: 1}, {key: "size", title: "Size", width: 42, align: "right"},
+                {key: "modified", title: "Date", width: 58, align: "right"}],
+            on_sort: (key, dir) => me:_sorted(key, dir), on_activate: (i, row, ev) => me:activate(row, ev), on_select: (t) => me:_status()})
+        body = cdk.row({grow: 1, gap: 2}, [self.places, self.table])
+        self.status = cdk.label("", {variant: "dim"})
+        root = cdk.column({padding: 0, gap: 1}, [toolbar, self.tabrow, body, cdk.row({padding: 2}, [self.status])])
+        ui:set_root(root)
+        ui:set_focus(self.table)
+        ui.on_key = (ev) => me:key(ev)
+
+    def _kind_color(self, kind):
+        st = self.ui.style
+        if kind == "folder":
+            return st.warn
+        if kind == "image" or kind == "script":
+            return st.ok
+        if kind == "music":
+            return st.danger
+        if kind == "text" or kind == "file":
+            return st.dim
+        return st.accent
+
+    # перечитать папку текущей вкладки; cursor_name: на каком имени поставить курсор
+    def refresh(self, cursor_name=nil):
+        t = self:tab()
+        path = t.path
+        ok, list = pcall(() => self.view:list(path, {hidden: true}))
+        rows = []
+        self.table.empty = "Nothing here"
+        if not ok:
+            self.table.empty = "Cannot open: " .. tostring(list)
+            list = []
+        shown = []
+        for e in list:
+            if self.show_hidden or not e.hidden:
+                shown[len(shown) + 1] = e
+        types.sort(shown, t.sort.key, t.sort.dir)
+        now = os.epoch("local")
+        for e in shown:
+            kind = types.kind(e, path)
+            rows[len(rows) + 1] = {cells: {name: e.name, size: e.type == "dir" and "" or types.human_size(e.size), modified: types.date_text(e.modified, now)},
+                icon: types.icon(kind), icon_color: self:_kind_color(kind), dim: e.hidden, data: e}
+        self.table.sort = t.sort
+        self.table:set_rows(rows, (r) => r.data.name, cursor_name ?? t.cursor)
+        alias, root = self:_alias(path)
+        self.path:set(path, alias, root)
+        name = path == "/" and "/" or paths.basename(path)
+        self.ui.win:set_title(NAME .. " - " .. name)
+        self.b_back.enabled = len(t.back) > 0
+        self.b_fwd.enabled = len(t.fwd) > 0
+        self.b_up.enabled = path != "/"
+        self.b_hidden.on = self.show_hidden
+        for b in [self.b_back, self.b_fwd, self.b_up, self.b_hidden]:
+            b:invalidate()
+        self:_tabs_changed()
+        self:_status()
+
+    def _status(self):
+        rows = self.table.rows
+        dirs = 0
+        for r in rows:
+            if r.data.type == "dir":
+                dirs += 1
+        text = len(rows) .. (len(rows) == 1 and " item" or " items")
+        if dirs > 0:
+            text = text .. " (" .. dirs .. (dirs == 1 and " folder)" or " folders)")
+        sel = self.table:selected()
+        if len(sel) > 1:
+            size = 0
+            for p in sel:
+                size += p[2].data.size ?? 0
+            text = text .. ", " .. len(sel) .. " selected, " .. types.human_size(size)
+        ok, sp = pcall(() => self.view:space(self:tab().path))
+        if ok and type(sp) == "table" and sp.free != nil:
+            text = text .. ", " .. types.human_size(sp.free) .. " free"
+        self.status:set_text(text)
+
+    def _tabs_changed(self):
+        names = []
+        for t in self.tabs:
+            names[len(names) + 1] = t.path == "/" and "/" or paths.basename(t.path)
+        self.tabbar:set(names, self.cur)
+        self.tabrow:set_visible(len(self.tabs) > 1)
+
+    def _sorted(self, key, dir):
+        t = self:tab()
+        t.sort = {key: key, dir: dir}
+        cur = self.table.rows[self.table.cursor]
+        self:refresh(cur != nil and cur.data.name or nil)
+
+    # ------------------------------------------------------------ навигация
+
+    def go(self, p):
+        path = self:_expand(p)
+        ok, st = pcall(() => self.view:stat(path))
+        if not ok or st == nil:
+            self.status:set_text("No such folder: " .. path)
+            return false
+        if st.type != "dir":
+            self.status:set_text("Not a folder: " .. path)
+            return false
+        t = self:tab()
+        if path == t.path:
+            self:refresh()
+            return true
+        cur = self.table.rows[self.table.cursor]
+        t.cursor = nil
+        t.back[len(t.back) + 1] = t.path
+        t.fwd = []
+        from_name = paths.basename(t.path)
+        old = t.path
+        t.path = path
+        # вверх: курсор на папке, из которой вышли
+        self:refresh(paths.is_inside(old, path) and from_name or nil)
+        return true
+
+    def back(self):
+        t = self:tab()
+        if len(t.back) == 0:
+            return
+        t.fwd[len(t.fwd) + 1] = t.path
+        old = t.path
+        t.path = table.remove(t.back)
+        self:refresh(paths.is_inside(old, t.path) and paths.basename(old) or nil)
+
+    def forward(self):
+        t = self:tab()
+        if len(t.fwd) == 0:
+            return
+        t.back[len(t.back) + 1] = t.path
+        t.path = table.remove(t.fwd)
+        self:refresh()
+
+    def up(self):
+        t = self:tab()
+        if t.path == "/":
+            return
+        self:go(paths.parent(t.path))
+
+    def activate(self, row, ev):
+        e = row.data
+        path = paths.join(self:tab().path, e.name)
+        if e.type == "dir":
+            self:go(path)
+            return
+        self.status:set_text("Opening files comes in the next Axo step")
+
+    def toggle_hidden(self):
+        self.show_hidden = not self.show_hidden
+        self:_save("show_hidden", self.show_hidden)
+        cur = self.table.rows[self.table.cursor]
+        self:refresh(cur != nil and cur.data.name or nil)
+
+    # ------------------------------------------------------------ вкладки
+
+    def _remember_cursor(self):
+        cur = self.table.rows[self.table.cursor]
+        self:tab().cursor = cur != nil and cur.data.name or nil
+
+    def new_tab(self):
+        self:_remember_cursor()
+        t = self:tab()
+        self.tabs[len(self.tabs) + 1] = self:_new_tab(t.path)
+        self.cur = len(self.tabs)
+        self:refresh()
+
+    def close_tab(self, i=nil):
+        i = i ?? self.cur
+        if len(self.tabs) <= 1:
+            return
+        table.remove(self.tabs, i)
+        self.cur = math.max(1, math.min(len(self.tabs), self.cur > i and self.cur - 1 or self.cur))
+        self:refresh()
+
+    def switch(self, i):
+        n = len(self.tabs)
+        if n <= 1:
+            return
+        i = (i - 1) % n + 1
+        if i == self.cur:
+            return
+        self:_remember_cursor()
+        self.cur = i
+        self:refresh()
+
+    # ------------------------------------------------------------ меню и клавиши
+
+    def menu(self, b):
+        let me = self
+        items = [{text: "New tab", icon: "plus", shortcut: "Ctrl+N", on_select: (it) => me:new_tab()},
+            {text: "Close tab", icon: "close", shortcut: "Ctrl+W", disabled: len(self.tabs) <= 1, on_select: (it) => me:close_tab()},
+            {separator: true},
+            {text: "Show hidden files", icon: "eye", shortcut: "Ctrl+H", checked: self.show_hidden, on_select: (it) => me:toggle_hidden()},
+            {text: "Refresh", icon: "restart", shortcut: "F5", on_select: (it) => me:refresh()},
+            {separator: true},
+            {text: "About Axo", icon: "axo", on_select: (it) => cdk.message(me.ui, "Axo", "Axo (Axolotl) file manager for CubeOS.")}]
+        cdk.menu(self.ui, items, b.x + b.w - 110, b.y + b.h + 1)
+
+    def key(self, ev):
+        k = ev.key
+        if self.path.editing:
+            if k == 256 or k == 1:
+                self.path:edit(false)
+                self.ui:set_focus(self.table)
+            return
+        if k == keys.backspace:
+            self:back()
+        elif k == keys.up and ev.ctrl:
+            self:up()
+        elif (k == keys.left or k == keys.right) and (ev.ctrl or ev.alt):
+            self:switch(self.cur + (k == keys.left and -1 or 1))
+        elif k == keys.n and ev.ctrl:
+            self:new_tab()
+        elif k == keys.w and ev.ctrl:
+            self:close_tab()
+        elif k == keys.h and ev.ctrl:
+            self:toggle_hidden()
+        elif (k == keys.l and ev.ctrl) or k == keys.f6:
+            self.path:edit(true)
+        elif k == keys.f5:
+            self:refresh()
+
+    def run(self):
+        self.ui:run()
+
+export def main(sys, ctx):
+    app = Axo(sys, ctx)
+    app:run()

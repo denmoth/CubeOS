@@ -1,0 +1,268 @@
+# apps.axo.parts: части окна Axo: кнопка панели инструментов с подсказкой, строка пути с алиасом, полоса вкладок
+#
+#   parts.tool("back", "Back (Backspace)", fn)       кнопка-значок; подсказка появляется, если держать кнопку мыши (в CC нет наведения):
+#                                                    отпустил на кнопке: действие, увёл: отмена
+#   parts.path_bar({on_go: (path) => ..., on_edit: (on) => ...})   bar:set(path, alias, full)  «$home ◦ /cubeos/users/denmoth/home»:
+#                                                    клик по части пути переходит туда, клик по пустому месту открывает поле ввода
+#   parts.tab_bar({on_pick: (i) => ..., on_close: (i) => ..., on_new: () => ...})   bar:set(names, index); видна при двух и больше
+
+import cdk
+import cdk.widget as widget
+import cdk.icons as icons
+import cgl.surface as surface_mod
+
+const HOLD = 0.45
+
+# ------------------------------------------------------------ кнопка с подсказкой
+
+export class ToolButton(widget.Widget):
+    def init(self, icon, tip, action, opts=nil):
+        super.init(self, opts)
+        self.kind = "tool"
+        self.icon = icon
+        self.tip = tip
+        self.action = action
+        self.pressed = false
+        self.on = false
+        self.timer = nil
+        self.tip_layer = nil
+
+    def measure(self, st):
+        return 15, 13
+
+    def draw(self, s, st):
+        if self.pressed:
+            st:round_fill(s, self.x, self.y, self.w, self.h, st.hi)
+        elif self.on:
+            st:round_fill(s, self.x, self.y, self.w, self.h, st.ctrl)
+        c = self.enabled and (self.on and st.accent or st.text) or st.dim
+        icons.draw(s, self.icon, self.x + math.floor((self.w - 9) / 2), self.y + math.floor((self.h - 9) / 2), c, st:darker(c))
+
+    def _show_tip(self):
+        self.timer = nil
+        if not self.pressed or self.tip == nil:
+            return
+        card = cdk.card({padding: 3}, [cdk.label(self.tip)])
+        self.tip_layer = card
+        self.ui:open_layer(card, {x: self.x, y: self.y + self.h + 2, dismiss: true})
+
+    def _hide_tip(self):
+        if self.timer != nil:
+            self.ui:cancel(self.timer)
+            self.timer = nil
+        if self.tip_layer != nil:
+            self.ui:close_layer(self.tip_layer)
+            self.tip_layer = nil
+
+    def handle(self, ev):
+        if not self.enabled:
+            return ev.name == "down" or ev.name == "click"
+        if ev.name == "down" and ev.button == 1:
+            self.pressed = true
+            let me = self
+            self.timer = self.ui:after(HOLD, () => me:_show_tip())
+            self:invalidate()
+            return true
+        if ev.name == "up":
+            self.pressed = false
+            self:_hide_tip()
+            self:invalidate()
+            return true
+        if ev.name == "click":
+            if self.action != nil:
+                self.action(self)
+            return true
+        return false
+
+export def tool(icon, tip, action, opts=nil):
+    return ToolButton(icon, tip, action, opts)
+
+# ------------------------------------------------------------ строка пути
+
+export class Crumbs(widget.Widget):
+    def init(self, bar, opts=nil):
+        super.init(self, opts)
+        self.kind = "crumbs"
+        self.bar = bar
+        self.hits = []
+        self.dot = "-"
+
+    def measure(self, st):
+        return 60, 13
+
+    def draw(self, s, st):
+        bar = self.bar
+        st:round_fill(s, self.x, self.y, self.w, self.h, st.well)
+        f = st.font
+        if f.covers != nil and f:covers(0x25E6):
+            self.dot = "◦"
+        elif f.covers != nil and f:covers(0xB7):
+            self.dot = "·"
+        self.hits = []
+        x = self.x + 4
+        right = self.x + self.w - 3
+        ty = self.y + math.floor((self.h - st.fh) / 2)
+        if bar.alias != nil:
+            w = st:text_w(bar.alias)
+            s:text(f, x, ty, bar.alias, st.accent)
+            self.hits[len(self.hits) + 1] = {x: x, w: w, path: bar.alias_root}
+            x += w + 3
+            s:text(f, x, ty, self.dot, st.dim)
+            x += st:text_w(self.dot) + 3
+        # части полного пути; не влезает: начало заменяется на «..»
+        segs = bar.segments
+        widths = []
+        total = 0
+        for i, sg in segs:
+            widths[i] = st:text_w(sg.name) + st:text_w("/")
+            total += widths[i]
+        first = 1
+        while total > right - x and first < len(segs):
+            total -= widths[first]
+            first += 1
+        if first > 1:
+            s:text(f, x, ty, "..", st.dim)
+            x += st:text_w("..")
+        for i in range[first, len(segs)]:
+            sg = segs[i]
+            s:text(f, x, ty, "/", st.dim)
+            x += st:text_w("/")
+            w = st:text_w(sg.name)
+            last = i == len(segs)
+            s:text(f, x, ty, surface_mod.ellipsize(f, sg.name, math.max(st.fw, right - x), ".."), last and st.text or st.dim)
+            self.hits[len(self.hits) + 1] = {x: x, w: w, path: sg.path}
+            x += w
+        if len(segs) == 0:
+            s:text(f, x, ty, "/", st.text)
+            self.hits[len(self.hits) + 1] = {x: x, w: st.fw, path: "/"}
+
+    def handle(self, ev):
+        if ev.name == "click":
+            for h in self.hits:
+                if ev.x >= h.x and ev.x < h.x + h.w:
+                    self.bar:_go(h.path)
+                    return true
+            self.bar:edit(true)
+            return true
+        return ev.name == "down" or ev.name == "up"
+
+export class PathBar(widget.Box):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, "row", {grow: o.grow ?? 1}, [])
+        self.kind = "pathbar"
+        self.on_go = o.on_go
+        self.on_edit = o.on_edit
+        self.alias = nil
+        self.alias_root = nil
+        self.full = "/"
+        self.segments = []
+        self.crumbs = Crumbs(self, {grow: 1})
+        let me = self
+        self.input = cdk.text_input({grow: 1, visible: false, on_submit: (text) => me:_submit(text)})
+        self:add(self.crumbs)
+        self:add(self.input)
+        self.editing = false
+
+    # путь (настоящий), алиас ("$home" или nil) и путь алиаса
+    def set(self, full, alias=nil, alias_root=nil):
+        self.full = full
+        self.alias = alias
+        self.alias_root = alias_root
+        self.segments = []
+        acc = ""
+        for part in string.gmatch(full, "[^/]+"):
+            acc = acc .. "/" .. part
+            self.segments[len(self.segments) + 1] = {name: part, path: acc}
+        self.crumbs:invalidate()
+
+    def _go(self, path):
+        if self.on_go != nil:
+            self.on_go(path)
+
+    def edit(self, on):
+        if on == self.editing:
+            return
+        self.editing = on
+        self.crumbs:set_visible(not on)
+        self.input:set_visible(on)
+        if on:
+            self.input:set_text(self.full)
+            self.ui:set_focus(self.input)
+        if self.on_edit != nil:
+            self.on_edit(on)
+
+    def _submit(self, text):
+        self:edit(false)
+        if text != nil and text != "":
+            self:_go(text)
+
+export def path_bar(opts=nil):
+    return PathBar(opts)
+
+# ------------------------------------------------------------ вкладки
+
+export class TabBar(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "tabbar"
+        self.names = []
+        self.index = 1
+        self.on_pick = o.on_pick
+        self.on_close = o.on_close
+        self.on_new = o.on_new
+        self.ux = nil
+        self.uw = 0
+
+    def measure(self, st):
+        return 60, 13
+
+    def set(self, names, index):
+        self.names = names
+        self.index = index
+        self:invalidate()
+
+    def _chip_w(self, st):
+        n = math.max(1, len(self.names))
+        return math.max(24, math.min(80, math.floor((self.w - 16) / n)))
+
+    def draw(self, s, st):
+        cw = self:_chip_w(st)
+        f = st.font
+        for i, name in self.names:
+            x = self.x + (i - 1) * cw
+            active = i == self.index
+            if active:
+                st:round_fill(s, x, self.y, cw - 1, self.h, st.ctrl)
+            text = surface_mod.ellipsize(f, name, cw - 8, "..")
+            s:text(f, x + 4, self.y + math.floor((self.h - st.fh) / 2) - 1, text, active and st.text or st.dim)
+        # подчёркивание активной вкладки плывёт к ней
+        tx = self.x + (self.index - 1) * cw + 2
+        if self.ux == nil:
+            self.ux = tx
+            self.ux_to = tx
+        elif self.ux_to != tx and self.ui != nil:
+            self.ux_to = tx
+            self.ui:tween(self, "ux", tx, 0.15, "out_cubic")
+        s:fill_rect(math.floor(self.ux + 0.5), self.y + self.h - 2, cw - 5, 2, st.accent)
+        px = self.x + len(self.names) * cw + 2
+        icons.draw(s, "plus", px, self.y + 2, st.dim, st.dim)
+
+    def handle(self, ev):
+        if ev.name == "down":
+            st = self.ui.style
+            cw = self:_chip_w(st)
+            i = math.floor((ev.x - self.x) / cw) + 1
+            if i >= 1 and i <= len(self.names):
+                if ev.button == 3 and self.on_close != nil:
+                    self.on_close(i)
+                elif ev.button == 1 and self.on_pick != nil:
+                    self.on_pick(i)
+            elif i == len(self.names) + 1 and ev.x < self.x + len(self.names) * cw + 14 and self.on_new != nil:
+                self.on_new()
+            return true
+        return ev.name == "click" or ev.name == "up"
+
+export def tab_bar(opts=nil):
+    return TabBar(opts)

@@ -1,0 +1,89 @@
+# Снимки файлового менеджера Axo без игры: менеджер окон CDE на подставном терминале, CFS в памяти с примерными файлами,
+# кадры build/ui_axo_*.ppm. Запуск: tools/axo_shots.sh
+
+import kernel
+import cfs
+import cde
+import apps.axo as axo
+
+def make_term(cols, rows):
+    api = {}
+    def get_size(px):
+        if px:
+            return cols * 6, rows * 9
+        return cols, rows
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "setGraphicsMode", "drawPixels", "setFrozen"]:
+        api[name] = nothing
+    return api
+
+def dump(wm, name):
+    s = wm.screen.surface
+    pal = wm.screen.palette
+    f = fs.open("/repo/build/" .. name .. ".ppm", "wb")
+    f.write("P6\n" .. s.w .. " " .. s.h .. "\n255\n")
+    for y in range[0, s.h - 1]:
+        parts = []
+        for x in range[0, s.w - 1]:
+            v = s.px[y * s.w + x + 1]
+            r, g, b = pal:get(v < 0 and 0 or v)
+            parts[x + 1] = string.char(r, g, b)
+        f.write(table.concat(parts))
+    f.close()
+    os.queueEvent("shot")
+    os.pullEvent("shot")
+
+clock = {now: 1792000000000}
+def now():
+    return clock.now
+fsys = cfs.new({clock: now})
+fsys:mount("/", cfs.memory({now: now}))
+cfs.install_defaults(fsys)
+home = "/cubeos/users/denmoth/home"
+for d in [home .. "/documents", home .. "/pictures", home .. "/games/snake", home .. "/projects", home .. "/.config", "/cubeos/users/denmoth/desktop", "/cubeos/users/denmoth/cfg"]:
+    fsys:mkdir(nil, d, {parents: true})
+files = [["notes.txt", 300], ["todo.md", 1200], ["startup.lua", 2400], ["world.cub", 5300], ["sunset.cimg", 9100], ["song.dfpwm", 48000],
+    ["backup.cpk", 120000], [".profile", 40], ["readme.txt", 90]]
+for f in files:
+    fsys:write_file(nil, home .. "/" .. f[1], string.rep("x", f[2]))
+fsys:write_file(nil, home .. "/games/snake/snake.lua", "print(1)")
+v = cfs.view(fsys, nil, {aliases: cfs.default_aliases("denmoth")})
+
+wm = cde.wm.new({term: make_term(51, 19), assets: "/repo/assets", clock: now, panel: {time_text: () => "14:32"}, background: "aurora",
+    animations: {enabled: false}})
+k = kernel.new({clock: now})
+def settle(n=10):
+    k:feed("cubeos_cde")
+    for i in range[1, n]:
+        clock.now = clock.now + 40
+        k:tick()
+        k:run_ready()
+    os.queueEvent("shot")
+    os.pullEvent("shot")
+wm:launch(axo.main, {name: "axo"}, ["$home", {view: v}])
+def desk(sys, args):
+    wm:run(sys)
+k:spawn(desk, [], {name: "cde", ui: true})
+settle(20)
+w = wm.windows[1]
+wm:set_state(w, "max")
+settle(20)
+dump(wm, "ui_axo_1_home")
+# скрытые файлы и вкладка
+k:feed("key", keys.leftCtrl, false)
+k:feed("key", keys.h, false)
+k:feed("key_up", keys.leftCtrl)
+settle(10)
+k:feed("key", keys.leftCtrl, false)
+k:feed("key", keys.n, false)
+k:feed("key_up", keys.leftCtrl)
+settle(10)
+for ch in ["g"]:
+    k:feed("char", ch)
+k:feed("key", keys.enter, false)
+settle(10)
+k:feed("key", keys.enter, false)
+settle(10)
+dump(wm, "ui_axo_2_tabs_games")

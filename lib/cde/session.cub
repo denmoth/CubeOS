@@ -18,6 +18,7 @@ import cde.startmenu as startmenu
 import cde.tray as tray_mod
 import cde.widgets as widgets_mod
 import cde.lock as lock_mod
+import apps.axo as axo
 import cde.theme as theme_mod
 import cde.wallpaper as wallpaper_mod
 import clock as clock_mod
@@ -155,6 +156,8 @@ export def program(session, opts=nil):
         reg = apps_mod.new()
         reg:add({id: "terminal", name: "Terminal", icon: "terminal", keywords: ["console", "shell", "cmd", "терминал", "консоль", "термінал"],
             run: (w) => open_terminal()})
+        reg:add({id: "axo", name: "Axo", icon: "axo", detail: "Files", keywords: ["axolotl", "files", "explorer", "folders", "файлы", "проводник", "аксолотль", "папки"],
+            run: (w) => w:launch(axo.main, {name: "axo"}, ["$home"])})
         reg:add({id: "widgets", name: "Widget gallery", icon: "cube", keywords: ["cdk", "controls", "ui", "виджеты", "элементы"],
             run: (w) => w:launch(gallery.main, {name: "gallery"})})
         def logout_entry():

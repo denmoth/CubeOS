@@ -1,0 +1,83 @@
+# apps.axo.types: тип файла по имени (значок и цвет в таблице Axo), размеры и даты для показа, порядок сортировки
+#
+#   kind = types.kind(entry, path)      "folder", "drive", "netfolder", "lua", "cubic", "text", "image", "music", "archive", "script", "file"
+#   types.icon(kind)                     значок cde.icons
+#   types.human_size(1536)               "1.5K"
+#   types.date_text(ms, now_ms)          "14:32" сегодня, иначе "17.10.26"
+#   types.sort(entries, key, dir)        папки впереди, скрытые в конце (решение владельца)
+
+import cfs.path as paths
+
+const EXT = {lua: "lua", cub: "cubic", txt: "text", md: "text", conf: "text", json: "text", json5: "text", log: "text", cfg: "text",
+    csv: "text", cimg: "image", nfp: "image", bimg: "image", png: "image", dfpwm: "music", wav: "music", cpk: "archive", zip: "archive",
+    tar: "archive", cmp: "archive", sh: "script", bat: "script"}
+
+const ICON = {folder: "folder", drive: "drive", netfolder: "netfolder", lua: "lua", cubic: "cube", text: "file", image: "image",
+    music: "music", archive: "archive", script: "script", file: "file", trash: "trash", home: "home"}
+
+export def kind(e, dir_path=nil):
+    if e.type == "dir":
+        if e.mount:
+            full = dir_path != nil and paths.join(dir_path, e.name) or e.name
+            if paths.is_inside(full, "/cubeos/net"):
+                return "netfolder"
+            return "drive"
+        return "folder"
+    ext = string.lower(paths.extension(e.name) ?? "")
+    if string.sub(ext, 1, 1) == ".":
+        ext = string.sub(ext, 2)
+    return EXT[ext] ?? "file"
+
+export def icon(k):
+    return ICON[k] ?? "file"
+
+export def human_size(n):
+    n = tonumber(n) ?? 0
+    if n < 1024:
+        return math.floor(n) .. " B"
+    if n < 1024 * 1024:
+        v = n / 1024
+        return (v < 10 and string.format("%.1f", v) or tostring(math.floor(v + 0.5))) .. "K"
+    v = n / 1024 / 1024
+    return (v < 10 and string.format("%.1f", v) or tostring(math.floor(v + 0.5))) .. "M"
+
+export def date_text(ms, now_ms=nil):
+    ms = tonumber(ms) ?? 0
+    if ms <= 0:
+        return ""
+    now_ms = now_ms ?? os.epoch("local")
+    t = math.floor(ms / 1000)
+    if os.date("%d.%m.%y", t) == os.date("%d.%m.%y", math.floor(now_ms / 1000)):
+        return os.date("%H:%M", t)
+    return os.date("%d.%m.%y", t)
+
+# сортировка: видимые папки, видимые файлы, скрытые папки, скрытые файлы; внутри по ключу (name, size, modified) и направлению
+export def sort(list, key, dir):
+    def group(e):
+        return (e.hidden and 2 or 0) + (e.type == "dir" and 0 or 1)
+    def less(a, b):
+        ga = group(a)
+        gb = group(b)
+        if ga != gb:
+            return ga < gb
+        va = nil
+        vb = nil
+        if key == "size":
+            va = a.size ?? 0
+            vb = b.size ?? 0
+        elif key == "modified":
+            va = a.modified ?? 0
+            vb = b.modified ?? 0
+        if va == nil or va == vb:
+            na = string.lower(a.name)
+            nb = string.lower(b.name)
+            if na == nb:
+                return false
+            if dir > 0 or key != "name":
+                return na < nb
+            return na > nb
+        if dir > 0:
+            return va < vb
+        return va > vb
+    table.sort(list, less)
+    return list

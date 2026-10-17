@@ -19,6 +19,12 @@ def _scrollbar(s, st, x, y, h, offset, total, view, active):
     ty = y + math.floor((h - th) * offset / math.max(1, total - view))
     st:round_fill(s, x + 1, ty, 3, th, active and st.accent or st.hi, 1)
 
+# полоса прокрутки для своих элементов (таблица и т. п.)
+export def scrollbar(s, st, x, y, h, offset, total, view, active):
+    _scrollbar(s, st, x, y, h, offset, total, view, active)
+
+export const BAR_W = BAR
+
 # ------------------------------------------------------------ область прокрутки
 
 export class ScrollView(widget.Widget):

@@ -1,0 +1,118 @@
+import t
+import kernel
+import cfs
+import cde
+import apps.axo as axo
+import apps.axo.types as types
+eq = t.eq
+
+def make_term():
+    api = {}
+    def get_size(px):
+        if px:
+            return 306, 171
+        return 51, 19
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "setGraphicsMode", "drawPixels", "setFrozen"]:
+        api[name] = nothing
+    return api
+
+def breathe():
+    os.queueEvent("t_breathe")
+    os.pullEvent("t_breathe")
+
+# ---------------------------------------------------------------- типы и сортировка
+eq([types.human_size(300), types.human_size(1536), types.human_size(3 * 1024 * 1024)], ["300 B", "1.5K", "3.0M"], "sizes")
+list = [{name: "b.txt", type: "file", size: 5}, {name: ".hid", type: "file", hidden: true}, {name: "zdir", type: "dir"},
+    {name: "A.lua", type: "file", size: 9}, {name: ".cfg", type: "dir", hidden: true}]
+names = []
+for e in types.sort(list, "name", 1):
+    names[len(names) + 1] = e.name
+eq(names, ["zdir", "A.lua", "b.txt", ".cfg", ".hid"], "folders first, hidden at the end")
+eq([types.kind({name: "x.lua", type: "file"}), types.kind({name: "p.cimg", type: "file"}), types.kind({name: "d", type: "dir"})],
+    ["lua", "image", "folder"], "kinds by extension")
+
+# ---------------------------------------------------------------- окно
+clock = {now: 1000}
+def now():
+    return clock.now
+fsys = cfs.new({clock: now})
+fsys:mount("/", cfs.memory({now: now}))
+cfs.install_defaults(fsys)
+home = "/cubeos/users/ann/home"
+fsys:mkdir(nil, home .. "/games/snake", {parents: true})
+fsys:mkdir(nil, "/cubeos/users/ann/cfg", {parents: true})
+for n in ["notes.txt", "run.lua", ".secret"]:
+    fsys:write_file(nil, home .. "/" .. n, "data")
+v = cfs.view(fsys, nil, {aliases: cfs.default_aliases("ann")})
+got = {}
+wm = cde.wm.new({animations: {enabled: false}, term: make_term(), assets: "/repo/assets", clock: now})
+k = kernel.new({clock: now})
+breathe()
+wm:launch(axo.main, {name: "axo"}, ["$home", {view: v, ready: (a) => rawset(got, "app", a)}])
+def desk(sys, args):
+    wm:run(sys)
+k:spawn(desk, [], {name: "cde", ui: true})
+def settle(n=10):
+    k:feed("cubeos_cde")
+    for i in range[1, n]:
+        clock.now = clock.now + 20
+        k:tick()
+        k:run_ready()
+settle()
+app = got.app
+def names_now():
+    out = []
+    for r in app.table.rows:
+        out[len(out) + 1] = r.data.name
+    return out
+eq(app:tab().path, home, "opens $home")
+eq(names_now(), ["games", "notes.txt", "run.lua"], "hidden files are not shown")
+eq([app.path.alias, app.path.alias_root], ["$home", home], "the path bar shows the alias")
+eq(wm.windows[1].title, "Axo - home", "window title")
+def key(code, ctrl=false):
+    if ctrl:
+        k:feed("key", keys.leftCtrl, false)
+    k:feed("key", code, false)
+    if ctrl:
+        k:feed("key_up", keys.leftCtrl)
+    settle()
+key(keys.h, true)
+eq(names_now(), ["games", "notes.txt", "run.lua", ".secret"], "Ctrl+H shows hidden files at the end")
+eq(app.table.rows[4].dim, true, "hidden files are dim")
+key(keys.enter)
+eq(app:tab().path, home .. "/games", "Enter opens the folder under the cursor")
+key(keys.backspace)
+eq([app:tab().path, app.table.rows[app.table.cursor].data.name], [home, "games"], "Backspace goes back with the cursor on the folder")
+key(keys.n, true)
+eq([len(app.tabs), app.cur, app.tabrow.visible], [2, 2, true], "Ctrl+N opens a tab, the tab bar shows")
+k:feed("char", "g")
+key(keys.enter)
+key(keys.enter)
+eq(app:tab().path, home .. "/games/snake", "the new tab goes on its own")
+key(keys.left, true)
+eq([app.cur, app:tab().path], [1, home], "Ctrl+Left switches back, each tab keeps its folder")
+key(keys.w, true)
+eq([len(app.tabs), app.tabrow.visible, app:tab().path], [1, false, home .. "/games/snake"], "Ctrl+W closes the active tab, the other one stays")
+key(keys.backspace)
+key(keys.backspace)
+eq(app:tab().path, home, "each tab has its own history")
+# путь вводом: несуществующая папка не меняет место
+key(keys.l, true)
+eq(app.path.editing, true, "Ctrl+L turns the path into a field")
+key(keys.backspace, true)
+for ch in ["/", "n", "o"]:
+    k:feed("char", ch)
+key(keys.enter)
+eq([app.path.editing, app:tab().path], [false, home], "a missing folder does not change the place")
+# сортировка кликом по заголовку «Name»: обратный порядок, папки всё равно впереди
+w = wm.windows[1]
+hx = w:content_x() + app.table.x + 6
+hy = w:content_y() + app.table.y + 3
+k:feed("mouse_click", 1, hx, hy)
+k:feed("mouse_up", 1, hx, hy)
+settle()
+eq([app:tab().sort.dir, names_now()[1]], [-1, "games"], "header click reverses the order, folders stay first")
+print("done")

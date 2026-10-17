@@ -1,0 +1,364 @@
+# cdk.table: таблица со столбцами (файловый менеджер Axo и не только)
+#
+#   t = cdk.data_table({columns: [{key: "name", title: "Name", grow: 1}, {key: "size", title: "Size", width: 38, align: "right"}],
+#                  rows: [{cells: {name: "a.txt", size: "1K"}, icon: "file", dim: false, data: ...}],
+#                  sort: {key: "name", dir: 1}, on_sort: (key, dir) => ..., on_activate: (i, row, ev) => ..., on_select: (t) => ...,
+#                  on_menu: (i, row, ev) => ... (правая кнопка), empty: "Тут пусто"})
+#
+# Выбор: клик, Ctrl+клик добавляет и убирает, Shift+клик и Shift+стрелки выделяют подряд, Ctrl+A всё. Двойной клик и Enter:
+# on_activate (ev.ctrl: с Ctrl). Буквы прыгают к строке, имя которой начинается с набранного (сброс через секунду). Колесо и полоса
+# справа листают, PageUp/PageDown, Home/End. Клик по заголовку столбца сортирует (повторно в обратную сторону), стрелка у заголовка.
+# Строка с dim: true рисуется тускло (скрытые файлы). Рисуются только видимые строки.
+
+import cdk.widget as widget
+import cdk.icons as icons
+import cdk.lists as lists
+import cgl.surface as surface_mod
+import unicode
+
+const BAR = 5
+
+export class Table(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "table"
+        self.columns = o.columns ?? [{key: "name", title: "Name", grow: 1}]
+        self.rows = o.rows ?? []
+        self.sort = o.sort ?? {key: self.columns[1].key, dir: 1}
+        self.on_sort = o.on_sort
+        self.on_activate = o.on_activate
+        self.on_select = o.on_select
+        self.on_menu = o.on_menu
+        self.empty = o.empty ?? ""
+        self.sel = {}
+        self.cursor = len(self.rows) > 0 and 1 or 0
+        self.anchor = self.cursor
+        self.offset = 0
+        self.focusable = true
+        self.last_click = nil
+        self.dragging = nil
+        self.typed = ""
+        self.typed_at = 0
+        if self.cursor > 0:
+            self.sel[1] = true
+
+    def row_h(self, st):
+        return st.line
+
+    def measure(self, st):
+        return 120, st.line * 6
+
+    # ------------------------------------------------------------ данные
+
+    # новые строки; keep: функция строки -> ключ (например имя файла), чтобы выбор и курсор остались на тех же строках
+    def set_rows(self, rows, keep=nil, cursor_key=nil):
+        old_keys = {}
+        cur_key = cursor_key
+        if keep != nil:
+            for i, on in self.sel:
+                if on and self.rows[i] != nil:
+                    old_keys[keep(self.rows[i])] = true
+            if cur_key == nil and self.rows[self.cursor] != nil:
+                cur_key = keep(self.rows[self.cursor])
+        self.rows = rows
+        self.sel = {}
+        self.cursor = len(rows) > 0 and 1 or 0
+        if keep != nil:
+            for i, r in rows:
+                k = keep(r)
+                if old_keys[k]:
+                    self.sel[i] = true
+                if cur_key != nil and k == cur_key:
+                    self.cursor = i
+        if self.cursor > 0 and not self:_any_selected():
+            self.sel[self.cursor] = true
+        self.anchor = self.cursor
+        self.offset = 0
+        if self.ui != nil and self.cursor > 0:
+            self:_ensure(self.ui.style, self.cursor)
+        self:invalidate()
+
+    def _any_selected(self):
+        for i, on in self.sel:
+            if on:
+                return true
+        return false
+
+    # выбранные строки по порядку: список [индекс, строка]
+    def selected(self):
+        out = []
+        for i in range[1, len(self.rows)]:
+            if self.sel[i]:
+                out[len(out) + 1] = [i, self.rows[i]]
+        return out
+
+    def _notify(self):
+        if self.on_select != nil:
+            self.on_select(self)
+
+    def select_only(self, i):
+        if i < 1 or i > len(self.rows):
+            return
+        self.sel = {}
+        self.sel[i] = true
+        self.cursor = i
+        self.anchor = i
+        self:_ensure(self.ui.style, i)
+        self:invalidate()
+        self:_notify()
+
+    def _range(self, a, b):
+        self.sel = {}
+        for i in range[math.min(a, b), math.max(a, b)]:
+            self.sel[i] = true
+
+    # ------------------------------------------------------------ геометрия
+
+    def _body_y(self, st):
+        return self.y + st.line
+
+    def _body_h(self, st):
+        return math.max(0, self.h - st.line)
+
+    def _max_offset(self, st):
+        return math.max(0, len(self.rows) * self:row_h(st) - self:_body_h(st))
+
+    def _ensure(self, st, i):
+        rh = self:row_h(st)
+        top = (i - 1) * rh
+        bh = self:_body_h(st)
+        if top < self.offset:
+            self.offset = top
+        elif top + rh > self.offset + bh:
+            self.offset = top + rh - bh
+        self.offset = math.max(0, math.min(self.offset, self:_max_offset(st)))
+
+    # ширины столбцов по ширине таблицы
+    def _widths(self):
+        total = self.w - BAR
+        fixed = 0
+        grow = 0
+        for c in self.columns:
+            if c.width != nil:
+                fixed += c.width
+            else:
+                grow += c.grow ?? 1
+        out = []
+        rest = math.max(0, total - fixed)
+        for i, c in self.columns:
+            out[i] = c.width ?? math.floor(rest * (c.grow ?? 1) / math.max(1, grow))
+        return out
+
+    def _row_at(self, st, py):
+        return math.floor((py - self:_body_y(st) + self.offset) / self:row_h(st)) + 1
+
+    # ------------------------------------------------------------ рисование
+
+    def draw(self, s, st):
+        widths = self:_widths()
+        rh = self:row_h(st)
+        f = st.font
+        # заголовок
+        s:fill_rect(self.x, self.y, self.w, st.line, st.ctrl)
+        x = self.x
+        ty = self.y + math.floor((st.line - st.fh) / 2)
+        for i, c in self.columns:
+            w = widths[i]
+            title = c.title ?? ""
+            if self.sort != nil and self.sort.key == c.key:
+                # стрелка сортировки
+                ax = x + w - 7
+                ay = self.y + math.floor(st.line / 2)
+                if self.sort.dir > 0:
+                    s:line(ax, ay + 1, ax + 2, ay - 1, st.accent)
+                    s:line(ax + 2, ay - 1, ax + 4, ay + 1, st.accent)
+                else:
+                    s:line(ax, ay - 1, ax + 2, ay + 1, st.accent)
+                    s:line(ax + 2, ay + 1, ax + 4, ay - 1, st.accent)
+            room = w - 10
+            if room > st.fw:
+                text = surface_mod.ellipsize(f, title, room, "..")
+                tx = c.align == "right" and (x + w - 9 - st:text_w(text)) or (x + 4)
+                s:text(f, tx, ty, text, st.dim)
+            if i > 1:
+                s:vline(x, self.y + 2, st.line - 4, st.border)
+            x += w
+        # строки
+        by = self:_body_y(st)
+        bh = self:_body_h(st)
+        rw = self.w - BAR
+        if len(self.rows) == 0:
+            if self.empty != "":
+                tw = st:text_w(self.empty)
+                s:text(f, self.x + math.floor((rw - tw) / 2), by + math.floor(bh / 2) - 4, self.empty, st.dim)
+            return
+        first = math.floor(self.offset / rh) + 1
+        last = math.min(len(self.rows), math.floor((self.offset + bh - 1) / rh) + 1)
+        s:push_clip(self.x, by, self.w, bh)
+        for i in range[first, last]:
+            row = self.rows[i]
+            y = by + (i - 1) * rh - self.offset
+            if self.sel[i]:
+                s:fill_rect(self.x, y, rw, rh, self.focused and st.sel or st.ctrl)
+            if i == self.cursor and self.focused:
+                s:fill_rect(self.x, y + 2, 2, rh - 4, st.accent)
+            fg = row.dim and st.dim or (row.color ?? st.text)
+            x = self.x
+            for ci, c in self.columns:
+                w = widths[ci]
+                text = tostring(row.cells[c.key] ?? "")
+                tx = x + 4
+                if ci == 1 and row.icon != nil:
+                    ic = row.icon_color ?? st.accent
+                    if row.dim:
+                        ic = st.dim
+                    icons.draw(s, row.icon, x + 3, y + math.floor((rh - 9) / 2), ic, st:darker(ic))
+                    tx = x + 15
+                room = x + w - tx - 3
+                if room > st.fw:
+                    shown = surface_mod.ellipsize(f, text, room, "..")
+                    if c.align == "right":
+                        tx = x + w - 4 - st:text_w(shown)
+                    s:text(f, tx, y + math.floor((rh - st.fh) / 2), shown, ci == 1 and fg or (row.dim and st.dim or st.dim))
+                x += w
+        s:pop_clip()
+        lists.scrollbar(s, st, self.x + self.w - BAR, by, bh, self.offset, len(self.rows) * rh, bh, self.dragging != nil)
+
+    # ------------------------------------------------------------ события
+
+    def _click_header(self, px):
+        widths = self:_widths()
+        x = self.x
+        for i, c in self.columns:
+            if px >= x and px < x + widths[i]:
+                dir = 1
+                if self.sort != nil and self.sort.key == c.key:
+                    dir = -self.sort.dir
+                self.sort = {key: c.key, dir: dir}
+                if self.on_sort != nil:
+                    self.on_sort(c.key, dir)
+                self:invalidate()
+                return
+            x += widths[i]
+
+    def _move(self, i, shift):
+        n = len(self.rows)
+        if n == 0:
+            return
+        i = math.max(1, math.min(n, i))
+        self.cursor = i
+        if shift:
+            self:_range(self.anchor, i)
+        else:
+            self.sel = {}
+            self.sel[i] = true
+            self.anchor = i
+        self:_ensure(self.ui.style, i)
+        self:invalidate()
+        self:_notify()
+
+    def _jump(self, ch):
+        now = self.ui:now()
+        if now - self.typed_at > 1:
+            self.typed = ""
+        self.typed_at = now
+        self.typed = self.typed .. unicode.lower(ch)
+        key = self.columns[1].key
+        for i, r in self.rows:
+            name = unicode.lower(tostring(r.cells[key] ?? ""))
+            if string.sub(name, 1, string.len(self.typed)) == self.typed:
+                self:_move(i, false)
+                return
+
+    def handle(self, ev):
+        st = self.ui.style
+        rh = self:row_h(st)
+        if ev.name == "scroll":
+            self.offset = math.max(0, math.min(self.offset + ev.dir * rh * 2, self:_max_offset(st)))
+            self:invalidate()
+            return true
+        if ev.name == "down":
+            if ev.y < self.y + st.line:
+                if ev.button == 1:
+                    self:_click_header(ev.x)
+                return true
+            if ev.x >= self.x + self.w - BAR and len(self.rows) * rh > self:_body_h(st):
+                self.dragging = {y: ev.y, offset: self.offset}
+                return true
+            i = self:_row_at(st, ev.y)
+            if i < 1 or i > len(self.rows):
+                if ev.button == 1 and not ev.ctrl:
+                    self.sel = {}
+                    self:invalidate()
+                    self:_notify()
+                if ev.button == 2 and self.on_menu != nil:
+                    self.on_menu(nil, nil, ev)
+                return true
+            if ev.button == 2:
+                if not self.sel[i]:
+                    self:select_only(i)
+                if self.on_menu != nil:
+                    self.on_menu(i, self.rows[i], ev)
+                return true
+            now = self.ui:now()
+            double = self.last_click != nil and self.last_click.i == i and now - self.last_click.at < 0.45 and not ev.shift
+            self.last_click = {i: i, at: now}
+            if ev.ctrl and not double:
+                self.sel[i] = not self.sel[i]
+                self.cursor = i
+                self.anchor = i
+                self:invalidate()
+                self:_notify()
+            elif ev.shift:
+                self.cursor = i
+                self:_range(self.anchor, i)
+                self:invalidate()
+                self:_notify()
+            elif not double:
+                self:select_only(i)
+            if double:
+                self.last_click = nil
+                if self.on_activate != nil:
+                    self.on_activate(i, self.rows[i], ev)
+            return true
+        if ev.name == "drag" and self.dragging != nil:
+            k = len(self.rows) * rh / math.max(1, self:_body_h(st))
+            self.offset = math.max(0, math.min(math.floor(self.dragging.offset + (ev.y - self.dragging.y) * k), self:_max_offset(st)))
+            self:invalidate()
+            return true
+        if ev.name == "up":
+            self.dragging = nil
+            return true
+        if ev.name == "key":
+            page = math.max(1, math.floor(self:_body_h(st) / rh) - 1)
+            k = ev.key
+            if k == keys.down:
+                self:_move(self.cursor + 1, ev.shift)
+            elif k == keys.up:
+                self:_move(self.cursor - 1, ev.shift)
+            elif k == keys.home:
+                self:_move(1, ev.shift)
+            elif k == keys["end"]:
+                self:_move(len(self.rows), ev.shift)
+            elif k == keys.pageDown:
+                self:_move(self.cursor + page, ev.shift)
+            elif k == keys.pageUp:
+                self:_move(self.cursor - page, ev.shift)
+            elif k == keys.enter or k == keys["numPadEnter"]:
+                if self.cursor > 0 and self.on_activate != nil:
+                    self.on_activate(self.cursor, self.rows[self.cursor], ev)
+            elif k == keys.a and ev.ctrl:
+                self:_range(1, len(self.rows))
+                self:invalidate()
+                self:_notify()
+            else:
+                return false
+            return true
+        if ev.name == "char" and not ev.ctrl and ev.char != " ":
+            self:_jump(ev.char)
+            return true
+        return ev.name == "click"
+
+export def data_table(opts=nil):
+    return Table(opts)

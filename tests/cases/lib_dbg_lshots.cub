@@ -76,7 +76,7 @@ def shoot(cols, rows, tag, users, fixed, extra=nil):
     run(1.0)
     print("result " .. tostring(scr.result != nil and scr.result.value))
 
-users = [{name: "denmoth", display: "Denmoth", image: img("cat")}, {name: "alex", display: "Alex", image: img("robot")}, {name: "kate", display: "Kate"}, {name: "steve", display: "Steve", image: img("creeper")}, {name: "guest", display: "Guest", guest: true, image: img("ghost")}]
+users = [{name: "denmoth", display: "Denmoth", image: img("cat")}, {name: "alex", display: "Alex", image: img("robot")}, {name: "kate", display: "Kate"}, {name: "steve", display: "Steve", image: img("creeper")}, {name: "guest", display: "Guest", guest: true, image: img("cube")}]
 shoot(51, 19, "small", users, false)
 shoot(51, 19, "locked", [users[1]], true, {wallpaper: "night-city", shape: "square"})
 shoot(51, 19, "square", users, false, {wallpaper: "sunset", shape: "square"})
