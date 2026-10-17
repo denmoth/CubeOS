@@ -234,6 +234,11 @@ export class CFS:
         if link_target != nil:
             e.type = "link"
             e.target = link_target
+        # слоёная папка (cfs.extend): где лежит запись, имя расширителя, не на связи ли он
+        if st.layer != nil:
+            e.layer = st.layer
+            e.label = st.label
+            e.offline = st.offline
         return e
 
     # сведения о пути (ссылки раскрываются); nil, если пути нет

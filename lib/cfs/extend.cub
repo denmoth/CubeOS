@@ -1,0 +1,458 @@
+# cfs.extend: слоёная папка (расширитель хранилища, docs/21-axo.md, подшаг 6): содержимое папки лежит в двух местах, на своём диске
+# (base) и на расширителе (ext, например общая папка другого компьютера или дискета), а видно одной папкой.
+#
+#   lay = extend.layered(base, ext, {label: "cube-2", priority: "extender", online: () => true, atomic: (rel) => nil,
+#                                    index: {}, on_index: () => ..., show_offline: true, reserve: 1024})
+#   extend.over(fsys, "/cubeos/users/ann/home/games", ext, opts)     папку файловой системы сделать слоёной (mount поверх)
+#   extend.detach(fsys, "/cubeos/users/ann/home/games")              снять: файлы расширителя уходят вместе с ним
+#   extend.sub(provider, "/a/b")                                      окно в часть провайдера (пути внутри от /)
+#
+# Правила (решения владельца):
+#   * список: оба слоя; совпало имя: главнее свой диск, файл расширителя виден рядом как «name (cube-2).txt»;
+#   * чтение и изменение файла идут туда, где он лежит (файл не переезжает со слоя на слой сам);
+#   * новый файл и новая папка: на расширитель, если он на связи и на нём есть место (priority "extender", по умолчанию), иначе на свой
+#     диск; priority "local": на свой диск, на расширитель только когда своё место кончилось; внутри «неделимой» папки (atomic(rel)
+#     возвращает её корень, например папка приложения) всё идёт туда, где лежит сама эта папка;
+#   * удаление: со слоя, где лежит; папка, которая есть в обоих слоях, удаляется из обоих;
+#   * расширитель не на связи (online() false или его вызовы падают): его файлы видны из сохранённого списка с пометкой offline
+#     (show_offline: false прячет их), читать и менять их нельзя.
+# У записей stat дополнительные поля: layer ("local", "ext", "both"), label (имя расширителя), offline (true).
+
+import cfs.path as paths
+import cfs.errors as errors
+
+# ------------------------------------------------------------ окно в часть провайдера
+
+export class Sub:
+    def init(self, provider, prefix):
+        self.p = provider
+        self.prefix = paths.normalize(prefix)
+
+    def _r(self, rel):
+        if self.prefix == "/":
+            return rel
+        if rel == "/":
+            return self.prefix
+        return self.prefix .. rel
+
+    def is_readonly(self):
+        return self.p:is_readonly()
+
+    def stat(self, rel):
+        return self.p:stat(self:_r(rel))
+
+    def list(self, rel):
+        return self.p:list(self:_r(rel))
+
+    def read(self, rel):
+        return self.p:read(self:_r(rel))
+
+    def write(self, rel, data):
+        return self.p:write(self:_r(rel), data)
+
+    def mkdir(self, rel):
+        return self.p:mkdir(self:_r(rel))
+
+    def remove(self, rel):
+        return self.p:remove(self:_r(rel))
+
+    def move(self, a, b):
+        return self.p:move(self:_r(a), self:_r(b))
+
+    def free_space(self):
+        return self.p:free_space()
+
+    def capacity(self):
+        return self.p:capacity()
+
+    def set_modified(self, rel, t):
+        if self.p.set_modified != nil:
+            return self.p:set_modified(self:_r(rel), t)
+
+export def sub(provider, prefix):
+    return Sub(provider, prefix)
+
+# ------------------------------------------------------------ слоёная папка
+
+def _split_ext(name):
+    dot = string.match(name, "^.+()%.[^%.]+$")
+    if dot == nil:
+        return name, ""
+    return string.sub(name, 1, dot - 1), string.sub(name, dot)
+
+# имя временного файла ядра («x.~tmp», «x.~old») -> («x», суффикс), иначе nil
+def _internal(name):
+    suf = string.sub(name, -5)
+    if (suf == ".~tmp" or suf == ".~old") and string.len(name) > 5:
+        return string.sub(name, 1, -6), suf
+    return nil, nil
+
+export class Layered:
+    def init(self, base, ext, opts=nil):
+        o = opts ?? {}
+        self.base = base
+        self.ext = ext
+        self.label = o.label ?? "extender"
+        self.priority = o.priority == "local" and "local" or "extender"
+        self.online_fn = o.online
+        self.atomic = o.atomic
+        self.index = o.index ?? {}
+        self.on_index = o.on_index
+        self.show_offline = o.show_offline != false
+        self.reserve = o.reserve ?? 1024
+        self.down = false
+
+    # ------------------------------------------------------------ расширитель
+
+    def online(self):
+        if self.online_fn != nil and not self.online_fn():
+            return false
+        return not self.down
+
+    # вызов расширителя: ошибка «нет связи» переводит слой в офлайн; ENOENT и прочие обычные ошибки отдаются как есть
+    def _ext(self, fn):
+        if not self:online():
+            errors.fail("EIO", "the extender " .. self.label .. " is not connected", "")
+        ok, a, b = pcall(fn)
+        if ok:
+            return a, b
+        text = tostring(a)
+        if string.find(text, "no answer", 1, true) != nil or string.find(text, "not connected", 1, true) != nil or string.find(text, "EIO", 1, true) != nil:
+            self.down = true
+        raise a
+
+    def _ext_stat(self, rel):
+        if not self:online():
+            return nil
+        ok, st = pcall(() => self:_ext(() => self.ext:stat(rel)))
+        return ok and st or nil
+
+    def reconnect(self):
+        self.down = false
+
+    def _remember(self, dir, name, st):
+        list = self.index[dir]
+        if list == nil:
+            list = {}
+            self.index[dir] = list
+        if st == nil:
+            list[name] = nil
+        else:
+            list[name] = {type: st.type, size: st.size ?? 0, modified: st.modified ?? 0}
+        if self.on_index != nil:
+            self.on_index()
+
+    def _forget_tree(self, rel):
+        for d, list in self.index:
+            if paths.is_inside(d, rel):
+                self.index[d] = nil
+        self:_remember(paths.parent(rel), paths.basename(rel), nil)
+
+    # ------------------------------------------------------------ где лежит
+
+    # «name (label).ext» -> «name.ext», если это имя файла расширителя, совпавшего с файлом своего диска
+    def _unalias(self, name):
+        stem, ext = _split_ext(name)
+        suffix = " (" .. self.label .. ")"
+        if string.len(stem) > string.len(suffix) and string.sub(stem, -string.len(suffix)) == suffix:
+            return string.sub(stem, 1, string.len(stem) - string.len(suffix)) .. ext
+        return nil
+
+    # путь на расширителе для пути, видимого в папке: «name (label).ext» (и его временные файлы) это файл name.ext расширителя
+    def _ext_dest(self, rel):
+        dir = paths.parent(rel)
+        name = paths.basename(rel)
+        stem, suf = _internal(name)
+        if stem == nil:
+            stem = name
+            suf = ""
+        real = self:_unalias(stem)
+        if real != nil and self.base:stat(paths.join(dir, real)) != nil:
+            stem = real
+        return paths.join(dir, stem .. suf)
+
+    def alias_of(self, name):
+        stem, ext = _split_ext(name)
+        return stem .. " (" .. self.label .. ")" .. ext
+
+    # слой и путь в нём: "local", "ext", "offline" или nil
+    def where(self, rel):
+        if self.base:stat(rel) != nil:
+            return "local", rel
+        dir = paths.parent(rel)
+        name = paths.basename(rel)
+        # временный файл ядра (атомарная замена) живёт на слое своего файла
+        stem, suf = _internal(name)
+        if stem != nil:
+            er = self:_ext_dest(rel)
+            if self:_ext_stat(er) != nil:
+                return "ext", er
+            return nil, nil
+        real = self:_unalias(name)
+        if real != nil:
+            rr = paths.join(dir, real)
+            if self.base:stat(rr) != nil:
+                if self:_ext_stat(rr) != nil:
+                    return "ext", rr
+                if self.index[dir] != nil and self.index[dir][real] != nil:
+                    return "offline", rr
+        if self:_ext_stat(rel) != nil:
+            return "ext", rel
+        if self.index[dir] != nil and self.index[dir][name] != nil:
+            return "offline", rel
+        return nil, nil
+
+    def _is_dir(self, layer, rel):
+        st = nil
+        if layer == "local":
+            st = self.base:stat(rel)
+        else:
+            st = self:_ext_stat(rel)
+        return st != nil and st.type == "dir"
+
+    # папки до rel (включительно) в слое: создать недостающие
+    def _ensure_dirs(self, layer, rel):
+        if rel == "/":
+            return
+        p = layer == "local" and self.base or self.ext
+        acc = ""
+        for seg in paths.split(rel):
+            acc = acc .. "/" .. seg
+            st = layer == "local" and p:stat(acc) or self:_ext(() => p:stat(acc))
+            if st == nil:
+                if layer == "local":
+                    p:mkdir(acc)
+                else:
+                    self:_ext(() => p:mkdir(acc))
+                    self:_remember(paths.parent(acc), seg, {type: "dir", size: 0, modified: 0})
+
+    # куда положить новое (файл size байт или папку) в папке dir
+    def _choose(self, dir, size):
+        if self.atomic != nil:
+            root = self.atomic(dir)
+            if root != nil:
+                w, rr = self:where(root)
+                if w == "local" or w == "ext":
+                    return w
+                if w == "offline":
+                    errors.fail("EIO", "this folder lives on the extender " .. self.label .. ", which is not connected", dir)
+        on = self:online()
+        only_ext = not self:_is_dir("local", dir) and on and self:_is_dir("ext", dir)
+        if only_ext:
+            return "ext"
+        free = nil
+        if on:
+            ok, f = pcall(() => self:_ext(() => self.ext:free_space()))
+            free = ok and f or nil
+        fits = on and (free == nil or free >= size + self.reserve)
+        if self.priority == "extender" and fits:
+            return "ext"
+        if self.priority == "local":
+            lf = self.base:free_space()
+            if lf != nil and lf < size + self.reserve and fits:
+                return "ext"
+        return "local"
+
+    # ------------------------------------------------------------ провайдер
+
+    def is_readonly(self):
+        return self.base:is_readonly() and self.ext:is_readonly()
+
+    def stat(self, rel):
+        st = self.base:stat(rel)
+        if st != nil:
+            out = {type: st.type, size: st.size, modified: st.modified, layer: "local"}
+            if st.type == "dir" and rel != "/" and self:_is_dir("ext", rel):
+                out.layer = "both"
+            if rel == "/":
+                out.layer = "both"
+                out.label = self.label
+            return out
+        w, rr = self:where(rel)
+        if w == "ext":
+            est = self:_ext_stat(rr)
+            if est != nil:
+                return {type: est.type, size: est.size, modified: est.modified, layer: "ext", label: self.label}
+        if w == "offline" and self.show_offline:
+            dir = paths.parent(rr)
+            e = self.index[dir][paths.basename(rr)]
+            return {type: e.type, size: e.size, modified: e.modified, layer: "ext", label: self.label, offline: true}
+        return nil
+
+    def list(self, rel):
+        names = []
+        seen = {}
+        bst = self.base:stat(rel)
+        if bst != nil and bst.type == "dir":
+            for n in self.base:list(rel):
+                names[len(names) + 1] = n
+                seen[n] = true
+        ext_names = nil
+        if self:online():
+            ok, est = pcall(() => self:_ext(() => self.ext:stat(rel)))
+            if ok and est != nil and est.type == "dir":
+                okl, list = pcall(() => self:_ext(() => self.ext:list(rel)))
+                if okl:
+                    ext_names = list
+                    fresh = {}
+                    for n in list:
+                        oks, s2 = pcall(() => self.ext:stat(paths.join(rel, n)))
+                        if oks and s2 != nil:
+                            fresh[n] = {type: s2.type, size: s2.size ?? 0, modified: s2.modified ?? 0}
+                    self.index[rel] = fresh
+                    if self.on_index != nil:
+                        self.on_index()
+        if ext_names == nil and self.show_offline and self.index[rel] != nil:
+            ext_names = []
+            for n, e in self.index[rel]:
+                ext_names[len(ext_names) + 1] = n
+        if bst == nil and ext_names == nil:
+            errors.fail("ENOENT", "no such directory", rel)
+        for n in ext_names ?? []:
+            if seen[n]:
+                bs = self.base:stat(paths.join(rel, n))
+                es = self.index[rel] != nil and self.index[rel][n] or nil
+                # одинаковые папки сливаются, файлы расширителя показываются рядом под другим именем
+                if not (bs != nil and bs.type == "dir" and es != nil and es.type == "dir"):
+                    names[len(names) + 1] = self:alias_of(n)
+            else:
+                names[len(names) + 1] = n
+                seen[n] = true
+        table.sort(names)
+        return names
+
+    def read(self, rel):
+        w, rr = self:where(rel)
+        if w == "local":
+            return self.base:read(rr)
+        if w == "ext":
+            return self:_ext(() => self.ext:read(rr))
+        if w == "offline":
+            errors.fail("EIO", "the extender " .. self.label .. " is not connected", rel)
+        errors.fail("ENOENT", "no such file", rel)
+
+    def write(self, rel, data):
+        w, rr = self:where(rel)
+        if w == "local":
+            return self.base:write(rr, data)
+        if w == "ext":
+            self:_ext(() => self.ext:write(rr, data))
+            self:_remember(paths.parent(rr), paths.basename(rr), {type: "file", size: string.len(data), modified: 0})
+            return
+        if w == "offline":
+            errors.fail("EIO", "the extender " .. self.label .. " is not connected", rel)
+        dir = paths.parent(rel)
+        stem, suf = _internal(paths.basename(rel))
+        if stem != nil:
+            sw, srr = self:where(paths.join(dir, stem))
+            if sw == "ext":
+                return self:_ext(() => self.ext:write(srr .. suf, data))
+            if sw == "local":
+                return self.base:write(rel, data)
+        layer = self:_choose(dir, string.len(data))
+        if layer == "ext":
+            self:_ensure_dirs("ext", dir)
+            self:_ext(() => self.ext:write(rel, data))
+            self:_remember(dir, paths.basename(rel), {type: "file", size: string.len(data), modified: 0})
+        else:
+            self:_ensure_dirs("local", dir)
+            self.base:write(rel, data)
+
+    def mkdir(self, rel):
+        w, rr = self:where(rel)
+        if w != nil:
+            errors.fail("EEXIST", "already exists", rel)
+        dir = paths.parent(rel)
+        layer = self:_choose(dir, 0)
+        self:_ensure_dirs(layer, dir)
+        if layer == "ext":
+            self:_ext(() => self.ext:mkdir(rel))
+            self:_remember(dir, paths.basename(rel), {type: "dir", size: 0, modified: 0})
+        else:
+            self.base:mkdir(rel)
+
+    def remove(self, rel):
+        w, rr = self:where(rel)
+        if w == nil:
+            errors.fail("ENOENT", "no such file or directory", rel)
+        if w == "offline":
+            errors.fail("EIO", "the extender " .. self.label .. " is not connected", rel)
+        if w == "local":
+            st = self.base:stat(rr)
+            self.base:remove(rr)
+            # папка, которая была в обоих слоях, уходит из обоих
+            if st.type == "dir" and self:_is_dir("ext", rr):
+                self:_ext(() => self.ext:remove(rr))
+                self:_forget_tree(rr)
+            return
+        self:_ext(() => self.ext:remove(rr))
+        self:_forget_tree(rr)
+
+    def move(self, from_rel, to_rel):
+        w, rr = self:where(from_rel)
+        if w == nil:
+            errors.fail("ENOENT", "no such file or directory", from_rel)
+        if w == "offline":
+            errors.fail("EIO", "the extender " .. self.label .. " is not connected", from_rel)
+        to_dir = paths.parent(to_rel)
+        if w == "local":
+            st = self.base:stat(rr)
+            both = st.type == "dir" and self:_is_dir("ext", rr)
+            self:_ensure_dirs("local", to_dir)
+            self.base:move(rr, to_rel)
+            if both:
+                self:_ensure_dirs("ext", to_dir)
+                self:_ext(() => self.ext:move(rr, to_rel))
+                self:_forget_tree(rr)
+            return
+        dest = self:_ext_dest(to_rel)
+        self:_ensure_dirs("ext", to_dir)
+        st = self:_ext_stat(rr)
+        self:_ext(() => self.ext:move(rr, dest))
+        self:_forget_tree(rr)
+        if _internal(paths.basename(dest)) == nil:
+            self:_remember(to_dir, paths.basename(dest), st)
+
+    def free_space(self):
+        a = self.base:free_space()
+        b = nil
+        if self:online():
+            ok, f = pcall(() => self.ext:free_space())
+            b = ok and f or nil
+        if a == nil and b == nil:
+            return nil
+        return (a ?? 0) + (b ?? 0)
+
+    def capacity(self):
+        a = self.base:capacity()
+        b = nil
+        if self:online():
+            ok, c = pcall(() => self.ext:capacity())
+            b = ok and c or nil
+        if a == nil and b == nil:
+            return nil
+        return (a ?? 0) + (b ?? 0)
+
+    def set_modified(self, rel, t):
+        w, rr = self:where(rel)
+        if w == "local" and self.base.set_modified != nil:
+            return self.base:set_modified(rr, t)
+        if w == "ext" and self.ext.set_modified != nil:
+            return self:_ext(() => self.ext:set_modified(rr, t))
+
+export def layered(base, ext, opts=nil):
+    return Layered(base, ext, opts)
+
+# папку path файловой системы сделать слоёной: поверх неё монтируется Layered, свой слой это то же место в прежнем провайдере
+export def over(fsys, path, ext, opts=nil):
+    norm = paths.normalize(path)
+    m, rel = fsys:_locate(norm)
+    st = m.provider:stat(rel)
+    if st == nil or st.type != "dir":
+        errors.fail("ENOTDIR", "only an existing folder can be extended", norm)
+    lay = Layered(Sub(m.provider, rel), ext, opts)
+    fsys:mount(norm, lay, {name: "extended:" .. ((opts ?? {}).label ?? "extender")})
+    return lay
+
+export def detach(fsys, path):
+    return fsys:umount(paths.normalize(path))

@@ -1,0 +1,137 @@
+import t
+import std.list as lists
+import cfs
+import cfs.extend as extend
+eq = t.eq
+
+fsys = cfs.new({})
+fsys:mount("/", cfs.memory())
+fsys:mkdir(nil, "/home/games/saves", {parents: true})
+fsys:write_file(nil, "/home/games/readme.txt", "mine")
+fsys:write_file(nil, "/home/games/saves/a.sav", "A")
+fsys:write_file(nil, "/home/other.txt", "outside")
+
+ext = cfs.memory({limit: 4000})
+ext:mkdir("/saves")
+ext:mkdir("/mods")
+ext:write("/readme.txt", "theirs")
+ext:write("/saves/b.sav", "B")
+ext:write("/mods/m.lua", "mod")
+
+link = {up: true}
+index = {}
+lay = extend.over(fsys, "/home/games", ext, {label: "cube-2", online: () => link.up, index: index, reserve: 100})
+
+def names(path):
+    out = []
+    for e in fsys:list(nil, path):
+        out[len(out) + 1] = e.name
+    return out
+
+# список: оба слоя, свой файл главнее, файл расширителя рядом под другим именем, одинаковые папки сливаются
+eq(names("/home/games"), ["mods", "readme (cube-2).txt", "readme.txt", "saves"], "both layers are listed, clashes get a label")
+eq(names("/home/games/saves"), ["a.sav", "b.sav"], "same folders merge")
+eq(fsys:read_file(nil, "/home/games/readme.txt"), "mine", "own disk wins on a clash")
+eq(fsys:read_file(nil, "/home/games/readme (cube-2).txt"), "theirs", "the extender copy opens by its label name")
+eq(fsys:read_file(nil, "/home/games/mods/m.lua"), "mod", "extender files read")
+eq(fsys:stat(nil, "/home/games/mods/m.lua").layer, "ext", "stat says where a file lives")
+eq(fsys:stat(nil, "/home/games/mods/m.lua").label, "cube-2", "and the extender name")
+eq(fsys:stat(nil, "/home/games/readme.txt").layer, "local", "own files are local")
+eq(fsys:stat(nil, "/home/games/saves").layer, "both", "a merged folder is in both")
+eq(fsys:read_file(nil, "/home/other.txt"), "outside", "the rest of the disk is untouched")
+
+# изменение идёт туда, где файл лежит
+fsys:write_file(nil, "/home/games/saves/b.sav", "B2")
+eq(ext:read("/saves/b.sav"), "B2", "an extender file is changed on the extender")
+fsys:write_file(nil, "/home/games/saves/a.sav", "A2")
+eq(ext:stat("/saves/a.sav"), nil, "a local file stays local")
+fsys:write_file(nil, "/home/games/readme (cube-2).txt", "theirs2")
+eq(ext:read("/readme.txt"), "theirs2", "writing the label name changes the extender copy")
+eq(fsys:read_file(nil, "/home/games/readme.txt"), "mine", "and not the own one")
+
+# новое: на расширитель, если есть место (приоритет по умолчанию)
+fsys:write_file(nil, "/home/games/new.txt", "fresh")
+eq(ext:read("/new.txt"), "fresh", "a new file goes to the extender")
+fsys:mkdir(nil, "/home/games/levels")
+eq(ext:stat("/levels").type, "dir", "a new folder too")
+fsys:mkdir(nil, "/home/games/mods/deep")
+fsys:write_file(nil, "/home/games/mods/deep/x.lua", "x")
+eq(ext:read("/mods/deep/x.lua"), "x", "inside an extender-only folder new things stay there")
+big = string.rep("z", 5000)
+fsys:write_file(nil, "/home/games/big.bin", big)
+eq(ext:stat("/big.bin"), nil, "a file that does not fit stays on the own disk")
+eq(fsys:read_file(nil, "/home/games/big.bin"), big, "and is readable")
+
+# приоритет «свой диск»
+lay.priority = "local"
+fsys:write_file(nil, "/home/games/local.txt", "l")
+eq(ext:stat("/local.txt"), nil, "priority local keeps new files on the own disk")
+lay.priority = "extender"
+
+# неделимая папка (приложение): всё внутри идёт туда, где лежит она сама
+fsys:mkdir(nil, "/home/games/app")
+eq(ext:stat("/app").type, "dir", "the app folder was put on the extender")
+fsys:write_file(nil, "/home/games/app/main.lua", "main")
+lay.atomic = (rel) => string.sub(rel, 1, 4) == "/app" and "/app" or nil
+lay.priority = "local"
+fsys:mkdir(nil, "/home/games/app/lib")
+fsys:write_file(nil, "/home/games/app/lib/util.lua", "u")
+eq(ext:read("/app/lib/util.lua"), "u", "a part of an app follows the app, whatever the priority")
+lay.priority = "extender"
+fsys:mkdir(nil, "/home/games/localapp")
+eq(ext:stat("/localapp").type, "dir", "(on the extender)")
+
+# переносы и удаление
+fsys:move(nil, "/home/games/new.txt", "/home/games/levels/new.txt")
+eq(ext:read("/levels/new.txt"), "fresh", "a move inside the extender")
+eq(names("/home/games/levels"), ["new.txt"], "the moved file is listed")
+fsys:move(nil, "/home/games/levels/new.txt", "/home/new.txt")
+eq(fsys:read_file(nil, "/home/new.txt"), "fresh", "a move out of the extended folder copies it to the own disk")
+eq(ext:stat("/levels/new.txt"), nil, "and removes it from the extender")
+fsys:remove(nil, "/home/games/mods/m.lua", {permanent: true})
+eq(ext:stat("/mods/m.lua"), nil, "removal from the extender")
+fsys:remove(nil, "/home/games/saves", {recursive: true, permanent: true})
+eq(ext:stat("/saves"), nil, "a merged folder is removed from both layers")
+eq(fsys:stat(nil, "/home/games/saves"), nil, "and is gone")
+
+# расширитель пропал: его файлы видны из сохранённого списка, серые, без чтения
+link.up = false
+ls = names("/home/games")
+eq(lists.contains(ls, "mods"), true, "offline extender files are still listed")
+eq(fsys:stat(nil, "/home/games/mods").offline, true, "and marked offline")
+ok, err = pcall(() => fsys:read_file(nil, "/home/games/readme (cube-2).txt"))
+eq(ok, false, "an offline file cannot be read")
+eq(fsys:read_file(nil, "/home/games/readme.txt"), "mine", "own files still work")
+fsys:write_file(nil, "/home/games/while_off.txt", "off")
+eq(ext:stat("/while_off.txt"), nil, "new files go to the own disk while it is away")
+ok, err = pcall(() => fsys:write_file(nil, "/home/games/app/more.lua", "m"))
+eq(ok, false, "an offline app folder refuses new parts")
+lay.show_offline = false
+eq(lists.contains(names("/home/games"), "mods"), false, "show_offline false hides them")
+lay.show_offline = true
+
+# связь вернулась
+link.up = true
+eq(fsys:read_file(nil, "/home/games/app/main.lua"), "main", "back online, files read again")
+
+# связь рвётся на вызове (сеть не ответила)
+real_read = ext.read
+ext.read = (self, rel) => error("no answer from cube-2", 0)
+ok, err = pcall(() => fsys:read_file(nil, "/home/games/app/main.lua"))
+eq(ok, false, "a broken call fails")
+eq(lay:online(), false, "and marks the extender offline")
+ext.read = real_read
+lay:reconnect()
+eq(lay:online(), true, "reconnect")
+
+# снятие: файлы расширителя уходят с ним, свои остаются
+extend.detach(fsys, "/home/games")
+eq(fsys:stat(nil, "/home/games/app"), nil, "after detach the extender files are gone")
+eq(fsys:read_file(nil, "/home/games/readme.txt"), "mine", "own files stay")
+eq(fsys:read_file(nil, "/home/games/while_off.txt"), "off", "including ones written while it was away")
+
+# только существующая папка
+ok, err = pcall(() => extend.over(fsys, "/home/nope", ext, {}))
+eq(ok, false, "only an existing folder can be extended")
+
+print("done")
