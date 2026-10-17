@@ -1,21 +1,27 @@
-# apps.axo: Axo (Axolotl), файловый менеджер CDE (docs/21-axo.md, D260). Подшаг 1: окно, места, путь с алиасом, таблица файлов,
-# навигация, скрытые файлы, вкладки, панель инструментов с подсказками удержанием.
+# apps.axo: Axo (Axolotl), файловый менеджер CDE (docs/21-axo.md, D260)
 #
-#   wm:launch(axo.main, {name: "axo"}, ["$home"])          ctx.args[1]: папка (по умолчанию $home); ctx.args[2]: {view, ready(app)} для тестов
+#   wm:launch(axo.main, {name: "axo"}, ["$home", {session, assets}])   ctx.args[1]: папка; ctx.args[2]: session (окна терминала для cubed
+#                                                                       и запуска), assets; для тестов view, ready(app)
 #
-# Клавиши: Enter и двойной клик открывают папку, Backspace назад, Ctrl+↑ вверх, Ctrl+N новая вкладка, Ctrl+W закрыть вкладку,
+# Подшаг 1: Enter и двойной клик открывают папку, Backspace назад, Ctrl+↑ вверх, Ctrl+N новая вкладка, Ctrl+W закрыть вкладку,
 # Ctrl+←/→ и правый Alt+←/→ между вкладками, Ctrl+H скрытые файлы, Ctrl+L и F6 ввести путь, F5 обновить, буквы прыгают к имени.
 # Подшаг 2: Ctrl+C, Ctrl+X, Ctrl+V (общий буфер всех окон Axo), F2 переименовать, Ctrl+Shift+N новая папка, Del в корзину и
-# Shift+Del навсегда (оба спрашивают), правая кнопка: меню, перетаскивание строк на папку, место слева, вкладку или другое окно Axo
-# (Ctrl: копия). Прогресс полоской у нижнего края окна, совпадение имён спрашивает (заменить/слить, пропустить, оставить оба, для всех).
+# Shift+Del навсегда (оба спрашивают), правая кнопка: меню, перетаскивание строк на папку, место слева, вкладку, другую панель или
+# другое окно Axo (Ctrl: копия). Прогресс полоской у нижнего края окна, совпадение имён спрашивает.
 # Подшаг 3: файл открывается первым приложением ассоциации (apps.axo.assoc), Ctrl+двойной клик и Ctrl+Enter вторым; неизвестный тип и
-# «Открыть с помощью...»: окно выбора с галочкой «Всегда открывать так»; «Запустить» для программ (окно терминала остаётся).
-# ctx.args[2].session: сессия пользователя (окна терминала для cubed и запуска).
-# Настройки $cfg/axo.conf: show_hidden, confirm_trash, confirm_delete.
+# «Открыть с помощью...»: окно выбора с галочкой «Всегда открывать так»; «Запустить» для программ.
+# Подшаг 4: пробел быстрый просмотр (текст, картинка; ↑↓ листают файлы), Ctrl+I панель сведений, F9 панель мест, F3 две панели
+# (у каждой своя папка и история; вкладки относятся к левой), Ctrl+F поиск по именам в папке и вложенных (результаты по мере
+# поиска, Esc назад), «Settings...» в меню (минимальный режим без анимаций).
+# Настройки $cfg/axo.conf: show_hidden, show_places, show_info, confirm_trash, confirm_delete, minimal.
 
 import cdk
 import cfs.path as paths
+import cgl.cimg as cimg
+import cgl.color as color
 import json5
+import unicode
+import cde.wallpaper as wallpaper_mod
 import apps.axo.types as types
 import apps.axo.parts as parts
 import apps.axo.ops as ops
@@ -27,6 +33,9 @@ export const FULL_NAME = "Axolotl file manager"
 
 const PLACES = [["Home", "home", "$home"], ["Desktop", "desktop", "$desktop"], ["Documents", "file", "$docs"], ["Pictures", "image", "$pictures"],
     ["Trash", "trash", "$trash"], ["Drives", "drive", "$mnt"], ["Network", "netfolder", "/cubeos/net"], ["Root", "folder", "/"]]
+const KIND_NAMES = {folder: "Folder", drive: "Drive", netfolder: "Network folder", lua: "Lua program", cubic: "Cubic program", text: "Text file",
+    image: "Picture", music: "Music", archive: "Archive", script: "Script", file: "File"}
+const PREVIEW_BYTES = 4096
 
 export class Axo:
     def init(self, sys, ctx):
@@ -40,15 +49,21 @@ export class Axo:
         self.assoc = assoc.read_all(self.view)
         self.conf = self:_read_conf()
         self.show_hidden = self.conf.show_hidden == true
+        self.minimal = self.conf.minimal == true
         start = ctx.args != nil and ctx.args[1] or "$home"
         self.tabs = [self:_new_tab(self:_expand(start))]
         self.cur = 1
+        self.second = nil
+        self.split = false
+        self.active = 1
+        self.search = nil
         self.ui = cdk.open(sys, ctx, {title: NAME, w: 282, h: 158, min_w: 170, min_h: 96, icon: "axo"})
         self.eng = ops.engine(self.view)
         self.inbox = []
         self.asking = nil
         self.drag = nil
         self.note_until = 0
+        self.look = nil
         ops.windows[self.ui.win] = self
         self:_build()
         self:refresh()
@@ -69,9 +84,9 @@ export class Axo:
 
     def _save(self, key, value):
         p = self:_conf_path()
+        self.conf[key] = value
         if p == nil:
             return
-        self.conf[key] = value
         def write():
             text = self.view:exists(p) and self.view:read(p) or "{}\n"
             self.view:write_atomic(p, json5.patch(text, [key], value))
@@ -80,34 +95,50 @@ export class Axo:
     def _expand(self, p):
         p = tostring(p ?? "/")
         if string.sub(p, 1, 1) != "/" and string.sub(p, 1, 1) != "$":
-            cur = self.tabs != nil and self.tabs[self.cur] != nil and self.tabs[self.cur].path or "/"
+            cur = self.tabs != nil and self:tab() != nil and self:tab().path or "/"
             p = paths.join(cur, p)
         ok, e = pcall(() => self.view:expand(p))
         return paths.normalize(ok and e or p)
 
     # самый длинный алиас, в котором лежит путь: "$home/games", путь алиаса
     def _alias(self, path):
-        best = nil
         best_len = 0
+        text = nil
+        root = nil
         for name, v in self.view.aliases ?? {}:
             ok, full = pcall(() => paths.normalize(self.view:expand("$" .. name)))
             if ok and full != "/" and paths.is_inside(path, full) and string.len(full) > best_len:
-                best = name
                 best_len = string.len(full)
-                rest = string.sub(path, string.len(full) + 1)
-                self._alias_root = full
-                self._alias_text = "$" .. name .. rest
-        if best == nil:
-            return nil, nil
-        return self._alias_text, self._alias_root
+                root = full
+                text = "$" .. name .. string.sub(path, string.len(full) + 1)
+        return text, root
 
     def _new_tab(self, path):
         return {path: path, back: [], fwd: [], sort: {key: "name", dir: 1}, cursor: nil}
 
-    def tab(self):
+    # состояние панели i (1 левая: вкладка, 2 правая) и активной панели
+    def _state(self, i):
+        if i == 2 and self.second != nil:
+            return self.second
         return self.tabs[self.cur]
 
+    def tab(self):
+        return self:_state(self.active)
+
+    def _table(self, i):
+        return i == 2 and self.table2 or self.table1
+
     # ------------------------------------------------------------ окно
+
+    def _make_table(self, i):
+        let me = self
+        return cdk.data_table({grow: 1, empty: "Nothing here", visible: i == 1,
+            columns: [{key: "name", title: "Name", grow: 1}, {key: "size", title: "Size", width: 42, align: "right"},
+                {key: "modified", title: "Date", width: 58, align: "right"}],
+            on_sort: (key, dir) => me:_sorted(i, key, dir), on_activate: (n, row, ev) => me:_pane_do(i, () => me:activate(row, ev)),
+            on_select: (t) => me:_pane_do(i, () => me:_selection()), on_focus: (t) => me:_set_active(i),
+            on_menu: (n, row, ev) => me:_pane_do(i, () => me:context_menu(row, ev)),
+            on_drag_start: (sel) => me:_pane_do(i, () => me:_drag_start(sel)), on_drag: (ev) => me:_drag_move(ev), on_drop: (ev) => me:_drop(ev)})
 
     def _build(self):
         ui = self.ui
@@ -115,23 +146,27 @@ export class Axo:
         self.b_back = parts.tool("back", "Back (Backspace)", (b) => me:back())
         self.b_fwd = parts.tool("forward", "Forward", (b) => me:forward())
         self.b_up = parts.tool("up", "Parent folder (Ctrl+Up)", (b) => me:up())
+        self.b_search = parts.tool("search", "Search (Ctrl+F)", (b) => me:start_search())
         self.b_hidden = parts.tool("eye", "Hidden files (Ctrl+H)", (b) => me:toggle_hidden())
         self.b_menu = parts.tool("menu", "Menu", (b) => me:menu(b))
         self.path = parts.path_bar({on_go: (p) => me:go(p)})
-        toolbar = cdk.row({padding: 2, gap: 1, align: "center"}, [self.b_back, self.b_fwd, self.b_up, self.path, self.b_hidden, self.b_menu])
+        self.search_box = cdk.text_input({grow: 1, visible: false, placeholder: "Search by name", on_change: (t) => me:_search_changed(t),
+            on_submit: (t) => me.ui:set_focus(me.table)})
+        toolbar = cdk.row({padding: 2, gap: 1, align: "center"}, [self.b_back, self.b_fwd, self.b_up, self.path, self.search_box, self.b_search,
+            self.b_hidden, self.b_menu])
         self.tabbar = parts.tab_bar({grow: 1, height: 13, on_pick: (i) => me:switch(i), on_close: (i) => me:close_tab(i), on_new: () => me:new_tab()})
+        self.tabbar.animate = not self.minimal
         self.tabrow = cdk.row({padding: 2, visible: false}, [self.tabbar])
         items = []
         for p in PLACES:
             items[len(items) + 1] = {text: p[1], icon: p[2], path: p[3]}
-        self.places = cdk.list_view({width: 70, height: 26, items: items, on_activate: (i, it) => me:go(it.path), on_select: (i, it) => me:go(it.path)})
-        self.table = cdk.data_table({grow: 1, empty: "Nothing here",
-            columns: [{key: "name", title: "Name", grow: 1}, {key: "size", title: "Size", width: 42, align: "right"},
-                {key: "modified", title: "Date", width: 58, align: "right"}],
-            on_sort: (key, dir) => me:_sorted(key, dir), on_activate: (i, row, ev) => me:activate(row, ev), on_select: (t) => me:_status(),
-            on_menu: (i, row, ev) => me:context_menu(row, ev), on_drag_start: (sel) => me:_drag_start(sel), on_drag: (ev) => me:_drag_move(ev),
-            on_drop: (ev) => me:_drop(ev)})
-        body = cdk.row({grow: 1, gap: 2}, [self.places, self.table])
+        self.places = cdk.list_view({width: 70, height: 26, items: items, visible: self.conf.show_places != false,
+            on_activate: (i, it) => me:go(it.path), on_select: (i, it) => me:go(it.path)})
+        self.table1 = self:_make_table(1)
+        self.table2 = self:_make_table(2)
+        self.table = self.table1
+        self.info = parts.info_panel({visible: self.conf.show_info == true})
+        body = cdk.row({grow: 1, gap: 2}, [self.places, self.table1, self.table2, self.info])
         self.status = cdk.label("", {variant: "dim"})
         self.strip = parts.ops_strip({visible: false, on_cancel: (op) => op:cancel()})
         root = cdk.column({padding: 0, gap: 1}, [toolbar, self.tabrow, body, self.strip, cdk.row({padding: 2}, [self.status])])
@@ -143,6 +178,19 @@ export class Axo:
             return true
         ui.on_close = closing
         ui:every(0.05, () => me:_tick())
+
+    # выполнить действие от имени панели i (клик по ней делает её активной)
+    def _pane_do(self, i, fn):
+        self:_set_active(i)
+        fn()
+
+    def _set_active(self, i):
+        if i == self.active or (i == 2 and not self.split):
+            return
+        self:_remember_cursor()
+        self.active = i
+        self.table = self:_table(i)
+        self:_chrome()
 
     def _kind_color(self, kind):
         st = self.ui.style
@@ -156,15 +204,22 @@ export class Axo:
             return st.dim
         return st.accent
 
-    # перечитать папку текущей вкладки; cursor_name: на каком имени поставить курсор
-    def refresh(self, cursor_name=nil):
-        t = self:tab()
+    def _row_for(self, e, base, now, cut, name=nil):
+        kind = types.kind(e, base)
+        return {cells: {name: name ?? e.name, size: e.type == "dir" and "" or types.human_size(e.size), modified: types.date_text(e.modified, now)},
+            icon: types.icon(kind), icon_color: self:_kind_color(kind), dim: e.hidden or cut[paths.join(base, name ?? e.name)] == true, data: e,
+            kind: kind}
+
+    # перечитать папку панели i (по умолчанию активной); cursor_name: на каком имени поставить курсор
+    def refresh_pane(self, i, cursor_name=nil):
+        t = self:_state(i)
+        tbl = self:_table(i)
         path = t.path
         ok, list = pcall(() => self.view:list(path, {hidden: true}))
         rows = []
-        self.table.empty = "Nothing here"
+        tbl.empty = "Nothing here"
         if not ok:
-            self.table.empty = "Cannot open: " .. tostring(list)
+            tbl.empty = "Cannot open: " .. string.gsub(tostring(list), "^.-: ", "", 1)
             list = []
         shown = []
         for e in list:
@@ -177,11 +232,25 @@ export class Axo:
             for c in ops.clip.paths:
                 cut[c] = true
         for e in shown:
-            kind = types.kind(e, path)
-            rows[len(rows) + 1] = {cells: {name: e.name, size: e.type == "dir" and "" or types.human_size(e.size), modified: types.date_text(e.modified, now)},
-                icon: types.icon(kind), icon_color: self:_kind_color(kind), dim: e.hidden or cut[paths.join(path, e.name)] == true, data: e}
-        self.table.sort = t.sort
-        self.table:set_rows(rows, (r) => r.data.name, cursor_name ?? t.cursor)
+            rows[len(rows) + 1] = self:_row_for(e, path, now, cut)
+        tbl.sort = t.sort
+        tbl:set_rows(rows, (r) => r.data.name, cursor_name ?? t.cursor)
+
+    def refresh(self, cursor_name=nil):
+        if self.search != nil and self.search.pane == self.active:
+            self:_search_restart()
+        else:
+            self:refresh_pane(self.active, cursor_name)
+        if self.split:
+            other = self.active == 1 and 2 or 1
+            if self.search == nil or self.search.pane != other:
+                self:refresh_pane(other)
+        self:_chrome()
+
+    # путь, заголовок, кнопки, вкладки, сведения, строка состояния по активной панели
+    def _chrome(self):
+        t = self:tab()
+        path = t.path
         alias, root = self:_alias(path)
         self.path:set(path, alias, root)
         name = path == "/" and "/" or paths.basename(path)
@@ -190,19 +259,29 @@ export class Axo:
         self.b_fwd.enabled = len(t.fwd) > 0
         self.b_up.enabled = path != "/"
         self.b_hidden.on = self.show_hidden
-        for b in [self.b_back, self.b_fwd, self.b_up, self.b_hidden]:
+        self.b_search.on = self.search != nil
+        for b in [self.b_back, self.b_fwd, self.b_up, self.b_hidden, self.b_search]:
             b:invalidate()
         self:_tabs_changed()
-        self:_status()
+        self:_selection()
 
     def _note(self, text):
         self.status:set_text(text)
         self.note_until = os.epoch("utc") + 2500
 
+    def _selection(self):
+        self:_info()
+        if self.look != nil:
+            self:_look_update()
+        self:_status()
+
     def _status(self):
         if os.epoch("utc") < self.note_until:
             return
         rows = self.table.rows
+        if self.search != nil and self.search.pane == self.active:
+            self.status:set_text((self.search.done and "" or "Searching... ") .. len(rows) .. " found for \"" .. self.search.query .. "\"")
+            return
         dirs = 0
         for r in rows:
             if r.data.type == "dir":
@@ -228,7 +307,8 @@ export class Axo:
         self.tabbar:set(names, self.cur)
         self.tabrow:set_visible(len(self.tabs) > 1)
 
-    def _sorted(self, key, dir):
+    def _sorted(self, i, key, dir):
+        self:_set_active(i)
         t = self:tab()
         t.sort = {key: key, dir: dir}
         cur = self.table.rows[self.table.cursor]
@@ -240,42 +320,46 @@ export class Axo:
         path = self:_expand(p)
         ok, st = pcall(() => self.view:stat(path))
         if not ok or st == nil:
-            self.status:set_text("No such folder: " .. path)
+            self:_note("No such folder: " .. path)
             return false
         if st.type != "dir":
-            self.status:set_text("Not a folder: " .. path)
+            self:_note("Not a folder: " .. path)
             return false
+        self:stop_search(false)
         t = self:tab()
         if path == t.path:
             self:refresh()
             return true
-        cur = self.table.rows[self.table.cursor]
         t.cursor = nil
         t.back[len(t.back) + 1] = t.path
         t.fwd = []
-        from_name = paths.basename(t.path)
         old = t.path
         t.path = path
         # вверх: курсор на папке, из которой вышли
-        self:refresh(paths.is_inside(old, path) and from_name or nil)
+        self:refresh_pane(self.active, paths.is_inside(old, path) and paths.basename(old) or nil)
+        self:_chrome()
         return true
 
     def back(self):
         t = self:tab()
         if len(t.back) == 0:
             return
+        self:stop_search(false)
         t.fwd[len(t.fwd) + 1] = t.path
         old = t.path
         t.path = table.remove(t.back)
-        self:refresh(paths.is_inside(old, t.path) and paths.basename(old) or nil)
+        self:refresh_pane(self.active, paths.is_inside(old, t.path) and paths.basename(old) or nil)
+        self:_chrome()
 
     def forward(self):
         t = self:tab()
         if len(t.fwd) == 0:
             return
+        self:stop_search(false)
         t.back[len(t.back) + 1] = t.path
         t.path = table.remove(t.fwd)
-        self:refresh()
+        self:refresh_pane(self.active)
+        self:_chrome()
 
     def up(self):
         t = self:tab()
@@ -283,14 +367,16 @@ export class Axo:
             return
         self:go(paths.parent(t.path))
 
+    def _full(self, e):
+        return paths.join(self:tab().path, e.name)
+
     def activate(self, row, ev):
         e = row.data
-        path = paths.join(self:tab().path, e.name)
         if e.type == "dir":
             if ev != nil and ev.ctrl:
                 self:_open_tab(e)
             else:
-                self:go(path)
+                self:go(self:_full(e))
             return
         self:open_file(e, ev != nil and ev.ctrl == true)
 
@@ -302,7 +388,7 @@ export class Axo:
             self:open_with(e)
             return
         h = second and (list[2] ?? list[1]) or list[1]
-        self:launch(h, paths.join(self:tab().path, e.name))
+        self:launch(h, self:_full(e))
 
     # открыть путь приложением h (cubed, run, pixel)
     def launch(self, h, path):
@@ -335,7 +421,7 @@ export class Axo:
         ui = self.ui
         let me = self
         ext = assoc.ext_of(e.name)
-        path = paths.join(self:tab().path, e.name)
+        path = self:_full(e)
         items = []
         for h in assoc.ORDER:
             info = assoc.HANDLERS[h]
@@ -352,7 +438,7 @@ export class Axo:
                 me.assoc = assoc.read_all(me.view)
             me:launch(it.id, path)
         list = cdk.list_view({height: len(items) * ui.style.line, items: items, on_activate: (i, it) => done(it)})
-        card = cdk.card({padding: 6, gap: 4}, [cdk.label("Open \"" .. e.name .. "\" with", {variant: "accent"}), list, always,
+        card = cdk.card({padding: 6, gap: 4}, [cdk.label("Open \"" .. paths.basename(e.name) .. "\" with", {variant: "accent"}), list, always,
             cdk.row({gap: 4}, [cdk.spacer(), cdk.button("Cancel", {on_click: (b) => done(nil)}),
                 cdk.button("Open", {variant: "primary", on_click: (b) => done(list.items[list.selected])})])])
         card.on_escape = () => done(nil)
@@ -365,13 +451,236 @@ export class Axo:
         cur = self.table.rows[self.table.cursor]
         self:refresh(cur != nil and cur.data.name or nil)
 
+    # ------------------------------------------------------------ панели: места, сведения, разделение
+
+    def toggle_places(self):
+        self.places:set_visible(not self.places.visible)
+        self:_save("show_places", self.places.visible)
+
+    def toggle_info(self):
+        self.info:set_visible(not self.info.visible)
+        self:_save("show_info", self.info.visible)
+        self:_info()
+
+    def toggle_split(self):
+        self.split = not self.split
+        if self.split:
+            t = self:tab()
+            self.second = self:_new_tab(t.path)
+            self.table2:set_visible(true)
+            self:refresh_pane(2)
+            self:_set_active(2)
+            self.ui:set_focus(self.table2)
+        else:
+            if self.search != nil and self.search.pane == 2:
+                self:stop_search(false)
+            self:_set_active(1)
+            self.table2:set_visible(false)
+            self.second = nil
+            self.ui:set_focus(self.table1)
+        self:_chrome()
+
+    # картинка .cimg, вписанная в w x h (цвета палитры экрана)
+    def _picture(self, path, w, h):
+        ok, data = pcall(() => self.view:read(path))
+        if not ok or data == nil:
+            return nil
+        okd, src, spal = pcall(cimg.decode, data)
+        if not okd:
+            return nil
+        return wallpaper_mod.fit_image(src, spal ?? color.default_palette(), math.min(w, src.w), math.min(h, src.h), "fit", self.ui.win.wm.palette)
+
+    def _info(self):
+        if not self.info.visible:
+            return
+        sel = self.table:selected()
+        if len(sel) == 0:
+            t = self:tab()
+            self.info:set({icon: "folder", icon_color: self.ui.style.warn, lines: [[t.path == "/" and "/" or paths.basename(t.path), "text"],
+                [len(self.table.rows) .. " items", "dim"]]})
+            return
+        if len(sel) > 1:
+            size = 0
+            for p in sel:
+                size += p[2].data.size ?? 0
+            self.info:set({icon: "file", lines: [[len(sel) .. " items selected", "text"], [types.human_size(size), "dim"]]})
+            return
+        row = sel[1][2]
+        e = row.data
+        lines = [[paths.basename(e.name), "text"], [KIND_NAMES[row.kind] ?? "File", "accent"]]
+        if e.type != "dir":
+            lines[len(lines) + 1] = [types.human_size(e.size), "dim"]
+        if (e.modified ?? 0) > 0:
+            lines[len(lines) + 1] = [os.date("%d.%m.%y %H:%M", math.floor(e.modified / 1000)), "dim"]
+        if e.hidden:
+            lines[len(lines) + 1] = ["Hidden", "dim"]
+        if e.readonly:
+            lines[len(lines) + 1] = ["Read only", "dim"]
+        img = nil
+        if row.kind == "image":
+            img = self:_picture(self:_full(e), self.info.w - 8, 44)
+        self.info:set({icon: row.icon, icon_color: row.icon_color, image: img, lines: lines})
+
+    # ------------------------------------------------------------ быстрый просмотр
+
+    def quick_look(self):
+        if self.look != nil:
+            self:_look_close()
+            return
+        ui = self.ui
+        let me = self
+        cv = ui.win.canvas
+        self.look = parts.quick_look({pw: cv.w - 24, ph: cv.h - 24, on_move: (d) => me:_look_move(d), on_close: () => me:_look_close()})
+        card = cdk.card({padding: 1}, [self.look])
+        self.look_card = card
+        card.on_escape = () => me:_look_close()
+        ui:open_layer(card, {center: true, modal: true, dismiss: true, on_close: () => me:_look_gone()})
+        ui:set_focus(self.look)
+        self:_look_update()
+
+    def _look_close(self):
+        if self.look_card != nil:
+            card = self.look_card
+            self.look_card = nil
+            self.look = nil
+            self.ui:close_layer(card)
+            self.ui:set_focus(self.table)
+
+    def _look_gone(self):
+        self.look = nil
+        self.look_card = nil
+
+    def _look_move(self, d):
+        t = self.table
+        if len(t.rows) == 0:
+            return
+        t:select_only(math.max(1, math.min(len(t.rows), t.cursor + d)))
+        self:_look_update()
+
+    def _look_update(self):
+        q = self.look
+        if q == nil:
+            return
+        row = self.table.rows[self.table.cursor]
+        if row == nil:
+            q:show("", "none", "Nothing selected")
+            return
+        e = row.data
+        full = self:_full(e)
+        title = paths.basename(e.name) .. (e.type == "dir" and "" or ("  " .. types.human_size(e.size)))
+        if e.type == "dir":
+            okl, list = pcall(() => self.view:list(full, {hidden: self.show_hidden}))
+            lines = []
+            if okl:
+                for x in list:
+                    lines[len(lines) + 1] = (x.type == "dir" and "/" or " ") .. x.name
+            q:show(title, "text", lines)
+        elif row.kind == "image":
+            img = self:_picture(full, q.pw - 8, q.ph - 20)
+            q:show(title, img != nil and "image" or "none", img ?? "Cannot read this picture")
+        elif row.kind == "music" or row.kind == "archive":
+            q:show(title, "none", "No preview for this kind of file")
+        else:
+            ok, data = pcall(() => self.view:read(full))
+            if not ok or data == nil:
+                q:show(title, "none", "Cannot read")
+                return
+            text = string.sub(data, 1, PREVIEW_BYTES)
+            for i in range[1, math.min(string.len(text), 512)]:
+                b = string.byte(text, i)
+                if b < 9 or (b > 13 and b < 32):
+                    q:show(title, "none", "Binary file")
+                    return
+            lines = []
+            for ln in string.gmatch(text .. "\n", "([^\n]*)\n"):
+                lines[len(lines) + 1] = string.gsub(ln, "\t", "    ")
+            q:show(title, "text", lines)
+
+    # ------------------------------------------------------------ поиск
+
+    def start_search(self):
+        if self.search != nil:
+            self.ui:set_focus(self.search_box)
+            return
+        self.search = {pane: self.active, root: self:tab().path, query: "", queue: [], done: true, results: []}
+        self.path:set_visible(false)
+        self.search_box:set_visible(true)
+        self.search_box:set_text("")
+        self.ui:set_focus(self.search_box)
+        self:_chrome()
+
+    def stop_search(self, restore=true):
+        if self.search == nil:
+            return
+        pane = self.search.pane
+        self.search = nil
+        self.search_box:set_visible(false)
+        self.path:set_visible(true)
+        if restore:
+            self:refresh_pane(pane)
+            self.ui:set_focus(self.table)
+            self:_chrome()
+
+    def _search_changed(self, text):
+        s = self.search
+        if s == nil:
+            return
+        s.query = unicode_lower(text)
+        self:_search_restart()
+
+    def _search_restart(self):
+        s = self.search
+        s.queue = [s.root]
+        s.results = []
+        s.done = s.query == ""
+        tbl = self:_table(s.pane)
+        tbl.empty = s.query == "" and "Type a name to search" or "Nothing found"
+        tbl:set_rows([])
+        if s.query == "":
+            s.queue = []
+        self:_status()
+
+    # немного поиска за тик: обход папок по очереди, найденные сразу в таблице
+    def _search_step(self):
+        s = self.search
+        if s == nil or s.done:
+            return
+        t0 = os.epoch("utc")
+        added = false
+        now = os.epoch("local")
+        while len(s.queue) > 0 and os.epoch("utc") - t0 < 15:
+            dir = table.remove(s.queue, 1)
+            ok, list = pcall(() => self.view:list(dir, {hidden: self.show_hidden}))
+            if ok:
+                for e in list:
+                    full = paths.join(dir, e.name)
+                    if e.type == "dir" and not e.mount:
+                        s.queue[len(s.queue) + 1] = full
+                    if string.find(unicode_lower(e.name), s.query, 1, true) != nil:
+                        rel = string.sub(full, string.len(s.root) + (s.root == "/" and 1 or 2))
+                        hit = {}
+                        for k, v in e:
+                            hit[k] = v
+                        hit.name = rel
+                        s.results[len(s.results) + 1] = self:_row_for(hit, s.root, now, {}, rel)
+                        added = true
+        if len(s.queue) == 0:
+            s.done = true
+        if added or s.done:
+            tbl = self:_table(s.pane)
+            tbl:set_rows(s.results, (r) => r.data.name)
+            self:_status()
+
     # ------------------------------------------------------------ вкладки
 
     def _remember_cursor(self):
         cur = self.table.rows[self.table.cursor]
-        self:tab().cursor = cur != nil and cur.data.name or nil
+        if self.search == nil:
+            self:tab().cursor = cur != nil and cur.data.name or nil
 
     def new_tab(self):
+        self:stop_search(false)
+        self:_set_active(1)
         self:_remember_cursor()
         t = self:tab()
         self.tabs[len(self.tabs) + 1] = self:_new_tab(t.path)
@@ -382,6 +691,7 @@ export class Axo:
         i = i ?? self.cur
         if len(self.tabs) <= 1:
             return
+        self:stop_search(false)
         table.remove(self.tabs, i)
         self.cur = math.max(1, math.min(len(self.tabs), self.cur > i and self.cur - 1 or self.cur))
         self:refresh()
@@ -393,11 +703,13 @@ export class Axo:
         i = (i - 1) % n + 1
         if i == self.cur:
             return
+        self:stop_search(false)
+        self:_set_active(1)
         self:_remember_cursor()
         self.cur = i
         self:refresh()
 
-    # ------------------------------------------------------------ меню и клавиши
+    # ------------------------------------------------------------ меню, настройки, клавиши
 
     def menu(self, b):
         let me = self
@@ -406,12 +718,47 @@ export class Axo:
             {separator: true},
             {text: "New tab", icon: "plus", shortcut: "Ctrl+N", on_select: (it) => me:new_tab()},
             {text: "Close tab", icon: "close", shortcut: "Ctrl+W", disabled: len(self.tabs) <= 1, on_select: (it) => me:close_tab()},
+            {text: "Split view", icon: "menu", shortcut: "F3", checked: self.split, on_select: (it) => me:toggle_split()},
             {separator: true},
+            {text: "Places panel", icon: "home", shortcut: "F9", checked: self.places.visible, on_select: (it) => me:toggle_places()},
+            {text: "Information panel", icon: "info", shortcut: "Ctrl+I", checked: self.info.visible, on_select: (it) => me:toggle_info()},
             {text: "Show hidden files", icon: "eye", shortcut: "Ctrl+H", checked: self.show_hidden, on_select: (it) => me:toggle_hidden()},
-            {text: "Refresh", icon: "restart", shortcut: "F5", on_select: (it) => me:refresh()},
             {separator: true},
+            {text: "Settings...", icon: "gear", on_select: (it) => me:settings()},
             {text: "About Axo", icon: "axo", on_select: (it) => cdk.message(me.ui, "Axo", "Axo (Axolotl) file manager for CubeOS.")}]
-        cdk.menu(self.ui, items, b.x + b.w - 110, b.y + b.h + 1)
+        cdk.menu(self.ui, items, b.x + b.w - 118, b.y + b.h + 1)
+
+    def settings(self):
+        ui = self.ui
+        let me = self
+        card = nil
+        c_places = cdk.checkbox("Places panel", {checked: self.places.visible})
+        c_info = cdk.checkbox("Information panel", {checked: self.info.visible})
+        c_hidden = cdk.checkbox("Show hidden files", {checked: self.show_hidden})
+        c_trash = cdk.checkbox("Ask before moving to trash", {checked: self.conf.confirm_trash != false})
+        c_delete = cdk.checkbox("Ask before deleting forever", {checked: self.conf.confirm_delete != false})
+        c_min = cdk.checkbox("Minimal mode (no animations)", {checked: self.minimal})
+        def done(save):
+            ui:close_layer(card)
+            ui:set_focus(me.table)
+            if not save:
+                return
+            if c_places.checked != me.places.visible:
+                me:toggle_places()
+            if c_info.checked != me.info.visible:
+                me:toggle_info()
+            if c_hidden.checked != me.show_hidden:
+                me:toggle_hidden()
+            me:_save("confirm_trash", c_trash.checked)
+            me:_save("confirm_delete", c_delete.checked)
+            me.minimal = c_min.checked
+            me.tabbar.animate = not me.minimal
+            me:_save("minimal", me.minimal)
+        card = cdk.card({padding: 6, gap: 3}, [cdk.label("Axo settings", {variant: "accent"}), c_places, c_info, c_hidden, c_trash, c_delete, c_min,
+            cdk.row({gap: 4}, [cdk.spacer(), cdk.button("Cancel", {on_click: (b) => done(false)}),
+                cdk.button("Save", {variant: "primary", on_click: (b) => done(true)})])])
+        card.on_escape = () => done(false)
+        ui:open_layer(card, {center: true, modal: true, dismiss: false})
 
     def key(self, ev):
         k = ev.key
@@ -419,6 +766,9 @@ export class Axo:
             if k == 256 or k == 1:
                 self.path:edit(false)
                 self.ui:set_focus(self.table)
+            return
+        if self.search != nil and (k == 256 or k == 1):
+            self:stop_search(true)
             return
         if k == keys.n and ev.ctrl and ev.shift:
             self:new_folder()
@@ -428,6 +778,16 @@ export class Axo:
             self:copy_sel(true)
         elif k == keys.v and ev.ctrl:
             self:paste()
+        elif k == keys.f and ev.ctrl:
+            self:start_search()
+        elif k == keys.i and ev.ctrl:
+            self:toggle_info()
+        elif k == keys.f9:
+            self:toggle_places()
+        elif k == keys.f3:
+            self:toggle_split()
+        elif k == keys.space and not ev.ctrl:
+            self:quick_look()
         elif k == keys.f2:
             self:rename()
         elif k == keys.delete:
@@ -453,9 +813,8 @@ export class Axo:
 
     def _selected_paths(self):
         out = []
-        base = self:tab().path
         for pr in self.table:selected():
-            out[len(out) + 1] = paths.join(base, pr[2].data.name)
+            out[len(out) + 1] = self:_full(pr[2].data)
         return out
 
     def copy_sel(self, cut):
@@ -465,7 +824,8 @@ export class Axo:
         ops.set_clip(cut and "cut" or "copy", list)
         self:_note((cut and "Cut " or "Copied ") .. len(list) .. (len(list) == 1 and " item" or " items"))
         cur = self.table.rows[self.table.cursor]
-        self:refresh(cur != nil and cur.data.name or nil)
+        if self.search == nil:
+            self:refresh(cur != nil and cur.data.name or nil)
 
     def paste(self):
         if len(ops.clip.paths) == 0:
@@ -530,22 +890,24 @@ export class Axo:
         if len(sel) != 1:
             return
         e = sel[1][2].data
-        old = paths.join(self:tab().path, e.name)
-        dot = string.match(e.name, "^.+()%.[^%.]+$")
+        old = self:_full(e)
+        base = paths.basename(old)
+        dir = paths.parent(old)
+        dot = string.match(base, "^.+()%.[^%.]+$")
         let me = self
         def ok(text):
-            if text == e.name or text == "":
+            if text == base or text == "":
                 return
             problem = paths.name_problem(text)
             if problem != nil:
                 me:_note("Cannot rename: " .. problem)
                 return
-            okm, err = pcall(() => me.view:move(old, paths.join(me:tab().path, text)))
+            okm, err = pcall(() => me.view:move(old, paths.join(dir, text)))
             if not okm:
                 me:_note("Cannot rename: " .. string.gsub(tostring(err), "^.-: ", "", 1))
                 return
             me:refresh(text)
-        self:_ask_text("Rename", e.name, "Rename", ok, e.type == "dir" and len(e.name) or ((dot ?? (len(e.name) + 1)) - 1))
+        self:_ask_text("Rename", base, "Rename", ok, e.type == "dir" and len(base) or ((dot ?? (len(base) + 1)) - 1))
 
     def new_folder(self):
         base = self:tab().path
@@ -559,6 +921,7 @@ export class Axo:
             if not okm:
                 me:_note("Cannot create: " .. string.gsub(tostring(err), "^.-: ", "", 1))
                 return
+            me:stop_search(false)
             me:refresh(text)
         name = "New folder"
         okx, st = pcall(() => self.view:stat(paths.join(base, name)))
@@ -584,7 +947,8 @@ export class Axo:
                         shortcut: "Ctrl+Enter", on_select: (it) => me:open_file(e, true)}
                 items[len(items) + 1] = {text: "Open with...", icon: "menu", on_select: (it) => me:open_with(e)}
                 if assoc.runnable(e.name) and hs[1] != "run" and hs[2] != "run":
-                    items[len(items) + 1] = {text: "Run", icon: "play", on_select: (it) => me:launch("run", paths.join(me:tab().path, e.name))}
+                    items[len(items) + 1] = {text: "Run", icon: "play", on_select: (it) => me:launch("run", me:_full(e))}
+                items[len(items) + 1] = {text: "Quick look", icon: "eye", shortcut: "Space", on_select: (it) => me:quick_look()}
             for it in [{separator: true},
                 {text: "Cut", icon: "minus", shortcut: "Ctrl+X", on_select: (it) => me:copy_sel(true)},
                 {text: "Copy", icon: "file", shortcut: "Ctrl+C", on_select: (it) => me:copy_sel(false)},
@@ -603,7 +967,7 @@ export class Axo:
         cdk.menu(self.ui, items, ev.x, ev.y)
 
     def _open_tab(self, e):
-        path = paths.join(self:tab().path, e.name)
+        path = self:_full(e)
         self:new_tab()
         self:go(path)
 
@@ -611,50 +975,56 @@ export class Axo:
 
     def _drag_start(self, sel):
         list = []
-        base = self:tab().path
         for pr in sel:
-            list[len(list) + 1] = paths.join(base, pr[2].data.name)
-        self.drag = {paths: list, target: nil}
+            list[len(list) + 1] = self:_full(pr[2].data)
+        self.drag = {paths: list, target: nil, from: self.active}
 
-    # папка под точкой окна (x, y на холсте): строка-папка таблицы, место слева, вкладка; nil: не цель
+    # папка под точкой окна (x, y на холсте): строка-папка таблицы любой панели, место слева, вкладка; nil: не цель
     def _target_at(self, x, y):
-        t = self.table
-        i = t:row_at(x, y)
-        if i != nil:
-            e = t.rows[i].data
-            full = paths.join(self:tab().path, e.name)
-            if e.type == "dir":
-                for p in self.drag.paths:
-                    if p == full:
-                        return nil, nil
-                return full, i
-            return nil, nil
-        if t:contains(x, y):
-            return self:tab().path, nil
+        for i in [1, 2]:
+            t = self:_table(i)
+            if t.visible:
+                st = self:_state(i)
+                r = t:row_at(x, y)
+                if r != nil:
+                    e = t.rows[r].data
+                    full = paths.join(st.path, e.name)
+                    if e.type == "dir":
+                        for p in self.drag.paths:
+                            if p == full:
+                                return nil, nil, i
+                        return full, r, i
+                    return nil, nil, i
+                if t:contains(x, y):
+                    return st.path, nil, i
         pl = self.places
-        if pl:contains(x, y):
+        if pl.visible and pl:contains(x, y):
             k = math.floor((y - pl.y + pl.offset) / pl:row_h(self.ui.style)) + 1
             it = pl.items[k]
             if it != nil:
-                return self:_expand(it.path), nil
+                return self:_expand(it.path), nil, nil
         tb = self.tabbar
         if self.tabrow.visible and tb:contains(x, y):
             k = math.floor((x - tb.x) / tb:_chip_w(self.ui.style)) + 1
             if self.tabs[k] != nil:
-                return self.tabs[k].path, nil
-        return nil, nil
+                return self.tabs[k].path, nil, nil
+        return nil, nil, nil
 
     def _drag_move(self, ev):
         if self.drag == nil:
             return
-        target, row = self:_target_at(ev.x, ev.y)
-        if self.table.drop_row != row:
-            self.table.drop_row = row
-            self.table:invalidate()
+        target, row, pane = self:_target_at(ev.x, ev.y)
+        for i in [1, 2]:
+            t = self:_table(i)
+            want = pane == i and row or nil
+            if t.drop_row != want:
+                t.drop_row = want
+                t:invalidate()
         self.drag.target = target
         n = len(self.drag.paths)
         what = n == 1 and paths.basename(self.drag.paths[1]) or (n .. " items")
-        if target != nil and target != self:tab().path:
+        from_dir = paths.parent(self.drag.paths[1])
+        if target != nil and target != from_dir:
             self:_note((self.ui.mods.ctrl and "Copy " or "Move ") .. what .. " to " .. (target == "/" and "/" or paths.basename(target)))
         else:
             self:_note("Drag " .. what .. " onto a folder (Ctrl: copy)")
@@ -663,11 +1033,13 @@ export class Axo:
         d = self.drag
         self.drag = nil
         self.note_until = 0
+        for i in [1, 2]:
+            self:_table(i).drop_row = nil
         if d == nil:
             return
         kind = self.ui.mods.ctrl and "copy" or "move"
-        target, row = self:_target_at(ev.x, ev.y)
-        if target == nil and not self.table:contains(ev.x, ev.y):
+        target, row, pane = self:_target_at(ev.x, ev.y)
+        if target == nil and pane == nil:
             # другое окно Axo под мышью
             win = self.ui.win
             px = win:content_x() + ev.x
@@ -679,14 +1051,15 @@ export class Axo:
                 self:_note((kind == "copy" and "Copying " or "Moving ") .. "to another Axo window")
             self:_status()
             return
-        if target == nil or (target == self:tab().path and kind == "move"):
+        if target == nil or (target == paths.parent(d.paths[1]) and kind == "move"):
             self:_status()
             return
         self:_run(kind, d.paths, target)
 
-    # ------------------------------------------------------------ таймер: операции, вопросы, входящие
+    # ------------------------------------------------------------ таймер: операции, вопросы, входящие, поиск
 
     def _tick(self):
+        self:_search_step()
         while len(self.inbox) > 0:
             req = table.remove(self.inbox, 1)
             self:_run(req.kind, req.paths, self:tab().path)
@@ -694,17 +1067,20 @@ export class Axo:
             return
         changed = self.eng:step(25)
         now = os.epoch("utc")
-        here = self:tab().path
         refresh = false
         for op in self.eng.ops:
             if op.state == "ask" and self.asking == nil:
                 self:_ask_conflict(op)
+            touched = false
+            for i in [1, 2]:
+                if (i == 1 or self.split) and op.touched[self:_state(i).path]:
+                    touched = true
             if (op.state == "done" or op.state == "cancelled") and op.finished_at == nil:
                 op.finished_at = now
-                refresh = refresh or op.touched[here] == true
+                refresh = refresh or touched
                 if len(op.errors) > 0:
                     cdk.message(self.ui, "Some items failed", table.concat(op.errors, "\n"))
-            if op.touched[here] and changed and (self.last_refresh == nil or now - self.last_refresh > 400):
+            if touched and changed and (self.last_refresh == nil or now - self.last_refresh > 400):
                 refresh = true
         keep = []
         for op in self.eng.ops:
@@ -712,7 +1088,7 @@ export class Axo:
                 keep[len(keep) + 1] = op
         if len(keep) != len(self.eng.ops):
             self.eng.ops = keep
-        if refresh:
+        if refresh and self.search == nil:
             self.last_refresh = now
             cur = self.table.rows[self.table.cursor]
             self:refresh(cur != nil and cur.data.name or nil)
@@ -743,6 +1119,9 @@ export class Axo:
 
     def run(self):
         self.ui:run()
+
+def unicode_lower(s):
+    return unicode.lower(tostring(s ?? ""))
 
 export def main(sys, ctx):
     app = Axo(sys, ctx)

@@ -244,7 +244,10 @@ export class TabBar(widget.Widget):
             self.ux_to = tx
         elif self.ux_to != tx and self.ui != nil:
             self.ux_to = tx
-            self.ui:tween(self, "ux", tx, 0.15, "out_cubic")
+            if self.animate == false:
+                self.ux = tx
+            else:
+                self.ui:tween(self, "ux", tx, 0.15, "out_cubic")
         s:fill_rect(math.floor(self.ux + 0.5), self.y + self.h - 2, cw - 5, 2, st.accent)
         px = self.x + len(self.names) * cw + 2
         icons.draw(s, "plus", px, self.y + 2, st.dim, st.dim)
@@ -357,3 +360,125 @@ export class OpsStrip(widget.Widget):
 
 export def ops_strip(opts=nil):
     return OpsStrip(opts)
+
+# ------------------------------------------------------------ панель сведений справа
+
+# set(info): {icon, icon_color, image (поверхность-превью или nil), lines: [[текст, "text" | "dim" | "accent"]]}
+export class InfoPanel(widget.Widget):
+    def init(self, opts=nil):
+        super.init(self, opts)
+        self.kind = "info"
+        self.info = nil
+
+    def measure(self, st):
+        return 82, 40
+
+    def set(self, info):
+        self.info = info
+        self:invalidate()
+
+    def bg(self):
+        return self.ui != nil and self.ui.style.ctrl or nil
+
+    def draw(self, s, st):
+        s:fill_rect(self.x, self.y, self.w, self.h, st.ctrl)
+        i = self.info
+        if i == nil:
+            return
+        f = st.font
+        y = self.y + 4
+        if i.image != nil:
+            ix = self.x + math.floor((self.w - i.image.w) / 2)
+            s:blit(i.image, ix, y, {})
+            y += i.image.h + 4
+        elif i.icon != nil:
+            big = surface_mod.new(9, 9, surface_mod.CLEAR)
+            icons.draw(big, i.icon, 0, 0, i.icon_color ?? st.accent, st:darker(i.icon_color ?? st.accent))
+            s:blit(big, self.x + math.floor((self.w - 27) / 2), y, {scale: 3})
+            y += 31
+        for ln in i.lines ?? []:
+            c = ln[2] == "dim" and st.dim or (ln[2] == "accent" and st.accent or st.text)
+            for part in surface_mod.wrap(f, ln[1], self.w - 8):
+                if y + st.fh <= self.y + self.h - 2:
+                    s:text(f, self.x + 4, y, part, c)
+                y += st.fh + 1
+            y += 2
+
+export def info_panel(opts=nil):
+    return InfoPanel(opts)
+
+# ------------------------------------------------------------ быстрый просмотр (пробел)
+
+# show(title, kind, payload): kind "text" (payload: список строк), "image" (поверхность), "none" (payload: текст); ↑ ↓ листают файлы
+# (on_move(dir)), PgUp/PgDn текст, пробел и Esc закрывают (on_close)
+export class QuickLook(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "quicklook"
+        self.focusable = true
+        self.title = ""
+        self.what = "none"
+        self.payload = nil
+        self.offset = 0
+        self.on_move = o.on_move
+        self.on_close = o.on_close
+        self.pw = o.pw ?? 200
+        self.ph = o.ph ?? 110
+
+    def measure(self, st):
+        return self.pw, self.ph
+
+    def show(self, title, what, payload):
+        self.title = title
+        self.what = what
+        self.payload = payload
+        self.offset = 0
+        self:invalidate()
+
+    def draw(self, s, st):
+        f = st.font
+        s:fill_rect(self.x, self.y, self.w, self.h, st.bg)
+        s:text(f, self.x + 4, self.y + 3, surface_mod.ellipsize(f, self.title, self.w - 8, ".."), st.accent)
+        s:hline(self.x + 2, self.y + st.fh + 5, self.w - 4, st.border)
+        top = self.y + st.fh + 8
+        h = self.h - (top - self.y) - 2
+        if self.what == "image" and self.payload != nil:
+            img = self.payload
+            s:blit(img, self.x + math.floor((self.w - img.w) / 2), top + math.floor((h - img.h) / 2), {})
+        elif self.what == "text" and self.payload != nil:
+            n = math.floor(h / (st.fh + 1))
+            s:push_clip(self.x + 2, top, self.w - 4, h)
+            for i in range[1, n]:
+                ln = self.payload[i + self.offset]
+                if ln == nil:
+                    break
+                s:text(f, self.x + 4, top + (i - 1) * (st.fh + 1), ln, st.text)
+            s:pop_clip()
+        else:
+            text = tostring(self.payload ?? "No preview")
+            s:text(f, self.x + math.floor((self.w - st:text_w(text)) / 2), top + math.floor(h / 2) - 4, text, st.dim)
+
+    def handle(self, ev):
+        if ev.name == "key":
+            k = ev.key
+            if k == keys.space or k == 256 or k == 1:
+                if self.on_close != nil:
+                    self.on_close()
+            elif k == keys.up or k == keys.down:
+                if self.on_move != nil:
+                    self.on_move(k == keys.up and -1 or 1)
+            elif k == keys.pageDown or k == keys.pageUp:
+                lines = self.what == "text" and self.payload or []
+                self.offset = math.max(0, math.min(len(lines) - 1, self.offset + (k == keys.pageDown and 8 or -8)))
+                self:invalidate()
+            return true
+        if ev.name == "scroll":
+            lines = self.what == "text" and self.payload or []
+            self.offset = math.max(0, math.min(len(lines) - 1, self.offset + ev.dir * 2))
+            self:invalidate()
+            return true
+        return ev.name == "char" or ev.name == "down" or ev.name == "click" or ev.name == "up"
+
+export def quick_look(opts=nil):
+    return QuickLook(opts)

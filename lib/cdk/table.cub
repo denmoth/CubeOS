@@ -17,6 +17,7 @@ import cgl.surface as surface_mod
 import unicode
 
 const BAR = 5
+const MIN_GROW = 56
 
 export class Table(widget.Widget):
     def init(self, opts=nil):
@@ -34,6 +35,7 @@ export class Table(widget.Widget):
         self.on_drag_start = o.on_drag_start
         self.on_drag = o.on_drag
         self.on_drop = o.on_drop
+        self.on_focus = o.on_focus
         self.drop_row = nil
         self.press = nil
         self.moving = false
@@ -142,19 +144,30 @@ export class Table(widget.Widget):
         self.offset = math.max(0, math.min(self.offset, self:_max_offset(st)))
 
     # ширины столбцов по ширине таблицы
+    # узкая таблица: столбцы постоянной ширины прячутся справа налево, пока растущим не останется хотя бы MIN_GROW
     def _widths(self):
         total = self.w - BAR
-        fixed = 0
-        grow = 0
-        for c in self.columns:
-            if c.width != nil:
-                fixed += c.width
-            else:
-                grow += c.grow ?? 1
+        hidden = {}
+        while true:
+            fixed = 0
+            grow = 0
+            last = nil
+            for i, c in self.columns:
+                if c.width != nil and not hidden[i]:
+                    fixed += c.width
+                    last = i
+                elif c.width == nil:
+                    grow += c.grow ?? 1
+            if total - fixed >= MIN_GROW or last == nil or grow == 0:
+                break
+            hidden[last] = true
         out = []
         rest = math.max(0, total - fixed)
         for i, c in self.columns:
-            out[i] = c.width ?? math.floor(rest * (c.grow ?? 1) / math.max(1, grow))
+            if hidden[i]:
+                out[i] = 0
+            else:
+                out[i] = c.width ?? math.floor(rest * (c.grow ?? 1) / math.max(1, grow))
         return out
 
     # строка под точкой холста или nil
@@ -180,6 +193,8 @@ export class Table(widget.Widget):
         ty = self.y + math.floor((st.line - st.fh) / 2)
         for i, c in self.columns:
             w = widths[i]
+            if w <= 0:
+                continue
             title = c.title ?? ""
             if self.sort != nil and self.sort.key == c.key:
                 # стрелка сортировки
@@ -224,6 +239,8 @@ export class Table(widget.Widget):
             x = self.x
             for ci, c in self.columns:
                 w = widths[ci]
+                if w <= 0:
+                    continue
                 text = tostring(row.cells[c.key] ?? "")
                 tx = x + 4
                 if ci == 1 and row.icon != nil:
@@ -378,6 +395,9 @@ export class Table(widget.Widget):
         if ev.name == "key":
             page = math.max(1, math.floor(self:_body_h(st) / rh) - 1)
             k = ev.key
+            # Ctrl со стрелками таблица не берёт (окно: вверх по папкам, вкладки)
+            if ev.ctrl and (k == keys.up or k == keys.down):
+                return false
             if k == keys.down:
                 self:_move(self.cursor + 1, ev.shift)
             elif k == keys.up:
@@ -399,6 +419,9 @@ export class Table(widget.Widget):
                 self:_notify()
             else:
                 return false
+            return true
+        if ev.name == "focus" and self.on_focus != nil:
+            self.on_focus(self)
             return true
         if ev.name == "char" and not ev.ctrl and ev.char != " ":
             self:_jump(ev.char)

@@ -48,6 +48,7 @@ files = [["notes.txt", 300], ["todo.md", 1200], ["startup.lua", 2400], ["world.c
     ["backup.cpk", 120000], [".profile", 40], ["readme.txt", 90]]
 for f in files:
     fsys:write_file(nil, home .. "/" .. f[1], string.rep("x", f[2]))
+fsys:write_file(nil, home .. "/notes.txt", table.concat(["Shopping list", "- glowstone x16", "- redstone x64", "- 3 diamonds for the pickaxe", "", "Ideas", "- auto farm under the base", "- CubeNet between the two towers"], string.char(10)))
 fsys:write_file(nil, home .. "/games/snake/snake.lua", "print(1)")
 v = cfs.view(fsys, nil, {aliases: cfs.default_aliases("denmoth")})
 
@@ -133,3 +134,31 @@ settle(5)
 k:feed("key", keys.enter, false)
 settle(10)
 dump(wm, "ui_axo_5_openwith")
+# две панели и сведения; быстрый просмотр; поиск
+def press(code, ctrl=false):
+    if ctrl:
+        k:feed("key", keys.leftCtrl, false)
+    k:feed("key", code, false)
+    if ctrl:
+        k:feed("key_up", keys.leftCtrl)
+    settle(8)
+press(256)
+press(keys.up, true)
+settle(30)
+press(keys.f3)
+press(keys.i, true)
+settle(30)
+k:feed("char", "n")
+settle(10)
+dump(wm, "ui_axo_6_split_info")
+press(keys.space)
+settle(10)
+dump(wm, "ui_axo_7_quicklook")
+press(keys.space)
+press(keys.f3)
+press(keys.i, true)
+press(keys.f, true)
+for ch in ["s", "n"]:
+    k:feed("char", ch)
+settle(30)
+dump(wm, "ui_axo_8_search")
