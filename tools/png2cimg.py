@@ -5,6 +5,7 @@
 
 --palette default   цвета подбираются по палитре CGL по умолчанию (16 цветов CC, куб 6x6x6, серые), в файл палитра не пишется
 --palette adaptive  палитра подбирается под картинку (до 255 цветов) и записывается в файл
+--palette cubeos    общие цвета палитры CDE с дизерингом Флойда-Стейнберга: лучше всего для обоев и аватаров
 Прозрачность: пиксели с альфа-каналом меньше 128 становятся прозрачными.
 """
 import argparse
@@ -27,6 +28,25 @@ def default_palette():
     for i in range(24):
         v = 8 + i * 10
         pal.append((v, v, v))
+    return pal
+
+
+def cubeos_palette():
+    """общие цвета палитры CDE (cde.theme: 16 серых и 12 оттенков x 3 насыщенности x 5 яркостей, номера 16..211): картинка в этих
+    цветах не теряет ничего при показе обоями или аватаром, дизеринг Флойда-Стейнберга делается здесь, а не грубее на CC"""
+    pal = []
+    for i in range(16):
+        v = int(10 + i * 235 / 15 + 0.5)
+        pal.append((v, v, v))
+    for hi in range(12):
+        for sat in (0.35, 0.65, 1):
+            for val in (0.22, 0.4, 0.58, 0.77, 0.96):
+                h = hi * 30
+                c = val * sat
+                x = c * (1 - abs((h / 60) % 2 - 1))
+                m = val - c
+                r, g, b = [(c, x, 0), (x, c, 0), (0, c, x), (0, x, c), (x, 0, c), (c, 0, x)][int(h // 60) % 6]
+                pal.append(tuple(int((v + m) * 255 + 0.5) for v in (r, g, b)))
     return pal
 
 
@@ -60,7 +80,7 @@ def main():
     ap.add_argument("src")
     ap.add_argument("dst")
     ap.add_argument("--size")
-    ap.add_argument("--palette", default="default", choices=["default", "adaptive"])
+    ap.add_argument("--palette", default="default", choices=["default", "adaptive", "cubeos"])
     ap.add_argument("--dither", action="store_true")
     a = ap.parse_args()
     img = Image.open(a.src).convert("RGBA")
@@ -72,7 +92,20 @@ def main():
     mask = [1 if p[3] < 128 else 0 for p in pixels]
     palette = None
     idx = []
-    if a.palette == "adaptive":
+    if a.palette == "cubeos":
+        pal = cubeos_palette()
+        pimg = Image.new("P", (1, 1))
+        flat = []
+        for c in pal:
+            flat += list(c)
+        flat += list(pal[0]) * (256 - len(pal))
+        pimg.putpalette(flat)
+        rgb = Image.new("RGB", img.size)
+        rgb.putdata([p[:3] for p in pixels])
+        q = rgb.quantize(palette=pimg, dither=Image.FLOYDSTEINBERG)
+        palette = pal
+        idx = [min(v, len(pal) - 1) for v in q.getdata()]
+    elif a.palette == "adaptive":
         rgb = Image.new("RGB", img.size)
         rgb.putdata([p[:3] for p in pixels])
         q = rgb.quantize(colors=255, method=Image.MEDIANCUT,
