@@ -10,7 +10,8 @@
 #
 # opts: term (по умолчанию настоящий), backend ("auto", "pixel", "text"), assets (папка assets для шрифта), host (имя компьютера),
 #   ready(ctx) (для тестов: {vterm, env, ui, proc, out} сразу после запуска), history (строк прокрутки, 2000),
-#   window (текстовое окно CDE: терминал рисуется в него, ввод приходит событиями окна; блокировка тогда у рабочего стола)
+#   window (текстовое окно CDE: терминал рисуется в него, ввод приходит событиями окна; блокировка тогда у рабочего стола),
+#   command (команда при запуске), keep (после команды остаться в оболочке; иначе сессия кончается вместе с командой)
 
 import ui
 import cfs
@@ -158,7 +159,12 @@ export def program(session, opts=nil):
         def on_shutdown(p, reboot):
             u.quit = true
         def start_shell():
-            p = proc_mod.new(env, "cush", [], {name: "terminal", main: cush.main, on_exit: on_exit, on_shutdown: on_shutdown})
+            # opts.command: выполнить команду при запуске; opts.keep: потом остаться в оболочке (иначе окно закрывается вместе с командой)
+            cargs = []
+            if o.command != nil and not cur.started:
+                cargs = [o.keep and "-r" or "-c", o.command]
+            cur.started = true
+            p = proc_mod.new(env, "cush", cargs, {name: "terminal", main: cush.main, on_exit: on_exit, on_shutdown: on_shutdown})
             cur.proc = p
             p:start()
         def restart_shell():

@@ -1,0 +1,85 @@
+# apps.axo.assoc: ассоциации файлов (чем открывать): встроенные по умолчанию, общий /cubeos/sys/cfg/assoc.conf, личный
+# $cfg/assoc.conf (личный главнее). Двойной клик и Enter открывают первым приложением списка, Ctrl+двойной клик и Ctrl+Enter вторым.
+#
+#   a = assoc.read_all(view)
+#   assoc.handlers_for(a, "notes.txt")        ["cubed"]; для .lua ["cubed", "run"]; неизвестный тип: []
+#   assoc.always(view, "txt", "cubed")         «Всегда открывать так»: личный файл, это приложение первым
+#
+# assoc.conf (JSON5): {types: {lua: ["cubed", "run"], cimg: ["pixel"], "": ["cubed", "run"]}}  ключ: расширение без точки, "" без
+# расширения. Приложения (HANDLERS): cubed (текстовый редактор в окне терминала), run (запустить в окне терминала), pixel (просмотр
+# картинок, придёт позже).
+
+import cfs.path as paths
+import json5
+
+export const HANDLERS = {
+    cubed: {title: "Text editor (cubed)", short: "cubed", icon: "script"},
+    run: {title: "Run in a terminal", short: "terminal", icon: "terminal"},
+    pixel: {title: "Pixel (image viewer)", short: "Pixel", icon: "image", missing: true},
+}
+export const ORDER = ["cubed", "run", "pixel"]
+
+const TEXT = ["txt", "md", "conf", "json", "json5", "log", "cfg", "csv", "ini", "xml", "html", "css", "js", "py"]
+const PROGRAMS = ["lua", "cub", "sh", "bat", ""]
+const RUNNABLE = {lua: true, cub: true, sh: true, bat: true, "": true}
+
+def _defaults():
+    t = {}
+    for e in TEXT:
+        t[e] = ["cubed"]
+    for e in PROGRAMS:
+        t[e] = ["cubed", "run"]
+    t.cimg = ["pixel"]
+    t.nfp = ["pixel"]
+    return t
+
+export const SYSTEM_PATH = "/cubeos/sys/cfg/assoc.conf"
+
+def _user_path(view):
+    return view:expand("$cfg") .. "/assoc.conf"
+
+def _read(view, path):
+    ok, data = pcall(() => view:exists(path) and json5.parse(view:read(path)) or nil)
+    if ok and type(data) == "table" and type(data.types) == "table":
+        return data.types
+    return {}
+
+export def read_all(view):
+    t = _defaults()
+    if view == nil:
+        return t
+    for e, list in _read(view, SYSTEM_PATH):
+        t[e] = list
+    for e, list in _read(view, _user_path(view)):
+        t[e] = list
+    return t
+
+export def ext_of(name):
+    dot = string.match(name, "^.+()%.[^%.]+$")
+    if dot == nil:
+        return ""
+    return string.lower(string.sub(name, dot + 1))
+
+export def handlers_for(a, name):
+    out = []
+    for h in a[ext_of(name)] ?? []:
+        if HANDLERS[h] != nil:
+            out[len(out) + 1] = h
+    return out
+
+export def runnable(name):
+    return RUNNABLE[ext_of(name)] == true
+
+# «Всегда открывать так»: приложение первым в личном файле, остальные из текущего списка следом
+export def always(view, ext, handler):
+    current = read_all(view)[ext] ?? []
+    list = [handler]
+    for h in current:
+        if h != handler:
+            list[len(list) + 1] = h
+    path = _user_path(view)
+    def write():
+        text = view:exists(path) and view:read(path) or "{types: {}}\n"
+        view:write_atomic(path, json5.patch(text, ["types", ext], list))
+    ok, err = pcall(write)
+    return ok, err

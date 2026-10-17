@@ -186,4 +186,24 @@ key(keys.enter)
 settle(20)
 eq(fsys:exists(nil, home .. "/games/memo.txt"), false, "Del asks and removes after Enter")
 
+# ---------------------------------------------------------------- ассоциации
+import apps.axo.assoc as assoc
+a = assoc.read_all(v)
+eq([assoc.handlers_for(a, "x.lua"), assoc.handlers_for(a, "n.txt"), assoc.handlers_for(a, "startup"), assoc.handlers_for(a, "z.zzz")],
+    [["cubed", "run"], ["cubed"], ["cubed", "run"], []], "defaults: .lua opens in cubed, runs second; unknown has nothing")
+assoc.always(v, "zzz", "cubed")
+eq(assoc.handlers_for(assoc.read_all(v), "z.zzz"), ["cubed"], "Always open this way writes the personal file")
+assoc.always(v, "lua", "run")
+eq(assoc.handlers_for(assoc.read_all(v), "x.lua"), ["run", "cubed"], "the chosen app goes first, the others follow")
+eq([assoc.runnable("a.lua"), assoc.runnable("a.txt"), assoc.runnable("prog")], [true, false, true], "runnable files")
+# окно выбора для неизвестного типа (сессии нет: открыть нельзя, но окно появляется)
+fsys:write_file(nil, home .. "/games/data.zzq", "?")
+key(keys.f5)
+settle(60)
+k:feed("char", "d")
+key(keys.enter)
+eq(app.ui:top_layer() != nil, true, "an unknown type opens the Open with window")
+key(256)
+eq(app.ui:top_layer() == nil, true, "Esc closes it")
+
 print("done")

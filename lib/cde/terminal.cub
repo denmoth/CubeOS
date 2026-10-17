@@ -7,8 +7,8 @@ import term.session as session_mod
 export def main(sys, ctx):
     session = ctx.args[1]
     o = ctx.args[2] ?? {}
-    win = app.open(sys, ctx, {title: o.title ?? "Terminal", icon: "terminal", kind: "text", cols: o.cols ?? 42, rows: o.rows ?? 13, min_cols: 20,
+    win = app.open(sys, ctx, {title: o.title ?? "Terminal", icon: o.icon ?? "terminal", kind: "text", cols: o.cols ?? 42, rows: o.rows ?? 13, min_cols: 20,
         min_rows: 4})
-    program = session_mod.program(session, {window: win, assets: o.assets, host: o.host, ready: o.ready})
+    program = session_mod.program(session, {window: win, assets: o.assets, host: o.host, ready: o.ready, command: o.command, keep: o.keep})
     program(sys, [])
     win:close()

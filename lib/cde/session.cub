@@ -157,7 +157,7 @@ export def program(session, opts=nil):
         reg:add({id: "terminal", name: "Terminal", icon: "terminal", keywords: ["console", "shell", "cmd", "терминал", "консоль", "термінал"],
             run: (w) => open_terminal()})
         reg:add({id: "axo", name: "Axo", icon: "axo", detail: "Files", keywords: ["axolotl", "files", "explorer", "folders", "файлы", "проводник", "аксолотль", "папки"],
-            run: (w) => w:launch(axo.main, {name: "axo"}, ["$home"])})
+            run: (w) => w:launch(axo.main, {name: "axo"}, ["$home", {session: session, assets: o.assets ?? "/repo/assets"}])})
         reg:add({id: "widgets", name: "Widget gallery", icon: "cube", keywords: ["cdk", "controls", "ui", "виджеты", "элементы"],
             run: (w) => w:launch(gallery.main, {name: "gallery"})})
         def logout_entry():

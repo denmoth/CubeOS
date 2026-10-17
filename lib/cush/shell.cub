@@ -1089,5 +1089,9 @@ export def main(env, args):
     env.cush = sh
     if args[1] == "-c" and args[2] != nil:
         return run_command_line(sh, args[2])
+    # -r КОМАНДА: выполнить и остаться в оболочке (Axo: «Запустить» в окне терминала)
+    if args[1] == "-r" and args[2] != nil:
+        sh.current = {target: sh.console, stdin: nil, piped: false}
+        pcall(() => sh:run_text(args[2]))
     sh:run()
     return sh.vars["?"]

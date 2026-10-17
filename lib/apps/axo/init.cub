@@ -8,6 +8,9 @@
 # Подшаг 2: Ctrl+C, Ctrl+X, Ctrl+V (общий буфер всех окон Axo), F2 переименовать, Ctrl+Shift+N новая папка, Del в корзину и
 # Shift+Del навсегда (оба спрашивают), правая кнопка: меню, перетаскивание строк на папку, место слева, вкладку или другое окно Axo
 # (Ctrl: копия). Прогресс полоской у нижнего края окна, совпадение имён спрашивает (заменить/слить, пропустить, оставить оба, для всех).
+# Подшаг 3: файл открывается первым приложением ассоциации (apps.axo.assoc), Ctrl+двойной клик и Ctrl+Enter вторым; неизвестный тип и
+# «Открыть с помощью...»: окно выбора с галочкой «Всегда открывать так»; «Запустить» для программ (окно терминала остаётся).
+# ctx.args[2].session: сессия пользователя (окна терминала для cubed и запуска).
 # Настройки $cfg/axo.conf: show_hidden, confirm_trash, confirm_delete.
 
 import cdk
@@ -16,6 +19,8 @@ import json5
 import apps.axo.types as types
 import apps.axo.parts as parts
 import apps.axo.ops as ops
+import apps.axo.assoc as assoc
+import cde.terminal as terminal_app
 
 export const NAME = "Axo"
 export const FULL_NAME = "Axolotl file manager"
@@ -30,6 +35,9 @@ export class Axo:
         self.ctx = ctx
         self.wm = ctx.wm
         self.view = (o != nil and o.view) or sys.view()
+        self.session = o != nil and o.session or nil
+        self.assets = o != nil and o.assets or "/repo/assets"
+        self.assoc = assoc.read_all(self.view)
         self.conf = self:_read_conf()
         self.show_hidden = self.conf.show_hidden == true
         start = ctx.args != nil and ctx.args[1] or "$home"
@@ -279,9 +287,77 @@ export class Axo:
         e = row.data
         path = paths.join(self:tab().path, e.name)
         if e.type == "dir":
-            self:go(path)
+            if ev != nil and ev.ctrl:
+                self:_open_tab(e)
+            else:
+                self:go(path)
             return
-        self.status:set_text("Opening files comes in the next Axo step")
+        self:open_file(e, ev != nil and ev.ctrl == true)
+
+    # ------------------------------------------------------------ открыть файл
+
+    def open_file(self, e, second=false):
+        list = assoc.handlers_for(self.assoc, e.name)
+        if len(list) == 0:
+            self:open_with(e)
+            return
+        h = second and (list[2] ?? list[1]) or list[1]
+        self:launch(h, paths.join(self:tab().path, e.name))
+
+    # открыть путь приложением h (cubed, run, pixel)
+    def launch(self, h, path):
+        info = assoc.HANDLERS[h]
+        name = paths.basename(path)
+        if info == nil or info.missing:
+            self:_note((info != nil and info.short or h) .. " is not in CubeOS yet")
+            return false
+        if self.session == nil:
+            self:_note("Opening needs a desktop session")
+            return false
+        q = "\"" .. path .. "\""
+        opts = {assets: self.assets}
+        if h == "cubed":
+            opts.command = "cubed " .. q
+            opts.title = "cubed - " .. name
+            opts.icon = "script"
+        else:
+            opts.command = q
+            opts.keep = true
+            opts.title = name
+        wm = self.wm
+        session = self.session
+        wm:defer(() => wm:launch(terminal_app.main, {name: "terminal"}, [session, opts]))
+        self:_note((h == "run" and "Running " or "Opening ") .. name)
+        return true
+
+    # окно «Открыть с помощью»: список приложений и галочка «Всегда открывать так»
+    def open_with(self, e):
+        ui = self.ui
+        let me = self
+        ext = assoc.ext_of(e.name)
+        path = paths.join(self:tab().path, e.name)
+        items = []
+        for h in assoc.ORDER:
+            info = assoc.HANDLERS[h]
+            items[len(items) + 1] = {text: info.title, icon: info.icon, id: h, color: info.missing and ui.style.dim or nil}
+        card = nil
+        always = cdk.checkbox(ext == "" and "Always for files without an extension" or ("Always open ." .. ext .. " files this way"))
+        def done(it):
+            ui:close_layer(card)
+            ui:set_focus(me.table)
+            if it == nil:
+                return
+            if always.checked:
+                okw, err = assoc.always(me.view, ext, it.id)
+                me.assoc = assoc.read_all(me.view)
+            me:launch(it.id, path)
+        list = cdk.list_view({height: len(items) * ui.style.line, items: items, on_activate: (i, it) => done(it)})
+        card = cdk.card({padding: 6, gap: 4}, [cdk.label("Open \"" .. e.name .. "\" with", {variant: "accent"}), list, always,
+            cdk.row({gap: 4}, [cdk.spacer(), cdk.button("Cancel", {on_click: (b) => done(nil)}),
+                cdk.button("Open", {variant: "primary", on_click: (b) => done(list.items[list.selected])})])])
+        card.on_escape = () => done(nil)
+        ui:open_layer(card, {center: true, modal: true, dismiss: false})
+        ui:set_focus(list)
 
     def toggle_hidden(self):
         self.show_hidden = not self.show_hidden
@@ -495,17 +571,29 @@ export class Axo:
         items = []
         if row != nil:
             e = row.data
-            items = [{text: e.type == "dir" and "Open" or "Open (step 3)", icon: e.type == "dir" and "folder" or "file", shortcut: "Enter",
-                    disabled: e.type != "dir", on_select: (it) => me:activate(row, {})},
-                {text: "Open in new tab", icon: "plus", disabled: e.type != "dir", on_select: (it) => me:_open_tab(e)},
-                {separator: true},
+            if e.type == "dir":
+                items = [{text: "Open", icon: "folder", shortcut: "Enter", on_select: (it) => me:activate(row, {})},
+                    {text: "Open in new tab", icon: "plus", shortcut: "Ctrl+Enter", on_select: (it) => me:_open_tab(e)}]
+            else:
+                hs = assoc.handlers_for(self.assoc, e.name)
+                if len(hs) > 0:
+                    items[len(items) + 1] = {text: "Open with " .. assoc.HANDLERS[hs[1]].short, icon: assoc.HANDLERS[hs[1]].icon, shortcut: "Enter",
+                        on_select: (it) => me:open_file(e, false)}
+                if len(hs) > 1:
+                    items[len(items) + 1] = {text: "Open with " .. assoc.HANDLERS[hs[2]].short, icon: assoc.HANDLERS[hs[2]].icon,
+                        shortcut: "Ctrl+Enter", on_select: (it) => me:open_file(e, true)}
+                items[len(items) + 1] = {text: "Open with...", icon: "menu", on_select: (it) => me:open_with(e)}
+                if assoc.runnable(e.name) and hs[1] != "run" and hs[2] != "run":
+                    items[len(items) + 1] = {text: "Run", icon: "play", on_select: (it) => me:launch("run", paths.join(me:tab().path, e.name))}
+            for it in [{separator: true},
                 {text: "Cut", icon: "minus", shortcut: "Ctrl+X", on_select: (it) => me:copy_sel(true)},
                 {text: "Copy", icon: "file", shortcut: "Ctrl+C", on_select: (it) => me:copy_sel(false)},
                 {text: "Paste", icon: "file", shortcut: "Ctrl+V", disabled: len(ops.clip.paths) == 0, on_select: (it) => me:paste()},
                 {separator: true},
                 {text: "Rename", icon: "script", shortcut: "F2", disabled: len(self.table:selected()) != 1, on_select: (it) => me:rename()},
                 {text: "Move to trash", icon: "trash", shortcut: "Del", on_select: (it) => me:delete_sel(false)},
-                {text: "Delete forever", icon: "warn", shortcut: "Shift+Del", on_select: (it) => me:delete_sel(true)}]
+                {text: "Delete forever", icon: "warn", shortcut: "Shift+Del", on_select: (it) => me:delete_sel(true)}]:
+                items[len(items) + 1] = it
         else:
             items = [{text: "New folder", icon: "folder", shortcut: "Ctrl+Shift+N", on_select: (it) => me:new_folder()},
                 {text: "Paste", icon: "file", shortcut: "Ctrl+V", disabled: len(ops.clip.paths) == 0, on_select: (it) => me:paste()},
