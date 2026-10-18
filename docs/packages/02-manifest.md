@@ -66,7 +66,7 @@
 
 ```lua
 -- src/init.lua
-local cdk = import("cdk")       -- системные модули доступны через import, как в Cubic (имя функции проверить в sys/boot/runtime.lua)
+local cdk = import("cdk")       -- системные модули через import, как в Cubic
 
 local M = {}
 function M.main(sys, ctx)
@@ -76,6 +76,10 @@ function M.main(sys, ctx)
 end
 return M
 ```
+
+Модуль на Lua загружается с окружением, где поверх `_G` есть `import(имя)`: `import("cdk")` ищет системный модуль,
+`import("./view")` файл рядом. Модуль, скомпилированный из Cubic, получает то же самое через `...` (`local __rt, __import = ...`).
+Глобальные переменные модуля на Lua пишутся в его окружение, а не в общий `_G`.
 
 Обычные программы CraftOS (без API CubeOS, например из PineStore) это не приложения CubeOS: они запускаются через `compat` в окне
 терминала (05-sources.md).

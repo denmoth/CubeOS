@@ -20,6 +20,35 @@ tools/                      сборщик (stew pack в CraftOS-PC headless), �
 Системные пакеты (`cubeos.*`) собираются из этого репозитория CubeOS по тегу версии системы тем же инструментом
 (`tools/build_packages.lua`).
 
+## Формат `index.json5`
+
+```json5
+{
+  format: 1, generated: "2026-10-18T12:00:00Z",
+  packages: {
+    "denmoth.snake": {
+      name: "Snake", description: "Classic snake", author: "Denmoth", kind: "app", category: "games",
+      priority: "optional", homepage: "",
+      versions: {
+        "1.2.0": {
+          url: "https://github.com/OWNER/cobble/releases/download/denmoth.snake-1.2.0/denmoth.snake-1.2.0.cpk",
+          sha256: "…", size: 18432, installed_size: 41200,
+          depends: { "cubeos.cdk": "^0.5" }, want: {}, conflicts: [], provides: [],
+          permissions: { need: ["gfx"], want: [] }, cubeos: { min: "0.5.0", max: null },
+        },
+      },
+    },
+  },
+}
+```
+
+Ту же запись (без `url`) пишет `stew pack` в `build/<id>-<version>.entry.json5`. Каталоги вида `http` и `path` используют этот же
+формат (у `path` в `url` относительный путь к `.cpk`).
+
+Локальный скелет репозитория: `D:/lin/Projects/MC/CC-Projects/cobble` (2026-10-18, без удалённого репозитория). Сборщик для Actions:
+`tools/build_packages.lua <папка с исходниками пакетов> <папка выхода>` из репозитория CubeOS собирает каждую подпапку в
+`<id>-<version>.cpk` и `.entry.json5`.
+
 ## Сборка в Actions
 
 На каждый PR:

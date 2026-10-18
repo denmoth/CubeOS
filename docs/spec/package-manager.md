@@ -61,7 +61,7 @@ stew plan chess
 ```json5
 {
   sources: [
-    { name: "cobble", kind: "github", url: "cubeos/cobble", trust: "official" },
+    { name: "cobble", kind: "cobble", url: "OWNER/cobble", trust: "official" },
     { name: "friend", kind: "http", url: "https://example.com/cubeos/index.json5", trust: "user" },
     { name: "disk", kind: "path", url: "/disk/packages", trust: "user" },
   ],
@@ -119,10 +119,10 @@ stew plan chess
       sha256: "…",
       size: 18432,              // архив
       installed_size: 41200,    // распакованный объём
-      need: ["cubic-ui >= 1.0"],
-      want: ["chess-engine"],
+      depends: { "cubeos.cdk": "^1.0" },
+      want: { "denmoth.chess-engine": "^1.0" },
       conflicts: [],
-      permissions: ["storage.read", "network.rednet"],
+      permissions: { need: ["storage.read"], want: ["network.rednet"] },
     },
   },
 }
