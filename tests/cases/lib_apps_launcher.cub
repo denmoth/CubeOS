@@ -1,0 +1,19 @@
+import t
+import cde.apps as apps_mod
+import apps.launcher as launcher
+eq = t.eq
+
+reg = apps_mod.new()
+launched = []
+wm = {launch: (self, main, info, args) => rawset(launched, len(launched) + 1, info.name)}
+launcher.add_all(reg, wm, {session: nil, assets: "/repo/assets", desktop: () => nil})
+def first(q):
+    r = reg:search(q)
+    return r[1] != nil and r[1].name or nil
+eq([first("paint"), first("рисовалка"), first("music"), first("музыка"), first("calc"), first("clock"), first("task"), first("диспетчер")],
+    ["Brush", "Brush", "Jukebox", "Jukebox", "Calc", "Clock", "Pulse", "Pulse"], "the Start search finds the new apps in two languages")
+eq([first("pict"), first("notep"), first("sett")], ["Pixel", "Notes", "Settings"], "and by name")
+reg:search("calc")[1].run(wm)
+eq(launched, ["calc"], "running an entry launches the app by name")
+eq(launcher.open("nope", wm, {}), false, "an unknown app is refused")
+print("done")

@@ -1,0 +1,58 @@
+# apps.launcher: каталог приложений CDE и запуск по имени. Приложения запускает менеджер окон; сюда сходятся меню «Пуск», Axo
+# («Открыть с помощью») и сами приложения (Pixel зовёт Brush).
+#
+#   launcher.add_all(reg, wm, env)               записи в каталог «Пуска» (Terminal и Axo добавляет сессия)
+#   launcher.open(id, wm, env, path)              запустить приложение id, path: файл (или nil)
+#   env = {session, assets, desktop: () => api}   desktop лениво: API рабочего стола (cde.session) появляется позже самих приложений
+
+import apps.pixel as pixel
+import apps.brush as brush
+import apps.jukebox as jukebox
+import apps.calc as calc
+import apps.notes as notes
+import apps.clock as clock
+import apps.pulse as pulse
+import apps.settings as settings
+
+export const CATALOG = [
+    {id: "settings", name: "Settings", icon: "sliders", detail: "System", main: settings.main,
+        keywords: ["preferences", "options", "theme", "wallpaper", "sound", "настройки", "параметры", "тема", "обои", "налаштування"]},
+    {id: "pixel", name: "Pixel", icon: "image", detail: "Pictures", main: pixel.main,
+        keywords: ["image", "viewer", "photo", "picture", "cimg", "картинки", "просмотр", "изображения", "фото"]},
+    {id: "brush", name: "Brush", icon: "brush", detail: "Paint", main: brush.main,
+        keywords: ["paint", "draw", "drawing", "sketch", "рисовалка", "рисовать", "рисунок", "малювати"]},
+    {id: "jukebox", name: "Jukebox", icon: "music", detail: "Music", main: jukebox.main,
+        keywords: ["music", "player", "songs", "audio", "disc", "minecraft", "музыка", "плеер", "проигрыватель", "пластинки", "музика"]},
+    {id: "notes", name: "Notes", icon: "notepad", detail: "Text editor", main: notes.main,
+        keywords: ["editor", "text", "write", "notepad", "блокнот", "редактор", "заметки", "текст"]},
+    {id: "calc", name: "Calc", icon: "calc", detail: "Calculator", main: calc.main,
+        keywords: ["calculator", "math", "sum", "калькулятор", "посчитать", "арифметика"]},
+    {id: "clock", name: "Clock", icon: "clock", detail: "Time", main: clock.main,
+        keywords: ["time", "timer", "alarm", "stopwatch", "world", "часы", "таймер", "будильник", "секундомер", "годинник"]},
+    {id: "pulse", name: "Pulse", icon: "gauge", detail: "Task manager", main: pulse.main,
+        keywords: ["tasks", "processes", "monitor", "performance", "kill", "диспетчер", "задачи", "процессы", "нагрузка"]},
+]
+
+def entry_of(id):
+    for e in CATALOG:
+        if e.id == id:
+            return e
+    return nil
+
+# аргументы приложения: файл, и общее окружение
+def _args(id, wm, env, path):
+    api = env.desktop != nil and env.desktop() or nil
+    return [path, {session: env.session, assets: env.assets, desktop: api, view: env.view,
+        edit: (p) => wm:defer(() => open("brush", wm, env, p)), open_app: (name, p) => wm:defer(() => open(name, wm, env, p))}]
+
+export def open(id, wm, env, path=nil):
+    e = entry_of(id)
+    if e == nil:
+        return false
+    wm:launch(e.main, {name: id}, _args(id, wm, env, path))
+    return true
+
+export def add_all(reg, wm, env):
+    for e in CATALOG:
+        let id = e.id
+        reg:add({id: id, name: e.name, icon: e.icon, detail: e.detail, keywords: e.keywords, run: (w) => open(id, wm, env, nil)})

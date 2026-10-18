@@ -1,0 +1,381 @@
+# apps.settings: Settings, настройки рабочего стола и системы в одном окне. Слева разделы, справа страница; всё применяется сразу.
+#
+#   wm:launch(settings.main, {name: "settings"}, [section_or_nil, {session, assets, desktop}])    для тестов: view, ready(app)
+#
+# Разделы: Appearance (тема, масштаб, анимации), Desktop (обои и виджеты), Panel, Login (экран входа и блокировки, аватар),
+# Sound, Keyboard, Network, Storage (диски и расширители), About. Рабочему столу нужен desktop (cde.session даёт его приложениям):
+# без него разделы показывают, что есть, но менять нечего. Что требует администратора (раскладка, имя в сети, экран входа), спросит
+# пароль окном подтверждения, как Axo.
+
+import cdk
+import cfs.path as paths
+import cgl.cimg as cimg
+import cgl.color as color
+import cde.wallpaper as wallpaper_mod
+import cde.theme as theme
+import apps.kit as kit
+import svc.rpc as rpc
+import version
+
+export const NAME = "Settings"
+const SECTIONS = [["Appearance", "star"], ["Desktop", "desktop"], ["Panel", "menu"], ["Login", "lock"], ["Sound", "volume"],
+    ["Keyboard", "terminal"], ["Network", "wifi"], ["Storage", "drive"], ["About", "info"]]
+const SCALES = [["Auto", "auto"], ["1x", 1], ["2x", 2], ["3x", 3], ["4x", 4]]
+const MODES = ["fill", "fit", "stretch", "center", "tile"]
+
+def head(text):
+    return cdk.label(text, {variant: "accent"})
+
+def line(label, w):
+    return cdk.row({gap: 6, align: "center"}, [cdk.label(label, {variant: "dim", width: 66}), w])
+
+export class Settings:
+    def init(self, sys, ctx):
+        o = ctx.args != nil and ctx.args[2] or nil
+        self.sys = sys
+        self.ctx = ctx
+        self.view = (o != nil and o.view) or sys.view()
+        self.assets = o != nil and o.assets or "/repo/assets"
+        self.session = o != nil and o.session or nil
+        self.d = o != nil and o.desktop or nil
+        self.page = 1
+        self.ui = cdk.open(sys, ctx, {title: NAME, w: 280, h: 160, min_w: 220, min_h: 110, icon: "sliders"})
+        self:_build()
+        arg = ctx.args != nil and ctx.args[1] or nil
+        if type(arg) == "string":
+            for i, s in SECTIONS:
+                if string.lower(s[1]) == string.lower(arg):
+                    self:show(i)
+        if o != nil and o.ready != nil:
+            o.ready(self)
+
+    def _conf(self, key):
+        return self.d != nil and self.d.conf != nil and self.d.conf[key] or nil
+
+    def _rpc(self, service, op, args=nil):
+        ok, res, err = pcall(() => rpc.call(self.sys, service, op, args, 3))
+        if not ok:
+            return nil, tostring(res)
+        return res, err
+
+    def _say(self, text):
+        self.note:set_text(text)
+
+    def _admin(self, service, op, args, reason, done):
+        kit.admin_call({sys: self.sys, ui: self.ui, session: self.session, focus: self.list}, service, op, args, reason, done)
+
+    # ------------------------------------------------------------ окно
+
+    def _build(self):
+        let me = self
+        ui = self.ui
+        items = []
+        for i, s in SECTIONS:
+            items[i] = {text: s[1], icon: s[2]}
+        self.list = cdk.list_view({width: 92, grow: 1, items: items, on_select: (i, it) => me:show(i)})
+        self.note = cdk.label("", {variant: "dim"})
+        self.pages = [self:_appearance(), self:_desktop(), self:_panel(), self:_login(), self:_sound(), self:_keyboard(), self:_network(), self:_storage(), self:_about()]
+        wrapped = []
+        for i, p in self.pages:
+            sv = cdk.scroll(p, {grow: 1})
+            sv.visible = i == 1
+            wrapped[i] = sv
+        self.wrapped = wrapped
+        ui:set_root(cdk.column({gap: 1, padding: 2}, [cdk.row({grow: 1, gap: 4}, [self.list, cdk.column({grow: 1}, wrapped)]), self.note]))
+        ui:set_focus(self.list)
+
+    def show(self, n):
+        if n == self.page:
+            return
+        self.page = n
+        for i, w in self.wrapped:
+            w:set_visible(i == n)
+        self.note:set_text("")
+        if n == 5:
+            self:_sound_refresh()
+        elif n == 7:
+            self:_network_refresh()
+        elif n == 8:
+            self:_storage_refresh()
+
+    # ------------------------------------------------------------ Appearance
+
+    def _appearance(self):
+        let me = self
+        d = self.d
+        names = d != nil and d.theme_names() or []
+        items = []
+        cur = self:_conf("theme") ?? (d != nil and d.wm.theme.name or nil)
+        sel = 1
+        for i, t in names:
+            items[i] = {text: t.display ?? t.name, icon: "star"}
+            if t.name == cur:
+                sel = i
+        self.themes = cdk.list_view({items: items, height: 56, selected: sel, on_select: (i, it) => me:_set_theme(names[i])})
+        cur_scale = self:_conf("scale") ?? "auto"
+        idx = 1
+        labels = []
+        for i, sc in SCALES:
+            labels[i] = sc[1]
+            if sc[2] == cur_scale:
+                idx = i
+        self.scale = cdk.dropdown({items: labels, index: idx, on_change: (i, t) => me:_set_scale(SCALES[i][2])})
+        anim = d != nil and d.wm.anim or {enabled: true, speed: 1, windows: true, glow: true, widgets: true, wallpaper: true}
+        def sw(text, key):
+            return cdk.switch(text, {on: anim[key] != false, on_change: (v) => me:_set_anim(key, v)})
+        self.speed = cdk.slider({min: 0.5, max: 2, step: 0.25, value: anim.speed ?? 1, width: 80, on_change: (v) => me:_set_anim("speed", v)})
+        return cdk.column({gap: 4, padding: 2}, [head("Theme"), self.themes, line("Scale", self.scale), head("Animations"),
+            sw("Animations", "enabled"), sw("Window effects", "windows"), sw("Window glow", "glow"), sw("Widget effects", "widgets"),
+            sw("Animated wallpaper", "wallpaper"), line("Speed", self.speed)])
+
+    def _set_theme(self, t):
+        if self.d != nil and t != nil:
+            self.d.set_theme(t.name)
+
+    def _set_scale(self, v):
+        if self.d != nil:
+            self.d.set_scale(v)
+
+    def _set_anim(self, key, v):
+        if self.d != nil:
+            self.d.set_animation(key, v)
+
+    # ------------------------------------------------------------ Desktop
+
+    def _wall_items(self, current):
+        d = self.d
+        names = d != nil and d.wallpapers() or []
+        items = []
+        sel = 1
+        for i, n in names:
+            items[i] = {text: n, icon: "image"}
+            if n == current:
+                sel = i
+        return names, items, sel
+
+    def _desktop(self):
+        let me = self
+        d = self.d
+        cur = self:_conf("wallpaper")
+        curname = type(cur) == "table" and cur.name or cur
+        names, items, sel = self:_wall_items(curname)
+        self.wall_names = names
+        self.walls = cdk.list_view({items: items, height: 62, selected: sel, on_select: (i, it) => me:_set_wall(names[i])})
+        mode = type(cur) == "table" and cur.mode or "fill"
+        mi = 1
+        for i, m in MODES:
+            if m == mode:
+                mi = i
+        self.wall_mode = cdk.dropdown({items: MODES, index: mi, on_change: (i, t) => me:_set_wall(me.wall_names[me.walls.selected])})
+        wl = []
+        for w in (d != nil and d.widgets() or []):
+            let id = w.id
+            wl[len(wl) + 1] = cdk.switch(w.name, {on: w.on, on_change: (v) => me:_toggle_widget(id, v)})
+        return cdk.column({gap: 4, padding: 2}, [head("Wallpaper"), self.walls, line("Mode", self.wall_mode), head("Widgets"), cdk.column({gap: 3}, wl)])
+
+    def _set_wall(self, name):
+        if self.d != nil and name != nil:
+            mode = MODES[self.wall_mode.index ?? 1]
+            self.d.set_wallpaper(mode == "fill" and name or {name: name, mode: mode})
+
+    def _toggle_widget(self, id, on):
+        if self.d != nil:
+            self.d.set_widget(id, on)
+
+    # ------------------------------------------------------------ Panel
+
+    def _panel(self):
+        let me = self
+        d = self.d
+        p = d != nil and d.wm.panel or nil
+        pos = p != nil and p.position or "bottom"
+        al = p != nil and p.align or "left"
+        self.p_pos = cdk.dropdown({items: ["bottom", "top"], index: pos == "top" and 2 or 1, on_change: (i, t) => me:_set_panel({position: t})})
+        self.p_align = cdk.dropdown({items: ["left", "center"], index: al == "center" and 2 or 1, on_change: (i, t) => me:_set_panel({align: t})})
+        return cdk.column({gap: 4, padding: 2}, [head("Taskbar"), line("Position", self.p_pos), line("Buttons", self.p_align),
+            cdk.label("Ctrl+Alt+P and Ctrl+Alt+O do the same.", {variant: "dim"})])
+
+    def _set_panel(self, change):
+        if self.d != nil:
+            self.d.set_panel(change)
+
+    # ------------------------------------------------------------ Login & lock
+
+    def _login(self):
+        let me = self
+        d = self.d
+        cur_lock = self:_conf("lock_wallpaper") ?? "aurora"
+        names, items, sel = self:_wall_items(cur_lock)
+        self.lock_names = names
+        self.lock_list = cdk.list_view({items: items, height: 48, selected: sel, on_select: (i, it) => me:_set_pref("lock_wallpaper", names[i])})
+        names2, items2, sel2 = self:_wall_items(nil)
+        self.login_list = cdk.list_view({items: items2, height: 48, selected: sel2, on_select: (i, it) => me:_set_login(names2[i])})
+        av = d != nil and d.avatars() or ["letter", "custom"]
+        aitems = []
+        asel = 1
+        cur_av = self:_conf("avatar") ?? "custom"
+        for i, n in av:
+            aitems[i] = {text: n, icon: "user"}
+            if n == cur_av:
+                asel = i
+        self.av_list = cdk.list_view({items: aitems, height: 48, selected: asel, on_select: (i, it) => me:_set_pref("avatar", av[i])})
+        shape = self:_conf("avatar_shape") ?? "circle"
+        self.shape = cdk.dropdown({items: ["circle", "square"], index: shape == "square" and 2 or 1, on_change: (i, t) => me:_set_pref("avatar_shape", t, "shape")})
+        return cdk.column({gap: 4, padding: 2}, [head("Lock screen wallpaper"), self.lock_list, head("Login wallpaper (admin)"), self.login_list,
+            head("Avatar"), self.av_list, line("Shape", self.shape), cdk.button("Lock now", {icon: "lock", on_click: (b) => me:_lock()})])
+
+    def _set_pref(self, key, value, login_key=nil):
+        if self.d == nil or value == nil:
+            return
+        self.d.save(key, value)
+        if login_key != nil:
+            self.d.save_login(login_key, value)
+
+    def _set_login(self, name):
+        if self.d != nil and name != nil:
+            self.d.save_login("wallpaper", name)
+
+    def _lock(self):
+        if self.d != nil:
+            self.d.lock()
+
+    # ------------------------------------------------------------ Sound
+
+    def _sound(self):
+        let me = self
+        self.vol = cdk.slider({min: 0, max: 100, step: 5, value: 100, width: 110, on_change: (v) => me:_set_volume(v)})
+        self.speakers = cdk.label("", {variant: "dim"})
+        return cdk.column({gap: 4, padding: 2}, [head("Volume"), line("Master", self.vol), line("Speakers", self.speakers),
+            cdk.button("Play a test sound", {icon: "play", on_click: (b) => me:_test_sound()})])
+
+    def _sound_refresh(self):
+        st, err = self:_rpc("audiod", "status")
+        if st == nil:
+            self.speakers:set_text("sound service is not running")
+            return
+        self.vol.value = math.floor((st.volume ?? 100) / 5 + 0.5) * 5
+        self.vol:invalidate()
+        self.speakers:set_text(len(st.speakers) > 0 and table.concat(st.speakers, ", ") or "none: put a speaker next to the computer")
+
+    def _set_volume(self, v):
+        self:_rpc("audiod", "volume", {value: v})
+
+    def _test_sound(self):
+        res, err = self:_rpc("audiod", "notes", {list: [{instrument: "harp", pitch: 12, volume: 3}, {instrument: "harp", pitch: 16, volume: 3}, {instrument: "bell", pitch: 19, volume: 3}]})
+        if err != nil:
+            self:_say(string.gsub(tostring(err), "^.-: ", "", 1))
+
+    # ------------------------------------------------------------ Keyboard
+
+    def _keyboard(self):
+        let me = self
+        info, err = self:_rpc("inputd", "get")
+        layouts = []
+        idx = 1
+        if info != nil:
+            for i, l in info.layouts ?? []:
+                layouts[i] = l.name
+                if l.name == info.keyboard:
+                    idx = i
+        if len(layouts) == 0:
+            layouts = ["ru"]
+        self.layouts = layouts
+        self.kb_second = cdk.dropdown({items: layouts, index: idx, on_change: (i, t) => me:_set_kb({keyboard: t})})
+        self.kb_mode = cdk.dropdown({items: ["auto", "manual"], index: info != nil and info.mode == "manual" and 2 or 1, on_change: (i, t) => me:_set_kb({mode: t})})
+        return cdk.column({gap: 4, padding: 2}, [head("Keyboard layouts"), line("Second", self.kb_second), line("Switching", self.kb_mode),
+            cdk.label("English is always there. Switch with Ctrl+Shift or the tray.", {variant: "dim"})])
+
+    def _set_kb(self, q):
+        let me = self
+        self:_admin("inputd", "set", q, "Change the keyboard layout for everyone.", (res, err) => me:_say(err == nil and "Saved" or ("Not changed: " .. string.gsub(tostring(err), "^.-: ", "", 1))))
+
+    # ------------------------------------------------------------ Network
+
+    def _network(self):
+        let me = self
+        self.net_name = cdk.text_input({width: 100, placeholder: "computer name"})
+        self.net_info = cdk.label("", {variant: "dim"})
+        self.net_peers = cdk.list_view({height: 48, items: []})
+        return cdk.column({gap: 4, padding: 2}, [head("This computer"), line("Name", cdk.row({gap: 3}, [self.net_name, cdk.button("Apply", {on_click: (b) => me:_set_name()})])),
+            self.net_info, head("Computers nearby"), self.net_peers,
+            cdk.label("Pair in a terminal: net pair, then Axo shows their folders.", {variant: "dim"})])
+
+    def _network_refresh(self):
+        st, err = self:_rpc("netd", "status")
+        if st == nil:
+            self.net_info:set_text("network service is not running")
+            return
+        self.net_name:set_text(tostring(st.name ?? ""))
+        self.net_info:set_text("Number " .. tostring(st.id) .. ", " .. len(st.modems ?? []) .. " modem(s), " .. len(st.paired ?? []) .. " paired")
+        peers = self:_rpc("netd", "peers") ?? []
+        rows = []
+        for i, p in peers:
+            rows[i] = {text: tostring(p.name ?? p.id), icon: p.paired and "netfolder" or "user", detail: p.paired and "paired" or ""}
+        self.net_peers:set_items(rows)
+
+    def _set_name(self):
+        let me = self
+        self:_admin("netd", "name", {name: self.net_name.text}, "Rename this computer on the network.", (res, err) => me:_say(err == nil and "Renamed" or ("Not renamed: " .. string.gsub(tostring(err), "^.-: ", "", 1))))
+
+    # ------------------------------------------------------------ Storage
+
+    def _storage(self):
+        self.disks = cdk.column({gap: 4}, [])
+        self.ext_info = cdk.column({gap: 2}, [])
+        return cdk.column({gap: 4, padding: 2}, [head("Disks"), self.disks, head("Storage extenders"), self.ext_info,
+            cdk.label("Connect or detach them in Axo (Ctrl+E).", {variant: "dim"})])
+
+    def _storage_refresh(self):
+        st = self.ui.style
+        self.disks:clear_children()
+        points = ["/"]
+        for base in ["/cubeos/drives/floppy", "/cubeos/mnt"]:
+            ok, list = pcall(() => self.view:list(base))
+            if ok and type(list) == "table":
+                for e in list:
+                    points[len(points) + 1] = base .. "/" .. (type(e) == "table" and e.name or e)
+        for p in points:
+            ok, sp = pcall(() => self.view:space(p))
+            if ok and sp != nil and sp.capacity != nil and sp.capacity > 0:
+                used = sp.used ?? 0
+                self.disks:add(cdk.column({gap: 1}, [cdk.row({gap: 4}, [cdk.icon("drive", {color: st.accent}), cdk.label(p, {grow: 1}),
+                    cdk.label(kit.size_text(used) .. " / " .. kit.size_text(sp.capacity), {variant: sp.warn and "danger" or "dim"})]), cdk.progress({value: used / sp.capacity})]))
+        if len(self.disks.children) == 0:
+            self.disks:add(cdk.label("No disk information", {variant: "dim"}))
+        self.ext_info:clear_children()
+        list = self:_rpc("extd", "list")
+        if list == nil or len(list) == 0:
+            self.ext_info:add(cdk.label(list == nil and "extender service is not running" or "None connected", {variant: "dim"}))
+        else:
+            for x in list:
+                self.ext_info:add(cdk.row({gap: 4}, [cdk.icon("drive", {color: x.online and st.accent or st.dim}), cdk.label(tostring(x.label), {grow: 1}),
+                    cdk.label(x.online and "online" or "away", {variant: "dim"})]))
+
+    # ------------------------------------------------------------ About
+
+    def _about(self):
+        logo = nil
+        path = self.assets .. "/images/cubeos-logo.cimg"
+        if fs.exists(path):
+            f = fs.open(path, "rb")
+            data = f.readAll()
+            f.close()
+            ok, src, spal = pcall(cimg.decode, data)
+            if ok:
+                logo = wallpaper_mod.fit_image(src, spal ?? color.default_palette(), math.min(src.w, 64), math.min(src.h, 40), "fit", self.ui.win.wm.palette)
+        self.logo = kit.picture({img: logo, pw: 64, ph: 40})
+        ok, ver = pcall(() => version.full())
+        user = self.session != nil and tostring(self.session.user) or "?"
+        wm = self.ui.win.wm
+        return cdk.column({gap: 4, padding: 2}, [cdk.row({gap: 8, align: "center"}, [self.logo, cdk.column({gap: 2}, [cdk.label("CubeOS", {variant: "title"}),
+            cdk.label(ok and ver or "", {variant: "dim"})])]), cdk.label("User: " .. user, {}),
+            cdk.label("Screen: " .. wm.W .. " x " .. wm.H .. " pixels, scale " .. tostring(wm.scale) .. "x", {}),
+            cdk.label("Theme: " .. tostring(wm.theme.display ?? wm.theme.name), {}),
+            cdk.label("Cubic desktop: CDE, files: Axo", {variant: "dim"})])
+
+    def run(self):
+        self.ui:run()
+
+export def main(sys, ctx):
+    app = Settings(sys, ctx)
+    app:run()

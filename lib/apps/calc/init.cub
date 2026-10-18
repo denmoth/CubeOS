@@ -1,0 +1,165 @@
+# apps.calc: Calc, калькулятор CDE. Обычный и инженерный (кнопка «Sci»), градусы и радианы, история вычислений, память.
+#
+#   wm:launch(calc.main, {name: "calc"}, [nil, {session, assets, desktop}])        для тестов: ready(app)
+#
+# Печатайте выражение с клавиатуры (2+3*4, sqrt(16), sin(30), 5!, 7%3, 2pi) или жмите кнопки; Enter считает, Esc очищает, ответ можно
+# использовать как ans. Клик по истории подставляет выражение, а ответ. Память: MC MR M+ M-.
+
+import cdk
+import apps.calc.eval as evalmod
+
+export const NAME = "Calc"
+
+const BASIC = [["C", "C"], ["(", "("], [")", ")"], ["/", "/"],
+    ["7", "7"], ["8", "8"], ["9", "9"], ["*", "*"],
+    ["4", "4"], ["5", "5"], ["6", "6"], ["-", "-"],
+    ["1", "1"], ["2", "2"], ["3", "3"], ["+", "+"],
+    ["0", "0"], [".", "."], ["<", "BS"], ["=", "="]]
+const SCI = [["sin", "sin("], ["cos", "cos("], ["tan", "tan("], ["ln", "ln("], ["log", "log("], ["sqrt", "sqrt("],
+    ["pi", "pi"], ["e", "e"], ["^", "^"], ["x!", "!"], ["%", "%"], ["ans", "ans"]]
+
+export class Calc:
+    def init(self, sys, ctx):
+        o = ctx.args != nil and ctx.args[2] or nil
+        self.sys = sys
+        self.view = (o != nil and o.view) or sys.view()
+        self.deg = true
+        self.sci = false
+        self.ans = 0
+        self.memory = 0
+        self.history = []
+        self.ui = cdk.open(sys, ctx, {title: NAME, w: 160, h: 148, min_w: 150, min_h: 120, icon: "calc"})
+        self:_build()
+        if o != nil and o.ready != nil:
+            o.ready(self)
+
+    def _build(self):
+        let me = self
+        ui = self.ui
+        self.input = cdk.text_input({width: 140, placeholder: "0", on_change: (t) => me:_preview(), on_submit: (t) => me:equals()})
+        self.result = cdk.label("0", {variant: "title", align: "right"})
+        self.note = cdk.label("", {variant: "dim"})
+        cells = []
+        for b in BASIC:
+            let v = b[2]
+            variant = b[2] == "=" and "primary" or (b[2] == "C" and "danger" or "normal")
+            cells[len(cells) + 1] = cdk.button(b[1], {variant: variant, on_click: (x) => me:press(v)})
+        self.pad = cdk.grid(4, {gap: 1}, cells)
+        sci_cells = []
+        for b in SCI:
+            let v = b[2]
+            sci_cells[len(sci_cells) + 1] = cdk.button(b[1], {variant: "flat", on_click: (x) => me:press(v)})
+        self.mode_button = cdk.button("Deg", {variant: "flat", on_click: (x) => me:toggle_deg()})
+        sci_cells[len(sci_cells) + 1] = self.mode_button
+        self.sci_pad = cdk.column({gap: 1, visible: false}, [cdk.grid(3, {gap: 1}, sci_cells)])
+        self.hist = cdk.list_view({width: 76, grow: 1, items: [], visible: false, on_activate: (i, it) => me:recall(i)})
+        mem = cdk.row({gap: 1}, [cdk.button("MC", {variant: "flat", on_click: (x) => me:mem("c")}), cdk.button("MR", {variant: "flat", on_click: (x) => me:mem("r")}),
+            cdk.button("M+", {variant: "flat", on_click: (x) => me:mem("+")}), cdk.button("M-", {variant: "flat", on_click: (x) => me:mem("-")}),
+            cdk.spacer(), cdk.button("Sci", {variant: "flat", on_click: (x) => me:toggle_sci()})])
+        left = cdk.column({gap: 1}, [self.input, cdk.row({gap: 4, align: "center"}, [self.note, cdk.spacer(), self.result]), mem, self.pad])
+        ui:set_root(cdk.row({gap: 4, padding: 2}, [left, self.sci_pad, self.hist]))
+        ui:set_focus(self.input)
+        ui.on_key = (ev) => me:key(ev)
+
+    def _opts(self):
+        return {deg: self.deg, ans: self.ans}
+
+    def _show(self, v, err):
+        if err != nil:
+            self.result:set_text("")
+            self.note:set_text(err)
+        else:
+            self.result:set_text(v != nil and evalmod.format(v) or "0")
+            self.note:set_text("")
+
+    def _preview(self):
+        v, err = evalmod.evaluate(self.input.text, self:_opts())
+        # пока печатают, ошибки о недописанном не показываем
+        if err != nil and (string.find(err, "Unfinished", 1, true) != nil or string.find(err, "Missing", 1, true) != nil):
+            self.note:set_text("")
+            return
+        self:_show(v, err)
+
+    def press(self, v):
+        if v == "C":
+            self.input:set_text("")
+            self:_preview()
+        elif v == "BS":
+            t = self.input.text
+            self.input:set_text(string.sub(t, 1, -2))
+        elif v == "=":
+            self:equals()
+        else:
+            self.input:set_text(self.input.text .. v)
+        self.ui:set_focus(self.input)
+
+    def equals(self):
+        text = self.input.text
+        v, err = evalmod.evaluate(text, self:_opts())
+        if err != nil:
+            self:_show(nil, err)
+            return
+        if v == nil:
+            return
+        self.ans = v
+        self.history[len(self.history) + 1] = {expr: text, value: v}
+        self:_refresh_history()
+        self:_show(v, nil)
+        self.input:set_text(evalmod.format(v))
+
+    def _refresh_history(self):
+        rows = []
+        n = len(self.history)
+        for i in range[1, n]:
+            e = self.history[n - i + 1]
+            rows[i] = {text: e.expr, detail: "= " .. evalmod.format(e.value)}
+        self.hist:set_items(rows)
+
+    def recall(self, i):
+        n = len(self.history)
+        e = self.history[n - i + 1]
+        if e != nil:
+            self.input:set_text(e.expr)
+            self:_preview()
+            self.ui:set_focus(self.input)
+
+    def mem(self, op):
+        if op == "c":
+            self.memory = 0
+        elif op == "r":
+            self.input:set_text(self.input.text .. evalmod.format(self.memory))
+        else:
+            v, err = evalmod.evaluate(self.input.text, self:_opts())
+            if v == nil:
+                v = self.ans
+            self.memory = op == "+" and self.memory + v or self.memory - v
+        self.note:set_text("Memory " .. evalmod.format(self.memory))
+
+    def toggle_deg(self):
+        self.deg = not self.deg
+        self.mode_button.text = self.deg and "Deg" or "Rad"
+        self.mode_button:invalidate()
+        self:_preview()
+
+    def toggle_sci(self):
+        self.sci = not self.sci
+        self.sci_pad:set_visible(self.sci)
+        self.hist:set_visible(self.sci)
+        w = self.ui.win
+        wm = w.wm
+        nw = w.w + (self.sci and 130 or -130)
+        wm:defer(() => wm:move_resize(w, w.x, w.y, nw, w.h))
+
+    def key(self, ev):
+        k = ev.key
+        if k == 256 or k == 1:
+            self:press("C")
+            return true
+        return false
+
+    def run(self):
+        self.ui:run()
+
+export def main(sys, ctx):
+    app = Calc(sys, ctx)
+    app:run()

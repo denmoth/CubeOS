@@ -1,0 +1,617 @@
+# apps.jukebox: Jukebox, проигрыватель CDE. Четыре источника:
+#   Tunes     встроенные треки CubeOS (assets/music/*.csc, ноты для динамика, играют через audiod notes) и ваши .csc из $home/music;
+#   Minecraft пластинки и музыка игры (звук играет сам динамик по имени, audiod sound);
+#   My music  файлы .dfpwm из $home/music (audiod play);
+#   Disc      пластинка или дискета-пластинка в дисководе (audiod disc).
+# Под музыку бегут эквалайзер, вспышка на бочке и огоньки нот; под файлы и пластинки он просто дышит в такт.
+#
+#   wm:launch(jukebox.main, {name: "jukebox"}, [path_or_nil, {session, assets, desktop}])    для тестов: view, ready(app), no_audio
+#
+# Клавиши: Space пауза, N и P следующий и прошлый, ←/→ перемотка на 5 секунд (у нотных треков), ↑/↓ громкость, S случайный порядок,
+# R повтор (все, один, нет), 1..4 источник, Enter играть выбранное.
+
+import cdk
+import cdk.widget as widget
+import cfs.path as paths
+import cde.theme as theme
+import apps.kit as kit
+import apps.jukebox.score as score
+import svc.rpc as rpc
+
+export const NAME = "Jukebox"
+
+# пластинки и музыка Minecraft: название, имя звука, секунд (у музыки игры длина примерная)
+export const MINECRAFT = [
+    ["13", "minecraft:music_disc.13", 178], ["cat", "minecraft:music_disc.cat", 185], ["blocks", "minecraft:music_disc.blocks", 345],
+    ["chirp", "minecraft:music_disc.chirp", 185], ["far", "minecraft:music_disc.far", 174], ["mall", "minecraft:music_disc.mall", 197],
+    ["mellohi", "minecraft:music_disc.mellohi", 96], ["stal", "minecraft:music_disc.stal", 150], ["strad", "minecraft:music_disc.strad", 188],
+    ["ward", "minecraft:music_disc.ward", 251], ["11", "minecraft:music_disc.11", 71], ["wait", "minecraft:music_disc.wait", 238],
+    ["otherside", "minecraft:music_disc.otherside", 195], ["5", "minecraft:music_disc.5", 178], ["pigstep", "minecraft:music_disc.pigstep", 149],
+    ["relic", "minecraft:music_disc.relic", 218], ["creator", "minecraft:music_disc.creator", 176],
+    ["creator (music box)", "minecraft:music_disc.creator_music_box", 73], ["precipice", "minecraft:music_disc.precipice", 299],
+    ["Overworld music", "minecraft:music.game", 180], ["Creative music", "minecraft:music.creative", 180], ["Menu music", "minecraft:music.menu", 180],
+    ["The End music", "minecraft:music.end", 180]]
+
+export const TRACKS = ["neon-drive", "block-sunrise", "redstone-rave", "nether-lullaby", "pixel-parade"]
+const SOURCES = [["Tunes", "music"], ["Minecraft", "cube"], ["My music", "folder"], ["Disc", "drive"]]
+const BARS = 30
+
+# ------------------------------------------------------------ эквалайзер
+
+export class Vis(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "vis"
+        self.e = []
+        self.peak = []
+        for i in range[1, BARS]:
+            self.e[i] = 0
+            self.peak[i] = 0
+        self.flash = 0
+        self.phase = 0
+        self.driven = 0
+        self.playing = false
+        self.min_h = 30
+
+    def measure(self, st):
+        return 100, 44
+
+    def hit(self, frac, amount):
+        c = math.floor(math.max(0, math.min(0.999, frac)) * BARS) + 1
+        for d in [-3, -2, -1, 0, 1, 2, 3]:
+            i = c + d
+            if i >= 1 and i <= BARS:
+                v = amount * (d == 0 and 1 or (math.abs(d) == 1 and 0.78 or (math.abs(d) == 2 and 0.5 or 0.28)))
+                if v > self.e[i]:
+                    self.e[i] = v
+        self.driven = 12
+
+    def kick(self, strong):
+        self.flash = math.max(self.flash, strong)
+        for i in range[1, 8]:
+            self.e[i] = math.max(self.e[i], 1.0 - i * 0.08)
+        self.driven = 12
+
+    # раз в тик: затухание; без событий (файлы, пластинки) волны дышат сами
+    def step(self, dt, playing):
+        self.playing = playing
+        self.phase += dt
+        k = math.exp(-dt * 5)
+        for i in range[1, BARS]:
+            if self.driven <= 0 and playing:
+                wave = 0.5 + 0.5 * math.sin(self.phase * 3.1 + i * 0.55) * math.sin(self.phase * 1.3 + i * 0.21)
+                target = 0.15 + 0.6 * wave * (0.6 + 0.4 * math.sin(self.phase * 0.8 + i))
+                self.e[i] = self.e[i] + (target - self.e[i]) * math.min(1, dt * 8)
+            elif not playing:
+                idle = 0.05 + 0.04 * math.sin(self.phase * 1.4 + i * 0.4)
+                self.e[i] = self.e[i] * k + idle * (1 - k)
+            else:
+                # звучит нотами: бары падают, но остаётся тихое дыхание по всей ширине
+                self.e[i] = math.max(self.e[i] * k, 0.07 + 0.05 * math.sin(self.phase * 2 + i * 0.6))
+            if self.e[i] > self.peak[i]:
+                self.peak[i] = self.e[i]
+            else:
+                self.peak[i] = math.max(0, self.peak[i] - dt * 0.5)
+        if self.driven > 0:
+            self.driven -= 1
+        self.flash = self.flash * math.exp(-dt * 6)
+        self:invalidate()
+
+    def draw(self, s, st):
+        x0 = self.x
+        y0 = self.y
+        w = self.w
+        h = self.h
+        st:round_fill(s, x0, y0, w, h, st.well, 3)
+        bw = math.floor((w - 6) / BARS)
+        left = x0 + 3 + math.floor((w - 6 - bw * BARS) / 2)
+        base = y0 + math.floor(h * 0.72)
+        top = y0 + 3
+        room = base - top
+        # вспышка бочки: свечение по низу
+        if self.flash > 0.08:
+            band = math.floor(self.flash * room * 0.5)
+            shade = theme.GENERAL0 + 5 * 15 + 3 + math.floor(self.flash * 4)
+            s:fill_rect(x0 + 3, base - band, w - 6, band, st:darker(shade))
+        for i in range[1, BARS]:
+            e = math.min(1, self.e[i])
+            bh = math.floor(e * room)
+            hue = (math.floor((i - 1) * 12 / BARS * 0.9) + 8) % 12
+            bx = left + (i - 1) * bw
+            seg = 3
+            filled = 0
+            while filled < bh:
+                sh = 3 + math.floor(filled / room * 10)
+                c = theme.GENERAL0 + hue * 15 + math.min(14, sh)
+                s:fill_rect(bx, base - filled - seg, bw - 1, math.min(seg, bh - filled) - (bh - filled > seg and 1 or 0), c)
+                filled += seg
+            pk = math.floor(self.peak[i] * room)
+            if pk > bh + 1:
+                s:fill_rect(bx, base - pk - 1, bw - 1, 1, theme.GENERAL0 + hue * 15 + 14)
+            # отражение под линией
+            rh = math.min(math.floor(bh * 0.35), h - (base - y0) - 3)
+            for j in range[0, rh - 1]:
+                if j % 2 == 0:
+                    c2 = theme.GENERAL0 + hue * 15 + 3
+                    s:fill_rect(bx, base + 2 + j, bw - 1, 1, st:darker(st:darker(c2)))
+        s:hline(left, base + 1, bw * BARS, st.border)
+
+export def vis(opts=nil):
+    return Vis(opts)
+
+# ------------------------------------------------------------ приложение
+
+def read_asset(path):
+    if not fs.exists(path):
+        return nil
+    f = fs.open(path, "rb")
+    data = f.readAll()
+    f.close()
+    return data
+
+export class Jukebox:
+    def init(self, sys, ctx):
+        o = ctx.args != nil and ctx.args[2] or nil
+        self.sys = sys
+        self.ctx = ctx
+        self.view = (o != nil and o.view) or sys.view()
+        self.assets = o != nil and o.assets or "/repo/assets"
+        self.no_audio = o != nil and o.no_audio == true
+        self.source = 1
+        self.items = []
+        self.cur = nil          # играющий элемент
+        self.cur_index = 0
+        self.state = "stopped"  # playing, paused, stopped
+        self.kind = nil
+        self.t0 = 0
+        self.length = 0
+        self.cursor = nil
+        self.sc = nil
+        self.paused_at = 0
+        self.shuffle = false
+        self.repeat = "all"
+        self.last = 0
+        self.last_sec = -1
+        self.sent = 0
+        self.speakers = nil
+        self.ui = cdk.open(sys, ctx, {title: NAME, w: 296, h: 158, min_w: 220, min_h: 110, icon: "music"})
+        self:_build()
+        self:_load_source(1)
+        self.last = self.ui:now()
+        self.timer = self.ui:every(0.05, () => self:_tick())
+        self:_audio_status()
+        arg = ctx.args != nil and ctx.args[1] or nil
+        if type(arg) == "string" and arg != "":
+            self:open_file(arg)
+        if o != nil and o.ready != nil:
+            o.ready(self)
+
+    # ------------------------------------------------------------ окно
+
+    def _build(self):
+        let me = self
+        ui = self.ui
+        self.src_buttons = []
+        row = []
+        for i, src in SOURCES:
+            let n = i
+            b = cdk.button(src[1], {icon: src[2], variant: "flat", on_click: (x) => me:_load_source(n)})
+            self.src_buttons[i] = b
+            row[len(row) + 1] = b
+        self.list = cdk.list_view({width: 132, grow: 1, items: [], on_activate: (i, it) => me:play_index(i)})
+        self.vis = vis({grow: 1})
+        self.title = cdk.label("Nothing playing", {variant: "accent"})
+        self.sub = cdk.label("Pick a track on the left", {variant: "dim"})
+        self.t_now = cdk.label("0:00", {variant: "dim"})
+        self.t_all = cdk.label("0:00", {variant: "dim"})
+        self.seek = cdk.slider({min: 0, max: 1000, value: 0, step: 1, grow: 1, on_change: (v) => me:_seek_to(v / 1000)})
+        self.b_prev = cdk.button("", {icon: "back", variant: "flat", on_click: (x) => me:prev()})
+        self.b_play = cdk.button("", {icon: "play", variant: "primary", on_click: (x) => me:toggle()})
+        self.b_next = cdk.button("", {icon: "forward", variant: "flat", on_click: (x) => me:next(false)})
+        self.b_shuf = cdk.button("Shuffle", {variant: "flat", on_click: (x) => me:toggle_shuffle()})
+        self.b_rep = cdk.button("Repeat all", {variant: "flat", on_click: (x) => me:cycle_repeat()})
+        self.vol = cdk.slider({min: 0, max: 100, value: 100, step: 5, width: 54, on_change: (v) => me:_set_volume(v)})
+        self.note = cdk.label("", {variant: "dim"})
+        right = cdk.column({grow: 1, gap: 2}, [self.vis, self.title, self.sub,
+            cdk.row({gap: 3, align: "center"}, [self.t_now, self.seek, self.t_all]),
+            cdk.row({gap: 1, align: "center"}, [self.b_prev, self.b_play, self.b_next, cdk.spacer(), cdk.icon("volume", {color: ui.style.dim}), self.vol]),
+            cdk.row({gap: 1}, [self.b_shuf, self.b_rep, cdk.spacer()]), self.note])
+        left = cdk.column({gap: 2}, [self.list])
+        ui:set_root(cdk.column({gap: 1, padding: 2}, [cdk.row({gap: 0}, row),
+            cdk.row({grow: 1, gap: 4}, [left, right])]))
+        ui:set_focus(self.list)
+        ui.on_key = (ev) => me:key(ev)
+
+    def _status(self, text):
+        self.note.text = text
+        self.note:invalidate()
+
+    # ------------------------------------------------------------ источники
+
+    def _own_dir(self):
+        return self.view != nil and (self.view:expand("$home") .. "/music") or nil
+
+    def _scan_own(self, want):
+        out = []
+        dir = self:_own_dir()
+        if dir != nil:
+            ok, list = pcall(() => self.view:list(dir))
+            if ok and type(list) == "table":
+                for e in list:
+                    nm = type(e) == "table" and e.name or e
+                    ext = string.lower(string.match(nm, "%.([^%.]+)$") ?? "")
+                    if ext == want:
+                        out[len(out) + 1] = {name: string.gsub(nm, "%.[^%.]*$", ""), path: dir .. "/" .. nm, ext: ext}
+                table.sort(out, (a, b) => a.name < b.name)
+        return out
+
+    def _load_source(self, n):
+        self.source = n
+        items = []
+        if n == 1:
+            for slug in TRACKS:
+                text = read_asset(self.assets .. "/music/" .. slug .. ".csc")
+                if text != nil:
+                    sc = score.parse(text)
+                    if sc != nil:
+                        items[len(items) + 1] = {kind: "score", title: sc.title, author: sc.author, secs: sc.seconds, sc: sc, key: sc.key}
+            for e in self:_scan_own("csc"):
+                text = nil
+                okr, t = pcall(() => self.view:read(e.path))
+                if okr:
+                    sc = score.parse(t)
+                    if sc != nil:
+                        items[len(items) + 1] = {kind: "score", title: sc.title, author: sc.author, secs: sc.seconds, sc: sc, key: sc.key}
+        elif n == 2:
+            for m in MINECRAFT:
+                items[len(items) + 1] = {kind: "sound", title: m[1], author: "Minecraft", secs: m[3], sound: m[2]}
+        elif n == 3:
+            for e in self:_scan_own("dfpwm"):
+                size = 0
+                oks, st = pcall(() => self.view:stat(e.path))
+                if oks and st != nil:
+                    size = st.size ?? 0
+                items[len(items) + 1] = {kind: "dfpwm", title: e.name, author: "$home/music", secs: size / 6000, path: e.path}
+        else:
+            items[1] = {kind: "disc", title: "Play the disc in the drive", author: "Minecraft disc or floppy with record.dfpwm", secs: 0}
+        self.items = items
+        rows = []
+        for i, it in items:
+            rows[i] = {text: it.title, icon: n == 4 and "drive" or "music", detail: it.secs > 0 and kit.human_time(it.secs) or ""}
+        self.list:set_items(rows)
+        self.list.selected = len(rows) > 0 and 1 or 0
+        for i, b in self.src_buttons:
+            b.variant = i == n and "primary" or "flat"
+            b:invalidate()
+        if n == 3 and len(items) == 0:
+            self:_status("Put .dfpwm files into $home/music")
+        elif n == 1:
+            self:_status("")
+
+    # ------------------------------------------------------------ звук (audiod)
+
+    def _call(self, op, args, timeout=4):
+        if self.no_audio:
+            return nil, "no audio in tests"
+        ok, res, err = pcall(() => rpc.call(self.sys, "audiod", op, args, timeout))
+        if not ok:
+            return nil, tostring(res)
+        return res, err
+
+    def _audio_status(self):
+        st, err = self:_call("status", nil)
+        if st != nil:
+            self.speakers = st.speakers
+            self.vol.value = math.floor((st.volume ?? 100) / 5 + 0.5) * 5
+            self.vol:invalidate()
+            if st.speakers == nil or len(st.speakers) == 0:
+                self:_status("No speaker: put one next to the computer")
+        elif err != nil and not self.no_audio:
+            self:_status("The sound service is not running")
+
+    def _set_volume(self, v):
+        self:_call("volume", {value: v})
+
+    def _error(self, err):
+        text = string.gsub(tostring(err), "^.-: ", "", 1)
+        self:_status(text)
+        if self.state == "playing":
+            self.state = "paused"
+            self.paused_at = self.ui:now() - self.t0
+            self.b_play.icon = "play"
+            self.b_play:invalidate()
+
+    # ------------------------------------------------------------ воспроизведение
+
+    def play_index(self, i):
+        it = self.items[i]
+        if it == nil:
+            return
+        self.cur_index = i
+        self:play_item(it)
+
+    def play_item(self, it):
+        self:stop(true)
+        self.cur = it
+        self.kind = it.kind
+        self.length = it.secs or 0
+        now = self.ui:now()
+        if it.kind == "score":
+            self.sc = it.sc
+            self.cursor = score.Cursor(it.sc)
+        elif it.kind == "sound":
+            res, err = self:_call("sound", {name: it.sound, volume: 3})
+            if err != nil:
+                self:_error(err)
+                return
+        elif it.kind == "dfpwm":
+            okr, data = pcall(() => self.view:read(it.path))
+            if not okr:
+                self:_status("Cannot read the file")
+                return
+            res, err = self:_call("play", {data: data, title: it.title})
+            if err != nil:
+                self:_error(err)
+                return
+        elif it.kind == "disc":
+            res, err = self:_call("disc", nil)
+            if err != nil:
+                self:_error(err)
+                return
+            it.title = (res and res.title) or "Disc"
+            self.length = 0
+        self.t0 = now
+        self.state = "playing"
+        self.paused_at = 0
+        self.last_sec = -1
+        self:_now_playing()
+
+    def _now_playing(self):
+        it = self.cur
+        self.title.text = it != nil and it.title or "Nothing playing"
+        self.sub.text = it != nil and ((it.author ?? "") .. (it.key != nil and it.key != "" and ("  " .. it.key) or "")) or ""
+        self.title:invalidate()
+        self.sub:invalidate()
+        self.b_play.icon = self.state == "playing" and "pause" or "play"
+        self.b_play:invalidate()
+        self.t_all.text = self.length > 0 and kit.human_time(self.length) or "--:--"
+        self.t_all:invalidate()
+        self.ui.win:set_title(NAME .. (it != nil and (" - " .. it.title) or ""))
+
+    def toggle(self):
+        if self.state == "playing":
+            self:pause()
+        elif self.state == "paused":
+            self:resume()
+        elif self.cur != nil:
+            self:play_item(self.cur)
+        else:
+            i = self.list.selected
+            if i != nil and i > 0:
+                self:play_index(i)
+            elif len(self.items) > 0:
+                self:play_index(1)
+
+    def pause(self):
+        if self.state != "playing":
+            return
+        if self.kind == "score":
+            self.paused_at = self.ui:now() - self.t0
+            self.state = "paused"
+        else:
+            self:_call("stop", nil)
+            self.state = "stopped"
+            self.paused_at = 0
+        self:_now_playing()
+
+    def resume(self):
+        if self.state == "paused" and self.kind == "score":
+            self.t0 = self.ui:now() - self.paused_at
+            self.state = "playing"
+            self:_now_playing()
+
+    def stop(self, quiet=false):
+        if self.kind != "score" and self.state != "stopped":
+            self:_call("stop", nil)
+        self.state = "stopped"
+        self.cursor = nil
+        self.seek.value = 0
+        self.seek:invalidate()
+        self.t_now.text = "0:00"
+        self.t_now:invalidate()
+        if not quiet:
+            self:_now_playing()
+
+    def _order(self, dir):
+        n = len(self.items)
+        if n == 0:
+            return nil
+        if self.shuffle and n > 1:
+            i = self.cur_index
+            while i == self.cur_index:
+                i = math.random(1, n)
+            return i
+        return (self.cur_index - 1 + dir) % n + 1
+
+    def next(self, auto):
+        if auto and self.repeat == "one" and self.cur != nil:
+            self:play_item(self.cur)
+            return
+        i = self:_order(1)
+        if i == nil:
+            return
+        if auto and self.repeat == "off" and not self.shuffle and i <= self.cur_index:
+            self:stop()
+            return
+        self.cur_index = i
+        self:play_item(self.items[i])
+        self.list.selected = i
+        self.list:invalidate()
+
+    def prev(self):
+        # в начале трека: предыдущий, иначе заново
+        t = self:_pos()
+        if t > 3 and self.cur != nil:
+            self:play_item(self.cur)
+            return
+        i = self:_order(-1)
+        if i != nil:
+            self.cur_index = i
+            self:play_item(self.items[i])
+            self.list.selected = i
+            self.list:invalidate()
+
+    def toggle_shuffle(self):
+        self.shuffle = not self.shuffle
+        self.b_shuf.variant = self.shuffle and "primary" or "flat"
+        self.b_shuf:invalidate()
+
+    def cycle_repeat(self):
+        order = ["all", "one", "off"]
+        for i, v in order:
+            if v == self.repeat:
+                self.repeat = order[i % 3 + 1]
+                break
+        self.b_rep.text = self.repeat == "all" and "Repeat all" or (self.repeat == "one" and "Repeat one" or "No repeat")
+        self.b_rep:invalidate()
+
+    def _pos(self):
+        if self.state == "playing":
+            return self.ui:now() - self.t0
+        if self.state == "paused":
+            return self.paused_at
+        return 0
+
+    def _seek_to(self, f):
+        if self.state == "stopped" or self.length <= 0 or self.kind != "score" or self.seeking_self:
+            return
+        t = f * self.length
+        if self.state == "playing":
+            self.t0 = self.ui:now() - t
+        else:
+            self.paused_at = t
+        self.cursor:seek(t)
+
+    def seek_by(self, dt):
+        if self.kind != "score" or self.state == "stopped":
+            return
+        t = math.max(0, math.min(self.length, self:_pos() + dt))
+        if self.state == "playing":
+            self.t0 = self.ui:now() - t
+        else:
+            self.paused_at = t
+        self.cursor:seek(t)
+
+    # раз в 0.05 с: ноты, время, эквалайзер
+    def _tick(self):
+        now = self.ui:now()
+        dt = math.min(0.25, now - self.last)
+        self.last = now
+        playing = self.state == "playing"
+        if playing:
+            t = now - self.t0
+            if self.kind == "score":
+                list = self.cursor:due(t)
+                if list == nil:
+                    self:next(true)
+                    return
+                if len(list) > 0:
+                    self:_send(list)
+            elif self.length > 0 and t >= self.length + 1:
+                self:next(true)
+                return
+            sec = math.floor(t)
+            if sec != self.last_sec:
+                self.last_sec = sec
+                self.t_now.text = kit.human_time(t)
+                self.t_now:invalidate()
+                if self.length > 0:
+                    self.seeking_self = true
+                    self.seek.value = math.floor(math.min(1, t / self.length) * 1000)
+                    self.seek:invalidate()
+                    self.seeking_self = false
+        self.vis:step(dt, playing)
+
+    def _send(self, list):
+        notes = []
+        for e in list:
+            if score.DRUMS[e.inst] == true:
+                if e.inst == "basedrum":
+                    self.vis:kick(e.vol / 3)
+                elif e.inst == "snare":
+                    self.vis:hit(0.55, 0.9)
+                else:
+                    self.vis:hit(0.9, 0.45)
+            else:
+                m = score.midi_of(e.inst, e.pitch)
+                if m != nil:
+                    self.vis:hit((m - 34) / 68, 0.5 + e.vol * 0.17)
+            if len(notes) < 8:
+                notes[len(notes) + 1] = {instrument: e.inst, pitch: e.pitch, volume: e.vol}
+        res, err = self:_call("notes", {list: notes}, 2)
+        if err != nil:
+            self:_error(err)
+
+    # ------------------------------------------------------------ открыть файл и клавиши
+
+    def open_file(self, path):
+        ext = string.lower(string.match(path, "%.([^%.]+)$") ?? "")
+        it = nil
+        if ext == "csc":
+            okr, text = pcall(() => self.view:read(path))
+            sc = okr and score.parse(text) or nil
+            if sc != nil:
+                it = {kind: "score", title: sc.title, author: sc.author, secs: sc.seconds, sc: sc, key: sc.key}
+        elif ext == "dfpwm":
+            size = 0
+            oks, st = pcall(() => self.view:stat(path))
+            if oks and st != nil:
+                size = st.size ?? 0
+            it = {kind: "dfpwm", title: paths.basename(path), author: "file", secs: size / 6000, path: path}
+        if it == nil:
+            self:_status("Not a music file")
+            return
+        self.items[len(self.items) + 1] = it
+        self:play_item(it)
+
+    def key(self, ev):
+        k = ev.key
+        if k == keys.space:
+            self:toggle()
+        elif k == keys.n:
+            self:next(false)
+        elif k == keys.p:
+            self:prev()
+        elif k == keys.left:
+            self:seek_by(-5)
+        elif k == keys.right:
+            self:seek_by(5)
+        elif k == keys.s:
+            self:toggle_shuffle()
+        elif k == keys.r:
+            self:cycle_repeat()
+        elif k == keys.one:
+            self:_load_source(1)
+        elif k == keys.two:
+            self:_load_source(2)
+        elif k == keys.three:
+            self:_load_source(3)
+        elif k == keys.four:
+            self:_load_source(4)
+        elif k == keys.up and ev.ctrl:
+            self.vol:set(self.vol.value + 10)
+        elif k == keys.down and ev.ctrl:
+            self.vol:set(self.vol.value - 10)
+        else:
+            return false
+        return true
+
+    def run(self):
+        self.ui:run()
+        # окно закрыли: музыка замолкает
+        self:stop(true)
+
+export def main(sys, ctx):
+    app = Jukebox(sys, ctx)
+    app:run()

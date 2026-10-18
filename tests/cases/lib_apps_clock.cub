@@ -1,0 +1,32 @@
+import t
+import appenv
+import clock as clock_mod
+import apps.clock as clockapp
+eq = t.eq
+
+env = appenv.new({user: "ann"})
+c = clock_mod.new({tz: "UTC", seconds: true})
+app = env.launch(clockapp.main, [nil, {view: env.view, no_audio: true, time: c, ready: (p) => rawset(env.got, "app", p)}])
+eq(string.len(app.digital.text), 8, "the digital clock shows hours, minutes and seconds")
+eq(app.face.parts != nil, true, "the face gets the time")
+env.key(keys.two)
+eq(app.tab, 2, "key 2 shows the world clock")
+eq(len(app.world.items) >= 5, true, "the world clock lists cities")
+env.key(keys.three)
+env.key(keys.space)
+eq(app.sw.running, true, "Space starts the stopwatch")
+env.settle(30)
+env.key(keys.l)
+eq(len(app.sw.laps), 1, "L records a lap")
+env.key(keys.space)
+eq(app.sw.running, false, "Space stops it")
+env.key(keys.four)
+app:tm_set(60)
+eq(app.tm_label.text, "01:00", "the timer shows a minute")
+env.key(keys.five)
+app:al_add("07:30")
+app:al_add("bad")
+eq([len(app.alarms), app.alarms[1].time], [1, "07:30"], "an alarm is added, a bad time is refused")
+eq(string.find(env.fsys:read_file(nil, "/cubeos/users/ann/cfg/clock.conf"), "07:30", 1, true) != nil, true, "alarms are saved")
+eq(env.alive(), true, "the app is still running (it did not crash)")
+print("done")

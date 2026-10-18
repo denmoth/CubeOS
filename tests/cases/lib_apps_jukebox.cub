@@ -1,0 +1,71 @@
+import t
+import appenv
+import svc.rpc as rpc
+import apps.jukebox as jukebox
+import apps.jukebox.score as score
+eq = t.eq
+
+# ---------------------------------------------------------------- разбор нот
+text = "CSC1\ntitle Demo\nby Me\nbpm 120\nsteps 32\np a 0:harp:3:2 4:bell:10+14:3\np b 0:basedrum:6:3\n@ 0 a\n@ 16 b\n@ 20 a"
+sc = score.parse(text)
+eq([sc.title, sc.bpm, sc.steps, len(sc.events)], ["Demo", 120, 32, 7], "a score is parsed (chords split into notes)")
+eq(sc.step_sec, 0.125, "a step is a sixteenth")
+eq([sc.events[1].step, sc.events[2].step, sc.events[7].step], [0, 4, 24], "events are sorted by step")
+eq(score.parse("nope"), nil, "a wrong header is refused")
+cur = score.Cursor(sc)
+eq(len(cur:due(0.0)), 1, "only the first note is due at the start")
+eq(len(cur:due(0.5)), 2, "the chord arrives at step 4 (0.5 s)")
+eq(len(cur:due(0.5)), 0, "notes are given once")
+cur:seek(1.0)
+eq(len(cur:due(1.0)), 0, "seek skips earlier notes")
+eq(cur:due(1.0 + sc.seconds + 5), nil, "the end gives nil")
+eq(score.midi_of("bass", 12), 42, "bass starts at F#1 (30)")
+
+# ---------------------------------------------------------------- окно
+env = appenv.new({user: "ann"})
+env.fsys:mkdir(nil, env.home .. "/music", {parents: true})
+env.fsys:write_file(nil, env.home .. "/music/mix.dfpwm", string.rep("x", 12000))
+played = []
+audiod = {}
+audiod.status = (q, f) => {playing: false, volume: 70, muted: false, speakers: ["speaker_0"]}
+audiod.notes = (q, f) => rawset(played, len(played) + 1, len(q.list)) and len(q.list)
+audiod.sound = (q, f) => rawset(played, len(played) + 1, q.name) and true
+audiod.stop = (q, f) => rawset(played, len(played) + 1, "stop") and true
+audiod.play = (q, f) => rawset(played, len(played) + 1, "dfpwm:" .. q.title) and true
+audiod.volume = (q, f) => rawset(played, len(played) + 1, "vol:" .. tostring(q.value)) and (q.value ?? 70)
+def service(sys, a):
+    sys.register("audiod")
+    rpc.serve(sys, audiod)
+env.k:spawn(service, [], {name: "audiod"})
+app = env.launch(jukebox.main, [nil, {view: env.view, assets: "/repo/assets", ready: (p) => rawset(env.got, "app", p)}])
+eq(app.vol.value, 70, "the volume comes from the sound service")
+eq(len(app.items), 5, "five built-in tracks")
+eq(app.items[1].title, "Neon Drive", "the first track")
+eq(app.items[1].secs > 60, true, "tracks are long")
+env.key(keys.enter)
+env.settle(40)
+eq(app.state, "playing", "playing")
+eq(len(played) > 0 and type(played[1]) == "number", true, "notes are sent to the speaker")
+env.key(keys.space)
+eq(app.state, "paused", "Space pauses")
+n = len(played)
+env.settle(60)
+eq(len(played), n, "no notes while paused")
+env.key(keys.space)
+eq(app.state, "playing", "and resumes")
+env.key(keys.n)
+eq(app.cur.title, "Block Sunrise", "N plays the next track")
+env.key(keys.two)
+eq(app.source, 2, "key 2 shows the Minecraft list")
+eq(len(app.items), 23, "discs and music of the game")
+env.key(keys.down)
+env.key(keys.enter)
+env.settle(10)
+eq(played[len(played)], "minecraft:music_disc.cat", "a disc is played by its sound name")
+env.key(keys.three)
+eq(app.items[1].title, "mix", "my music lists dfpwm files")
+env.key(keys.enter)
+env.settle(10)
+eq(played[len(played)], "dfpwm:mix", "a file is sent to the player")
+eq(env.alive(), true, "the app is still running (it did not crash)")
+print("done")

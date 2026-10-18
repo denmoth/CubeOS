@@ -1,0 +1,396 @@
+# apps.clock: Clock, часы CDE: аналоговые и цифровые часы с датой, мировое время, секундомер с кругами, таймер, будильники.
+#
+#   wm:launch(clock.main, {name: "clock"}, [nil, {session, assets, desktop}])        для тестов: view, ready(app), no_audio, time (clock.new)
+#
+# Часовой пояс берётся из /cubeos/sys/cfg/time.conf (как на панели). Будильники лежат в $cfg/clock.conf и звонят, пока окно открыто
+# (звонок играет audiod нотами). Клавиши: 1..5 вкладки, Space старт и стоп секундомера и таймера, L круг.
+
+import cdk
+import cdk.widget as widget
+import cde.theme as theme
+import clock as clock_mod
+import apps.kit as kit
+import svc.rpc as rpc
+
+export const NAME = "Clock"
+const TABS = [["Clock", "clock"], ["World", "desktop"], ["Stopwatch", "play"], ["Timer", "bell"], ["Alarms", "star"]]
+const ZONES = [["UTC", "UTC"], ["London", "Europe/London"], ["Kyiv", "Europe/Kyiv"], ["Dubai", "Asia/Dubai"], ["Tokyo", "Asia/Tokyo"],
+    ["Sydney", "Australia/Sydney"], ["New York", "America/New_York"], ["Los Angeles", "America/Los_Angeles"]]
+const RING = [[["bell", 12], ["harp", 12]], [["bell", 16]], [["bell", 19], ["harp", 16]], [["bell", 24]], [["bell", 19]], [["bell", 16], ["harp", 12]]]
+
+# ------------------------------------------------------------ циферблат
+
+export class Face(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "face"
+        self.parts = nil
+        self.ms = 0
+        self.min_w = 70
+        self.min_h = 70
+
+    def measure(self, st):
+        return 84, 84
+
+    def set_time(self, parts):
+        self.parts = parts
+        self:invalidate()
+
+    def _hand(self, s, cx, cy, ang, len_, c, thick):
+        x = cx + math.floor(math.cos(ang) * len_ + 0.5)
+        y = cy + math.floor(math.sin(ang) * len_ + 0.5)
+        s:line(cx, cy, x, y, c, thick)
+
+    def draw(self, s, st):
+        r = math.floor(math.min(self.w, self.h) / 2) - 2
+        cx = self.x + math.floor(self.w / 2)
+        cy = self.y + math.floor(self.h / 2)
+        # циферблат: тёмное поле, кольцо, метки
+        s:circle(cx, cy, r, st.border, true)
+        s:circle(cx, cy, r - 1, st.well, true)
+        for i in range[0, 59]:
+            a = i / 60 * math.pi * 2 - math.pi / 2
+            big = i % 5 == 0
+            r0 = r - (big and 5 or 2)
+            x0 = cx + math.floor(math.cos(a) * r0 + 0.5)
+            y0 = cy + math.floor(math.sin(a) * r0 + 0.5)
+            x1 = cx + math.floor(math.cos(a) * (r - 2) + 0.5)
+            y1 = cy + math.floor(math.sin(a) * (r - 2) + 0.5)
+            if big:
+                s:line(x0, y0, x1, y1, i % 15 == 0 and st.accent or st.text)
+            else:
+                s:set(x1, y1, st.dim)
+        p = self.parts
+        if p == nil:
+            return
+        sec = p.sec + (p.ms ?? 0) / 1000
+        mn = p.min + sec / 60
+        hr = (p.hour % 12) + mn / 60
+        self:_hand(s, cx, cy, hr / 12 * math.pi * 2 - math.pi / 2, r * 0.5, st.text, 2)
+        self:_hand(s, cx, cy, mn / 60 * math.pi * 2 - math.pi / 2, r * 0.75, st.text, 1)
+        self:_hand(s, cx, cy, sec / 60 * math.pi * 2 - math.pi / 2, r * 0.85, st.danger, 1)
+        s:circle(cx, cy, 2, st.accent, true)
+
+export def face(opts=nil):
+    return Face(opts)
+
+# ------------------------------------------------------------ приложение
+
+def two(n):
+    return string.format("%02d", n)
+
+def span_text(sec, hundredths):
+    s = math.max(0, sec)
+    h = math.floor(s / 3600)
+    m = math.floor(s / 60) % 60
+    r = math.floor(s) % 60
+    text = (h > 0 and (h .. ":") or "") .. two(m) .. ":" .. two(r)
+    if hundredths:
+        text = text .. "." .. two(math.floor((s - math.floor(s)) * 100))
+    return text
+
+export class Clock:
+    def init(self, sys, ctx):
+        o = ctx.args != nil and ctx.args[2] or nil
+        self.sys = sys
+        self.view = (o != nil and o.view) or sys.view()
+        self.no_audio = o != nil and o.no_audio == true
+        self.tab = 1
+        self.sw = {running: false, t0: 0, acc: 0, laps: []}
+        self.timer = {running: false, left: 300, total: 300, t0: 0}
+        self.alarms = []
+        self.ring = nil
+        self.last_alarm = ""
+        self.zones = []
+        self.clock = o != nil and o.time or nil
+        if self.clock == nil:
+            text = nil
+            if self.view != nil:
+                okr, t = pcall(() => self.view:read("/cubeos/sys/cfg/time.conf"))
+                text = okr and t or nil
+            self.clock = clock_mod.from_text(text ?? "{}")
+        for z in ZONES:
+            okz, c = pcall(() => clock_mod.new({tz: z[2], seconds: true}))
+            if okz and c != nil:
+                self.zones[len(self.zones) + 1] = {name: z[1], clock: c}
+        conf = kit.read_conf(self.view, "clock.conf")
+        if type(conf.alarms) == "table":
+            for a in conf.alarms:
+                if type(a) == "table" and type(a.time) == "string":
+                    self.alarms[len(self.alarms) + 1] = {time: a.time, on: a.on != false, label: a.label ?? ""}
+        self.ui = cdk.open(sys, ctx, {title: NAME, w: 230, h: 150, min_w: 190, min_h: 120, icon: "clock"})
+        self:_build()
+        self.ticker = self.ui:every(0.1, () => self:_tick())
+        self:_tick()
+        if o != nil and o.ready != nil:
+            o.ready(self)
+
+    # ------------------------------------------------------------ окно
+
+    def _build(self):
+        let me = self
+        ui = self.ui
+        self.tab_buttons = []
+        row = []
+        for i, t in TABS:
+            let n = i
+            b = cdk.button(i == 1 and t[1] or "", {icon: t[2], variant: i == 1 and "primary" or "flat", on_click: (x) => me:show_tab(n)})
+            self.tab_buttons[i] = b
+            row[len(row) + 1] = b
+        # 1: часы
+        self.face = face({grow: 1})
+        self.digital = cdk.label("00:00:00", {variant: "title", align: "center"})
+        self.date = cdk.label("", {variant: "dim", align: "center"})
+        self.zone_label = cdk.label("", {variant: "dim", align: "center"})
+        p1 = cdk.row({grow: 1, gap: 6, align: "center"}, [self.face, cdk.column({gap: 2, grow: 1}, [cdk.spacer(), self.digital, self.date, self.zone_label, cdk.spacer()])])
+        # 2: мир
+        self.world = cdk.list_view({grow: 1, items: []})
+        p2 = cdk.column({grow: 1}, [self.world])
+        # 3: секундомер
+        self.sw_label = cdk.label("00:00.00", {variant: "title", align: "center"})
+        self.sw_start = cdk.button("Start", {variant: "primary", on_click: (x) => me:sw_toggle()})
+        self.sw_laps = cdk.list_view({grow: 1, items: []})
+        p3 = cdk.column({grow: 1, gap: 3}, [self.sw_label, cdk.row({gap: 3}, [self.sw_start, cdk.button("Lap", {on_click: (x) => me:sw_lap()}),
+            cdk.button("Reset", {on_click: (x) => me:sw_reset()})]), self.sw_laps])
+        # 4: таймер
+        self.tm_label = cdk.label("05:00", {variant: "title", align: "center"})
+        self.tm_bar = cdk.progress({value: 0})
+        self.tm_start = cdk.button("Start", {variant: "primary", on_click: (x) => me:tm_toggle()})
+        presets = []
+        for m in [1, 5, 10, 15, 30]:
+            let mm = m
+            presets[len(presets) + 1] = cdk.button(m .. "m", {variant: "flat", on_click: (x) => me:tm_set(mm * 60)})
+        self.tm_custom = cdk.text_input({width: 44, placeholder: "min", on_submit: (t) => me:tm_set((tonumber(t) ?? 5) * 60)})
+        p4 = cdk.column({grow: 1, gap: 3}, [self.tm_label, self.tm_bar, cdk.row({gap: 2}, presets), cdk.row({gap: 3}, [self.tm_custom, self.tm_start,
+            cdk.button("Reset", {on_click: (x) => me:tm_set(me.timer.total)})])])
+        # 5: будильники
+        self.al_list = cdk.list_view({grow: 1, items: [], on_activate: (i, it) => me:al_toggle(i)})
+        self.al_input = cdk.text_input({width: 44, placeholder: "07:30", on_submit: (t) => me:al_add(t)})
+        p5 = cdk.column({grow: 1, gap: 3}, [self.al_list, cdk.row({gap: 3, align: "center"}, [self.al_input, cdk.button("Add", {on_click: (x) => me:al_add(me.al_input.text)}),
+            cdk.button("Remove", {variant: "danger", on_click: (x) => me:al_remove()}), cdk.label("Enter toggles", {variant: "dim"})])])
+        self.pages = [p1, p2, p3, p4, p5]
+        for i, p in self.pages:
+            p.visible = i == 1
+        self.status = cdk.label("", {variant: "accent"})
+        ui:set_root(cdk.column({gap: 2, padding: 3}, [cdk.row({gap: 0}, row), cdk.column({grow: 1}, self.pages), self.status]))
+        ui.on_key = (ev) => me:key(ev)
+        self:_refresh_alarms()
+
+    def show_tab(self, n):
+        self.tab = n
+        for i, p in self.pages:
+            p:set_visible(i == n)
+        for i, b in self.tab_buttons:
+            b.variant = i == n and "primary" or "flat"
+            b.text = i == n and TABS[i][1] or ""
+            b:relayout()
+            b:invalidate()
+
+    # ------------------------------------------------------------ часы и мир
+
+    def _tick(self):
+        now = self.ui:now()
+        c = self.clock
+        parts = c:parts()
+        # доли секунды для плавной стрелки
+        parts.ms = parts.ms ?? 0
+        if self.tab == 1:
+            self.face:set_time(parts)
+            self.digital:set_text(c:format("%H:%M:%S"))
+            self.date:set_text(c:format("%a %d %b %Y"))
+            z = c:zone()
+            self.zone_label:set_text(z.name .. "  " .. clock_mod.format_offset(z.offset_min))
+        elif self.tab == 2:
+            rows = []
+            base = c:parts()
+            for i, zz in self.zones:
+                p = zz.clock:parts()
+                diff = p.day != base.day and (p.day > base.day or p.month > base.month) and "+1 day" or (p.day != base.day and "-1 day" or "")
+                rows[i] = {text: zz.name, icon: "clock", detail: two(p.hour) .. ":" .. two(p.min) .. " " .. diff}
+            self.world:set_items(rows)
+        elif self.tab == 3 and self.sw.running:
+            self:_sw_update(now)
+        if self.timer.running:
+            left = self.timer.left - (now - self.timer.t0)
+            if left <= 0:
+                self.timer.running = false
+                self.timer.left = 0
+                self:_tm_update(0)
+                self.tm_start.text = "Start"
+                self.tm_start:invalidate()
+                self:_ring("Timer is up!")
+            else:
+                self:_tm_update(left)
+        # будильники: раз в минуту
+        stamp = two(parts.hour) .. ":" .. two(parts.min)
+        if stamp != self.last_alarm:
+            self.last_alarm = stamp
+            for a in self.alarms:
+                if a.on and a.time == stamp:
+                    self:_ring("Alarm " .. a.time .. (a.label != "" and (" " .. a.label) or ""))
+        if self.ring != nil:
+            self:_ring_step(now)
+
+    # ------------------------------------------------------------ секундомер
+
+    def _sw_elapsed(self, now):
+        return self.sw.acc + (self.sw.running and (now - self.sw.t0) or 0)
+
+    def _sw_update(self, now):
+        self.sw_label:set_text(span_text(self:_sw_elapsed(now), true))
+
+    def sw_toggle(self):
+        now = self.ui:now()
+        if self.sw.running:
+            self.sw.acc = self:_sw_elapsed(now)
+            self.sw.running = false
+        else:
+            self.sw.t0 = now
+            self.sw.running = true
+        self.sw_start.text = self.sw.running and "Stop" or "Start"
+        self.sw_start:invalidate()
+
+    def sw_lap(self):
+        if not self.sw.running and self.sw.acc == 0:
+            return
+        t = self:_sw_elapsed(self.ui:now())
+        n = len(self.sw.laps)
+        prev = n > 0 and self.sw.laps[n].total or 0
+        self.sw.laps[n + 1] = {total: t, split: t - prev}
+        rows = []
+        for i in range[1, n + 1]:
+            l = self.sw.laps[n + 2 - i]
+            rows[i] = {text: "Lap " .. (n + 2 - i), detail: span_text(l.split, true) .. "  " .. span_text(l.total, true)}
+        self.sw_laps:set_items(rows)
+
+    def sw_reset(self):
+        self.sw = {running: false, t0: 0, acc: 0, laps: []}
+        self.sw_start.text = "Start"
+        self.sw_start:invalidate()
+        self.sw_label:set_text("00:00.00")
+        self.sw_laps:set_items([])
+
+    # ------------------------------------------------------------ таймер
+
+    def _tm_update(self, left):
+        self.tm_label:set_text(span_text(math.ceil(left), false))
+        self.tm_bar:set(self.timer.total > 0 and (1 - left / self.timer.total) or 0)
+
+    def tm_set(self, secs):
+        self.timer = {running: false, left: secs, total: secs, t0: 0}
+        self.tm_start.text = "Start"
+        self.tm_start:invalidate()
+        self:_tm_update(secs)
+
+    def tm_toggle(self):
+        now = self.ui:now()
+        if self.timer.running:
+            self.timer.left = self.timer.left - (now - self.timer.t0)
+            self.timer.running = false
+        else:
+            if self.timer.left <= 0:
+                self.timer.left = self.timer.total
+            self.timer.t0 = now
+            self.timer.running = true
+        self.tm_start.text = self.timer.running and "Pause" or "Start"
+        self.tm_start:invalidate()
+
+    # ------------------------------------------------------------ будильники
+
+    def _refresh_alarms(self):
+        rows = []
+        for i, a in self.alarms:
+            rows[i] = {text: a.time .. (a.label != "" and ("  " .. a.label) or ""), icon: a.on and "bell" or "close", detail: a.on and "on" or "off",
+                color: a.on and nil or self.ui.style.dim}
+        self.al_list:set_items(rows)
+
+    def _save_alarms(self):
+        out = []
+        for a in self.alarms:
+            out[len(out) + 1] = {time: a.time, on: a.on, label: a.label}
+        kit.patch_conf(self.view, "clock.conf", "alarms", out)
+
+    def al_add(self, text):
+        h, m = string.match(tostring(text ?? ""), "^%s*(%d+):(%d+)%s*$")
+        if h == nil or tonumber(h) > 23 or tonumber(m) > 59:
+            self.status:set_text("Time looks like 07:30")
+            return
+        self.alarms[len(self.alarms) + 1] = {time: two(tonumber(h)) .. ":" .. two(tonumber(m)), on: true, label: ""}
+        table.sort(self.alarms, (a, b) => a.time < b.time)
+        self.al_input:set_text("")
+        self:_refresh_alarms()
+        self:_save_alarms()
+        self.status:set_text("")
+
+    def al_toggle(self, i):
+        a = self.alarms[i]
+        if a != nil:
+            a.on = not a.on
+            self:_refresh_alarms()
+            self:_save_alarms()
+
+    def al_remove(self):
+        i = self.al_list.selected
+        if i != nil and i > 0 and self.alarms[i] != nil:
+            table.remove(self.alarms, i)
+            self:_refresh_alarms()
+            self:_save_alarms()
+
+    # ------------------------------------------------------------ звонок
+
+    def _ring(self, text):
+        self.ring = {step: 0, next: 0, left: 24}
+        self.status:set_text(text .. "  (Esc stops)")
+
+    def _ring_step(self, now):
+        r = self.ring
+        if now < r.next:
+            return
+        r.next = now + 0.18
+        chord = RING[r.step % len(RING) + 1]
+        r.step += 1
+        r.left -= 1
+        if r.left <= 0:
+            self.ring = nil
+            return
+        if not self.no_audio:
+            notes = []
+            for n in chord:
+                notes[len(notes) + 1] = {instrument: n[1], pitch: n[2], volume: 3}
+            ok, res, err = pcall(() => rpc.call(self.sys, "audiod", "notes", {list: notes}, 1))
+
+    def stop_ring(self):
+        self.ring = nil
+        self.status:set_text("")
+
+    def key(self, ev):
+        k = ev.key
+        if (k == 256 or k == 1) and self.ring != nil:
+            self:stop_ring()
+        elif k == keys.one:
+            self:show_tab(1)
+        elif k == keys.two:
+            self:show_tab(2)
+        elif k == keys.three:
+            self:show_tab(3)
+        elif k == keys.four:
+            self:show_tab(4)
+        elif k == keys.five:
+            self:show_tab(5)
+        elif k == keys.space and self.tab == 3:
+            self:sw_toggle()
+        elif k == keys.space and self.tab == 4:
+            self:tm_toggle()
+        elif k == keys.l and self.tab == 3:
+            self:sw_lap()
+        else:
+            return false
+        return true
+
+    def run(self):
+        self.ui:run()
+
+export def main(sys, ctx):
+    app = Clock(sys, ctx)
+    app:run()

@@ -1,0 +1,97 @@
+# apps.jukebox.score: нотные файлы .csc (формат CSC1, tools/make_music.py): разбор и проигрывание по времени.
+#
+#   sc = score.parse(text)       -> {title, by, bpm, steps, key, events: [{step, inst, pitch, vol}] по возрастанию шага, step_sec, seconds}
+#   cur = score.Cursor(sc)
+#   list = cur:due(t)            события, которые наступили к моменту t (секунды от начала) и ещё не отданы; nil, когда трек кончился
+#   cur:seek(t)                  перейти к моменту t (пропущенные ноты не играются)
+#   score.midi_of(inst, pitch)   номер ноты MIDI (для показа спектра), для ударных nil
+
+export const BASES = {harp: 54, pling: 54, bit: 54, banjo: 54, iron_xylophone: 54, bass: 30, didgeridoo: 30, guitar: 42, flute: 66,
+    cow_bell: 66, bell: 78, chime: 78, xylophone: 78}
+export const DRUMS = {basedrum: true, snare: true, hat: true}
+
+export def midi_of(inst, pitch):
+    b = BASES[inst]
+    if b == nil:
+        return nil
+    return b + pitch
+
+# строка "шаг:инструмент:высота[+высота]:громкость" -> события в таблицу out (шаг сдвинут на base)
+def _events(tok, base, out):
+    st, inst, pitches, vol = string.match(tok, "^(%d+):([%w_]+):([%d%+]+):(%d)$")
+    if st == nil:
+        return
+    for p in string.gmatch(pitches, "%d+"):
+        out[len(out) + 1] = {step: base + tonumber(st), inst: inst, pitch: tonumber(p), vol: tonumber(vol)}
+
+export def parse(text):
+    sc = {title: "Untitled", author: "", bpm: 120, steps: 0, key: "", events: []}
+    patterns = {}
+    placed = []
+    first = true
+    for line in string.gmatch(text, "[^\r\n]+"):
+        if first:
+            first = false
+            if line != "CSC1":
+                return nil, "not a CSC1 score"
+        else:
+            tag, rest = string.match(line, "^(%S+)%s*(.*)$")
+            if tag == "title":
+                sc.title = rest
+            elif tag == "by":
+                sc.author = rest
+            elif tag == "key":
+                sc.key = rest
+            elif tag == "bpm":
+                sc.bpm = tonumber(rest) ?? 120
+            elif tag == "steps":
+                sc.steps = tonumber(rest) ?? 0
+            elif tag == "p":
+                name, body = string.match(rest, "^(%S+)%s+(.*)$")
+                if name != nil:
+                    patterns[name] = body
+            elif tag == "@":
+                st, name = string.match(rest, "^(%d+)%s+(%S+)")
+                if st != nil:
+                    placed[len(placed) + 1] = [tonumber(st), name]
+    for pl in placed:
+        body = patterns[pl[2]]
+        if body != nil:
+            for tok in string.gmatch(body, "%S+"):
+                _events(tok, pl[1], sc.events)
+    table.sort(sc.events, (a, b) => a.step < b.step)
+    sc.step_sec = 60 / sc.bpm / 4
+    sc.seconds = sc.steps * sc.step_sec
+    return sc
+
+export class Cursor:
+    def init(self, sc):
+        self.sc = sc
+        self.i = 1
+
+    def seek(self, t):
+        step = t / self.sc.step_sec
+        self.i = 1
+        ev = self.sc.events
+        # события раньше момента пропускаем
+        lo = 1
+        hi = len(ev) + 1
+        while lo < hi:
+            mid = math.floor((lo + hi) / 2)
+            if ev[mid].step < step:
+                lo = mid + 1
+            else:
+                hi = mid
+        self.i = lo
+
+    def due(self, t):
+        sc = self.sc
+        if t > sc.seconds + 1.5:
+            return nil
+        step = t / sc.step_sec
+        out = []
+        ev = sc.events
+        while self.i <= len(ev) and ev[self.i].step <= step:
+            out[len(out) + 1] = ev[self.i]
+            self.i += 1
+        return out

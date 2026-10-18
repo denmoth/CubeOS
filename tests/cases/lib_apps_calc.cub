@@ -1,0 +1,39 @@
+import t
+import appenv
+import apps.calc as calc
+import apps.calc.eval as ev
+eq = t.eq
+
+def v(text, deg=true):
+    r, e = ev.evaluate(text, {deg: deg, ans: 7})
+    return r
+eq([v("2+3*4"), v("(1+2)^3"), v("2^3^2"), v("-2^2"), v("10/4")], [14, 27, 512, -4, 2.5], "precedence and powers")
+eq([v("7%3"), v("-7%3"), v("5!"), v("sqrt(16)"), v("2pi") > 6.28, v("3(4+1)")], [1, 2, 120, 4, true, 15], "remainder, factorial, functions, implicit multiplication")
+eq([ev.format(v("sin(30)")), ev.format(v("cos(60)")), ev.format(v("sin(pi)", false)), ev.format(v("ans*2"))], ["0.5", "0.5", "0", "14"], "degrees, radians and ans")
+eq([ev.format(v("min(3,1,2)")), ev.format(v("max(3,1,2)")), ev.format(v("log(1000)")), ev.format(v("ln(e)")), ev.format(v("round(2.5)"))], ["1", "3", "3", "1", "3"], "functions with several arguments")
+r, e = ev.evaluate("1/0")
+eq([r, e], [nil, "Cannot divide by zero"], "division by zero is an error, not infinity")
+r, e = ev.evaluate("2+")
+eq(e != nil, true, "an unfinished expression is an error")
+r, e = ev.evaluate("os.exit()")
+eq(e != nil, true, "names that are not math are refused")
+r, e = ev.evaluate("2 $ 3")
+eq(e, "Unexpected $", "a stray character is reported")
+eq([ev.format(14), ev.format(2.5), ev.format(1 / 3), ev.format(1e20)], ["14", "2.5", "0.3333333333", "1e+20"], "number formatting")
+
+env = appenv.new({user: "ann"})
+app = env.launch(calc.main, [nil, {view: env.view, ready: (p) => rawset(env.got, "app", p)}])
+env.chars("12*3")
+eq(app.result.text, "36", "the result is live while typing")
+env.key(keys.enter)
+eq([app.input.text, len(app.history)], ["36", 1], "Enter keeps the answer and writes the history")
+env.chars("+4")
+env.key(keys.enter)
+eq(app.input.text, "40", "the answer continues the next calculation")
+env.key(256)
+eq(app.input.text, "", "Esc clears")
+app.input:set_text("1/0")
+env.key(keys.enter)
+eq(app.note.text, "Cannot divide by zero", "errors are shown in plain words")
+eq(env.alive(), true, "the app is still running (it did not crash)")
+print("done")

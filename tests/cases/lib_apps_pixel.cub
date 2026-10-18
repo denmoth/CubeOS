@@ -1,0 +1,41 @@
+import t
+import appenv
+import cgl.cimg as cimg
+import cgl.surface as surface_mod
+import apps.pixel as pixel
+eq = t.eq
+
+env = appenv.new({user: "ann"})
+# две картинки: 40x30 с прозрачным углом и 16x16
+a = surface_mod.new(40, 30, 40)
+a:fill_rect(10, 8, 20, 14, 90)
+a:set(0, 0, -1)
+b = surface_mod.new(16, 16, 120)
+env.fsys:mkdir(nil, env.home .. "/pictures", {parents: true})
+env.fsys:write_file(nil, env.home .. "/pictures/a.cimg", cimg.encode(a, nil))
+env.fsys:write_file(nil, env.home .. "/pictures/b.cimg", cimg.encode(b, nil))
+env.fsys:write_file(nil, env.home .. "/pictures/note.txt", "x")
+app = env.launch(pixel.main, [env.home .. "/pictures/a.cimg", {view: env.view, desktop: {set_wallpaper: (n) => rawset(env.got, "wall", n), save: (k, v) => rawset(env.got, k, v)}, ready: (p) => rawset(env.got, "app", p)}])
+eq(app.vp.img.w .. "x" .. app.vp.img.h, "40x30", "the picture opens")
+eq(app.vp.img.px[1], -1, "the transparent pixel stays transparent")
+eq(len(app.files), 2, "the folder lists only pictures")
+eq(app.vp.zoom >= 1, true, "a small picture is shown enlarged")
+env.key(keys.right)
+eq(app.pos, 2, "the right arrow shows the next picture")
+eq(app.vp.img.w, 16, "it is the second picture")
+env.key(keys.left)
+eq(app.vp.img.w, 40, "and back")
+env.key(keys.r)
+eq(app.vp.img.w .. "x" .. app.vp.img.h, "30x40", "R rotates")
+env.key(keys.g)
+eq(app.vp.grid, true, "G shows the pixel grid")
+env.key(keys.i)
+eq(app.show_info, true, "I shows the colors")
+app:set_as("wallpaper")
+eq(env.fsys:exists(nil, "/cubeos/users/ann/cfg/wallpapers/a.cimg"), true, "set as wallpaper stores a copy")
+eq(env.got.wall, "a", "and tells the desktop")
+app:set_as("avatar")
+eq(env.fsys:exists(nil, "/cubeos/users/ann/cfg/avatar.cimg"), true, "the avatar is stored")
+eq(env.got.avatar, "custom", "and switched on")
+eq(env.alive(), true, "the app is still running (it did not crash)")
+print("done")

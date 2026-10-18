@@ -1,0 +1,676 @@
+# apps.brush: Brush, рисовалка CDE. Рисует в общих цветах палитры экрана (16..211) и сохраняет картинки .cimg.
+#
+#   wm:launch(brush.main, {name: "brush"}, [path_or_nil, {session, assets, desktop}])    для тестов: view, ready(app)
+#
+# Инструменты (слева; клавиши): карандаш P, кисть B, ластик E (прозрачный пиксель с Shift), аэрограф S, линия L, прямоугольник R (с
+# заливкой Shift+R), эллипс O (Shift+O), заливка F, пипетка I, текст T, рука H. Левая кнопка рисует первым цветом, правая вторым.
+# Зеркало M: рисует симметрично (вертикаль, горизонталь, обе). Z/Ctrl+Z отмена, Ctrl+Y повтор, X обмен цветов, G сетка, [ ] размер,
+# колесо или + и - масштаб, Ctrl+S сохранить, Ctrl+N новая, Ctrl+O открыть. «Effects»: негатив, серый, светлее, темнее, повороты.
+
+import cdk
+import cdk.widget as widget
+import cfs.path as paths
+import cgl.cimg as cimg
+import cgl.surface as surface_mod
+import cde.theme as theme
+import apps.kit as kit
+
+export const NAME = "Brush"
+const UNDO_MAX = 24
+const TOOLS = [["pencil", "pencil", "P"], ["brush", "brush", "B"], ["eraser", "eraser", "E"], ["spray", "spray", "S"], ["line", "line", "L"],
+    ["rect", "rect", "R"], ["rectf", "rectf", ""], ["ellipse", "ellipse", "O"], ["ellipsef", "ellipsef", ""], ["fill", "fill", "F"],
+    ["picker", "picker", "I"], ["text", "text", "T"], ["hand", "hand", "H"]]
+const SIZES = [["64 x 64", 64, 64], ["128 x 80", 128, 80], ["160 x 100", 160, 100], ["200 x 120", 200, 120], ["306 x 171 (screen)", 306, 171]]
+
+# ------------------------------------------------------------ два цвета: основной и второй
+
+export def fx_invert(r, g, b):
+    return 255 - r, 255 - g, 255 - b
+
+def fx_gray(r, g, b):
+    v = r * 0.3 + g * 0.59 + b * 0.11
+    return v, v, v
+
+def fx_lighter(r, g, b):
+    return r + (255 - r) * 0.25, g + (255 - g) * 0.25, b + (255 - b) * 0.25
+
+def fx_darker(r, g, b):
+    return r * 0.75, g * 0.75, b * 0.75
+
+class Swatch(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "swatch"
+        self.fg = theme.GRAY0
+        self.bg = theme.GRAY0 + 15
+        self.on_swap = o.on_swap
+
+    def measure(self, st):
+        return 26, 22
+
+    def draw(self, s, st):
+        s:fill_rect(self.x + 8, self.y + 6, 16, 14, st.border)
+        s:fill_rect(self.x + 9, self.y + 7, 14, 12, self.bg)
+        s:fill_rect(self.x + 1, self.y + 1, 16, 14, st.border)
+        s:fill_rect(self.x + 2, self.y + 2, 14, 12, self.fg)
+
+    def handle(self, ev):
+        if ev.name == "down":
+            if self.on_swap != nil:
+                self.on_swap()
+            return true
+        return false
+
+export class Brush:
+    def init(self, sys, ctx):
+        o = ctx.args != nil and ctx.args[2] or nil
+        self.sys = sys
+        self.ctx = ctx
+        self.view = (o != nil and o.view) or sys.view()
+        self.desktop = o != nil and o.desktop or nil
+        self.path = nil
+        self.fg = theme.GRAY0
+        self.bg = theme.GRAY0 + 15
+        self.tool = "pencil"
+        self.size = 1
+        self.mirror = 0           # 0 нет, 1 вертикаль, 2 горизонталь, 3 обе
+        self.undo = []
+        self.redo = []
+        self.stroke = nil
+        self.dirty = false
+        self.text_value = "Hello"
+        self.canvas = nil
+        self.ui = cdk.open(sys, ctx, {title: NAME, w: 296, h: 160, min_w: 200, min_h: 110, icon: "brush"})
+        self:_build()
+        self:new_canvas(128, 80, false)
+        arg = ctx.args != nil and ctx.args[1] or nil
+        if type(arg) == "string" and arg != "":
+            self:open(arg)
+        if o != nil and o.ready != nil:
+            o.ready(self)
+
+    # ------------------------------------------------------------ окно
+
+    def _build(self):
+        let me = self
+        ui = self.ui
+        def b(icon, fn):
+            return cdk.button("", {icon: icon, variant: "flat", on_click: (x) => fn()})
+        self.vp = kit.viewport({grow: 1, pan_drag: false, on_down: (x, y, btn) => me:_down(x, y, btn), on_drag: (x, y, btn) => me:_drag(x, y, btn),
+            on_up: (x, y, btn) => me:_up(x, y, btn), on_zoom: (z) => me:_status(), overlay: (s, vp) => me:_overlay(s, vp)})
+        self.vp.on_key = (ev) => me:key(ev)
+        self.grid = kit.color_grid({on_pick: (idx, btn) => me:pick_color(idx, btn)})
+        self.swatch = Swatch({on_swap: () => me:swap()})
+        self.size_label = cdk.label("1", {variant: "dim"})
+        self.size_slider = cdk.slider({min: 1, max: 9, step: 1, value: 1, width: 64, on_change: (v) => me:set_size(v)})
+        self.tool_buttons = []
+        cells = []
+        for i, t in TOOLS:
+            let id = t[1]
+            btn = cdk.button("", {icon: t[2], variant: i == 1 and "primary" or "flat", on_click: (x) => me:set_tool(id)})
+            self.tool_buttons[id] = btn
+            cells[len(cells) + 1] = btn
+        tools = cdk.grid(2, {gap: 1}, cells)
+        self.status = cdk.label("", {variant: "dim"})
+        top = cdk.row({gap: 1, padding: 1, align: "center"}, [cdk.button("New", {variant: "flat", on_click: (x) => me:ask_new()}),
+            cdk.button("Open", {variant: "flat", on_click: (x) => me:ask_open()}), cdk.button("Save", {variant: "flat", icon: "save", on_click: (x) => me:save()}),
+            b("undo", () => me:do_undo()), b("redo", () => me:do_redo()), cdk.spacer(),
+            b("minus", () => me.vp:zoom_by(-1)), b("plus", () => me.vp:zoom_by(1)), cdk.button("Fit", {variant: "flat", on_click: (x) => me.vp:fit()}),
+            b("grid", () => me:toggle_grid()), b("mirror", () => me:cycle_mirror()), cdk.button("Effects", {variant: "flat", on_click: (x) => me:effects_menu()})])
+        right = cdk.column({gap: 3, padding: 1}, [self.swatch, self.grid, cdk.label("Size", {variant: "dim"}), self.size_slider])
+        ui:set_root(cdk.column({gap: 0}, [top, cdk.row({grow: 1, gap: 2}, [cdk.column({padding: 1}, [tools]), self.vp, right]),
+            cdk.row({padding: 2}, [self.status])]))
+        ui:set_focus(self.vp)
+        ui.on_key = (ev) => me:key(ev)
+
+    def _status(self, text=nil):
+        if self.canvas == nil:
+            return
+        t = text
+        if t == nil:
+            t = self.canvas.w .. "x" .. self.canvas.h .. "   " .. math.floor(self.vp.zoom * 100 + 0.5) .. "%   " .. self.tool
+            if self.mirror > 0:
+                t = t .. "   mirror " .. (self.mirror == 1 and "|" or (self.mirror == 2 and "-" or "+"))
+            if self.path != nil:
+                t = t .. "   " .. paths.basename(self.path)
+            if self.dirty:
+                t = t .. " *"
+        self.status.text = t
+        self.status:invalidate()
+
+    def set_tool(self, id):
+        self.tool = id
+        for k, btn in self.tool_buttons:
+            btn.variant = k == id and "primary" or "flat"
+            btn:invalidate()
+        if id == "hand":
+            self.vp.pan_drag = true
+        else:
+            self.vp.pan_drag = false
+        self:_status()
+
+    def set_size(self, v):
+        self.size = v
+        self.size_label.text = tostring(v)
+        self.size_slider.value = v
+        self.size_slider:invalidate()
+
+    def pick_color(self, idx, btn):
+        if btn == 2:
+            self.bg = idx
+        else:
+            self.fg = idx
+        self.swatch.fg = self.fg
+        self.swatch.bg = self.bg
+        self.swatch:invalidate()
+        self.grid.fg = self.fg
+        self.grid:invalidate()
+
+    def swap(self):
+        self.fg, self.bg = self.bg, self.fg
+        self.swatch.fg = self.fg
+        self.swatch.bg = self.bg
+        self.swatch:invalidate()
+
+    def toggle_grid(self):
+        self.vp.grid = not self.vp.grid
+        self.vp:invalidate()
+
+    def cycle_mirror(self):
+        self.mirror = (self.mirror + 1) % 4
+        self:_status()
+        self.vp:invalidate()
+
+    # ------------------------------------------------------------ холст
+
+    def new_canvas(self, w, h, clear):
+        self.canvas = surface_mod.new(w, h, clear and -1 or theme.GRAY0 + 15)
+        self.undo = []
+        self.redo = []
+        self.dirty = false
+        self.path = nil
+        self.vp:set_image(self.canvas)
+        self.vp:fit()
+        self:_status()
+
+    def _push_undo(self):
+        self.undo[len(self.undo) + 1] = self.canvas:copy()
+        if len(self.undo) > UNDO_MAX:
+            table.remove(self.undo, 1)
+        self.redo = []
+
+    def _replace(self, surf):
+        self.canvas = surf
+        self.vp:set_image(surf, true)
+
+    def do_undo(self):
+        n = len(self.undo)
+        if n == 0:
+            return
+        self.redo[len(self.redo) + 1] = self.canvas:copy()
+        self:_replace(table.remove(self.undo, n))
+        self.dirty = true
+        self:_status()
+
+    def do_redo(self):
+        n = len(self.redo)
+        if n == 0:
+            return
+        self.undo[len(self.undo) + 1] = self.canvas:copy()
+        self:_replace(table.remove(self.redo, n))
+        self.dirty = true
+        self:_status()
+
+    # ------------------------------------------------------------ рисование
+
+    # точка с учётом зеркала
+    def _plot(self, x, y, c):
+        cv = self.canvas
+        w = cv.w
+        h = cv.h
+        if x >= 0 and y >= 0 and x < w and y < h:
+            cv.px[y * w + x + 1] = c
+        m = self.mirror
+        if m == 1 or m == 3:
+            mx = w - 1 - x
+            if mx >= 0 and mx < w and y >= 0 and y < h:
+                cv.px[y * w + mx + 1] = c
+        if m == 2 or m == 3:
+            my = h - 1 - y
+            if x >= 0 and x < w and my >= 0 and my < h:
+                cv.px[my * w + x + 1] = c
+        if m == 3:
+            mx = w - 1 - x
+            my = h - 1 - y
+            if mx >= 0 and mx < w and my >= 0 and my < h:
+                cv.px[my * w + mx + 1] = c
+
+    # круглая точка поперечником size
+    def _stamp(self, x, y, c, size=nil):
+        n = size ?? self.size
+        if n <= 1:
+            self:_plot(x, y, c)
+            return
+        r = (n - 1) / 2
+        lo = -math.floor(r)
+        hi = math.floor(r + 0.5)
+        for dy in range[lo, hi]:
+            for dx in range[lo, hi]:
+                if dx * dx + dy * dy <= r * r + 0.6:
+                    self:_plot(x + dx, y + dy, c)
+
+    def _line(self, x0, y0, x1, y1, c, size=nil):
+        dx = math.abs(x1 - x0)
+        dy = -math.abs(y1 - y0)
+        sx = x0 < x1 and 1 or -1
+        sy = y0 < y1 and 1 or -1
+        err = dx + dy
+        x = x0
+        y = y0
+        guard = 0
+        while guard < 2000:
+            guard += 1
+            self:_stamp(x, y, c, size)
+            if x == x1 and y == y1:
+                break
+            e2 = 2 * err
+            if e2 >= dy:
+                err += dy
+                x += sx
+            if e2 <= dx:
+                err += dx
+                y += sy
+
+    def _rect(self, x0, y0, x1, y1, c, fill):
+        xa = math.min(x0, x1)
+        xb = math.max(x0, x1)
+        ya = math.min(y0, y1)
+        yb = math.max(y0, y1)
+        if fill:
+            for y in range[ya, yb]:
+                for x in range[xa, xb]:
+                    self:_plot(x, y, c)
+        else:
+            self:_line(xa, ya, xb, ya, c)
+            self:_line(xa, yb, xb, yb, c)
+            self:_line(xa, ya, xa, yb, c)
+            self:_line(xb, ya, xb, yb, c)
+
+    def _ellipse(self, x0, y0, x1, y1, c, fill):
+        xa = math.min(x0, x1)
+        xb = math.max(x0, x1)
+        ya = math.min(y0, y1)
+        yb = math.max(y0, y1)
+        cx = (xa + xb) / 2
+        cy = (ya + yb) / 2
+        rx = math.max(0.5, (xb - xa) / 2)
+        ry = math.max(0.5, (yb - ya) / 2)
+        if fill:
+            for y in range[ya, yb]:
+                t = (y - cy) / ry
+                if math.abs(t) <= 1:
+                    half = rx * math.sqrt(1 - t * t)
+                    for x in range[math.floor(cx - half + 0.5), math.floor(cx + half + 0.5)]:
+                        self:_plot(x, y, c)
+        else:
+            steps = math.max(24, math.floor((rx + ry) * 4))
+            px = nil
+            py = nil
+            for i in range[0, steps]:
+                a = i / steps * math.pi * 2
+                x = math.floor(cx + rx * math.cos(a) + 0.5)
+                y = math.floor(cy + ry * math.sin(a) + 0.5)
+                if px != nil:
+                    self:_line(px, py, x, y, c)
+                px = x
+                py = y
+
+    def _spray(self, x, y, c):
+        r = self.size * 2 + 2
+        for i in range[1, self.size * 3 + 3]:
+            a = math.random() * math.pi * 2
+            d = math.sqrt(math.random()) * r
+            self:_plot(x + math.floor(math.cos(a) * d + 0.5), y + math.floor(math.sin(a) * d + 0.5), c)
+
+    def _color_for(self, btn, erase_clear):
+        if self.tool == "eraser":
+            return erase_clear and -1 or self.bg
+        return btn == 2 and self.bg or self.fg
+
+    def _flood(self, x, y, c):
+        cv = self.canvas
+        if x < 0 or y < 0 or x >= cv.w or y >= cv.h:
+            return
+        target = cv.px[y * cv.w + x + 1]
+        if target == c:
+            return
+        stack = [[x, y]]
+        while len(stack) > 0:
+            p = table.remove(stack)
+            px = p[1]
+            py = p[2]
+            if px >= 0 and py >= 0 and px < cv.w and py < cv.h and cv.px[py * cv.w + px + 1] == target:
+                cv.px[py * cv.w + px + 1] = c
+                stack[len(stack) + 1] = [px + 1, py]
+                stack[len(stack) + 1] = [px - 1, py]
+                stack[len(stack) + 1] = [px, py + 1]
+                stack[len(stack) + 1] = [px, py - 1]
+
+    def _down(self, x, y, btn):
+        if x == nil:
+            return
+        t = self.tool
+        if t == "picker":
+            c = self.canvas.px[y * self.canvas.w + x + 1]
+            if c >= 0:
+                self:pick_color(c, btn)
+            return
+        self:_push_undo()
+        self.dirty = true
+        c = self:_color_for(btn, self.ui.mods.shift)
+        self.stroke = {x: x, y: y, btn: btn, c: c, base: nil}
+        if t == "pencil" or t == "brush" or t == "eraser":
+            self:_stamp(x, y, c, t == "pencil" and 1 or nil)
+        elif t == "spray":
+            self:_spray(x, y, c)
+        elif t == "fill":
+            self:_flood(x, y, c)
+        elif t == "text":
+            self:_stamp_text(x, y, c)
+        elif t == "line" or t == "rect" or t == "rectf" or t == "ellipse" or t == "ellipsef":
+            self.stroke.base = self.canvas:copy()
+        self.vp:invalidate()
+
+    def _stamp_text(self, x, y, c):
+        font = self.ui.style.font
+        self.canvas:text(font, x, y, self.text_value, c)
+
+    def _drag(self, x, y, btn):
+        st = self.stroke
+        if st == nil:
+            return
+        if x == nil:
+            # за краем холста: переносим на ближайшую точку
+            return
+        t = self.tool
+        if t == "pencil" or t == "brush" or t == "eraser":
+            self:_line(st.x, st.y, x, y, st.c, t == "pencil" and 1 or nil)
+            st.x = x
+            st.y = y
+        elif t == "spray":
+            self:_spray(x, y, st.c)
+        elif st.base != nil:
+            self:_preview(x, y)
+        self.vp:invalidate()
+
+    def _preview(self, x, y):
+        st = self.stroke
+        cv = self.canvas
+        for i in range[1, cv.w * cv.h]:
+            cv.px[i] = st.base.px[i]
+        t = self.tool
+        if t == "line":
+            self:_line(st.x, st.y, x, y, st.c)
+        elif t == "rect" or t == "rectf":
+            self:_rect(st.x, st.y, x, y, st.c, t == "rectf")
+        else:
+            self:_ellipse(st.x, st.y, x, y, st.c, t == "ellipsef")
+
+    def _up(self, x, y, btn):
+        st = self.stroke
+        if st == nil:
+            return
+        if st.base != nil and x != nil:
+            self:_preview(x, y)
+        self.stroke = nil
+        self:_status()
+        self.vp:invalidate()
+
+    def _overlay(self, s, vp):
+        # линии зеркала поверх холста
+        if self.mirror == 0 or self.canvas == nil:
+            return
+        ox, oy = vp:origin()
+        z = vp.zoom
+        c = theme.GRAY0 + 12
+        if self.mirror == 1 or self.mirror == 3:
+            s:vline(ox + math.floor(self.canvas.w * z / 2), oy, math.floor(self.canvas.h * z), c)
+        if self.mirror == 2 or self.mirror == 3:
+            s:hline(ox, oy + math.floor(self.canvas.h * z / 2), math.floor(self.canvas.w * z), c)
+
+    # ------------------------------------------------------------ эффекты
+
+    def _map_colors(self, fn):
+        pal = self.ui.win.wm.palette
+        cache = {}
+        self:_push_undo()
+        cv = self.canvas
+        for i in range[1, cv.w * cv.h]:
+            c = cv.px[i]
+            if c >= 0:
+                n = cache[c]
+                if n == nil:
+                    r, g, b = pal:get(c)
+                    r2, g2, b2 = fn(r, g, b)
+                    n = pal:nearest(math.max(0, math.min(255, math.floor(r2))), math.max(0, math.min(255, math.floor(g2))),
+                        math.max(0, math.min(255, math.floor(b2))), theme.GRAY0, theme.GENERAL0 + 179)
+                    cache[c] = n
+                cv.px[i] = n
+        cv:touch()
+        self.dirty = true
+        self.vp:invalidate()
+
+    def effect(self, name):
+        if name == "invert":
+            self:_map_colors(fx_invert)
+        elif name == "gray":
+            self:_map_colors(fx_gray)
+        elif name == "lighter":
+            self:_map_colors(fx_lighter)
+        elif name == "darker":
+            self:_map_colors(fx_darker)
+        elif name == "fliph":
+            self:_push_undo()
+            self:_replace(kit.flipped(self.canvas, true))
+        elif name == "flipv":
+            self:_push_undo()
+            self:_replace(kit.flipped(self.canvas, false))
+        elif name == "rotate":
+            self:_push_undo()
+            self:_replace(self.canvas:rotate90(1))
+            self.vp:fit()
+        elif name == "clear":
+            self:_push_undo()
+            self.canvas:clear(self.bg)
+            self.canvas:touch()
+        self.dirty = true
+        self:_status()
+        self.vp:invalidate()
+
+    def effects_menu(self):
+        let me = self
+        items = [{text: "Negative", icon: "eye", on_select: (it) => me:effect("invert")},
+            {text: "Grayscale", icon: "eye", on_select: (it) => me:effect("gray")},
+            {text: "Lighter", icon: "plus", on_select: (it) => me:effect("lighter")},
+            {text: "Darker", icon: "minus", on_select: (it) => me:effect("darker")},
+            {separator: true},
+            {text: "Flip horizontally", icon: "menu", on_select: (it) => me:effect("fliph")},
+            {text: "Flip vertically", icon: "menu", on_select: (it) => me:effect("flipv")},
+            {text: "Rotate", icon: "restart", on_select: (it) => me:effect("rotate")},
+            {separator: true},
+            {text: "Fill all with the second color", icon: "fill", on_select: (it) => me:effect("clear")},
+            {text: "Text to stamp...", icon: "text", on_select: (it) => me:ask_text()},
+            {separator: true},
+            {text: "Set as wallpaper", icon: "image", on_select: (it) => me:set_as("wallpaper")},
+            {text: "Set as my avatar", icon: "user", on_select: (it) => me:set_as("avatar")}]
+        cdk.menu(self.ui, items, self.ui.win.w - 124, 16)
+
+    # ------------------------------------------------------------ файлы
+
+    def _bytes(self):
+        return cimg.encode(self.canvas, self.ui.win.wm.palette)
+
+    def set_as(self, what):
+        name = kit.safe_name(self.path, "drawing")
+        ok, err = pcall(() => kit.set_as(self.view, self.desktop, self.ui.win.wm, what, self:_bytes(), name))
+        self:_status(ok and "Done" or ("Cannot set: " .. string.gsub(tostring(err), "^.-: ", "", 1)))
+
+    def open(self, path):
+        pal = self.ui.win.wm.palette
+        ok, img = pcall(() => kit.read_image(self.view, path, pal))
+        if not ok:
+            self:_status("Cannot open: " .. string.gsub(tostring(img), "^.-: ", "", 1))
+            return false
+        self.canvas = img
+        self.undo = []
+        self.redo = []
+        self.path = path
+        self.dirty = false
+        self.vp:set_image(img)
+        self.vp:fit()
+        self:_status()
+        return true
+
+    def save_to(self, path):
+        ok, err = pcall(() => self.view:write_atomic(path, self:_bytes()))
+        if ok:
+            self.path = path
+            self.dirty = false
+            self:_status("Saved " .. paths.basename(path))
+        else:
+            self:_status("Cannot save: " .. string.gsub(tostring(err), "^.-: ", "", 1))
+        return ok
+
+    def save(self):
+        if self.path != nil:
+            self:save_to(self.path)
+        else:
+            self:ask_save()
+
+    def _ask(self, title, value, ok_text, on_ok):
+        ui = self.ui
+        let me = self
+        card = nil
+        input = cdk.text_input({width: 200, text: value})
+        def done(ok):
+            ui:close_layer(card)
+            ui:set_focus(me.vp)
+            if ok and input.text != "":
+                on_ok(input.text)
+        input.on_submit = (t) => done(true)
+        card = cdk.card({padding: 6, gap: 4}, [cdk.label(title, {variant: "accent"}), input,
+            cdk.row({gap: 4}, [cdk.spacer(), cdk.button("Cancel", {on_click: (b) => done(false)}),
+                cdk.button(ok_text, {variant: "primary", on_click: (b) => done(true)})])])
+        card.on_escape = () => done(false)
+        ui:open_layer(card, {center: true, modal: true, dismiss: false})
+        ui:set_focus(input)
+
+    def _full(self, p):
+        ok, full = pcall(() => self.view:expand(p))
+        return ok and full or p
+
+    def ask_save(self):
+        let me = self
+        self:_ask("Save picture as", "$pictures/drawing.cimg", "Save", (p) => me:_save_as(p))
+
+    def _save_as(self, p):
+        full = self:_full(p)
+        if string.lower(string.sub(full, -5)) != ".cimg":
+            full = full .. ".cimg"
+        pcall(() => self.view:mkdir(paths.parent(full), {parents: true}))
+        self:save_to(full)
+
+    def ask_open(self):
+        let me = self
+        self:_ask("Open a picture", self.path ?? "$pictures/", "Open", (p) => me:open(me:_full(p)))
+
+    def ask_text(self):
+        let me = self
+        self:_ask("Text for the Text tool", self.text_value, "OK", (t) => rawset(me, "text_value", t))
+
+    def ask_new(self):
+        ui = self.ui
+        let me = self
+        card = nil
+        items = []
+        for i, sz in SIZES:
+            items[i] = {text: sz[1], icon: "image"}
+        lv = cdk.list_view({items: items, width: 150, height: 64})
+        clear = cdk.checkbox("Transparent background", {checked: false})
+        def done(ok):
+            ui:close_layer(card)
+            ui:set_focus(me.vp)
+            if ok and lv.selected > 0:
+                sz = SIZES[lv.selected]
+                me:new_canvas(sz[2], sz[3], clear.checked)
+        lv.on_activate = (i, it) => done(true)
+        card = cdk.card({padding: 6, gap: 3}, [cdk.label("New picture", {variant: "accent"}), lv, clear,
+            cdk.row({gap: 4}, [cdk.spacer(), cdk.button("Cancel", {on_click: (b) => done(false)}),
+                cdk.button("Create", {variant: "primary", on_click: (b) => done(true)})])])
+        card.on_escape = () => done(false)
+        ui:open_layer(card, {center: true, modal: true, dismiss: false})
+        ui:set_focus(lv)
+
+    # ------------------------------------------------------------ клавиши
+
+    def key(self, ev):
+        k = ev.key
+        if ev.ctrl:
+            if k == keys.z:
+                self:do_undo()
+            elif k == keys.y:
+                self:do_redo()
+            elif k == keys.s:
+                self:save()
+            elif k == keys.n:
+                self:ask_new()
+            elif k == keys.o:
+                self:ask_open()
+            else:
+                return false
+            return true
+        if k == keys.p:
+            self:set_tool("pencil")
+        elif k == keys.b:
+            self:set_tool("brush")
+        elif k == keys.e:
+            self:set_tool("eraser")
+        elif k == keys.s:
+            self:set_tool("spray")
+        elif k == keys.l:
+            self:set_tool("line")
+        elif k == keys.r:
+            self:set_tool(ev.shift and "rectf" or "rect")
+        elif k == keys.o:
+            self:set_tool(ev.shift and "ellipsef" or "ellipse")
+        elif k == keys.f:
+            self:set_tool("fill")
+        elif k == keys.i:
+            self:set_tool("picker")
+        elif k == keys.t:
+            self:set_tool("text")
+        elif k == keys.h:
+            self:set_tool("hand")
+        elif k == keys.m:
+            self:cycle_mirror()
+        elif k == keys.x:
+            self:swap()
+        elif k == keys.g:
+            self:toggle_grid()
+        elif k == keys.z:
+            self:do_undo()
+        elif k == keys.leftBracket:
+            self:set_size(math.max(1, self.size - 1))
+        elif k == keys.rightBracket:
+            self:set_size(math.min(9, self.size + 1))
+        else:
+            return false
+        return true
+
+    def run(self):
+        self.ui:run()
+
+export def main(sys, ctx):
+    app = Brush(sys, ctx)
+    app:run()

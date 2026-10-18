@@ -1,0 +1,239 @@
+# apps.notes: Notes, текстовый редактор CDE (одно окно, один документ). Номера строк, подсветка Lua и Cubic, поиск, отмена,
+# автоотступ. Файлы открываются как есть: текст в UTF-8.
+#
+#   wm:launch(notes.main, {name: "notes"}, [path_or_nil, {session, assets, desktop}])         для тестов: view, ready(app)
+#
+# Ctrl+S сохранить, Ctrl+Shift+S сохранить как, Ctrl+O открыть, Ctrl+N новый, Ctrl+F найти (Enter дальше, Shift+Enter назад, Esc
+# закрывает), F3 следующее, Ctrl+G на строку, Ctrl+Z/Y отмена и возврат; остальное в apps.notes.editor.
+
+import cdk
+import cfs.path as paths
+import apps.notes.editor as editor
+
+export const NAME = "Notes"
+
+def lang_of(path):
+    ext = string.lower(string.match(path ?? "", "%.([^%.]+)$") ?? "")
+    if ext == "lua":
+        return "lua"
+    if ext == "cub" or ext == "cubic" or ext == "py":
+        return "cub"
+    if ext == "json" or ext == "json5" or ext == "conf":
+        return "json"
+    return nil
+
+export class Notes:
+    def init(self, sys, ctx):
+        o = ctx.args != nil and ctx.args[2] or nil
+        self.sys = sys
+        self.view = (o != nil and o.view) or sys.view()
+        self.path = nil
+        self.ui = cdk.open(sys, ctx, {title: NAME, w: 260, h: 156, min_w: 170, min_h: 100, icon: "notepad"})
+        self:_build()
+        arg = ctx.args != nil and ctx.args[1] or nil
+        if type(arg) == "string" and arg != "":
+            self:open(arg)
+        self:_title()
+        if o != nil and o.ready != nil:
+            o.ready(self)
+
+    def _build(self):
+        let me = self
+        ui = self.ui
+        def b(label, icon, fn):
+            return cdk.button(label, {icon: icon, variant: "flat", on_click: (x) => fn()})
+        self.ed = editor.editor({grow: 1, on_change: (e) => me:_title(), on_cursor: (e) => me:_status()})
+        self.find_input = cdk.text_input({grow: 1, placeholder: "Find", on_change: (t) => me:_find_changed(t), on_submit: (t) => me:find_next(1)})
+        self.find_info = cdk.label("", {variant: "dim"})
+        self.find_bar = cdk.row({gap: 2, padding: 2, align: "center", visible: false}, [cdk.icon("search", {color: ui.style.dim}), self.find_input, self.find_info,
+            b("", "back", () => me:find_next(-1)), b("", "forward", () => me:find_next(1)), b("", "close", () => me:close_find())])
+        self.status = cdk.label("", {variant: "dim"})
+        bar = cdk.row({gap: 1, padding: 2, align: "center"}, [b("New", "file", () => me:new_doc()), b("Open", "folder", () => me:ask_open()), b("Save", "save", () => me:save()),
+            cdk.spacer(), b("", "undo", () => me.ed:_restore(me.ed.undo, me.ed.redo)), b("", "redo", () => me.ed:_restore(me.ed.redo, me.ed.undo)),
+            b("", "search", () => me:open_find())])
+        ui:set_root(cdk.column({gap: 0}, [bar, self.ed, self.find_bar, cdk.row({padding: 2}, [self.status])]))
+        ui:set_focus(self.ed)
+        ui.on_key = (ev) => me:key(ev)
+        self.blink = ui:every(0.5, () => me:_blink())
+
+    def _blink(self):
+        if self.ed.focused:
+            self.ed.caret = not self.ed.caret
+            self.ed:invalidate()
+
+    def _title(self):
+        name = self.path != nil and paths.basename(self.path) or "Untitled"
+        self.ui.win:set_title(NAME .. " - " .. name .. (self.ed.modified and " *" or ""))
+        self:_status()
+
+    def _status(self):
+        e = self.ed
+        text = "Ln " .. e.row .. ", Col " .. (e.col + 1) .. "   " .. e:line_count() .. " lines"
+        if e.lang != nil:
+            text = text .. "   " .. e.lang
+        if e.modified:
+            text = text .. "   modified"
+        if self.note != nil:
+            text = self.note
+        self.status:set_text(text)
+
+    def _say(self, text):
+        self.note = text
+        self:_status()
+        self.note = nil
+
+    # ------------------------------------------------------------ файлы
+
+    def open(self, path):
+        ok, text = pcall(() => self.view:read(path))
+        if not ok:
+            self:_say("Cannot open: " .. string.gsub(tostring(text), "^.-: ", "", 1))
+            return false
+        self.ed:set_text(text)
+        self.ed:set_lang(lang_of(path))
+        self.path = path
+        self:_title()
+        return true
+
+    def new_doc(self):
+        let me = self
+        def fresh():
+            me.ed:set_text("")
+            me.ed:set_lang(nil)
+            me.path = nil
+            me:_title()
+        if self.ed.modified:
+            cdk.dialog(self.ui, {title: "Discard changes?", icon: "warn", text: "The document was not saved.",
+                buttons: [{text: "Cancel", value: false}, {text: "Discard", variant: "danger", value: true}],
+                on_result: (v) => v == true and fresh()})
+        else:
+            fresh()
+
+    def save_to(self, path):
+        ok, err = pcall(() => self.view:write_atomic(path, self.ed:text()))
+        if not ok:
+            self:_say("Cannot save: " .. string.gsub(tostring(err), "^.-: ", "", 1))
+            return false
+        self.path = path
+        self.ed.modified = false
+        self.ed:set_lang(lang_of(path))
+        self:_title()
+        self:_say("Saved " .. paths.basename(path))
+        return true
+
+    def save(self):
+        if self.path != nil:
+            self:save_to(self.path)
+        else:
+            self:ask_save()
+
+    def _ask(self, title, value, ok_text, on_ok):
+        ui = self.ui
+        let me = self
+        card = nil
+        input = cdk.text_input({width: 200, text: value})
+        def done(ok):
+            ui:close_layer(card)
+            ui:set_focus(me.ed)
+            if ok and input.text != "":
+                on_ok(input.text)
+        input.on_submit = (t) => done(true)
+        card = cdk.card({padding: 6, gap: 4}, [cdk.label(title, {variant: "accent"}), input,
+            cdk.row({gap: 4}, [cdk.spacer(), cdk.button("Cancel", {on_click: (b) => done(false)}),
+                cdk.button(ok_text, {variant: "primary", on_click: (b) => done(true)})])])
+        card.on_escape = () => done(false)
+        ui:open_layer(card, {center: true, modal: true, dismiss: false})
+        ui:set_focus(input)
+
+    def _full(self, p):
+        ok, full = pcall(() => self.view:expand(p))
+        return ok and full or p
+
+    def ask_save(self):
+        let me = self
+        self:_ask("Save as", self.path ?? "$docs/note.txt", "Save", (p) => me:_save_as(p))
+
+    def _save_as(self, p):
+        full = self:_full(p)
+        pcall(() => self.view:mkdir(paths.parent(full), {parents: true}))
+        self:save_to(full)
+
+    def ask_open(self):
+        let me = self
+        self:_ask("Open a file", self.path ?? "$docs/", "Open", (p) => me:open(me:_full(p)))
+
+    def ask_goto(self):
+        let me = self
+        self:_ask("Go to line", "", "Go", (t) => me.ed:goto_line(tonumber(t) ?? 1))
+
+    # ------------------------------------------------------------ поиск
+
+    def open_find(self):
+        self.find_bar:set_visible(true)
+        if self.ed:has_selection():
+            self.find_input:set_text(self.ed:selected_text())
+        self.ui:set_focus(self.find_input)
+        self:_find_changed(self.find_input.text)
+
+    def close_find(self):
+        self.find_bar:set_visible(false)
+        self.ed.find_text = nil
+        self.ed:invalidate()
+        self.ui:set_focus(self.ed)
+
+    def _find_changed(self, text):
+        self.ed.find_text = text
+        n = 0
+        if text != "" and text != nil:
+            low = string.lower(text)
+            for ln in self.ed.lines:
+                pos = 1
+                while true:
+                    h = string.find(string.lower(ln), low, pos, true)
+                    if h == nil:
+                        break
+                    n += 1
+                    pos = h + 1
+        self.find_info:set_text(text == "" and "" or (n .. " found"))
+        self.ed:invalidate()
+
+    def find_next(self, dir):
+        if not self.find_bar.visible:
+            self:open_find()
+            return
+        if not self.ed:find_next(self.find_input.text, dir):
+            self.find_info:set_text("not found")
+
+    def key(self, ev):
+        k = ev.key
+        if ev.ctrl:
+            if k == keys.s:
+                if ev.shift:
+                    self:ask_save()
+                else:
+                    self:save()
+            elif k == keys.o:
+                self:ask_open()
+            elif k == keys.n:
+                self:new_doc()
+            elif k == keys.f:
+                self:open_find()
+            elif k == keys.g:
+                self:ask_goto()
+            else:
+                return false
+            return true
+        if k == keys.f3:
+            self:find_next(ev.shift and -1 or 1)
+            return true
+        if (k == 256 or k == 1) and self.find_bar.visible:
+            self:close_find()
+            return true
+        return false
+
+    def run(self):
+        self.ui:run()
+
+export def main(sys, ctx):
+    app = Notes(sys, ctx)
+    app:run()

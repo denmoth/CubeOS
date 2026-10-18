@@ -1,0 +1,299 @@
+# apps.pixel: Pixel, просмотр картинок CDE (.cimg). Папка листается стрелками, колесо или + и - меняют масштаб вокруг курсора, мышь
+# двигает картинку, 0 вписывает, 1 показывает в натуральную величину; поворот, зеркало, сетка пикселей, показ слайдов, сведения
+# о цветах; «Set as...» ставит картинку обоями, обоями блокировки или входа и аватаром.
+#
+#   wm:launch(pixel.main, {name: "pixel"}, [path, {session, assets, desktop}])   для тестов: view, ready(app)
+#
+# Клавиши: ←/→ (если картинка целиком в окне) или PgUp/PgDn предыдущая и следующая; Space показ слайдов; R поворот; F, V зеркала;
+# G сетка; I сведения; O открыть путь; E править в Brush; Del не удаляет (удалять в Axo).
+
+import cdk
+import cfs.path as paths
+import cgl.cimg as cimg
+import cgl.surface as surface_mod
+import apps.kit as kit
+
+export const NAME = "Pixel"
+
+export class Pixel:
+    def init(self, sys, ctx):
+        o = ctx.args != nil and ctx.args[2] or nil
+        self.sys = sys
+        self.ctx = ctx
+        self.view = (o != nil and o.view) or sys.view()
+        self.desktop = o != nil and o.desktop or nil
+        self.assets = o != nil and o.assets or "/repo/assets"
+        self.session = o != nil and o.session or nil
+        self.open_editor = o != nil and o.edit or nil
+        self.files = []
+        self.pos = 0
+        self.path = nil
+        self.bytes = nil
+        self.src_pal = nil
+        self.changed = false
+        self.show_info = false
+        self.slide = nil
+        self.ui = cdk.open(sys, ctx, {title: NAME, w: 250, h: 150, min_w: 170, min_h: 90, icon: "image"})
+        self:_build()
+        path = ctx.args != nil and ctx.args[1] or nil
+        if path != nil:
+            self:open(path)
+        else:
+            self:_status()
+        if o != nil and o.ready != nil:
+            o.ready(self)
+
+    def _build(self):
+        let me = self
+        ui = self.ui
+        b = (icon, tip, fn) => cdk.button("", {icon: icon, variant: "flat", on_click: (x) => fn()})
+        self.b_prev = b("back", "Previous", () => me:step(-1))
+        self.b_next = b("forward", "Next", () => me:step(1))
+        self.b_play = b("play", "Slideshow", () => me:toggle_slide())
+        self.title = cdk.label("", {grow: 1})
+        self.vp = kit.viewport({grow: 1, on_nav: (d) => me:step(d), on_zoom: (z) => me:_status()})
+        self.vp.on_key = (ev) => me:key(ev)
+        self.status = cdk.label("Open a picture with O", {variant: "dim"})
+        bar1 = cdk.row({gap: 1, padding: 2, align: "center"}, [self.b_prev, self.b_next, self.title,
+            b("minus", "Zoom out", () => me.vp:zoom_by(-1)), b("plus", "Zoom in", () => me.vp:zoom_by(1)),
+            cdk.button("Fit", {variant: "flat", on_click: (x) => me.vp:fit()}), cdk.button("1:1", {variant: "flat", on_click: (x) => me:actual()}),
+            self.b_play, b("menu", "More", () => me:menu())])
+        self.info = cdk.label("", {variant: "dim", visible: false})
+        ui:set_root(cdk.column({gap: 0}, [bar1, self.vp, self.info, cdk.row({padding: 2}, [self.status])]))
+        ui:set_focus(self.vp)
+        ui.on_key = (ev) => me:key(ev)
+
+    # ------------------------------------------------------------ файлы
+
+    def _is_image(self, name):
+        return string.lower(string.sub(name, -5)) == ".cimg"
+
+    def _scan(self, path):
+        dir = paths.parent(path)
+        ok, list = pcall(() => self.view:list(dir))
+        self.files = []
+        self.pos = 0
+        if ok and type(list) == "table":
+            for e in list:
+                nm = type(e) == "table" and e.name or e
+                if type(e) != "table" or e.type != "dir":
+                    if self:_is_image(nm):
+                        self.files[len(self.files) + 1] = paths.join(dir, nm)
+            table.sort(self.files)
+        for i, f in self.files:
+            if f == path:
+                self.pos = i
+
+    def open(self, path):
+        pal = self.ui.win.wm.palette
+        ok, img, spal, data = pcall(() => kit.read_image(self.view, path, pal))
+        if not ok:
+            self:_note("Cannot open: " .. string.gsub(tostring(img), "^.-: ", "", 1))
+            return false
+        self.path = path
+        self.bytes = data
+        self.src_pal = spal
+        self.changed = false
+        self.vp:set_image(img)
+        seen = {}
+        self.ncolors = 0
+        for i in range[1, img.w * img.h]:
+            c = img.px[i]
+            if c >= 0 and not seen[c]:
+                seen[c] = true
+                self.ncolors += 1
+        self.vp:fit()
+        if self.pos == 0 or self.files[self.pos] != path:
+            self:_scan(path)
+        self:_status()
+        return true
+
+    def step(self, d):
+        n = len(self.files)
+        if n < 2:
+            return
+        self.pos = (self.pos - 1 + d) % n + 1
+        self:open(self.files[self.pos])
+
+    def actual(self):
+        self.vp:set_zoom(1)
+
+    def _note(self, text):
+        self.status.text = text
+        self.status:invalidate()
+
+    def _status(self):
+        if self.vp.img == nil:
+            return
+        img = self.vp.img
+        name = paths.basename(self.path ?? "")
+        n = len(self.files)
+        self.title.text = name .. (n > 1 and ("  " .. self.pos .. "/" .. n) or "") .. (self.changed and " *" or "")
+        self.title:invalidate()
+        zoom = self.vp.zoom
+        text = img.w .. "x" .. img.h .. "   " .. (self.ncolors ?? 0) .. " colors   " .. math.floor(zoom * 100 + 0.5) .. "%"
+        if self.bytes != nil:
+            text = text .. "   " .. (len(self.bytes) >= 1024 and string.format("%.1fK", len(self.bytes) / 1024) or (len(self.bytes) .. " B"))
+        self.status.text = text
+        self.status:invalidate()
+
+    # ------------------------------------------------------------ действия
+
+    def rotate(self):
+        if self.vp.img == nil:
+            return
+        self.vp:set_image(self.vp.img:rotate90(1))
+        self.vp:fit()
+        self.changed = true
+        self:_status()
+
+    def flip(self, horizontal):
+        if self.vp.img == nil:
+            return
+        self.vp:set_image(kit.flipped(self.vp.img, horizontal), true)
+        self.changed = true
+        self:_status()
+
+    def toggle_grid(self):
+        self.vp.grid = not self.vp.grid
+        self.vp:invalidate()
+
+    def toggle_checker(self):
+        self.vp.checker = not self.vp.checker
+        self.vp:invalidate()
+
+    def toggle_info(self):
+        self.show_info = not self.show_info
+        if self.show_info and self.vp.img != nil:
+            pal = self.ui.win.wm.palette
+            used = {}
+            for i in range[1, self.vp.img.w * self.vp.img.h]:
+                c = self.vp.img.px[i]
+                if c >= 0:
+                    used[c] = (used[c] ?? 0) + 1
+            list = []
+            for c, n in used:
+                list[len(list) + 1] = {c: c, n: n}
+            table.sort(list, (a, b) => a.n > b.n)
+            parts = []
+            for i in range[1, math.min(4, len(list))]:
+                r, g, bl = pal:get(list[i].c)
+                parts[len(parts) + 1] = string.format("#%02x%02x%02x %d%%", r, g, bl, math.floor(list[i].n * 100 / (self.vp.img.w * self.vp.img.h) + 0.5))
+            self.info.text = "Main colors: " .. table.concat(parts, "  ")
+        self.info:set_visible(self.show_info)
+
+    def toggle_slide(self):
+        if self.slide != nil:
+            self.ui:cancel(self.slide)
+            self.slide = nil
+            self.b_play.icon = "play"
+        else:
+            if len(self.files) < 2:
+                self:_note("Only one picture in this folder")
+                return
+            let me = self
+            self.slide = self.ui:every(3, () => me:step(1))
+            self.b_play.icon = "pause"
+        self.b_play:invalidate()
+
+    # ------------------------------------------------------------ «Set as...»
+
+    # байты картинки для записи: исходный файл, если не меняли, иначе перекодированная картинка
+    def _bytes(self):
+        if not self.changed and self.bytes != nil:
+            return self.bytes
+        return cimg.encode(self.vp.img, self.ui.win.wm.palette)
+
+    def set_as(self, what):
+        if self.vp.img == nil:
+            return
+        name = kit.safe_name(self.path, "picture")
+        ok, err = pcall(() => kit.set_as(self.view, self.desktop, self.ui.win.wm, what, self:_bytes(), name))
+        if ok:
+            self:_note("Done")
+        else:
+            self:_note("Cannot set: " .. string.gsub(tostring(err), "^.-: ", "", 1))
+
+    def menu(self):
+        let me = self
+        ui = self.ui
+        items = [{text: "Open...", icon: "folder", shortcut: "O", on_select: (it) => me:ask_open()},
+            {separator: true},
+            {text: "Rotate", icon: "restart", shortcut: "R", on_select: (it) => me:rotate()},
+            {text: "Flip horizontally", icon: "menu", shortcut: "F", on_select: (it) => me:flip(true)},
+            {text: "Flip vertically", icon: "menu", shortcut: "V", on_select: (it) => me:flip(false)},
+            {separator: true},
+            {text: "Pixel grid", icon: "eye", shortcut: "G", checked: self.vp.grid, on_select: (it) => me:toggle_grid()},
+            {text: "Checkerboard behind", icon: "eye", checked: self.vp.checker, on_select: (it) => me:toggle_checker()},
+            {text: "Colors", icon: "info", shortcut: "I", checked: self.show_info, on_select: (it) => me:toggle_info()},
+            {separator: true},
+            {text: "Set as wallpaper", icon: "image", on_select: (it) => me:set_as("wallpaper")},
+            {text: "Set as lock screen wallpaper", icon: "lock", on_select: (it) => me:set_as("lock")},
+            {text: "Set as login screen wallpaper", icon: "user", on_select: (it) => me:set_as("login")},
+            {text: "Set as my avatar", icon: "user", on_select: (it) => me:set_as("avatar")}]
+        if self.open_editor != nil:
+            items[len(items) + 1] = {separator: true}
+            items[len(items) + 1] = {text: "Edit in Brush", icon: "star", shortcut: "E", on_select: (it) => me:edit()}
+        cdk.menu(ui, items, ui.win.w - 120, 16)
+
+    def edit(self):
+        if self.open_editor != nil and self.path != nil:
+            self.open_editor(self.path)
+
+    def ask_open(self):
+        ui = self.ui
+        let me = self
+        card = nil
+        input = cdk.text_input({width: 200, text: self.path ?? "", placeholder: "$pictures/photo.cimg"})
+        def done(ok):
+            ui:close_layer(card)
+            ui:set_focus(me.vp)
+            if ok and input.text != "":
+                p = input.text
+                if me.view != nil:
+                    pok, full = pcall(() => me.view:expand(p))
+                    if pok:
+                        p = full
+                me:open(p)
+        input.on_submit = (t) => done(true)
+        card = cdk.card({padding: 6, gap: 4}, [cdk.label("Open a picture", {variant: "accent"}), input,
+            cdk.row({gap: 4}, [cdk.spacer(), cdk.button("Cancel", {on_click: (b) => done(false)}),
+                cdk.button("Open", {variant: "primary", on_click: (b) => done(true)})])])
+        card.on_escape = () => done(false)
+        ui:open_layer(card, {center: true, modal: true, dismiss: false})
+        ui:set_focus(input)
+
+    def key(self, ev):
+        k = ev.key
+        if k == keys.pageDown:
+            self:step(1)
+        elif k == keys.pageUp:
+            self:step(-1)
+        elif k == keys.space:
+            self:toggle_slide()
+        elif k == keys.r:
+            self:rotate()
+        elif k == keys.f:
+            self:flip(true)
+        elif k == keys.v:
+            self:flip(false)
+        elif k == keys.g:
+            self:toggle_grid()
+        elif k == keys.i:
+            self:toggle_info()
+        elif k == keys.o:
+            self:ask_open()
+        elif k == keys.e:
+            self:edit()
+        elif k == keys.one:
+            self:actual()
+        else:
+            return false
+        return true
+
+    def run(self):
+        self.ui:run()
+
+export def main(sys, ctx):
+    app = Pixel(sys, ctx)
+    app:run()

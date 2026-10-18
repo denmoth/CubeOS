@@ -1,7 +1,7 @@
 # svc.audiod: служба звука (шаг 7, частично). Динамики (speaker), ноты, звуки Minecraft, музыка DFPWM, общая громкость.
 #
 # Запросы (svc.rpc):
-#   speakers -> [имена]                    note {instrument, pitch (0..24), volume (0..3)}
+#   speakers -> [имена]                    note {instrument, pitch (0..24), volume (0..3)}    notes {list: [{instrument, pitch, volume}]} -> сколько сыграно
 #   sound {name, volume, pitch}             play {data (DFPWM), title} -> true (играет в фоне), stop, status -> {playing, title, volume, speakers}
 #   volume {value (0..100)} -> громкость    (без value: текущая)
 # Громкость в /cubeos/sys/cfg/audio.conf ({volume: 100, muted: false}) умножается на громкость каждого звука.
@@ -91,6 +91,27 @@ export def main(sys, args):
         each_speaker((sp) => sp.playNote(inst, math.min(3, gain(o.volume)), pitch))
         return true
     handlers.note = note
+
+    # пачка нот сразу (музыкальные программы): {list: [{instrument, pitch, volume}]}; лишние и неверные ноты пропускаются
+    def notes(q, sender):
+        list = (q ?? {}).list
+        if type(list) != "table":
+            raise Error("list of notes expected")
+        names = speakers()
+        if len(names) == 0:
+            raise Error("no speaker attached")
+        played = 0
+        for name in names:
+            sp = per.wrap(name)
+            if sp != nil:
+                for n in list:
+                    if type(n) == "table" and n.instrument != nil:
+                        pitch = math.max(0, math.min(24, n.pitch ?? 12))
+                        ok = pcall(() => sp.playNote(n.instrument, math.min(3, gain(n.volume ?? 2)), pitch))
+                        if ok:
+                            played += 1
+        return played
+    handlers.notes = notes
 
     def sound(q, sender):
         o = q ?? {}

@@ -1,0 +1,33 @@
+import t
+import appenv
+import apps.pulse as pulse
+eq = t.eq
+
+env = appenv.new({user: "ann"})
+procs = [{pid: 1, name: "init", state: "waiting", user: "system", cpu_ms: 100, ui: false}, {pid: 7, name: "shell", state: "running", user: "ann", cpu_ms: 50, ui: true},
+    {pid: 9, name: "hog", state: "ready", user: "ann", cpu_ms: 900, ui: false}]
+killed = []
+env.fsys:mkdir(nil, "/cubeos/run/services", {parents: true})
+env.fsys:write_file(nil, "/cubeos/run/services/logd", "running\n")
+env.fsys:write_file(nil, "/cubeos/run/services/netd", "failed\n")
+app = env.launch(pulse.main, [nil, {view: env.view, ps: () => procs, kill: (pid, mode) => rawset(killed, len(killed) + 1, pid .. ":" .. mode), ready: (p) => rawset(env.got, "app", p)}])
+eq(len(app.table.rows), 3, "all processes are listed")
+procs[3].cpu_ms = 1500
+env.settle(80)
+eq(app.table.rows[1].data.name, "hog", "the busiest process is first (sorted by load)")
+eq(app.table.rows[1].cells.pid, "9", "with its number")
+env.key(keys.down)
+eq(len(app.table:selected()), 1, "the arrow keys select a row")
+env.key(keys.delete)
+eq(len(killed) > 0 and string.find(killed[1], ":term", 1, true) != nil, true, "Del asks the task to close")
+env.key(keys.delete, false, true)
+eq(string.find(killed[len(killed)], ":kill", 1, true) != nil, true, "Shift+Del kills it")
+env.key(keys.two)
+eq(len(app.services.items), 2, "services are listed with their state")
+eq(app.services.items[1].text, "logd", "alphabetical")
+env.key(keys.three)
+eq(len(app.g_cpu.values) > 0, true, "the load graph collects samples")
+env.key(keys.four)
+eq(app.tab, 4, "the disks tab")
+eq(env.alive(), true, "the app is still running (it did not crash)")
+print("done")

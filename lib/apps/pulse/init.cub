@@ -1,0 +1,288 @@
+# apps.pulse: Pulse, диспетчер задач CDE. Процессы (кто, чей, в каком состоянии, сколько времени занял), службы, нагрузка
+# графиком, диски. Снять задачу можно просьбой завершиться (End task) или сразу (Force quit).
+#
+#   wm:launch(pulse.main, {name: "pulse"}, [nil, {session, assets, desktop}])        для тестов: view, ready(app), ps (список процессов), kill (fn)
+#
+# Нагрузка это доля времени, которое процессы заняли за последнюю секунду (весь компьютер как одно ядро). Состояния: ready, running,
+# waiting, sleeping. Клавиши: 1..4 вкладки, Del снять задачу, Shift+Del силой.
+
+import cdk
+import cdk.widget as widget
+import cde.theme as theme
+import apps.kit as kit
+
+export const NAME = "Pulse"
+const TABS = [["Processes", "gauge"], ["Services", "gear"], ["Performance", "info"], ["Disks", "drive"]]
+const HISTORY = 90
+
+# ------------------------------------------------------------ график
+
+export class Graph(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "graph"
+        self.values = []
+        self.max = o.max ?? 1
+        self.title = o.title ?? ""
+        self.suffix = o.suffix ?? "%"
+        self.scale = o.scale ?? 100
+        self.hue = o.hue ?? 5
+        self.min_h = 30
+
+    def measure(self, st):
+        return 100, 46
+
+    def push(self, v):
+        self.values[len(self.values) + 1] = v
+        if len(self.values) > HISTORY:
+            table.remove(self.values, 1)
+        self:invalidate()
+
+    def draw(self, s, st):
+        st:round_fill(s, self.x, self.y, self.w, self.h, st.well, 3)
+        gx = self.x + 3
+        gy = self.y + st.fh + 4
+        gw = self.w - 6
+        gh = self.h - st.fh - 7
+        # линии сетки
+        for q in [0.25, 0.5, 0.75]:
+            s:hline(gx, gy + math.floor(gh * q), gw, st.ctrl)
+        n = len(self.values)
+        base = gy + gh
+        step = gw / (HISTORY - 1)
+        px = nil
+        py = nil
+        for i, v in self.values:
+            x = gx + gw - math.floor((n - i) * step)
+            y = base - math.floor(math.min(1, v / self.max) * (gh - 1))
+            # заливка столбиком под линией: светлее к вершине
+            c = theme.GENERAL0 + self.hue * 15 + 4
+            s:fill_rect(x, y, math.ceil(step) + 1, base - y, st:darker(st:darker(c)))
+            if px != nil:
+                s:line(px, py, x, y, theme.GENERAL0 + self.hue * 15 + 11)
+            px = x
+            py = y
+        last = self.values[n] ?? 0
+        s:text(st.font, self.x + 4, self.y + 2, self.title, st.dim)
+        text = math.floor(last * self.scale / self.max + 0.5) .. self.suffix
+        s:text(st.font, self.x + self.w - 4 - st:text_w(text), self.y + 2, text, st.text)
+
+export def graph(opts=nil):
+    return Graph(opts)
+
+# ------------------------------------------------------------ приложение
+
+export class Pulse:
+    def init(self, sys, ctx):
+        o = ctx.args != nil and ctx.args[2] or nil
+        self.sys = sys
+        self.view = (o != nil and o.view) or sys.view()
+        self.ps_fn = o != nil and o.ps or nil
+        self.kill_fn = o != nil and o.kill or nil
+        self.tab = 1
+        self.sort = {key: "cpu", dir: -1}
+        self.last_cpu = {}
+        self.last_t = nil
+        self.load = 0
+        self.ui = cdk.open(sys, ctx, {title: NAME, w: 270, h: 158, min_w: 200, min_h: 110, icon: "gauge"})
+        self:_build()
+        self:refresh()
+        self.ticker = self.ui:every(1, () => self:refresh())
+        if o != nil and o.ready != nil:
+            o.ready(self)
+
+    def _build(self):
+        let me = self
+        ui = self.ui
+        self.tab_buttons = []
+        row = []
+        for i, t in TABS:
+            let n = i
+            b = cdk.button(t[1], {icon: t[2], variant: i == 1 and "primary" or "flat", on_click: (x) => me:show_tab(n)})
+            self.tab_buttons[i] = b
+            row[len(row) + 1] = b
+        self.table = cdk.data_table({grow: 1, empty: "No processes",
+            columns: [{key: "name", title: "Name", grow: 1}, {key: "pid", title: "PID", width: 26, align: "right"}, {key: "user", title: "User", width: 54},
+                {key: "state", title: "State", width: 54}, {key: "cpu", title: "CPU", width: 44, align: "right"}],
+            sort: {key: "cpu", dir: -1}, on_sort: (key, dir) => me:_sorted(key, dir)})
+        self.btn_end = cdk.button("End task", {on_click: (x) => me:end_task(false)})
+        self.btn_kill = cdk.button("Force quit", {variant: "danger", on_click: (x) => me:end_task(true)})
+        self.summary = cdk.label("", {variant: "dim"})
+        p1 = cdk.column({grow: 1, gap: 2}, [self.table, cdk.row({gap: 3, align: "center"}, [self.btn_end, self.btn_kill, cdk.spacer(), self.summary])])
+        self.services = cdk.list_view({grow: 1, items: []})
+        p2 = cdk.column({grow: 1}, [self.services])
+        self.g_cpu = graph({title: "Load", hue: 5, grow: 1})
+        self.g_proc = graph({title: "Processes", hue: 9, max: 40, scale: 40, suffix: "", grow: 1})
+        p3 = cdk.column({grow: 1, gap: 3}, [self.g_cpu, self.g_proc])
+        self.disks = cdk.column({gap: 4, padding: 2}, [])
+        p4 = cdk.column({grow: 1}, [cdk.scroll(self.disks, {grow: 1})])
+        self.pages = [p1, p2, p3, p4]
+        for i, p in self.pages:
+            p.visible = i == 1
+        ui:set_root(cdk.column({gap: 2, padding: 3}, [cdk.row({gap: 0}, row), cdk.column({grow: 1}, self.pages)]))
+        ui:set_focus(self.table)
+        ui.on_key = (ev) => me:key(ev)
+
+    def show_tab(self, n):
+        self.tab = n
+        for i, p in self.pages:
+            p:set_visible(i == n)
+        for i, b in self.tab_buttons:
+            b.variant = i == n and "primary" or "flat"
+            b:invalidate()
+        self:refresh()
+
+    def _sorted(self, key, dir):
+        self.sort = {key: key, dir: dir}
+        self.table.sort = self.sort
+        self:refresh()
+
+    def _procs(self):
+        if self.ps_fn != nil:
+            return self.ps_fn()
+        return self.sys.ps()
+
+    # ------------------------------------------------------------ обновление
+
+    def refresh(self):
+        now = self.ui:now()
+        list = self:_procs()
+        total = 0
+        deltas = {}
+        for p in list:
+            before = self.last_cpu[p.pid]
+            d = before != nil and math.max(0, p.cpu_ms - before) or 0
+            deltas[p.pid] = d
+            total += d
+            self.last_cpu[p.pid] = p.cpu_ms
+        if self.last_t != nil and now > self.last_t:
+            self.load = math.min(1, total / ((now - self.last_t) * 1000))
+            self.g_cpu:push(self.load)
+            self.g_proc.max = math.max(12, len(list) * 1.5)
+            self.g_proc.scale = self.g_proc.max
+            self.g_proc:push(len(list))
+        self.last_t = now
+        if self.tab == 1:
+            self:_rows(list, deltas, now)
+        elif self.tab == 2:
+            self:_services()
+        elif self.tab == 4:
+            self:_disks()
+
+    def _rows(self, list, deltas, now):
+        keep = nil
+        sel = self.table:selected()
+        if len(sel) > 0:
+            keep = sel[1][2].data.pid
+        rows = []
+        for p in list:
+            share = self.last_t != nil and deltas[p.pid] / math.max(1, (now - self.last_t) * 1000) or 0
+            rows[len(rows) + 1] = {cells: {name: p.name, pid: tostring(p.pid), user: tostring(p.user ?? ""), state: tostring(p.state),
+                cpu: string.format("%.1f%%", share * 100)}, icon: p.ui and "image" or "gear", dim: p.state == "waiting",
+                icon_color: p.ui and self.ui.style.accent or self.ui.style.dim, data: {pid: p.pid, name: p.name, cpu: share, user: p.user, state: p.state, ui: p.ui}}
+        key = self.sort.key
+        dir = self.sort.dir
+        table.sort(rows, (a, b) => self:_less(a, b, key, dir))
+        self.table:set_rows(rows, (r) => r.data.pid, keep)
+        self.summary:set_text(len(list) .. " tasks   load " .. math.floor(self.load * 100 + 0.5) .. "%")
+
+    def _less(self, a, b, key, dir):
+        va = a.data[key] ?? a.cells[key]
+        vb = b.data[key] ?? b.cells[key]
+        if key == "name" or key == "user" or key == "state":
+            va = string.lower(tostring(va ?? ""))
+            vb = string.lower(tostring(vb ?? ""))
+        if va == vb:
+            return a.data.pid < b.data.pid
+        if dir > 0:
+            return va < vb
+        return va > vb
+
+    def _services(self):
+        rows = []
+        dir = "/cubeos/run/services"
+        ok, list = pcall(() => self.view:list(dir))
+        if ok and type(list) == "table":
+            names = []
+            for e in list:
+                names[len(names) + 1] = type(e) == "table" and e.name or e
+            table.sort(names)
+            for n in names:
+                okr, state = pcall(() => self.view:read(dir .. "/" .. n))
+                st = okr and string.gsub(tostring(state), "%s+$", "") or "?"
+                good = st == "running"
+                rows[len(rows) + 1] = {text: n, icon: good and "check" or "warn", detail: st, color: good and nil or self.ui.style.warn}
+        if len(rows) == 0:
+            rows[1] = {text: "No service information", color: self.ui.style.dim}
+        self.services:set_items(rows)
+
+    def _disks(self):
+        let me = self
+        st = self.ui.style
+        self.disks:clear_children()
+        points = ["/"]
+        for base in ["/cubeos/drives", "/cubeos/drives/floppy", "/cubeos/mnt", "/cubeos/net"]:
+            ok, list = pcall(() => self.view:list(base))
+            if ok and type(list) == "table":
+                for e in list:
+                    nm = type(e) == "table" and e.name or e
+                    if base == "/cubeos/drives" and nm == "floppy":
+                        continue
+                    if base == "/cubeos/net":
+                        ok2, sub = pcall(() => self.view:list("/cubeos/net/" .. nm))
+                        if ok2 and type(sub) == "table":
+                            for s2 in sub:
+                                points[len(points) + 1] = "/cubeos/net/" .. nm .. "/" .. (type(s2) == "table" and s2.name or s2)
+                    else:
+                        points[len(points) + 1] = base .. "/" .. nm
+        for p in points:
+            ok, sp = pcall(() => self.view:space(p))
+            if ok and sp != nil and sp.capacity != nil and sp.capacity > 0:
+                used = sp.used ?? 0
+                frac = used / sp.capacity
+                self.disks:add(cdk.column({gap: 1}, [cdk.row({gap: 4}, [cdk.icon("drive", {color: st.accent}), cdk.label(p, {grow: 1}),
+                    cdk.label(kit.size_text(used) .. " of " .. kit.size_text(sp.capacity), {variant: sp.warn and "danger" or "dim"})]),
+                    cdk.progress({value: frac})]))
+        if len(self.disks.children) == 0:
+            self.disks:add(cdk.label("No disk information", {variant: "dim"}))
+
+    # ------------------------------------------------------------ задачи
+
+    def end_task(self, force):
+        sel = self.table:selected()
+        if len(sel) == 0:
+            return
+        d = sel[1][2].data
+        if d.pid == self.sys.getpid():
+            self.ui:close()
+            return
+        ok, err = pcall(() => self.kill_fn != nil and self.kill_fn(d.pid, force and "kill" or "term") or self.sys.kill(d.pid, force and "kill" or "term"))
+        if not ok:
+            self.summary:set_text("Cannot end it: " .. string.gsub(tostring(err), "^.-: ", "", 1))
+        else:
+            self.summary:set_text((force and "Killed " or "Asked to close ") .. d.name)
+        self:refresh()
+
+    def key(self, ev):
+        k = ev.key
+        if k == keys.one:
+            self:show_tab(1)
+        elif k == keys.two:
+            self:show_tab(2)
+        elif k == keys.three:
+            self:show_tab(3)
+        elif k == keys.four:
+            self:show_tab(4)
+        elif k == keys.delete and self.tab == 1:
+            self:end_task(ev.shift)
+        else:
+            return false
+        return true
+
+    def run(self):
+        self.ui:run()
+
+export def main(sys, ctx):
+    app = Pulse(sys, ctx)
+    app:run()

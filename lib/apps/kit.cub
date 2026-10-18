@@ -1,0 +1,458 @@
+# apps.kit: общее для приложений CDE: просмотр картинки с масштабом и сдвигом (Viewport), палитра цветов для рисования (ColorGrid),
+# чтение картинок в цвета экрана и мелкие помощники.
+#
+#   vp = kit.viewport({grow: 1, on_down: (ix, iy, btn) => ..., on_drag: ..., on_up: ..., overlay: (s, vp) => ...})
+#   vp:set_image(surface)                картинка в общих цветах 16..211 (-1: прозрачный пиксель); vp.zoom: число (0.25 .. 16)
+#   vp:fit() / vp:set_zoom(z) / vp:zoom_by(dir)    vp:to_image(px, py) -> (ix, iy) или nil вне картинки; vp.grid: сетка при zoom >= 6
+#   vp.pan_drag: true (по умолчанию): перетаскивание двигает картинку; false: события идут в on_down/on_drag/on_up (рисование)
+#   grid = kit.color_grid({on_pick: (index, button) => ...})     палитра: серые и 12 цветов по 15 оттенков; клик: левая кнопка цвет, правая второй
+#   kit.read_image(view, path, pal) -> surface, spal, bytes       картинка .cimg в цветах палитры экрана
+#   kit.patch_conf(view, name, key, value)                        пишет один ключ в $cfg/<name>
+
+import cdk.widget as widget
+import cgl.surface as surface_mod
+import cgl.cimg as cimg
+import cgl.color as color
+import cde.wallpaper as wallpaper_mod
+import cde.theme as theme
+import json5
+import cfs.path as paths
+import cdk
+import svc.rpc as rpc
+
+export def human_time(sec):
+    s = math.max(0, math.floor(sec ?? 0))
+    if s >= 3600:
+        return string.format("%d:%02d:%02d", math.floor(s / 3600), math.floor(s / 60) % 60, s % 60)
+    return string.format("%d:%02d", math.floor(s / 60), s % 60)
+
+export def size_text(n):
+    if n == nil:
+        return "?"
+    if n >= 1048576:
+        return string.format("%.1f MB", n / 1048576)
+    if n >= 1024:
+        return string.format("%.1f KB", n / 1024)
+    return n .. " B"
+
+export def patch_conf(view, name, key, value):
+    if view == nil:
+        return false
+    path = view:expand("$cfg") .. "/" .. name
+    def write():
+        text = view:exists(path) and view:read(path) or "{}\n"
+        view:write_atomic(path, json5.patch(text, [key], value))
+    ok, err = pcall(write)
+    return ok
+
+# $cfg/<name> как таблица (пустая, если файла нет или он испорчен)
+export def read_conf(view, name):
+    if view == nil:
+        return {}
+    path = view:expand("$cfg") .. "/" .. name
+    ok, data = pcall(() => view:exists(path) and json5.parse(view:read(path)) or {})
+    return ok and type(data) == "table" and data or {}
+
+export def read_image(view, path, pal):
+    data = view:read(path)
+    src, spal = cimg.decode(data)
+    return wallpaper_mod.remap(src, spal, pal), spal, data
+
+# ставит картинку (байты .cimg) обоями (what: wallpaper), обоями блокировки (lock) или входа (login), или своим аватаром (avatar).
+# desktop: {save, save_login, set_wallpaper} от сессии рабочего стола (без неё пишется только файл настроек)
+export def set_as(view, desktop, wm, what, bytes, name):
+    if view == nil:
+        raise Error("no file system")
+    cfg = view:expand("$cfg")
+    def put(rel):
+        full = cfg .. "/" .. rel
+        pcall(() => view:mkdir(paths.parent(full), {parents: true}))
+        view:write_atomic(full, bytes)
+    def pref(key, value):
+        if desktop != nil and desktop.save != nil:
+            desktop.save(key, value)
+        else:
+            patch_conf(view, "cde.conf", key, value)
+    if what == "wallpaper":
+        put("wallpapers/" .. name .. ".cimg")
+        if desktop != nil and desktop.set_wallpaper != nil:
+            desktop.set_wallpaper(name)
+        else:
+            wm:set_wallpaper(name)
+            pref("wallpaper", name)
+    elif what == "lock":
+        put("wallpapers/" .. name .. ".cimg")
+        pref("lock_wallpaper", name)
+    elif what == "login":
+        put("wallpapers/" .. name .. ".cimg")
+        if desktop != nil and desktop.save_login != nil:
+            desktop.save_login("wallpaper", name)
+        else:
+            raise Error("only the desktop session can change the login screen")
+    elif what == "avatar":
+        put("avatar.cimg")
+        pref("avatar", "custom")
+
+# имя файла без папки и расширения, только буквы, цифры и - _ пробел
+export def safe_name(path, fallback):
+    base = paths.basename(path ?? fallback)
+    base = string.gsub(base, "%.[^%.]*$", "")
+    base = string.gsub(base, "[^%w%-_ ]", "_")
+    return base == "" and fallback or base
+
+# зеркало или поворот: новая поверхность
+export def flipped(img, horizontal):
+    out = surface_mod.new(img.w, img.h, -1)
+    out:blit(img, 0, 0, {flip_x: horizontal, flip_y: not horizontal, transparent: false})
+    return out
+
+export const ZOOMS = [0.125, 0.25, 0.33, 0.5, 0.67, 1, 2, 3, 4, 6, 8, 12, 16]
+
+# ------------------------------------------------------------ просмотр картинки
+
+export class Viewport(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "viewport"
+        self.focusable = true
+        self.img = nil
+        self.zoom = 1
+        self.cx = 0
+        self.cy = 0
+        self.grid = o.grid == true
+        self.checker = o.checker != false
+        self.pan_drag = o.pan_drag != false
+        self.on_down = o.on_down
+        self.on_drag = o.on_drag
+        self.on_up = o.on_up
+        self.on_zoom = o.on_zoom
+        self.on_key = o.on_key
+        self.on_nav = o.on_nav
+        self.overlay = o.overlay
+        self.panning = nil
+        self.fit_on_resize = true
+        self.tool_cursor = nil
+
+    def measure(self, st):
+        return 60, 40
+
+    # центр показа в координатах картинки (дробные)
+    def set_image(self, img, keep=false):
+        self.img = img
+        if not keep:
+            self.cx = img != nil and img.w / 2 or 0
+            self.cy = img != nil and img.h / 2 or 0
+        self:invalidate()
+
+    def fit(self):
+        if self.img == nil or self.w <= 0:
+            return
+        z = math.min((self.w - 2) / self.img.w, (self.h - 2) / self.img.h)
+        if z >= 1:
+            z = math.max(1, math.floor(math.min(z, 8)))
+        else:
+            # ближайший снизу из ряда ZOOMS, чтобы картинка влезала
+            pick = ZOOMS[1]
+            for v in ZOOMS:
+                if v <= z:
+                    pick = v
+            z = pick
+        self.cx = self.img.w / 2
+        self.cy = self.img.h / 2
+        self:set_zoom(z, true)
+
+    def set_zoom(self, z, quiet=false):
+        z = math.max(ZOOMS[1], math.min(ZOOMS[len(ZOOMS)], z))
+        self.zoom = z
+        self:_clamp()
+        self:invalidate()
+        if self.on_zoom != nil:
+            self.on_zoom(z)
+
+    def zoom_by(self, dir):
+        pos = 1
+        for i, v in ZOOMS:
+            if v <= self.zoom + 0.001:
+                pos = i
+        pos = math.max(1, math.min(len(ZOOMS), pos + dir))
+        self:set_zoom(ZOOMS[pos])
+
+    # центр не уходит дальше края картинки; если картинка меньше окна, она по центру
+    def _clamp(self):
+        if self.img == nil:
+            return
+        vw = self.w / self.zoom
+        vh = self.h / self.zoom
+        if self.img.w <= vw:
+            self.cx = self.img.w / 2
+        else:
+            self.cx = math.max(vw / 2, math.min(self.img.w - vw / 2, self.cx))
+        if self.img.h <= vh:
+            self.cy = self.img.h / 2
+        else:
+            self.cy = math.max(vh / 2, math.min(self.img.h - vh / 2, self.cy))
+
+    # левый верхний угол картинки на экране
+    def origin(self):
+        return self.x + math.floor(self.w / 2 - self.cx * self.zoom), self.y + math.floor(self.h / 2 - self.cy * self.zoom)
+
+    def to_image(self, px, py):
+        if self.img == nil:
+            return nil
+        ox, oy = self:origin()
+        ix = math.floor((px - ox) / self.zoom)
+        iy = math.floor((py - oy) / self.zoom)
+        if ix < 0 or iy < 0 or ix >= self.img.w or iy >= self.img.h:
+            return nil, nil, ix, iy
+        return ix, iy, ix, iy
+
+    def pan(self, dx, dy):
+        self.cx += dx / self.zoom
+        self.cy += dy / self.zoom
+        self:_clamp()
+        self:invalidate()
+
+    def draw(self, s, st):
+        s:fill_rect(self.x, self.y, self.w, self.h, st.well)
+        if self.img == nil:
+            return
+        self:_clamp()
+        ox, oy = self:origin()
+        z = self.zoom
+        dw = math.floor(self.img.w * z)
+        dh = math.floor(self.img.h * z)
+        s:push_clip(self.x, self.y, self.w, self.h)
+        if self.checker:
+            # шахматка под прозрачным: две серые клетки по 4 пикселя
+            c1 = theme.GRAY0 + 3
+            c2 = theme.GRAY0 + 5
+            x0 = math.max(ox, self.x)
+            y0 = math.max(oy, self.y)
+            x1 = math.min(ox + dw, self.x + self.w)
+            y1 = math.min(oy + dh, self.y + self.h)
+            yy = y0
+            while yy < y1:
+                row = math.floor((yy - oy) / 4)
+                xx = x0
+                while xx < x1:
+                    col = math.floor((xx - ox) / 4)
+                    nx = math.min(x1, ox + (col + 1) * 4)
+                    ny = math.min(y1, oy + (row + 1) * 4)
+                    s:fill_rect(xx, yy, nx - xx, ny - yy, (row + col) % 2 == 0 and c1 or c2)
+                    xx = nx
+                yy = math.min(y1, oy + (row + 1) * 4)
+        s:blit(self.img, ox, oy, {scale: z})
+        if self.grid and z >= 6:
+            gc = theme.GRAY0 + 7
+            i = 0
+            while i <= self.img.w:
+                gx = ox + math.floor(i * z)
+                if gx >= self.x and gx < self.x + self.w:
+                    s:vline(gx, math.max(oy, self.y), math.min(dh, self.h), gc)
+                i += 1
+            j = 0
+            while j <= self.img.h:
+                gy = oy + math.floor(j * z)
+                if gy >= self.y and gy < self.y + self.h:
+                    s:hline(math.max(ox, self.x), gy, math.min(dw, self.w), gc)
+                j += 1
+        s:rect(ox - 1, oy - 1, dw + 2, dh + 2, st.border)
+        if self.overlay != nil:
+            self.overlay(s, self)
+        s:pop_clip()
+        if self.focused:
+            s:rect(self.x, self.y, self.w, self.h, st.accent)
+
+    def handle(self, ev):
+        if ev.name == "down":
+            if self.pan_drag or ev.button == 3:
+                self.panning = {x: ev.x, y: ev.y}
+                return true
+            ix, iy, rx, ry = self:to_image(ev.x, ev.y)
+            if self.on_down != nil:
+                self.on_down(rx, ry, ev.button)
+            return true
+        if ev.name == "drag":
+            if self.panning != nil:
+                self:pan(self.panning.x - ev.x, self.panning.y - ev.y)
+                self.panning = {x: ev.x, y: ev.y}
+                return true
+            ix, iy, rx, ry = self:to_image(ev.x, ev.y)
+            if self.on_drag != nil:
+                self.on_drag(rx, ry, ev.button)
+            return true
+        if ev.name == "up":
+            if self.panning != nil:
+                self.panning = nil
+                return true
+            ix, iy, rx, ry = self:to_image(ev.x, ev.y)
+            if self.on_up != nil:
+                self.on_up(rx, ry, ev.button)
+            return true
+        if ev.name == "scroll":
+            # колесо: масштаб вокруг точки под мышью
+            ix, iy, rx, ry = self:to_image(ev.x, ev.y)
+            self:zoom_by(ev.dir < 0 and 1 or -1)
+            if rx != nil:
+                ox, oy = self:origin()
+                # точка под мышью остаётся на месте
+                self.cx += ((rx + 0.5) * self.zoom - (ev.x - ox)) / self.zoom
+                self.cy += ((ry + 0.5) * self.zoom - (ev.y - oy)) / self.zoom
+                self:_clamp()
+                self:invalidate()
+            return true
+        if ev.name == "key":
+            k = ev.key
+            step = ev.shift and 40 or 12
+            fits = self.img != nil and self.img.w * self.zoom <= self.w
+            if (k == keys.left or k == keys.right) and fits and self.on_nav != nil:
+                self.on_nav(k == keys.left and -1 or 1)
+            elif k == keys.left:
+                self:pan(-step, 0)
+            elif k == keys.right:
+                self:pan(step, 0)
+            elif k == keys.up and not ev.ctrl:
+                self:pan(0, -step)
+            elif k == keys.down and not ev.ctrl:
+                self:pan(0, step)
+            elif k == keys.equals or k == keys.numPadAdd:
+                self:zoom_by(1)
+            elif k == keys.minus or k == keys.numPadSubtract:
+                self:zoom_by(-1)
+            elif k == keys.zero or k == keys.numPadZero:
+                self:fit()
+            elif self.on_key != nil:
+                return self.on_key(ev)
+            else:
+                return false
+            return true
+        return false
+
+export def viewport(opts=nil):
+    return Viewport(opts)
+
+# ------------------------------------------------------------ палитра для рисования
+
+const GRAYS = 16
+const HUES = 12
+const SHADES = 15
+
+export class ColorGrid(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "colorgrid"
+        self.cell = o.cell ?? 5
+        self.on_pick = o.on_pick
+        self.fg = theme.GRAY0
+        self.bg = theme.GRAY0 + 15
+
+    # столбцы: два серых по 8, затем 12 цветов по 15 оттенков (сверху тёмные, снизу светлые)
+    def _index(self, col, row):
+        if col < 2:
+            i = col * 8 + row
+            if row >= 8:
+                return nil
+            return theme.GRAY0 + i
+        if row >= SHADES:
+            return nil
+        return theme.GENERAL0 + (col - 2) * SHADES + row
+
+    def measure(self, st):
+        return (2 + HUES) * self.cell + 1, SHADES * self.cell + 1
+
+    def draw(self, s, st):
+        c = self.cell
+        for col in range[0, 1 + HUES]:
+            for row in range[0, SHADES - 1]:
+                idx = self:_index(col, row)
+                if idx != nil:
+                    s:fill_rect(self.x + col * c, self.y + row * c, c - 1, c - 1, idx)
+                    if idx == self.fg:
+                        s:rect(self.x + col * c - 1, self.y + row * c - 1, c + 1, c + 1, theme.GRAY0 + 15)
+
+    def handle(self, ev):
+        if ev.name == "down":
+            col = math.floor((ev.x - self.x) / self.cell)
+            row = math.floor((ev.y - self.y) / self.cell)
+            idx = self:_index(col, row)
+            if idx != nil and self.on_pick != nil:
+                self.on_pick(idx, ev.button)
+            return true
+        return false
+
+export def color_grid(opts=nil):
+    return ColorGrid(opts)
+
+# ------------------------------------------------------------ картинка в окне
+
+export class Picture(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "picture"
+        self.img = o.img
+        self.pw = o.pw ?? 32
+        self.ph = o.ph ?? 32
+
+    def measure(self, st):
+        return self.img != nil and self.img.w or self.pw, self.img != nil and self.img.h or self.ph
+
+    def set(self, img):
+        self.img = img
+        self:relayout()
+        self:invalidate()
+
+    def draw(self, s, st):
+        if self.img != nil:
+            s:blit(self.img, self.x + math.floor((self.w - self.img.w) / 2), self.y + math.floor((self.h - self.img.h) / 2), {})
+
+export def picture(opts=nil):
+    return Picture(opts)
+
+# ------------------------------------------------------------ подтверждение администратора (как в Axo, в духе UAC)
+
+# запрос к службе, которой нужен администратор: сначала как есть, при отказе окно с паролем и снова. env: {sys, ui, session, focus}
+export def admin_call(env, service, op, args, reason, done):
+    ok, res, err = pcall(() => rpc.call(env.sys, service, op, args, 4))
+    if not ok:
+        done(nil, tostring(res))
+        return
+    if err == nil:
+        done(res, nil)
+        return
+    if string.find(tostring(err), "administrator", 1, true) == nil:
+        done(nil, err)
+        return
+    ui = env.ui
+    card = nil
+    user = env.session != nil and env.session.user or nil
+    is_admin = false
+    if user != nil and env.session.manager != nil and env.session.manager.auth != nil:
+        is_admin = env.session.manager.auth:is_admin(user)
+    name = cdk.text_input({width: 140, placeholder: "Administrator name", visible: not is_admin})
+    pw = cdk.text_input({width: 140, placeholder: "Password", password: true})
+    def finish(yes):
+        ui:close_layer(card)
+        if env.focus != nil:
+            ui:set_focus(env.focus)
+        if not yes:
+            done(nil, "cancelled")
+            return
+        q = {}
+        for k, v in args ?? {}:
+            q[k] = v
+        q.admin_user = is_admin and user or name.text
+        q.admin_password = pw.text
+        ok2, res2, err2 = pcall(() => rpc.call(env.sys, service, op, q, 4))
+        done(ok2 and res2 or nil, ok2 and err2 or tostring(res2))
+    pw.on_submit = (t) => finish(true)
+    card = cdk.card({padding: 6, gap: 4}, [cdk.row({gap: 4, align: "center"}, [cdk.icon("lock", {color: ui.style.warn}),
+            cdk.label("Administrator permission", {variant: "accent"})]),
+        cdk.label(reason, {variant: "dim"}), name, pw,
+        cdk.row({gap: 4}, [cdk.spacer(), cdk.button("Cancel", {on_click: (b) => finish(false)}),
+            cdk.button("Allow", {variant: "danger", icon: "lock", on_click: (b) => finish(true)})])])
+    card.on_escape = () => finish(false)
+    ui:open_layer(card, {center: true, modal: true, dismiss: false})
+    ui:set_focus(is_admin and pw or name)

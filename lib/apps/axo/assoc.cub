@@ -15,9 +15,12 @@ import json5
 export const HANDLERS = {
     cubed: {title: "Text editor (cubed)", short: "cubed", icon: "script"},
     run: {title: "Run in a terminal", short: "terminal", icon: "terminal"},
-    pixel: {title: "Pixel (image viewer)", short: "Pixel", icon: "image", missing: true},
+    pixel: {title: "Pixel (image viewer)", short: "Pixel", icon: "image", app: true},
+    brush: {title: "Brush (paint)", short: "Brush", icon: "brush", app: true},
+    notes: {title: "Notes (text editor)", short: "Notes", icon: "notepad", app: true},
+    jukebox: {title: "Jukebox (music player)", short: "Jukebox", icon: "music", app: true},
 }
-export const ORDER = ["cubed", "run", "pixel"]
+export const ORDER = ["cubed", "run", "notes", "pixel", "brush", "jukebox"]
 
 const TEXT = ["txt", "md", "conf", "json", "json5", "log", "cfg", "csv", "ini", "xml", "html", "css", "js", "py"]
 const PROGRAMS = ["lua", "cub", "sh", "bat", ""]
@@ -29,8 +32,12 @@ def _defaults():
         t[e] = ["cubed"]
     for e in PROGRAMS:
         t[e] = ["cubed", "run"]
-    t.cimg = ["pixel"]
+    t.cimg = ["pixel", "brush"]
     t.nfp = ["pixel"]
+    t.dfpwm = ["jukebox"]
+    t.csc = ["jukebox", "notes"]
+    for e in TEXT:
+        t[e] = ["cubed", "notes"]
     return t
 
 export const SYSTEM_PATH = "/cubeos/sys/cfg/assoc.conf"

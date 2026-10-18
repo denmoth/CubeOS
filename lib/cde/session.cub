@@ -19,6 +19,7 @@ import cde.tray as tray_mod
 import cde.widgets as widgets_mod
 import cde.lock as lock_mod
 import apps.axo as axo
+import apps.launcher as launcher
 import cde.theme as theme_mod
 import cde.wallpaper as wallpaper_mod
 import clock as clock_mod
@@ -156,8 +157,13 @@ export def program(session, opts=nil):
         reg = apps_mod.new()
         reg:add({id: "terminal", name: "Terminal", icon: "terminal", keywords: ["console", "shell", "cmd", "терминал", "консоль", "термінал"],
             run: (w) => open_terminal()})
+        # API рабочего стола для приложений (Настройки, Pixel): собирается в конце, пока там пусто
+        holder = {}
+        app_env = {session: session, assets: o.assets ?? "/repo/assets", desktop: () => holder.api}
         reg:add({id: "axo", name: "Axo", icon: "axo", detail: "Files", keywords: ["axolotl", "files", "explorer", "folders", "файлы", "проводник", "аксолотль", "папки"],
-            run: (w) => w:launch(axo.main, {name: "axo"}, ["$home", {session: session, assets: o.assets ?? "/repo/assets"}])})
+            run: (w) => w:launch(axo.main, {name: "axo"}, ["$home", {session: session, assets: o.assets ?? "/repo/assets", desktop: holder.api,
+                open_app: (id, p) => w:defer(() => launcher.open(id, w, app_env, p))}])})
+        launcher.add_all(reg, wm, app_env)
         reg:add({id: "widgets", name: "Widget gallery", icon: "cube", keywords: ["cdk", "controls", "ui", "виджеты", "элементы"],
             run: (w) => w:launch(gallery.main, {name: "gallery"})})
         def logout_entry():
@@ -334,6 +340,15 @@ export def program(session, opts=nil):
                 e.y = win.y
                 save_widgets()
         wm.on_widget_moved = widget_moved
+        def set_anim(key, v):
+            wm.anim[key] = v
+            save("animations", wm.anim)
+        def set_wall(spec):
+            wm:set_wallpaper(spec)
+            save("wallpaper", spec)
+        def set_widget(id, on):
+            if (widget_entry(id) != nil) != on:
+                toggle_widget(id)
         def widget_commands():
             out = []
             for spec in widgets_mod.CATALOG:
@@ -344,6 +359,28 @@ export def program(session, opts=nil):
         reg:provider(widget_commands)
         for e in wlist:
             start_widget(e)
+        # API для приложений: всё, что трогает менеджер окон, выполняется в его процессе (wm:defer)
+        def theme_names():
+            out = []
+            for name in theme_mod.list(wm.theme_dirs):
+                th = theme_mod.find(name, wm.theme_dirs)
+                out[len(out) + 1] = {name: name, display: th.display ?? name}
+            return out
+        def widget_list():
+            out = []
+            for spec in widgets_mod.CATALOG:
+                out[len(out) + 1] = {id: spec.id, name: spec.name, on: widget_entry(spec.id) != nil}
+            return out
+        holder.api = {wm: wm, conf: conf, save: save, save_login: save_login, user: session.user,
+            theme_names: theme_names, widgets: widget_list, avatars: avatar_names,
+            wallpapers: () => wallpaper_mod.names(wm.wallpaper_dirs, user_wallpapers()),
+            set_theme: (name) => wm:defer(() => run_theme(name)(wm)),
+            set_scale: (v) => wm:defer(() => run_scale(v)(wm)),
+            set_animation: (key, v) => wm:defer(() => set_anim(key, v)),
+            set_wallpaper: (spec) => wm:defer(() => set_wall(spec)),
+            set_panel: (change) => wm:defer(() => run_panel(change)(wm)),
+            set_widget: (id, on) => wm:defer(() => set_widget(id, on)),
+            lock: () => wm:defer(lock_screen), logout: () => wm:defer(logout)}
         wm:hotkey("ctrl+alt+o", panel_align)
         wm:hotkey("ctrl+alt+k", () => wm:launch(gallery.main, {name: "gallery"}))
         wm:hotkey("ctrl+alt+equals", () => zoom(1))

@@ -9,7 +9,7 @@
 import cfs.path as paths
 
 const EXT = {lua: "lua", cub: "cubic", txt: "text", md: "text", conf: "text", json: "text", json5: "text", log: "text", cfg: "text",
-    csv: "text", cimg: "image", nfp: "image", bimg: "image", png: "image", dfpwm: "music", wav: "music", cpk: "archive", zip: "archive",
+    csv: "text", cimg: "image", nfp: "image", bimg: "image", png: "image", dfpwm: "music", csc: "music", wav: "music", cpk: "archive", zip: "archive",
     tar: "archive", cmp: "archive", sh: "script", bat: "script"}
 
 const ICON = {folder: "folder", drive: "drive", netfolder: "netfolder", lua: "lua", cubic: "cube", text: "file", image: "image",

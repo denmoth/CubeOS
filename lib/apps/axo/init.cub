@@ -48,6 +48,7 @@ export class Axo:
         o = ctx.args != nil and ctx.args[2] or nil
         self.sys = sys
         self.ctx = ctx
+        self.open_app = o != nil and o.open_app or nil
         self.wm = ctx.wm
         self.view = (o != nil and o.view) or sys.view()
         self.session = o != nil and o.session or nil
@@ -432,13 +433,20 @@ export class Axo:
         h = second and (list[2] ?? list[1]) or list[1]
         self:launch(h, self:_full(e))
 
-    # открыть путь приложением h (cubed, run, pixel)
+    # открыть путь приложением h (cubed, run; pixel, brush, notes, jukebox открывает рабочий стол через open_app)
     def launch(self, h, path):
         info = assoc.HANDLERS[h]
         name = paths.basename(path)
         if info == nil or info.missing:
             self:_note((info != nil and info.short or h) .. " is not in CubeOS yet")
             return false
+        if info.app:
+            if self.open_app == nil:
+                self:_note("Opening needs a desktop session")
+                return false
+            self.open_app(h, path)
+            self:_note("Opening " .. name)
+            return true
         if self.session == nil:
             self:_note("Opening needs a desktop session")
             return false

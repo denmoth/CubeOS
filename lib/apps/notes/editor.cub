@@ -1,0 +1,716 @@
+# apps.notes.editor: многострочный редактор текста для cdk (виджет Editor). Моноширинный шрифт, номера строк, выделение мышью и
+# Shift+стрелки, буфер обмена cdk (общий с полями ввода), отмена и возврат, автоотступ, подсветка Lua и Cubic, поиск с подсветкой.
+#
+#   ed = editor.editor({grow: 1, on_change: (ed) => ..., on_cursor: (ed) => ...})
+#   ed:set_text(text); ed:text(); ed:set_lang("lua")        lang: lua, cub, json, nil (без подсветки)
+#   ed:goto_line(n); ed:find_next(text, dir) -> true, если нашли; ed.find_text: что подсвечивать
+#   ed.row, ed.col (0-based): курсор; ed.modified
+#
+# Клавиши: стрелки, Home, End, PgUp, PgDn, Ctrl+Home/End, Ctrl+←/→ по словам, Tab и Shift+Tab (отступ), Ctrl+A/C/X/V, Ctrl+Z/Y,
+# Ctrl+D дублировать строку, Ctrl+K удалить строку, Alt+↑/↓ двигать строку, Ctrl+/ комментарий.
+
+import cdk.widget as widget
+import cdk.lists as lists
+import cdk.input as input
+import unicode
+
+const KEYWORDS = {
+    lua: ["and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while"],
+    cub: ["def", "class", "import", "export", "const", "let", "if", "elif", "else", "for", "in", "while", "return", "break", "continue", "and", "or", "not",
+        "true", "false", "nil", "try", "except", "raise", "pass", "override", "as", "super", "range"],
+}
+const UNDO_MAX = 100
+
+def _ascii(s):
+    return string.find(s, "[\128-\255]") == nil
+
+def ulen(s):
+    return _ascii(s) and string.len(s) or unicode.length(s)
+
+# символы с i по j включительно (с единицы)
+def usub(s, i, j=nil):
+    if _ascii(s):
+        return string.sub(s, i, j)
+    return unicode.sub(s, i, j)
+
+def _is_word(ch):
+    return ch != "" and (string.match(ch, "[%w_]") != nil or string.byte(ch) >= 128)
+
+export class Editor(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "editor"
+        self.focusable = true
+        self.lines = [""]
+        self.row = 1
+        self.col = 0
+        self.arow = nil
+        self.acol = nil
+        self.top = 1
+        self.left = 0
+        self.lang = nil
+        self.undo = []
+        self.redo = []
+        self.typing = false
+        self.modified = false
+        self.caret = true
+        self.find_text = nil
+        self.on_change = o.on_change
+        self.on_cursor = o.on_cursor
+        self.dragging = false
+        self.last_click = nil
+        self.rows_shown = 10
+        self.cols_shown = 40
+
+    def measure(self, st):
+        return 120, 60
+
+    # ------------------------------------------------------------ текст
+
+    def set_text(self, text):
+        self.lines = []
+        t = string.gsub(tostring(text), "\r", "")
+        for ln in string.gmatch(t .. "\n", "([^\n]*)\n"):
+            self.lines[len(self.lines) + 1] = ln
+        if len(self.lines) > 1 and self.lines[len(self.lines)] == "":
+            table.remove(self.lines)
+        if len(self.lines) == 0:
+            self.lines = [""]
+        self.row = 1
+        self.col = 0
+        self.arow = nil
+        self.top = 1
+        self.left = 0
+        self.undo = []
+        self.redo = []
+        self.modified = false
+        self:invalidate()
+        self:_moved()
+
+    def text(self):
+        return table.concat(self.lines, "\n") .. "\n"
+
+    def set_lang(self, lang):
+        self.lang = lang
+        self:invalidate()
+
+    def line_count(self):
+        return len(self.lines)
+
+    def _snap(self):
+        dup = []
+        for i, l in self.lines:
+            dup[i] = l
+        self.undo[len(self.undo) + 1] = {lines: dup, row: self.row, col: self.col}
+        if len(self.undo) > UNDO_MAX:
+            table.remove(self.undo, 1)
+        self.redo = []
+
+    def _changed(self):
+        self.modified = true
+        self.caret = true
+        if self.on_change != nil:
+            self.on_change(self)
+        self:_moved()
+
+    def _moved(self):
+        self:_scroll_to_cursor()
+        self:invalidate()
+        if self.on_cursor != nil:
+            self.on_cursor(self)
+
+    def _scroll_to_cursor(self):
+        if self.row < self.top:
+            self.top = self.row
+        if self.row > self.top + self.rows_shown - 1:
+            self.top = self.row - self.rows_shown + 1
+        self.top = math.max(1, self.top)
+        if self.col < self.left:
+            self.left = self.col
+        if self.col > self.left + self.cols_shown - 2:
+            self.left = self.col - self.cols_shown + 2
+        self.left = math.max(0, self.left)
+
+    def _restore(self, from_list, to_list):
+        n = len(from_list)
+        if n == 0:
+            return
+        dup = []
+        for i, l in self.lines:
+            dup[i] = l
+        to_list[len(to_list) + 1] = {lines: dup, row: self.row, col: self.col}
+        s = table.remove(from_list, n)
+        self.lines = s.lines
+        self.row = math.min(s.row, len(self.lines))
+        self.col = s.col
+        self.arow = nil
+        self.typing = false
+        self:_changed()
+
+    # ------------------------------------------------------------ выделение
+
+    def has_selection(self):
+        return self.arow != nil and (self.arow != self.row or self.acol != self.col)
+
+    def _sel(self):
+        if not self:has_selection():
+            return nil
+        r1 = self.arow
+        c1 = self.acol
+        r2 = self.row
+        c2 = self.col
+        if r1 > r2 or (r1 == r2 and c1 > c2):
+            r1, c1, r2, c2 = r2, c2, r1, c1
+        return r1, c1, r2, c2
+
+    def selected_text(self):
+        r1, c1, r2, c2 = self:_sel()
+        if r1 == nil:
+            return ""
+        if r1 == r2:
+            return usub(self.lines[r1], c1 + 1, c2)
+        out = [usub(self.lines[r1], c1 + 1)]
+        for r in range[r1 + 1, r2 - 1]:
+            out[len(out) + 1] = self.lines[r]
+        out[len(out) + 1] = usub(self.lines[r2], 1, c2)
+        return table.concat(out, "\n")
+
+    def _delete_selection(self):
+        r1, c1, r2, c2 = self:_sel()
+        if r1 == nil:
+            return
+        first = usub(self.lines[r1], 1, c1)
+        last = usub(self.lines[r2], c2 + 1)
+        for r in range[r1 + 1, r2]:
+            table.remove(self.lines, r1 + 1)
+        self.lines[r1] = first .. last
+        self.row = r1
+        self.col = c1
+        self.arow = nil
+
+    def select_all(self):
+        self.arow = 1
+        self.acol = 0
+        self.row = len(self.lines)
+        self.col = ulen(self.lines[self.row])
+        self:_moved()
+
+    # ------------------------------------------------------------ правка
+
+    def insert(self, text):
+        if text == nil or text == "":
+            return
+        multi = string.find(text, "\n", 1, true) != nil
+        if not self.typing or multi or self:has_selection():
+            self:_snap()
+        self.typing = not multi
+        if self:has_selection():
+            self:_delete_selection()
+        text = string.gsub(text, "\r", "")
+        cur = self.lines[self.row]
+        head = usub(cur, 1, self.col)
+        tail = usub(cur, self.col + 1)
+        parts = []
+        for ln in string.gmatch(text .. "\n", "([^\n]*)\n"):
+            parts[len(parts) + 1] = ln
+        if len(parts) == 1:
+            self.lines[self.row] = head .. parts[1] .. tail
+            self.col += ulen(parts[1])
+        else:
+            self.lines[self.row] = head .. parts[1]
+            at = self.row
+            for i in range[2, len(parts) - 1]:
+                at += 1
+                table.insert(self.lines, at, parts[i])
+            at += 1
+            table.insert(self.lines, at, parts[len(parts)] .. tail)
+            self.row = at
+            self.col = ulen(parts[len(parts)])
+        self:_changed()
+
+    def _newline(self):
+        self:_snap()
+        self.typing = false
+        if self:has_selection():
+            self:_delete_selection()
+        cur = self.lines[self.row]
+        indent = string.match(cur, "^[ \t]*")
+        head = usub(cur, 1, self.col)
+        tail = usub(cur, self.col + 1)
+        # после двоеточия, then, do, { отступ глубже
+        if string.match(head, "[:{]%s*$") != nil or string.match(head, "%f[%w]then%s*$") != nil or string.match(head, "%f[%w]do%s*$") != nil:
+            indent = indent .. "    "
+        self.lines[self.row] = head
+        table.insert(self.lines, self.row + 1, indent .. tail)
+        self.row += 1
+        self.col = string.len(indent)
+        self:_changed()
+
+    def _backspace(self, word):
+        if self:has_selection():
+            self:_snap()
+            self:_delete_selection()
+            self:_changed()
+            return
+        self.typing = false
+        if self.col > 0:
+            self:_snap()
+            to = word and self:_word(self.row, self.col, -1) or self.col - 1
+            # на пустом месте перед текстом стираем отступ по 4
+            cur = self.lines[self.row]
+            if not word and string.match(usub(cur, 1, self.col), "^ +$") != nil and self.col >= 4 and self.col % 4 == 0:
+                to = self.col - 4
+            self.lines[self.row] = usub(cur, 1, to) .. usub(cur, self.col + 1)
+            self.col = to
+            self:_changed()
+        elif self.row > 1:
+            self:_snap()
+            prev = self.lines[self.row - 1]
+            self.col = ulen(prev)
+            self.lines[self.row - 1] = prev .. self.lines[self.row]
+            table.remove(self.lines, self.row)
+            self.row -= 1
+            self:_changed()
+
+    def _delete(self, word):
+        if self:has_selection():
+            self:_snap()
+            self:_delete_selection()
+            self:_changed()
+            return
+        self.typing = false
+        cur = self.lines[self.row]
+        n = ulen(cur)
+        if self.col < n:
+            self:_snap()
+            to = word and self:_word(self.row, self.col, 1) or self.col + 1
+            self.lines[self.row] = usub(cur, 1, self.col) .. usub(cur, to + 1)
+            self:_changed()
+        elif self.row < len(self.lines):
+            self:_snap()
+            self.lines[self.row] = cur .. self.lines[self.row + 1]
+            table.remove(self.lines, self.row + 1)
+            self:_changed()
+
+    # начало или конец слова от позиции col в строке row
+    def _word(self, row, col, dir):
+        ln = self.lines[row]
+        n = ulen(ln)
+        c = col
+        if dir < 0:
+            while c > 0 and not _is_word(usub(ln, c, c)):
+                c -= 1
+            while c > 0 and _is_word(usub(ln, c, c)):
+                c -= 1
+        else:
+            while c < n and not _is_word(usub(ln, c + 1, c + 1)):
+                c += 1
+            while c < n and _is_word(usub(ln, c + 1, c + 1)):
+                c += 1
+        return c
+
+    def _indent_selection(self, out):
+        r1, c1, r2, c2 = self:_sel()
+        if r1 == nil:
+            r1 = self.row
+            r2 = self.row
+        self:_snap()
+        for r in range[r1, r2]:
+            ln = self.lines[r]
+            if out:
+                if string.sub(ln, 1, 4) == "    ":
+                    self.lines[r] = string.sub(ln, 5)
+                else:
+                    self.lines[r] = string.gsub(ln, "^ ?%s?%s?", "", 1)
+            else:
+                self.lines[r] = "    " .. ln
+        self.typing = false
+        self.col = math.min(ulen(self.lines[self.row]), math.max(0, self.col + (out and -4 or 4)))
+        self:_changed()
+
+    def _comment_toggle(self):
+        mark = (self.lang == "lua") and "-- " or "# "
+        r1 = self.row
+        r2 = self.row
+        if self:has_selection():
+            a, b, c, d = self:_sel()
+            r1 = a
+            r2 = c
+        self:_snap()
+        every = true
+        for r in range[r1, r2]:
+            if string.match(self.lines[r], "^%s*" .. (self.lang == "lua" and "%-%-" or "#")) == nil and self.lines[r] != "":
+                every = false
+        for r in range[r1, r2]:
+            ln = self.lines[r]
+            if every:
+                self.lines[r] = string.gsub(ln, "^(%s*)" .. (self.lang == "lua" and "%-%- ?" or "# ?"), "%1", 1)
+            elif ln != "":
+                indent = string.match(ln, "^%s*")
+                self.lines[r] = indent .. mark .. string.sub(ln, string.len(indent) + 1)
+        self.typing = false
+        self:_changed()
+
+    # ------------------------------------------------------------ перемещение
+
+    def _go(self, row, col, extend):
+        row = math.max(1, math.min(len(self.lines), row))
+        col = math.max(0, math.min(ulen(self.lines[row]), col))
+        if extend:
+            if self.arow == nil:
+                self.arow = self.row
+                self.acol = self.col
+        else:
+            self.arow = nil
+        self.row = row
+        self.col = col
+        self.typing = false
+        self.caret = true
+        self:_moved()
+
+    def goto_line(self, n):
+        self:_go(n, 0, false)
+        self.top = math.max(1, n - math.floor(self.rows_shown / 2))
+        self:invalidate()
+
+    # поиск вперёд (dir 1) или назад (-1) от курсора, по кругу; true, если нашли (курсор встал в конец найденного, оно выделено)
+    def find_next(self, text, dir):
+        if text == nil or text == "":
+            return false
+        low = string.lower(text)
+        n = len(self.lines)
+        r = self.row
+        start = dir > 0 and (self:has_selection() and math.max(self.col, self.acol or 0) or self.col) or (self:has_selection() and math.min(self.col, self.acol or 0) or self.col)
+        for k in range[0, n]:
+            ln = string.lower(self.lines[r])
+            hit = nil
+            if dir > 0:
+                begin = k == 0 and string.len(usub(self.lines[r], 1, start)) + 1 or 1
+                hit = string.find(ln, low, begin, true)
+            else:
+                last = nil
+                upto = k == 0 and string.len(usub(self.lines[r], 1, start)) or string.len(ln)
+                pos = 1
+                while true:
+                    h = string.find(ln, low, pos, true)
+                    if h == nil or h + string.len(low) - 1 > upto:
+                        break
+                    last = h
+                    pos = h + 1
+                hit = last
+            if hit != nil:
+                c1 = ulen(string.sub(self.lines[r], 1, hit - 1))
+                self.arow = r
+                self.acol = c1
+                self.row = r
+                self.col = c1 + ulen(text)
+                self.typing = false
+                self:_moved()
+                self.top = math.max(1, r - math.floor(self.rows_shown / 2))
+                self:invalidate()
+                return true
+            r = r + dir
+            if r > n:
+                r = 1
+            if r < 1:
+                r = n
+        return false
+
+    # ------------------------------------------------------------ события
+
+    def _key(self, ev):
+        k = ev.key
+        if ev.ctrl and not ev.alt:
+            if k == keys.a:
+                self:select_all()
+            elif k == keys.c:
+                if self:has_selection():
+                    input.clipboard.text = self:selected_text()
+            elif k == keys.x:
+                if self:has_selection():
+                    input.clipboard.text = self:selected_text()
+                    self:_snap()
+                    self:_delete_selection()
+                    self:_changed()
+            elif k == keys.v:
+                self.typing = false
+                self:insert(input.clipboard.text)
+            elif k == keys.z:
+                self:_restore(self.undo, self.redo)
+            elif k == keys.y:
+                self:_restore(self.redo, self.undo)
+            elif k == keys.d:
+                self:_snap()
+                table.insert(self.lines, self.row + 1, self.lines[self.row])
+                self.row += 1
+                self:_changed()
+            elif k == keys.k:
+                self:_snap()
+                if len(self.lines) > 1:
+                    table.remove(self.lines, self.row)
+                    self.row = math.min(self.row, len(self.lines))
+                else:
+                    self.lines = [""]
+                self.col = 0
+                self.arow = nil
+                self:_changed()
+            elif k == keys.slash:
+                self:_comment_toggle()
+            elif k == keys.home:
+                self:_go(1, 0, ev.shift)
+            elif k == keys["end"]:
+                self:_go(len(self.lines), ulen(self.lines[len(self.lines)]), ev.shift)
+            elif k == keys.left:
+                if self.col == 0 and self.row > 1:
+                    self:_go(self.row - 1, ulen(self.lines[self.row - 1]), ev.shift)
+                else:
+                    self:_go(self.row, self:_word(self.row, self.col, -1), ev.shift)
+            elif k == keys.right:
+                if self.col >= ulen(self.lines[self.row]) and self.row < len(self.lines):
+                    self:_go(self.row + 1, 0, ev.shift)
+                else:
+                    self:_go(self.row, self:_word(self.row, self.col, 1), ev.shift)
+            elif k == keys.backspace:
+                self:_backspace(true)
+            elif k == keys.delete:
+                self:_delete(true)
+            else:
+                return false
+            return true
+        if ev.alt and (k == keys.up or k == keys.down):
+            d = k == keys.up and -1 or 1
+            t = self.row + d
+            if t >= 1 and t <= len(self.lines):
+                self:_snap()
+                self.lines[self.row], self.lines[t] = self.lines[t], self.lines[self.row]
+                self.row = t
+                self:_changed()
+            return true
+        if k == keys.left:
+            if self:has_selection() and not ev.shift:
+                r1, c1, r2, c2 = self:_sel()
+                self:_go(r1, c1, false)
+            elif self.col == 0 and self.row > 1:
+                self:_go(self.row - 1, ulen(self.lines[self.row - 1]), ev.shift)
+            else:
+                self:_go(self.row, self.col - 1, ev.shift)
+        elif k == keys.right:
+            if self:has_selection() and not ev.shift:
+                r1, c1, r2, c2 = self:_sel()
+                self:_go(r2, c2, false)
+            elif self.col >= ulen(self.lines[self.row]) and self.row < len(self.lines):
+                self:_go(self.row + 1, 0, ev.shift)
+            else:
+                self:_go(self.row, self.col + 1, ev.shift)
+        elif k == keys.up:
+            self:_go(self.row - 1, self.col, ev.shift)
+        elif k == keys.down:
+            self:_go(self.row + 1, self.col, ev.shift)
+        elif k == keys.pageUp:
+            self:_go(self.row - self.rows_shown + 1, self.col, ev.shift)
+        elif k == keys.pageDown:
+            self:_go(self.row + self.rows_shown - 1, self.col, ev.shift)
+        elif k == keys.home:
+            # первый нажим к первому знаку строки, второй в самое начало
+            ln = self.lines[self.row]
+            first = string.len(string.match(ln, "^%s*"))
+            self:_go(self.row, (self.col == first or first >= ulen(ln)) and 0 or first, ev.shift)
+        elif k == keys["end"]:
+            self:_go(self.row, ulen(self.lines[self.row]), ev.shift)
+        elif k == keys.enter or k == keys.numPadEnter:
+            self:_newline()
+        elif k == keys.backspace:
+            self:_backspace(false)
+        elif k == keys.delete:
+            self:_delete(false)
+        elif k == keys.tab:
+            if ev.shift:
+                self:_indent_selection(true)
+            elif self:has_selection():
+                self:_indent_selection(false)
+            else:
+                self:insert("    ")
+        else:
+            return false
+        return true
+
+    def _pos_at(self, st, px, py):
+        gw = self:_gutter(st)
+        rh = st.fh + 1
+        r = math.max(1, math.min(len(self.lines), self.top + math.floor((py - self.y) / rh)))
+        c = self.left + math.floor((px - self.x - gw - 3) / st.fw + 0.5)
+        return r, math.max(0, math.min(ulen(self.lines[r]), c))
+
+    def handle(self, ev):
+        if not self.enabled:
+            return false
+        st = self.ui.style
+        if ev.name == "down":
+            r, c = self:_pos_at(st, ev.x, ev.y)
+            now = self.ui:now()
+            if self.last_click != nil and now - self.last_click.t < 0.45 and self.last_click.r == r and self.last_click.c == c:
+                # двойной клик: слово
+                a = self:_word(r, c, -1)
+                b = self:_word(r, c, 1)
+                self.arow = r
+                self.acol = a
+                self.row = r
+                self.col = b
+                self.last_click = nil
+                self:_moved()
+                return true
+            self.last_click = {t: now, r: r, c: c}
+            self:_go(r, c, ev.shift)
+            if not ev.shift:
+                self.arow = r
+                self.acol = c
+            self.dragging = true
+            return true
+        if ev.name == "drag" and self.dragging:
+            r, c = self:_pos_at(st, ev.x, ev.y)
+            self.row = r
+            self.col = c
+            self:_moved()
+            return true
+        if ev.name == "up":
+            self.dragging = false
+            if self.arow == self.row and self.acol == self.col:
+                self.arow = nil
+            return true
+        if ev.name == "scroll":
+            self.top = math.max(1, math.min(math.max(1, len(self.lines) - self.rows_shown + 1), self.top + ev.dir * 3))
+            self:invalidate()
+            return true
+        if ev.name == "char":
+            self:insert(ev.char)
+            return true
+        if ev.name == "paste":
+            self.typing = false
+            self:insert(ev.text)
+            return true
+        if ev.name == "key":
+            return self:_key(ev)
+        if ev.name == "focus" or ev.name == "blur":
+            self.caret = true
+            self:invalidate()
+            return true
+        return false
+
+    # ------------------------------------------------------------ рисование
+
+    def _gutter(self, st):
+        return (string.len(tostring(len(self.lines))) + 1) * st.fw + 3
+
+    def _tokens(self, ln):
+        kw = self.lang != nil and KEYWORDS[self.lang == "json" and "cub" or self.lang] or nil
+        out = []
+        n = string.len(ln)
+        i = 1
+        com = self.lang == "lua" and "%-%-" or "#"
+        while i <= n:
+            ch = string.sub(ln, i, i)
+            if (self.lang == "lua" and string.sub(ln, i, i + 1) == "--") or (self.lang != "lua" and ch == "#"):
+                out[len(out) + 1] = [i, n, "com"]
+                break
+            elif ch == "\"" or ch == "'":
+                j = i + 1
+                while j <= n and string.sub(ln, j, j) != ch:
+                    if string.sub(ln, j, j) == "\\":
+                        j += 1
+                    j += 1
+                out[len(out) + 1] = [i, math.min(j, n), "str"]
+                i = j + 1
+            elif string.match(ch, "%d") and (i == 1 or not _is_word(string.sub(ln, i - 1, i - 1))):
+                j = i
+                while j <= n and string.match(string.sub(ln, j, j), "[%w%.]"):
+                    j += 1
+                out[len(out) + 1] = [i, j - 1, "num"]
+                i = j
+            elif string.match(ch, "[%a_]"):
+                j = i
+                while j <= n and string.match(string.sub(ln, j, j), "[%w_]"):
+                    j += 1
+                word = string.sub(ln, i, j - 1)
+                if kw != nil:
+                    for w in kw:
+                        if w == word:
+                            out[len(out) + 1] = [i, j - 1, "kw"]
+                            break
+                i = j
+            else:
+                i += 1
+        return out
+
+    def draw(self, s, st):
+        f = st.font
+        fw = st.fw
+        rh = st.fh + 1
+        gw = self:_gutter(st)
+        bar = lists.BAR_W
+        s:fill_rect(self.x, self.y, self.w, self.h, st.well)
+        self.rows_shown = math.max(1, math.floor(self.h / rh))
+        textw = self.w - gw - bar - 3
+        self.cols_shown = math.max(1, math.floor(textw / fw))
+        self:_scroll_to_cursor()
+        s:fill_rect(self.x, self.y, gw - 1, self.h, st.bg)
+        s:vline(self.x + gw - 1, self.y, self.h, st.border)
+        tx = self.x + gw + 3
+        s1, sc1, s2, sc2 = self:_sel()
+        s:push_clip(tx - 2, self.y, textw + 2, self.h)
+        for i in range[1, self.rows_shown]:
+            r = self.top + i - 1
+            if r > len(self.lines):
+                break
+            y = self.y + (i - 1) * rh
+            ln = self.lines[r]
+            if r == self.row and not self:has_selection():
+                s:fill_rect(tx - 2, y, textw + 2, rh, st.ctrl)
+            # выделение
+            if s1 != nil and r >= s1 and r <= s2:
+                a = r == s1 and sc1 or 0
+                b = r == s2 and sc2 or ulen(ln) + 1
+                if b > a:
+                    s:fill_rect(tx + (a - self.left) * fw, y, (b - a) * fw, rh, self.focused and st.sel or st.hi)
+            # подсветка найденного
+            if self.find_text != nil and self.find_text != "":
+                low = string.lower(ln)
+                q = string.lower(self.find_text)
+                pos = 1
+                while true:
+                    h = string.find(low, q, pos, true)
+                    if h == nil:
+                        break
+                    c0 = ulen(string.sub(ln, 1, h - 1))
+                    s:fill_rect(tx + (c0 - self.left) * fw, y, ulen(self.find_text) * fw, rh, st.warn)
+                    pos = h + 1
+            shown = usub(ln, self.left + 1, self.left + self.cols_shown + 1)
+            if self.lang != nil and _ascii(ln):
+                last = 1
+                for tk in self:_tokens(ln):
+                    if tk[1] > last:
+                        s:text(f, tx + (last - 1 - self.left) * fw, y + 1, string.sub(ln, last, tk[1] - 1), st.text)
+                    color = tk[3] == "com" and st.dim or (tk[3] == "str" and st.ok or (tk[3] == "num" and st.warn or st.accent))
+                    s:text(f, tx + (tk[1] - 1 - self.left) * fw, y + 1, string.sub(ln, tk[1], tk[2]), color)
+                    last = tk[2] + 1
+                if last <= string.len(ln):
+                    s:text(f, tx + (last - 1 - self.left) * fw, y + 1, string.sub(ln, last), st.text)
+            else:
+                s:text(f, tx, y + 1, shown, st.text)
+        s:pop_clip()
+        # номера строк
+        for i in range[1, self.rows_shown]:
+            r = self.top + i - 1
+            if r > len(self.lines):
+                break
+            label = tostring(r)
+            s:text(f, self.x + gw - 3 - string.len(label) * fw, self.y + (i - 1) * rh + 1, label, r == self.row and st.accent or st.dim)
+        # курсор
+        if self.focused and self.caret and self.row >= self.top and self.row < self.top + self.rows_shown:
+            cx = tx + (self.col - self.left) * fw
+            if cx >= tx and cx < tx + textw:
+                s:fill_rect(cx, self.y + (self.row - self.top) * rh, 1, rh, st.accent)
+        lists.scrollbar(s, st, self.x + self.w - bar, self.y, self.h, (self.top - 1) * rh, len(self.lines) * rh, self.rows_shown * rh, false)
+
+export def editor(opts=nil):
+    return Editor(opts)

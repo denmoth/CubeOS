@@ -1,0 +1,57 @@
+import t
+import appenv
+import apps.brush as brush
+eq = t.eq
+
+env = appenv.new({user: "ann"})
+app = env.launch(brush.main, [nil, {view: env.view, ready: (p) => rawset(env.got, "app", p)}])
+eq([app.canvas.w, app.canvas.h], [128, 80], "a new picture is 128 x 80")
+eq(app.canvas.px[1], 31, "painted white")
+vp = app.vp
+ox, oy = vp:origin()
+z = vp.zoom
+def at(ix, iy):
+    return env.win():content_x() + ox + math.floor((ix + 0.5) * z), env.win():content_y() + oy + math.floor((iy + 0.5) * z)
+# карандаш: чёрная точка
+x, y = at(10, 10)
+env.click(x, y)
+eq(app.canvas.px[10 * 128 + 10 + 1], 16, "the pencil paints with the first color")
+eq(len(app.undo), 1, "one undo step per stroke")
+env.key(keys.z, true)
+eq(app.canvas.px[10 * 128 + 10 + 1], 31, "Ctrl+Z takes it back")
+env.key(keys.y, true)
+eq(app.canvas.px[10 * 128 + 10 + 1], 16, "Ctrl+Y brings it back")
+# цвет из палитры правой кнопкой во второй, ластик красит им
+app:pick_color(60, 2)
+eq(app.bg, 60, "right click picks the second color")
+env.key(keys.x)
+eq([app.fg, app.bg], [60, 16], "X swaps the colors")
+# линия
+env.key(keys.l)
+eq(app.tool, "line", "L selects the line")
+x0, y0 = at(20, 20)
+x1, y1 = at(30, 20)
+env.drag(x0, y0, x1, y1)
+eq([app.canvas.px[20 * 128 + 20 + 1], app.canvas.px[20 * 128 + 25 + 1], app.canvas.px[20 * 128 + 30 + 1]], [60, 60, 60], "a line is drawn between the points")
+# заполнение
+env.key(keys.r, false, true)
+eq(app.tool, "rectf", "Shift+R selects the filled rectangle")
+a0, b0 = at(40, 40)
+a1, b1 = at(44, 43)
+env.drag(a0, b0, a1, b1)
+eq(app.canvas.px[41 * 128 + 42 + 1], 60, "the filled rectangle is full")
+env.key(keys.f)
+fx, fy = at(42, 41)
+env.click(fx, fy)
+eq(app.canvas.px[41 * 128 + 42 + 1], 60, "filling the same color changes nothing")
+env.key(keys.m)
+eq(app.mirror, 1, "M turns the mirror on")
+env.key(keys.p)
+mx, my = at(5, 60)
+env.click(mx, my)
+eq([app.canvas.px[60 * 128 + 5 + 1], app.canvas.px[60 * 128 + 122 + 1]], [60, 60], "the mirror paints the opposite point too")
+app.mirror = 0
+app:save_to("/cubeos/users/ann/home/p.cimg")
+eq(env.fsys:exists(nil, "/cubeos/users/ann/home/p.cimg"), true, "the picture is saved as .cimg")
+eq(env.alive(), true, "the app is still running (it did not crash)")
+print("done")

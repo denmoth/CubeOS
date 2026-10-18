@@ -1,0 +1,98 @@
+# appenv: окружение для тестов приложений CDE: файловая система в памяти, менеджер окон с пустым терминалом, ядро, нажатия.
+#
+#   env = appenv.new({user: "ann"})            env.fsys, env.view, env.wm, env.k, env.home
+#   env.launch(main, args)                     запускает приложение окном, args как ctx.args; возвращает ready-значение (app)
+#   env.settle(n), env.key(code, ctrl, shift), env.chars("text"), env.click(x, y, btn), env.win()  (первое окно)
+
+import kernel
+import cfs
+import cde
+
+export def make_term(cols, rows):
+    api = {}
+    def get_size(px):
+        if px:
+            return 306, 171
+        return 51, 19
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "setGraphicsMode", "drawPixels", "setFrozen"]:
+        api[name] = nothing
+    return api
+
+export def breathe():
+    os.queueEvent("t_breathe")
+    os.pullEvent("t_breathe")
+
+export def new(opts=nil):
+    o = opts ?? {}
+    env = {}
+    env.clock = {now: 1000}
+    def now():
+        return env.clock.now
+    env.fsys = cfs.new({clock: now})
+    env.fsys:mount("/", cfs.memory({now: now}))
+    cfs.install_defaults(env.fsys)
+    user = o.user ?? "ann"
+    env.home = "/cubeos/users/" .. user .. "/home"
+    for d in [env.home, "/cubeos/users/" .. user .. "/cfg", "/cubeos/users/" .. user .. "/desktop"]:
+        env.fsys:mkdir(nil, d, {parents: true})
+    env.view = cfs.view(env.fsys, nil, {aliases: cfs.default_aliases(user)})
+    env.wm = cde.wm.new({animations: {enabled: false}, term: make_term(51, 19), assets: "/repo/assets", clock: now, background: o.background ?? "plain"})
+    env.k = kernel.new({clock: now})
+    breathe()
+    def settle(n=10):
+        env.k:feed("cubeos_cde")
+        for i in range[1, n]:
+            env.clock.now = env.clock.now + 20
+            env.k:tick()
+            env.k:run_ready()
+    env.settle = settle
+    def desk(sys, args):
+        env.wm:run(sys)
+    env.got = {}
+    def launch(main, args):
+        env.wm:launch(main, {name: "app"}, args)
+        env.k:spawn(desk, [], {name: "cde", ui: true})
+        settle(20)
+        return env.got.app
+    env.launch = launch
+    def key(code, ctrl=false, shift=false):
+        if ctrl:
+            env.k:feed("key", keys.leftCtrl, false)
+        if shift:
+            env.k:feed("key", keys.leftShift, false)
+        env.k:feed("key", code, false)
+        if shift:
+            env.k:feed("key_up", keys.leftShift)
+        if ctrl:
+            env.k:feed("key_up", keys.leftCtrl)
+        settle()
+    env.key = key
+    def chars(text):
+        for ch in string.gmatch(text, "."):
+            env.k:feed("char", ch)
+        settle()
+    env.chars = chars
+    def click(x, y, btn=1):
+        env.k:feed("mouse_click", btn, x, y)
+        env.k:feed("mouse_up", btn, x, y)
+        settle()
+    env.click = click
+    def drag(x0, y0, x1, y1, btn=1):
+        env.k:feed("mouse_click", btn, x0, y0)
+        env.k:feed("mouse_drag", btn, x1, y1)
+        env.k:feed("mouse_up", btn, x1, y1)
+        settle()
+    env.drag = drag
+    def win():
+        return env.wm.windows[1]
+    env.win = win
+    def alive():
+        for p in env.k:ps():
+            if p.name == "app":
+                return true
+        return false
+    env.alive = alive
+    return env

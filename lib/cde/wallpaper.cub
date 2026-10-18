@@ -149,6 +149,26 @@ def _mapper(spal, pal):
         share[v + 1] = (d1 < 40 or d1 + d2 == 0) and 0 or math.min(0.5, d1 / (d1 + d2))
     return main, alt, share
 
+# картинка в цветах палитры экрана pal (общие цвета 16..211), того же размера; прозрачные пиксели остаются прозрачными (просмотр, рисование)
+export def remap(src, spal, pal, dither=true):
+    sp = spal ?? color.default_palette()
+    main, alt, share = _mapper(sp, pal)
+    out = surface_mod.new(src.w, src.h, -1)
+    spx = src.px
+    px = out.px
+    W = src.w
+    for y in range[0, src.h - 1]:
+        base = y * W + 1
+        for x in range[0, W - 1]:
+            idx = spx[base + x]
+            if idx >= 0:
+                c = main[idx + 1]
+                if dither and share[idx + 1] > 0 and color.dither(share[idx + 1], x, y):
+                    c = alt[idx + 1]
+                px[base + x] = c
+    out:touch()
+    return out
+
 # картинка src (поверхность с палитрой spal) на поверхность W x H в режиме mode, цветами 16..211 палитры pal (аватары, обои)
 export def fit_image(src, spal, W, H, mode, pal):
     main, alt, share = _mapper(spal, pal)

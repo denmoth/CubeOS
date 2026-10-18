@@ -1,0 +1,57 @@
+import t
+import appenv
+import apps.notes as notes
+import cdk.input as cdk_input
+eq = t.eq
+cdk_clip = cdk_input.clipboard
+
+env = appenv.new({user: "ann"})
+env.fsys:mkdir(nil, env.home .. "/documents", {parents: true})
+env.fsys:write_file(nil, env.home .. "/documents/a.lua", "local x = 1\nif x then\n    print(x)\nend\n")
+app = env.launch(notes.main, [env.home .. "/documents/a.lua", {view: env.view, ready: (p) => rawset(env.got, "app", p)}])
+ed = app.ed
+eq([ed:line_count(), ed.lang, ed.modified], [4, "lua", false], "a Lua file opens with highlighting on")
+env.chars("ab")
+eq([ed.lines[1], ed.col, ed.modified], ["ablocal x = 1", 2, true], "typing inserts at the cursor")
+env.key(keys.z, true)
+eq(ed.lines[1], "local x = 1", "Ctrl+Z undoes the typing")
+env.key(keys.y, true)
+eq(ed.lines[1], "ablocal x = 1", "Ctrl+Y returns it")
+env.key(keys.down)
+env.key(keys.home)
+env.key(keys.enter)
+eq([ed.lines[2], ed.row], ["", 3], "Enter splits the line")
+env.key(keys.backspace)
+eq([ed:line_count(), ed.row], [4, 2], "Backspace at the start joins lines")
+env.key(keys.a, true)
+eq(ed:has_selection(), true, "Ctrl+A selects everything")
+eq(string.len(ed:selected_text()) > 20, true, "the whole text is selected")
+env.key(keys.c, true)
+eq(string.len(cdk_clip.text) > 20, true, "Ctrl+C fills the clipboard")
+env.key(keys.right)
+eq(ed:has_selection(), false, "an arrow key drops the selection")
+env.key(keys["end"], true)
+n0 = ed:line_count()
+env.key(keys.v, true)
+eq(ed:line_count() > n0 + 2, true, "Ctrl+V pastes the copied text")
+env.key(keys.z, true)
+eq(ed:line_count(), n0, "one Ctrl+Z takes the whole paste back")
+env.key(keys.home, true)
+env.key(keys.d, true)
+eq(ed.lines[1], ed.lines[2], "Ctrl+D duplicates the line")
+env.key(keys.k, true)
+eq(ed.lines[1] != ed.lines[2], true, "Ctrl+K removes a line")
+# поиск
+env.key(keys.f, true)
+env.chars("print")
+eq(app.find_info.text, "1 found", "find counts matches")
+env.key(keys.enter)
+eq(ed:has_selection(), true, "Enter selects the match")
+env.key(256)
+eq(app.find_bar.visible, false, "Esc closes the find bar")
+# сохранение
+env.key(keys.s, true)
+eq(ed.modified, false, "Ctrl+S saves")
+eq(string.find(env.fsys:read_file(nil, env.home .. "/documents/a.lua"), "print(x)", 1, true) != nil, true, "the file on disk is updated")
+eq(env.alive(), true, "the app is still running (it did not crash)")
+print("done")

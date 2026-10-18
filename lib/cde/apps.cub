@@ -91,6 +91,13 @@ export class Registry:
                     out[len(out) + 1] = e
         return out
 
+    # запись по номеру (id), в том числе от поставщиков; nil, если нет
+    def find(self, id):
+        for e in self:entries():
+            if e.id == id:
+                return e
+        return nil
+
     # запись запущена: чаще запускаемые поднимаются выше
     def used(self, e):
         if e.id == nil:
