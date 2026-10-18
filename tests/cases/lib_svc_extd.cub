@@ -1,0 +1,128 @@
+import t
+import std.list as lists
+import cfs
+import cfs.extlabel as extlabel
+import svc.extd as extd
+eq = t.eq
+
+# защиты
+eq(extd.check_point("/cubeos/sys/cfg", "folder"), "system folders cannot be extended", "system places are refused")
+eq(extd.check_point("/cubeos", "folder"), "system folders cannot be extended", "a folder holding system places too")
+eq(extd.check_point("/", "folder") != nil, true, "the root too")
+eq(extd.check_point("/cubeos/drives/floppy/x", "folder") != nil, true, "no extender inside a device")
+eq(extd.check_point("/cubeos/shared/apps/paint", "folder") != nil, true, "an app folder is refused")
+eq(extd.check_point("/cubeos/users/ann/apps/game/data", "folder") != nil, true, "a part of an app too")
+eq(extd.check_point("/cubeos/shared/apps", "folder"), nil, "the whole apps folder is fine")
+eq(extd.check_point("/cubeos/users/ann/home/games", "folder"), nil, "a home folder is fine")
+eq(extd.check_point("/cubeos/mnt/cube-2", "disk"), nil, "disks go in /cubeos/mnt")
+eq(extd.check_point("/cubeos/users/ann/home/x", "disk") != nil, true, "and only there")
+eq(extd.app_root("/cubeos/users/ann/apps/game/data/a"), "/cubeos/users/ann/apps/game", "app root")
+
+fsys = cfs.new({})
+fsys:mount("/", cfs.memory())
+fsys:mkdir(nil, "/cubeos/users/ann/home/games", {parents: true})
+fsys:mkdir(nil, "/cubeos/shared/apps/paint", {parents: true})
+fsys:write_file(nil, "/cubeos/shared/apps/paint/main.lua", "paint")
+fsys:write_file(nil, "/cubeos/users/ann/home/games/mine.txt", "mine")
+store = {text: nil}
+def put(text):
+    store.text = text
+def mk():
+    return extd.Extd(fsys, {host: "pc-1", read_conf: () => store.text, write_conf: put})
+svc = mk()
+
+floppy = cfs.memory({limit: 20000})
+floppy:write("/old.txt", "old")
+fsys:mount("/cubeos/drives/floppy/disk-3", floppy, {name: "/cubeos/drives/floppy/disk-3"})
+
+# источник виден, пока не расширитель
+src = svc:sources_info()
+eq(len(src), 1, "the floppy is a possible extender")
+eq(src[1].label, nil, "not labelled yet")
+made = svc:make("/cubeos/drives/floppy/disk-3", "cube-2")
+eq(extlabel.read(floppy).label, "cube-2", "make labels the device")
+id = made.id
+
+# защиты при добавлении точки
+ok, err = pcall(() => svc:add_point(id, "/cubeos/sys", "folder"))
+eq(ok, false, "system folder refused")
+ok, err = pcall(() => svc:add_point(id, "/cubeos/shared/apps/paint", "folder"))
+eq(ok, false, "an app folder refused")
+
+# точка: папка игр
+r = svc:add_point(id, "/cubeos/users/ann/home/games", "folder")
+eq(r.path, "/cubeos/users/ann/home/games", "a point is added")
+eq(extlabel.read(floppy).hosts["pc-1"][1].path, "/cubeos/users/ann/home/games", "and written to the label")
+fsys:write_file(nil, "/cubeos/users/ann/home/games/new.txt", "n")
+eq(floppy:read("/new.txt"), "n", "new files land on the floppy")
+ok, err = pcall(() => svc:add_point(id, "/cubeos/users/ann/home/games/inner", "folder"))
+eq(ok, false, "no extender inside an extended folder")
+
+# папка приложений: приложение целиком на одном слое
+r = svc:add_point(id, "/cubeos/shared/apps", "folder")
+fsys:mkdir(nil, "/cubeos/shared/apps/paint/lib")
+fsys:write_file(nil, "/cubeos/shared/apps/paint/lib/x.lua", "x")
+eq(floppy:stat("/paint"), nil, "a part of a local app stays with the app")
+fsys:mkdir(nil, "/cubeos/shared/apps/chess")
+fsys:write_file(nil, "/cubeos/shared/apps/chess/main.lua", "c")
+eq(floppy:read("/chess/main.lua"), "c", "a whole new app may live on the extender")
+
+# список
+l = svc:list()
+eq(l[1].label, "cube-2", "list shows the extender")
+eq(l[1].online, true, "online")
+eq(len(l[1].points), 2, "with its points")
+
+# вынули дискету: папки остаются, файлы расширителя серые
+fsys:umount("/cubeos/drives/floppy/disk-3")
+svc:rescan()
+eq(svc:list()[1].online, false, "the extender is offline")
+eq(fsys:stat(nil, "/cubeos/users/ann/home/games/new.txt").offline, true, "its files are shown offline")
+eq(fsys:read_file(nil, "/cubeos/users/ann/home/games/mine.txt"), "mine", "own files work")
+ok, err = pcall(() => fsys:read_file(nil, "/cubeos/users/ann/home/games/new.txt"))
+eq(ok, false, "offline files cannot be read")
+
+# вставили снова (в другой дисковод): снова на связи
+floppy2 = floppy
+fsys:mount("/cubeos/drives/floppy/cube-2", floppy2, {name: "/cubeos/drives/floppy/cube-2"})
+svc:rescan()
+eq(svc:list()[1].online, true, "back online")
+eq(fsys:read_file(nil, "/cubeos/users/ann/home/games/new.txt"), "n", "its files read again")
+
+# перезагрузка: служба заново, по своему списку и метке подключает туда же
+for p in ["/cubeos/users/ann/home/games", "/cubeos/shared/apps"]:
+    fsys:umount(p)
+svc2 = mk()
+svc2:rescan()
+eq(fsys:read_file(nil, "/cubeos/users/ann/home/games/new.txt"), "n", "after a restart it is attached again")
+eq(svc2:list()[1].points[1].attached, true, "and listed as attached")
+
+# офлайн-список переживает перезагрузку без устройства
+fsys:umount("/cubeos/drives/floppy/cube-2")
+for p in ["/cubeos/users/ann/home/games", "/cubeos/shared/apps"]:
+    fsys:umount(p)
+svc3 = mk()
+svc3:rescan()
+eq(svc3:list()[1].online, false, "a restart without the device knows it is away")
+
+# диск целиком
+fsys:mount("/cubeos/drives/floppy/cube-2", floppy, {name: "/cubeos/drives/floppy/cube-2"})
+svc3:rescan()
+svc3:add_point(id, "/cubeos/mnt/cube-2", "disk")
+eq(fsys:read_file(nil, "/cubeos/mnt/cube-2/old.txt"), "old", "disk mode mounts it whole")
+fsys:umount("/cubeos/drives/floppy/cube-2")
+svc3:rescan()
+eq(fsys:stat(nil, "/cubeos/mnt/cube-2"), nil, "a vanished disk is unmounted")
+
+# снять точку: файлы расширителя уходят, свои остаются
+fsys:mount("/cubeos/drives/floppy/cube-2", floppy, {name: "/cubeos/drives/floppy/cube-2"})
+svc3:rescan()
+svc3:remove_point(id, "/cubeos/users/ann/home/games")
+eq(fsys:stat(nil, "/cubeos/users/ann/home/games/new.txt"), nil, "after removing a point the extender files left")
+eq(fsys:read_file(nil, "/cubeos/users/ann/home/games/mine.txt"), "mine", "own files stay")
+eq(len(extlabel.read(floppy).hosts["pc-1"]), 2, "the label forgets the point")
+eq(svc3:forget(id), true, "forget")
+eq(len(svc3:list()), 0, "nothing known")
+eq(fsys:stat(nil, "/cubeos/shared/apps/chess"), nil, "forgetting detaches everything")
+
+print("done")

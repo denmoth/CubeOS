@@ -16,6 +16,7 @@ import svc.fontd as fontd
 import svc.inputd as inputd
 import svc.audiod as audiod
 import svc.netd as netd
+import svc.extd as extd
 eq = t.eq
 
 # Загрузка с настоящими манифестами из sys/services и настоящими службами: всё поднимается, питание, журнал, сбои, виртуальные каталоги.
@@ -25,7 +26,7 @@ def now():
     return clock.now
 
 modules = {"svc.logd": logd, "svc.timed": timed, "svc.devd": devd, "svc.powerd": powerd, "svc.crashd": crashd, "svc.permd": permd,
-    "svc.notifyd": notifyd, "svc.clipboard": clipboard, "svc.stub": stub, "svc.fontd": fontd, "svc.inputd": inputd, "svc.audiod": audiod, "svc.netd": netd}
+    "svc.notifyd": notifyd, "svc.clipboard": clipboard, "svc.stub": stub, "svc.fontd": fontd, "svc.inputd": inputd, "svc.audiod": audiod, "svc.netd": netd, "svc.extd": extd}
 def importer(path):
     return modules[path]
 
@@ -85,7 +86,7 @@ breathe()
 fsys = build_fs()
 system = mk_boot(fsys, nil):start()
 settle(system, 60)
-names = ["logd", "timed", "devd", "powerd", "crashd", "permd", "notifyd", "clipboard", "fontd", "audiod", "netd"]
+names = ["logd", "timed", "devd", "powerd", "crashd", "permd", "notifyd", "clipboard", "fontd", "audiod", "netd", "extd"]
 bad = []
 for name in names:
     if system.services:state(name) != "running":

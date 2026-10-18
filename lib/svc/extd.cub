@@ -1,0 +1,348 @@
+# svc.extd: расширители хранилища (docs/21-axo.md, подшаг 6.3). Расширитель это любое подключённое хранилище с меткой
+# .cubeos-extender (cfs.extlabel): дискета или диск (devd монтирует их в /cubeos/drives), общая папка другого компьютера (netd монтирует
+# в /cubeos/net). Служба смотрит, что подключено, и сама подключает расширители туда, где они были на этом компьютере; пропал
+# (вынули дискету, сеть не отвечает): папки остаются, его файлы видны серыми из сохранённого списка; вернулся: снова на связи.
+#
+# Защиты (решения владельца): системные места (/cubeos/sys, /cubeos/var, /cubeos/boot, /cubeos/kernel, /rom, корень и /cubeos
+# целиком) не расширяются; папку приложения (/cubeos/shared/apps/<app>, /cubeos/users/<u>/apps/<app>) и всё внутри неё расширить
+# нельзя, а папку приложений целиком можно: каждое приложение тогда лежит целиком на одном слое. Расширитель внутри расширителя и
+# в /cubeos/drives или /cubeos/net нельзя. Режим «диск» монтирует расширитель в /cubeos/mnt/<имя>.
+#
+# Свой список (что за расширители, куда подключались, сохранённые списки файлов для офлайна): /cubeos/sys/cfg/extenders.conf.
+# Запросы (svc.rpc): list, sources, make {source, label}, add_point {id, path, mode, priority}, remove_point {id, path},
+#   forget {id}, rescan. Менять (make, add_point, remove_point, forget) может только администратор: сам вызывающий или имя и пароль
+#   администратора в запросе (admin_user, admin_password, как UAC). Ошибки шаблоны с {path}, {label}.
+# main(sys, args): args.system (контекст; kernel, auth, fsys), args.host (имя компьютера), args.interval (секунды между проверками).
+
+import json5
+import cfs.path as paths
+import cfs.rules as rules
+import cfs.extlabel as extlabel
+import svc.rpc as rpc
+
+export const CONF_PATH = "/cubeos/sys/cfg/extenders.conf"
+export const SOURCES = ["/cubeos/drives", "/cubeos/net"]
+export const DISK_ROOT = "/cubeos/mnt"
+export const PROTECTED = ["/cubeos/sys", "/cubeos/var", "/cubeos/boot", "/cubeos/kernel", "/rom", "/cubeos/drives", "/cubeos/net"]
+const APP_ROOTS = ["/cubeos/shared/apps", "/cubeos/users/*/apps"]
+
+# корень приложения, в котором лежит path (или nil): /cubeos/shared/apps/<app> или /cubeos/users/<u>/apps/<app>
+export def app_root(path):
+    norm = paths.normalize(path)
+    a = string.match(norm, "^(/cubeos/shared/apps/[^/]+)")
+    if a != nil:
+        return a
+    return string.match(norm, "^(/cubeos/users/[^/]+/apps/[^/]+)")
+
+# nil, если папку path можно расширять в режиме mode, иначе причина
+export def check_point(path, mode):
+    norm = paths.normalize(path)
+    if mode == "disk":
+        if not paths.is_inside(norm, DISK_ROOT) or norm == DISK_ROOT:
+            return "an extender as a disk goes inside " .. DISK_ROOT
+        return nil
+    if norm == "/" or norm == "/cubeos" or norm == "/cubeos/users" or norm == "/cubeos/shared":
+        return "system folders cannot be extended"
+    for pre in PROTECTED:
+        if paths.is_inside(norm, pre) or paths.is_inside(pre, norm):
+            return "system folders cannot be extended"
+    if app_root(norm) != nil:
+        return "a part of an application cannot be extended (the whole apps folder can)"
+    return nil
+
+export class Extd:
+    # opts: host, read_conf() -> текст | nil, write_conf(text), now() мс
+    def init(self, fsys, opts=nil):
+        o = opts ?? {}
+        self.fsys = fsys
+        self.host = o.host ?? "pc-0"
+        self.read_conf = o.read_conf
+        self.write_conf = o.write_conf
+        self.conf = {known: {}}
+        self.live = {}         # id -> {source, provider, label, layers: {path: Layered}, online}
+        self.dirty = false
+        self:_load()
+
+    def _load(self):
+        if self.read_conf == nil:
+            return
+        ok, text = pcall(self.read_conf)
+        if not ok or text == nil:
+            return
+        ok2, data = pcall(() => json5.parse(text))
+        if ok2 and type(data) == "table" and type(data.known) == "table":
+            self.conf = data
+
+    def save(self):
+        self.dirty = false
+        if self.write_conf != nil:
+            self.write_conf(json5.stringify(self.conf, {json5: true, indent: 2}) .. "\n")
+
+    def _known(self, id, label):
+        k = self.conf.known[id]
+        if k == nil:
+            k = {label: label, points: [], index: {}}
+            self.conf.known[id] = k
+        k.label = label ?? k.label
+        if type(k.index) != "table":
+            k.index = {}
+        return k
+
+    # ------------------------------------------------------------ что подключено
+
+    # смонтированные хранилища, которые могут быть расширителями: {path, name, provider}
+    def sources(self):
+        out = []
+        for m in self.fsys.mounts:
+            for root in SOURCES:
+                if paths.is_inside(m.path, root) and m.path != root:
+                    out[len(out) + 1] = {path: m.path, name: m.name, provider: m.provider}
+        table.sort(out, (a, b) => a.path < b.path)
+        return out
+
+    def _source(self, path):
+        norm = paths.normalize(path)
+        for s in self:sources():
+            if s.path == norm:
+                return s
+        return nil
+
+    def _atomic_for(self, point):
+        # путь внутри слоёной папки -> корень приложения внутри неё (тоже внутри), чтобы приложение лежало целиком на одном слое
+        def atomic(rel):
+            abs = rel == "/" and point or point .. rel
+            root = app_root(abs)
+            if root == nil or not paths.is_inside(root, point) or root == point:
+                return nil
+            return string.sub(root, string.len(point) + 1)
+        return atomic
+
+    def _attach(self, id, entry):
+        live = self.live[id]
+        k = self:_known(id, live.label.label)
+        me = self
+        def online():
+            return me.live[id] != nil and me.live[id].online
+        def index_for(path):
+            if k.index[path] == nil:
+                k.index[path] = {}
+            return k.index[path]
+        def on_index(path):
+            me.dirty = true
+        lab = {id: id, label: live.label.label, hosts: {}}
+        lab.hosts[self.host] = [entry]
+        r = extlabel.attach(self.fsys, live.provider, lab, self.host, {online: online, index_for: index_for, on_index: on_index,
+            atomic: self:_atomic_for(entry.path), check: (p) => check_point(p.path, p.mode)})
+        for a in r.attached:
+            live.layers[a.path] = a.layer ?? true
+        return r
+
+    # проверка подключённого: новые расширители подключить, пропавшие перевести в офлайн, вернувшиеся снова на связь
+    def rescan(self):
+        seen = {}
+        for s in self:sources():
+            lab = extlabel.read(s.provider)
+            if lab != nil:
+                seen[lab.id] = true
+                live = self.live[lab.id]
+                if live != nil and live.source == s.path and live.online:
+                    continue
+                if live != nil:
+                    # вернулся (может быть, в другом месте): слои берут новый провайдер
+                    live.source = s.path
+                    live.provider = s.provider
+                    live.label = lab
+                    live.online = true
+                    for path, lay in live.layers:
+                        if type(lay) == "table":
+                            lay.ext = extlabel.Hidden(s.provider)
+                            lay:reconnect()
+                else:
+                    self.live[lab.id] = {source: s.path, provider: s.provider, label: lab, layers: {}, online: true}
+                k = self:_known(lab.id, lab.label)
+                # точки на этом компьютере: из метки на устройстве и из своего списка (метку могли записать на другом компьютере)
+                pts = {}
+                for p in extlabel.points(lab, self.host):
+                    pts[p.path] = p
+                for p in k.points:
+                    if pts[p.path] == nil:
+                        pts[p.path] = p
+                k.points = []
+                for path, p in pts:
+                    k.points[len(k.points) + 1] = p
+                    if self.live[lab.id].layers[path] == nil:
+                        self:_attach(lab.id, p)
+                self.dirty = true
+        for id, live in self.live:
+            if not seen[id] and live.online:
+                live.online = false
+                # диск целиком снимается; папки остаются, его файлы серые
+                for path, lay in live.layers:
+                    if type(lay) != "table":
+                        self.fsys:umount(path)
+                        live.layers[path] = nil
+        if self.dirty:
+            self:save()
+
+    # ------------------------------------------------------------ запросы
+
+    def list(self):
+        out = []
+        for id, k in self.conf.known:
+            live = self.live[id]
+            pts = []
+            for p in k.points:
+                pts[len(pts) + 1] = {path: p.path, mode: p.mode, priority: p.priority,
+                    attached: live != nil and live.layers[p.path] != nil}
+            item = {id: id, label: k.label, online: live != nil and live.online, source: live != nil and live.source or nil, points: pts}
+            if live != nil and live.online:
+                okf, f = pcall(() => live.provider:free_space())
+                okc, c = pcall(() => live.provider:capacity())
+                item.free = okf and f or nil
+                item.capacity = okc and c or nil
+            out[len(out) + 1] = item
+        table.sort(out, (a, b) => a.label < b.label)
+        return out
+
+    def sources_info(self):
+        out = []
+        for s in self:sources():
+            lab = extlabel.read(s.provider)
+            okf, f = pcall(() => s.provider:free_space())
+            out[len(out) + 1] = {path: s.path, name: s.name, label: lab != nil and lab.label or nil, id: lab != nil and lab.id or nil,
+                readonly: s.provider:is_readonly(), free: okf and f or nil}
+        return out
+
+    def make(self, source, label):
+        s = self:_source(source)
+        if s == nil:
+            raise Error("nothing is connected at {path}")
+        lab = extlabel.create(s.provider, label)
+        self:rescan()
+        return {id: lab.id, label: lab.label}
+
+    def add_point(self, id, path, mode, priority):
+        live = self.live[id]
+        if live == nil or not live.online:
+            raise Error("the extender {label} is not connected")
+        norm = paths.normalize(path)
+        why = check_point(norm, mode)
+        if why != nil:
+            raise Error(why)
+        for oid, other in self.live:
+            for p, lay in other.layers:
+                if paths.is_inside(norm, p) or paths.is_inside(p, norm):
+                    raise Error("{path} is already extended")
+        entry = extlabel.set_point(live.label, self.host, {path: norm, mode: mode, priority: priority})
+        extlabel.save(live.provider, live.label)
+        k = self:_known(id, live.label.label)
+        keep = []
+        for p in k.points:
+            if p.path != norm:
+                keep[len(keep) + 1] = p
+        keep[len(keep) + 1] = entry
+        k.points = keep
+        if mode == "disk":
+            pcall(() => self.fsys:mkdir(nil, DISK_ROOT, {parents: true}))
+        r = self:_attach(id, entry)
+        self:save()
+        if len(r.skipped) > 0:
+            raise Error(r.skipped[1].reason)
+        return {path: norm, mode: entry.mode}
+
+    # снять точку: файлы расширителя уходят вместе с ним, свои остаются
+    def remove_point(self, id, path):
+        k = self.conf.known[id]
+        if k == nil:
+            raise Error("unknown extender")
+        norm = paths.normalize(path)
+        live = self.live[id]
+        if live != nil and live.layers[norm] != nil:
+            self.fsys:umount(norm)
+            live.layers[norm] = nil
+        keep = []
+        for p in k.points:
+            if p.path != norm:
+                keep[len(keep) + 1] = p
+        k.points = keep
+        k.index[norm] = nil
+        if live != nil and live.online:
+            extlabel.drop_point(live.label, self.host, norm)
+            pcall(() => extlabel.save(live.provider, live.label))
+        self:save()
+        return true
+
+    def forget(self, id):
+        k = self.conf.known[id]
+        if k == nil:
+            return false
+        for p in k.points:
+            self:remove_point(id, p.path)
+        self.conf.known[id] = nil
+        self.live[id] = nil
+        self:save()
+        return true
+
+export def main(sys, args):
+    a = args ?? {}
+    system = a.system ?? {}
+    fsys = system.fsys
+    kernel = system.kernel
+    auth = system.auth
+    host = a.host ?? ("pc-" .. tostring(os.getComputerID != nil and os.getComputerID() or 0))
+    ext = Extd(fsys, {host: host,
+        read_conf: () => fsys:exists(nil, CONF_PATH) and fsys:read_file(nil, CONF_PATH) or nil,
+        write_conf: (text) => fsys:write_file(nil, CONF_PATH, text)})
+
+    def admin_ok(sender, q):
+        proc = kernel != nil and kernel:proc(sender) or nil
+        sub = proc != nil and proc.subject or nil
+        if rules.is_admin(sub) or (sub != nil and auth != nil and auth:is_admin(sub.name)):
+            return true
+        if q.admin_password != nil and auth != nil:
+            user = q.admin_user ?? (sub != nil and sub.name or nil)
+            return user != nil and auth:is_admin(user) and auth:verify(user, q.admin_password) == true
+        return false
+
+    def need_admin(sender, q):
+        if not admin_ok(sender, q):
+            raise Error(q.admin_password != nil and "wrong administrator name or password" or "only an administrator can change extenders")
+
+    handlers = {}
+    handlers.list = (q, f) => ext:list()
+    handlers.sources = (q, f) => ext:sources_info()
+    def rescan(q, f):
+        ext:rescan()
+        return true
+    handlers.rescan = rescan
+    def make(q, f):
+        need_admin(f, q ?? {})
+        return ext:make(q.source, q.label)
+    handlers.make = make
+    def add_point(q, f):
+        need_admin(f, q ?? {})
+        return ext:add_point(q.id, q.path, q.mode ?? "folder", q.priority)
+    handlers.add_point = add_point
+    def remove_point(q, f):
+        need_admin(f, q ?? {})
+        return ext:remove_point(q.id, q.path)
+    handlers.remove_point = remove_point
+    def forget(q, f):
+        need_admin(f, q ?? {})
+        return ext:forget(q.id)
+    handlers.forget = forget
+
+    pcall(() => ext:rescan())
+    interval = a.interval ?? 2
+    last = {t: os.clock()}
+    def tick():
+        if os.clock() - last.t >= interval:
+            last.t = os.clock()
+            ok, err = pcall(() => ext:rescan())
+            if not ok:
+                sys.log("warn", "rescan failed: " .. tostring(err))
+            # сохранённые списки файлов (для офлайна) пишутся не чаще раза за проверку
+            if ext.dirty:
+                pcall(() => ext:save())
+    sys.register("extd")
+    rpc.serve(sys, handlers, {timeout: () => interval, tick: tick})

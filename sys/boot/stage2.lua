@@ -168,7 +168,8 @@ local function main()
   load("kernel", "Loading the kernel", { "kernel", "kernel.cc", "boot", "boot.console", "crash", "sysfs" })
   -- модули служб подгружаются заранее: иначе они компилировались бы в процессе init одним куском
   load("system", "Loading system services", { "svc.logd", "svc.timed", "svc.devd", "svc.powerd", "svc.crashd", "svc.permd", "svc.notifyd",
-    "svc.clipboard", "svc.stub", "svc.fontd", "svc.inputd", "svc.audiod", "svc.netd" })
+    "svc.clipboard", "svc.stub", "svc.fontd", "svc.inputd", "svc.audiod", "svc.netd", "svc.extd",
+    "cfs.extend", "cfs.extlabel" })
   -- после входа рабочий стол CDE (D249), если есть CC: Graphics. Полноэкранный терминал: без CC: Graphics, boot.conf de: "tui",
   -- пункт меню загрузки «CubeOS (terminal)» (на одну загрузку) и безопасный режим
   local want_cde = term.setGraphicsMode ~= nil and not ctx.terminal and ctx.mode ~= "safe"
