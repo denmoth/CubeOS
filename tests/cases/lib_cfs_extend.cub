@@ -134,4 +134,52 @@ eq(fsys:read_file(nil, "/home/games/while_off.txt"), "off", "including ones writ
 ok, err = pcall(() => extend.over(fsys, "/home/nope", ext, {}))
 eq(ok, false, "only an existing folder can be extended")
 
+# ---------------------------------------------------------------- крайние случаи
+fs2 = cfs.new({})
+fs2:mount("/", cfs.memory())
+fs2:mkdir(nil, "/g", {parents: true})
+tiny = cfs.memory({limit: 300})
+lay2 = extend.over(fs2, "/g", tiny, {label: "tiny", reserve: 0})
+
+# расширитель не говорит, сколько места, и переполняется посреди записи: файл ложится на свой диск
+tiny.free_space = (self) => nil
+fs2:write_file(nil, "/g/big.bin", string.rep("b", 1000))
+eq(tiny:stat("/big.bin"), nil, "a full extender leaves no piece of the file")
+eq(fs2:read_file(nil, "/g/big.bin"), string.rep("b", 1000), "and the file is safe on the own disk")
+eq(lay2:online(), true, "a full extender is still online")
+
+# пропал посреди копирования: всё скопированное на месте, часть на расширителе, остальное на своём диске
+fs2:mkdir(nil, "/src", {parents: true})
+for i in range[1, 6]:
+    fs2:write_file(nil, "/src/f" .. i .. ".txt", "file " .. i)
+count = {n: 0}
+real_write = tiny.write
+def flaky(self, rel, data):
+    count.n = count.n + 1
+    if count.n > 2:
+        error("no answer from tiny", 0)
+    return real_write(self, rel, data)
+tiny.write = flaky
+fs2:copy(nil, "/src", "/g/src")
+eq(lay2:online(), false, "the extender is marked away")
+eq(fs2:read_file(nil, "/g/src/f6.txt"), "file 6", "files after the drop are on the own disk")
+eq(tiny:stat("/src/f1.txt") != nil, true, "what made it is on the extender")
+eq(tiny:stat("/src/f3.txt"), nil, "the broken file left no piece there")
+tiny.write = real_write
+lay2:reconnect()
+got = []
+for i in range[1, 6]:
+    got[len(got) + 1] = fs2:read_file(nil, "/g/src/f" .. i .. ".txt")
+eq(got, ["file 1", "file 2", "file 3", "file 4", "file 5", "file 6"], "back online, nothing was lost")
+
+# часть приложения не разъезжается: расширитель пропал посреди записи в папку приложения, это ошибка, а не файл на своём диске
+fs2:mkdir(nil, "/g/app")
+lay2.atomic = (rel) => string.sub(rel, 1, 4) == "/app" and "/app" or nil
+eq(tiny:stat("/app") != nil, true, "(the app folder is on the extender)")
+tiny.write = (self, rel, data) => error("no answer from tiny", 0)
+ok, err = pcall(() => fs2:write_file(nil, "/g/app/part.lua", "p"))
+eq(ok, false, "a part of an app is not split onto the own disk")
+eq(fs2:stat(nil, "/g/app/part.lua"), nil, "and nothing half-written appears")
+tiny.write = real_write
+
 print("done")

@@ -14,6 +14,7 @@
 #     диск; priority "local": на свой диск, на расширитель только когда своё место кончилось; внутри «неделимой» папки (atomic(rel)
 #     возвращает её корень, например папка приложения) всё идёт туда, где лежит сама эта папка;
 #   * удаление: со слоя, где лежит; папка, которая есть в обоих слоях, удаляется из обоих;
+#   * расширитель переполнился или пропал во время записи нового файла: файл ложится на свой диск (часть приложения: ошибка);
 #   * расширитель не на связи (online() false или его вызовы падают): его файлы видны из сохранённого списка с пометкой offline
 #     (show_offline: false прячет их), читать и менять их нельзя.
 # У записей stat дополнительные поля: layer ("local", "ext", "both"), label (имя расширителя), offline (true).
@@ -218,7 +219,11 @@ export class Layered:
         acc = ""
         for seg in paths.split(rel):
             acc = acc .. "/" .. seg
-            st = layer == "local" and p:stat(acc) or self:_ext(() => p:stat(acc))
+            st = nil
+            if layer == "local":
+                st = p:stat(acc)
+            else:
+                st = self:_ext(() => p:stat(acc))
             if st == nil:
                 if layer == "local":
                     p:mkdir(acc)
@@ -233,7 +238,7 @@ export class Layered:
             if root != nil:
                 w, rr = self:where(root)
                 if w == "local" or w == "ext":
-                    return w
+                    return w, true
                 if w == "offline":
                     errors.fail("EIO", "this folder lives on the extender " .. self.label .. ", which is not connected", dir)
         on = self:online()
@@ -349,12 +354,22 @@ export class Layered:
                 return self:_ext(() => self.ext:write(srr .. suf, data))
             if sw == "local":
                 return self.base:write(rel, data)
-        layer = self:_choose(dir, string.len(data))
+        layer, forced = self:_choose(dir, string.len(data))
         if layer == "ext":
-            self:_ensure_dirs("ext", dir)
-            self:_ext(() => self.ext:write(rel, data))
-            self:_remember(dir, paths.basename(rel), {type: "file", size: string.len(data), modified: 0})
-        else:
+            # расширитель переполнился или пропал прямо сейчас: новый файл ложится на свой диск, данные не теряются
+            # (кроме части приложения: она не должна разъехаться по двум слоям)
+            ok, err = pcall(() => self:_ensure_dirs("ext", dir))
+            if ok:
+                ok, err = pcall(() => self:_ext(() => self.ext:write(rel, data)))
+            if ok:
+                self:_remember(dir, paths.basename(rel), {type: "file", size: string.len(data), modified: 0})
+                return
+            # недописанный кусок на расширителе не оставляем (на полной дискете CC может записать часть)
+            pcall(() => self.ext:remove(rel))
+            if forced:
+                raise err
+            layer = "local"
+        if layer == "local":
             self:_ensure_dirs("local", dir)
             self.base:write(rel, data)
 
