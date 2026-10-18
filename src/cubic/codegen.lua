@@ -347,6 +347,20 @@ function M.generate(ast, file, opts)
     return r
   end
 
+  -- значения инструкции (x = ..., return ..., let ...): выражение целиком может вычисляться отдельными строками до самой
+  -- инструкции (a ?? сложное без замыкания), порядок вычисления значений при этом сохраняется
+  local hoist_node = nil
+  local fn_temps = 0
+  local function exprs_top(list)
+    local r = {}
+    for k, e in ipairs(list) do
+      hoist_node = e
+      r[k] = expr(e)
+    end
+    hoist_node = nil
+    return r
+  end
+
   function expr(node)
     return E[node.tag](node)
   end
@@ -565,21 +579,35 @@ function M.generate(ast, file, opts)
     return node.tag == "Name"
   end
 
+  -- a ?? b: простые случаи без вызова; сложное b у значения инструкции временной переменной, иначе замыканием (лениво)
+  local function coalesce(n)
+    local safe_r = SAFE_TRUTHY[n.r.tag] or (n.r.tag == "Bool" and n.r.v)
+    if safe_r and pure_path(n.l) then
+      local l = expr(n.l)
+      return "(" .. l .. " == nil and " .. expr(n.r) .. " or " .. l .. ")"
+    end
+    if SIMPLE_NODE[n.r.tag] or safe_r then
+      return "__rt.nvl(" .. expr(n.l) .. ", " .. expr(n.r) .. ")"
+    end
+    if n == hoist_node and fn_temps < 40 then
+      hoist_node = nil
+      local l = expr(n.l)
+      local tmp = temp_name("__n")
+      fn_temps = fn_temps + 1
+      emit("local " .. tmp .. " = " .. l)
+      local r = expr(n.r)
+      emit("if " .. tmp .. " == nil then " .. tmp .. " = " .. r .. " end")
+      return tmp
+    end
+    return "__rt.nvl_lazy(" .. expr(n.l) .. ", function() return " .. expr(n.r) .. " end)"
+  end
+
   function E.Binary(n)
     local op = n.op
+    if op == "??" then return coalesce(n) end
     local l, r = expr(n.l), expr(n.r)
     if op == "and" or op == "or" then
       return "(" .. l .. " " .. op .. " " .. r .. ")"
-    elseif op == "??" then
-      -- слева простая ссылка, справа значение, которое не бывает false/nil: без вызова функции
-      local safe_r = SAFE_TRUTHY[n.r.tag] or (n.r.tag == "Bool" and n.r.v)
-      if safe_r and pure_path(n.l) then
-        return "(" .. l .. " == nil and " .. r .. " or " .. l .. ")"
-      end
-      if SIMPLE_NODE[n.r.tag] or safe_r then
-        return "__rt.nvl(" .. l .. ", " .. r .. ")"
-      end
-      return "__rt.nvl_lazy(" .. l .. ", function() return " .. r .. " end)"
     elseif op == "==" or op == "is" then
       return "(" .. l .. " == " .. r .. ")"
     elseif op == "!=" or op == "is not" then
@@ -840,7 +868,9 @@ function M.generate(ast, file, opts)
     local single = s.values[1]
     local unpack_list = star ~= nil or (#s.targets >= 2 and #s.values == 1 and single.tag ~= "Call" and single.tag ~= "Method" and single.tag ~= "LuaExpr")
     if unpack_list then
+      hoist_node = single
       local rhs = expr(single)
+      hoist_node = nil
       local codes = {}
       for k, t in ipairs(s.targets) do
         if t.tag == "Starred" then
@@ -851,7 +881,7 @@ function M.generate(ast, file, opts)
       end
       emit_unpack(codes, star, rhs)
     else
-      local lhs, rhs = {}, exprs(s.values)
+      local lhs, rhs = {}, exprs_top(s.values)
       for k, t in ipairs(s.targets) do lhs[k] = target_code(t) end
       emit(table.concat(lhs, ", ") .. " = " .. table.concat(rhs, ", "))
     end
@@ -892,7 +922,7 @@ function M.generate(ast, file, opts)
   end
 
   local function let_like(s, kind, names, values)
-    local codes = exprs(values)
+    local codes = exprs_top(values)
     local decl = {}
     for k, name in ipairs(names) do
       if B.PROTECTED[name] and s.tag ~= "Override" then protected_error(name, s.line) end
@@ -917,7 +947,7 @@ function M.generate(ast, file, opts)
   function S.Override(s) let_like(s, "local", { s.name }, { s.value }) end
 
   function S.Return(s)
-    emit_return(table.concat(exprs(s.values), ", "), nil, s.line)
+    emit_return(table.concat(exprs_top(s.values), ", "), nil, s.line)
   end
 
   function S.Break(s) emit_break(s.line) end
@@ -1075,6 +1105,8 @@ function M.generate(ast, file, opts)
     end
     emit(header .. "(" .. table.concat(plist, ", ") .. ")")
     level = level + 1
+    local saved_temps = fn_temps
+    fn_temps = 0
     ctx[#ctx + 1] = { kind = "func" }
     for _, p in ipairs(params) do
       if p.default then
@@ -1086,6 +1118,7 @@ function M.generate(ast, file, opts)
     hoist(body)
     block(body)
     ctx[#ctx] = nil
+    fn_temps = saved_temps
     level = level - 1
     pop_scope()
     if sig then

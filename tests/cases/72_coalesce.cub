@@ -1,0 +1,14 @@
+calls = []
+def f(x):
+    calls[len(calls) + 1] = x
+    return x
+o = {}
+a = o.v ?? f(1)
+o.v = 5
+b = o.v ?? f(2)
+def g():
+    return nil ?? f(3)
+c = g()
+d, e = o.w ?? f(4), 9
+let h = (nil ?? f(5)) + 1
+print(a, b, c, d, e, h, len(calls))
