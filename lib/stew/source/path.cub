@@ -1,0 +1,72 @@
+# stew.source.path: источник «папка» (дискета, диск, build/packages в тестах). src.url это папка. Если в ней есть index.json5, это
+# каталог (url версий: имена файлов относительно папки). Иначе каталог собирается из манифестов всех *.cpk в папке.
+
+import cpk
+import json5
+import semver
+import stew.source.http as shttp
+
+def _arr():
+    return setmetatable({}, json5.array_mt)
+
+export def refresh(src, ctx):
+    fsys = ctx.fs
+    dir = src.url
+    if type(dir) != "string" or dir == "":
+        error("source " .. tostring(src.name) .. ": no folder", 0)
+    index = fsys.combine(dir, "index.json5")
+    if fsys.exists(index):
+        return shttp.parse_index(shttp.read_file(fsys, index), index)
+    if not fsys.isDir(dir):
+        error("no such folder: " .. dir, 0)
+    names = fsys.list(dir)
+    table.sort(names)
+    packages = {}
+    latest = {}
+    for name in names:
+        if string.lower(string.sub(name, -4)) != ".cpk":
+            continue
+        full = fsys.combine(dir, name)
+        ok, a = pcall(cpk.open_file, full, fsys)
+        if not ok:
+            ctx.log("skip " .. name .. ": " .. tostring(a))
+            continue
+        ok2, m = pcall(a.manifest, a)
+        if not ok2 or type(m) != "table" or type(m.id) != "string" or type(m.version) != "string":
+            ctx.log("skip " .. name .. ": no usable manifest")
+            continue
+        rec = packages[m.id]
+        if rec == nil:
+            rec = {
+                name: m.name ?? m.id, description: m.description ?? "", author: m.author ?? "", kind: m.kind ?? "app",
+                category: m.category ?? "apps", priority: m.priority ?? "optional", homepage: m.homepage ?? "", versions: {},
+            }
+            packages[m.id] = rec
+        rec.versions[m.version] = {
+            url: name, sha256: a:sha256_hex(), size: fsys.getSize(full), installed_size: m.installed_size ?? 0,
+            depends: m.depends ?? {}, want: m.want ?? {}, conflicts: m.conflicts ?? _arr(), provides: m.provides ?? _arr(),
+            permissions: m.permissions ?? {need: _arr(), want: _arr()}, cubeos: m.cubeos ?? {min: "0.5.0"},
+        }
+        # имя и описание берутся у самой новой версии
+        if latest[m.id] == nil or semver.gt(m.version, latest[m.id]):
+            latest[m.id] = m.version
+            rec.name = m.name ?? m.id
+            rec.description = m.description ?? ""
+            rec.category = m.category ?? "apps"
+    return {packages: packages, format: 1}
+
+export def fetch(src, id, version, rec, dest, ctx):
+    fsys = ctx.fs
+    vrec = shttp.version_record(rec, version)
+    if type(vrec.url) != "string":
+        error(id .. " " .. version .. ": the catalog has no url", 0)
+    file = fsys.combine(src.url, vrec.url)
+    if not fsys.exists(file) or fsys.isDir(file):
+        error("no such package file: " .. file, 0)
+    data = shttp.read_file(fsys, file)
+    shttp.check_blob(data, vrec, id .. " " .. version)
+    if fsys.combine(dest, "") != fsys.combine(file, ""):
+        if fsys.exists(dest):
+            fsys.delete(dest)
+        shttp.write_file(fsys, dest, data)
+    return dest

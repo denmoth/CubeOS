@@ -1,0 +1,25 @@
+# stew.source.cobble: официальный каталог Cobble (docs/packages/06-cobble.md). То же, что http, только адрес индекса выводится из
+# src.url: «OWNER/cobble» (или «OWNER/REPO») -> https://raw.githubusercontent.com/OWNER/cobble/main/index.json5; полный адрес
+# (https://...) берётся как есть.
+
+import stew.source.http as shttp
+
+export def index_url(src):
+    url = src.url
+    if type(url) != "string" or url == "":
+        error("source " .. tostring(src.name) .. ": url is OWNER/cobble or a full address", 0)
+    if string.match(url, "^https?://") != nil:
+        return shttp.index_url(src)
+    owner, repo = string.match(url, "^([%w_%.%-]+)/([%w_%.%-]+)$")
+    if owner == nil:
+        owner = string.match(url, "^([%w_%.%-]+)$")
+        repo = "cobble"
+    if owner == nil:
+        error("source " .. tostring(src.name) .. ": bad cobble address " .. url, 0)
+    return "https://raw.githubusercontent.com/" .. owner .. "/" .. repo .. "/main/index.json5"
+
+export def refresh(src, ctx):
+    return shttp.refresh_url(index_url(src), ctx)
+
+export def fetch(src, id, version, rec, dest, ctx):
+    return shttp.fetch_url(index_url(src), id, version, rec, dest, ctx)

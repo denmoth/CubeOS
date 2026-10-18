@@ -1,0 +1,576 @@
+# stew: менеджер пакетов CubeOS (docs/packages/09-stew-api.md, spec/package-manager.md). Источники, каталог, план с расчётом места,
+# установка целиком (транзакция в stew.txn), удаление, обновление, обслуживание. Ничего не рисует: терминал, магазин и
+# установщик системы пользуются одним API.
+#
+#   s = stew.new({fs: fs, root: "/", http: nil, cubic: nil, log: nil, yield: nil, adapters: nil})
+#   s:refresh()  s:catalog()  s:search("snake")  s:info(id)  s:installed()
+#   p = s:plan({install: ["denmoth.snake"]})   r = s:apply(p, {on_progress: fn})   s:install(["x"])  s:remove(["x"])
+
+import json5
+import semver
+import cpk
+import stew.db as dbm
+import stew.txn as txn
+import stew.pack as pack
+
+export const VERSION = "1.0.0"
+# без этих пакетов не прочитать сжатый пакет: всегда распакованы (вместе с их зависимостями)
+export const BOOT_SET = ["cubeos.boot", "cubeos.cubic-rt", "cubeos.cpk", "cubeos.stew"]
+export const DEFAULT_SOURCES = [
+    {name: "cobble", kind: "cobble", url: "OWNER/cobble", trust: "official"},
+    {name: "pinestore", kind: "pinestore", url: "https://pinestore.cc", trust: "community"},
+]
+const MIN_FILE = 500
+
+def _arr(t=nil):
+    return setmetatable(t ?? {}, json5.array_mt)
+
+def _keys(t):
+    out = []
+    for k, _ in t ?? {}:
+        out[len(out) + 1] = k
+    table.sort(out)
+    return out
+
+def _default_http(url, binary):
+    if http == nil:
+        return nil, "http is disabled on this computer"
+    h, err = http.get({url: url, binary: binary == true})
+    if h == nil:
+        return nil, err ?? "request failed"
+    body = h.readAll()
+    h.close()
+    return body
+
+def _default_yield():
+    os.queueEvent("stew_yield")
+    os.pullEvent("stew_yield")
+
+# версии каталога по убыванию; latest это самая новая
+def _latest(versions):
+    vs = _keys(versions)
+    if len(vs) == 0:
+        return nil
+    return semver.max_satisfying(vs, "*") ?? vs[len(vs)]
+
+def _pick(versions, range):
+    vs = _keys(versions)
+    if range == nil or range == "" or range == "*" or range == "latest":
+        return semver.max_satisfying(vs, "*") ?? vs[len(vs)]
+    return semver.max_satisfying(vs, range)
+
+def _in(list, v):
+    for x in list ?? []:
+        if x == v:
+            return true
+    return false
+
+export class Stew:
+    def init(self, o=nil):
+        o = o ?? {}
+        self.fs = o.fs ?? fs
+        self.root = o.root ?? "/"
+        self.db = dbm.new(self.fs, self.root)
+        self.http = o.http ?? _default_http
+        self.cubic = o.cubic
+        self.log = o.log ?? ((s) => nil)
+        self.yield = o.yield ?? _default_yield
+        self.adapters = o.adapters
+        self.free_space = o.free_space
+
+    # ---------------------------------------------------------------- источники и каталог
+
+    def ctx(self):
+        return {fs: self.fs, http: self.http, tmp: self.db:path(dbm.VAR .. "/tmp"), pack: pack, cubic: self.cubic, log: self.log,
+            yield: self.yield}
+
+    def adapter(self, kind):
+        if self.adapters == nil:
+            import stew.sources as all
+            self.adapters = all.adapters()
+        a = self.adapters[kind]
+        if a == nil:
+            error("stew: unknown source kind '" .. tostring(kind) .. "'", 0)
+        return a
+
+    def sources(self):
+        s = self.db:read_json(dbm.VAR .. "/sources.json5", nil)
+        if s == nil:
+            return DEFAULT_SOURCES
+        return s.sources ?? []
+
+    def save_sources(self, list):
+        self.db:write_json(dbm.VAR .. "/sources.json5", {sources: _arr(list)})
+
+    def source_add(self, src):
+        if type(src.name) != "string" or type(src.kind) != "string":
+            error("stew: a source needs name and kind", 0)
+        list = []
+        for s in self:sources():
+            if s.name == src.name:
+                error("stew: source '" .. src.name .. "' already exists", 0)
+            list[len(list) + 1] = s
+        src.trust = src.trust ?? "user"
+        list[len(list) + 1] = src
+        self:save_sources(list)
+
+    def source_remove(self, name):
+        list = []
+        found = false
+        for s in self:sources():
+            if s.name == name:
+                found = true
+            else:
+                list[len(list) + 1] = s
+        if not found:
+            error("stew: no source '" .. tostring(name) .. "'", 0)
+        self:save_sources(list)
+        p = self.db:path(dbm.VAR .. "/cache/" .. name .. ".json5")
+        if self.fs.exists(p):
+            self.fs.delete(p)
+
+    def source(self, name):
+        for s in self:sources():
+            if s.name == name:
+                return s
+        return nil
+
+    def refresh(self, name=nil, on_progress=nil):
+        res = {ok: [], failed: []}
+        list = self:sources()
+        for i in range[1, len(list)]:
+            src = list[i]
+            if name == nil or src.name == name:
+                if on_progress != nil:
+                    on_progress(src.name, i, len(list))
+                ok, data = pcall(() => self:adapter(src.kind).refresh(src, self:ctx()))
+                if ok and type(data) == "table":
+                    self.db:write_json(dbm.VAR .. "/cache/" .. src.name .. ".json5", {fetched: os.epoch("utc"), packages: data.packages ?? {}})
+                    res.ok[len(res.ok) + 1] = src.name
+                else:
+                    res.failed[len(res.failed) + 1] = {name: src.name, error: tostring(data)}
+                self.yield()
+        return res
+
+    def cached(self, name):
+        c = self.db:read_json(dbm.VAR .. "/cache/" .. name .. ".json5", nil)
+        return c != nil and (c.packages ?? {}) or {}
+
+    def installed(self):
+        return self.db:load().packages
+
+    # все пакеты всех источников; одинаковый id: побеждает источник выше в списке, кроме уже установленного (он из своего)
+    def catalog(self):
+        st = self.db:load()
+        out = []
+        by_id = {}
+        for src in self:sources():
+            pkgs = self:cached(src.name)
+            for id in _keys(pkgs):
+                rec = pkgs[id]
+                inst = st.packages[id]
+                prev = by_id[id]
+                take = prev == nil or (inst != nil and inst.source == src.name and prev.source != src.name)
+                if take:
+                    e = {id: id, name: rec.name ?? id, description: rec.description ?? "", author: rec.author ?? "", kind: rec.kind ?? "app",
+                        category: rec.category ?? "apps", priority: rec.priority ?? "optional", homepage: rec.homepage ?? "",
+                        source: src.name, trust: src.trust ?? "user", versions: rec.versions ?? {}, tags: rec.tags}
+                    e.latest = _latest(e.versions)
+                    e.installed = inst != nil and inst.version or nil
+                    e.update = inst != nil and inst.source == src.name and e.latest != nil and semver.gt(e.latest, inst.version)
+                    if prev == nil:
+                        out[len(out) + 1] = e
+                    else:
+                        for i in range[1, len(out)]:
+                            if out[i].id == id:
+                                out[i] = e
+                    by_id[id] = e
+        # установленное, которого нет ни в одном кэше (из файла, снятый источник)
+        for id in _keys(st.packages):
+            if by_id[id] == nil:
+                inst = st.packages[id]
+                e = {id: id, name: inst.name ?? id, description: inst.description ?? "", kind: inst.kind, category: inst.category ?? "apps",
+                    priority: inst.priority, source: inst.source, trust: inst.trust ?? "adhoc", versions: {}, latest: inst.version,
+                    installed: inst.version, update: false}
+                out[len(out) + 1] = e
+                by_id[id] = e
+        table.sort(out, (a, b) => a.id < b.id)
+        return out
+
+    def search(self, text, filter=nil):
+        q = string.lower(text ?? "")
+        f = filter ?? {}
+        out = []
+        for e in self:catalog():
+            hay = string.lower(e.id .. " " .. e.name .. " " .. e.description)
+            text_ok = q == "" or string.find(hay, q, 1, true) != nil
+            filter_ok = (f.source == nil or f.source == e.source) and (f.category == nil or f.category == e.category) and (f.kind == nil or f.kind == e.kind)
+            if text_ok and filter_ok:
+                out[len(out) + 1] = e
+        return out
+
+    def info(self, id):
+        for e in self:catalog():
+            if e.id == id:
+                inst = self:installed()[id]
+                if inst != nil:
+                    e.record = inst
+                    e.manifest = self:manifest(id)
+                return e
+        return nil
+
+    # манифест установленного пакета (из архива или из распакованной папки)
+    def manifest(self, id):
+        rec = self:installed()[id]
+        if rec == nil:
+            return nil
+        text = nil
+        if rec.storage == "packed":
+            p = self.db:path(dbm.PKG .. "/" .. id .. ".cpk")
+            if self.fs.exists(p):
+                text = cpk.open_file(p, self.fs).manifest_text
+        else:
+            text = self.db:read(dbm.PKG .. "/" .. id .. "/package.json5")
+        if text == nil:
+            return nil
+        ok, m = pcall(json5.parse, text)
+        return ok and m or nil
+
+    # ---------------------------------------------------------------- план
+
+    def _entries_by_source(self):
+        m = {}
+        for src in self:sources():
+            m[src.name] = {src: src, pkgs: self:cached(src.name)}
+        return m
+
+    def _space(self):
+        if self.free_space != nil:
+            return self.free_space()
+        p = self.db:path("/")
+        free = self.fs.getFreeSpace(p)
+        cap = nil
+        if self.fs.getCapacity != nil:
+            ok, c = pcall(self.fs.getCapacity, p)
+            if ok:
+                cap = c
+        return free, cap
+
+    # req = {install: [id или id@версия], remove: [id], update: [id] или true (всё), storage: "auto"|"packed"|"unpacked",
+    #        options: {id: {...}}, files: {id: путь к локальному .cpk}, cascade: false, no_want: false}
+    def plan(self, req):
+        st = self.db:load()
+        srcs = self:_entries_by_source()
+        cat = {}
+        for e in self:catalog():
+            cat[e.id] = e
+        p = {ok: true, steps: [], missing: [], conflicts: [], warnings: [], new_permissions: {}, runs_setup: [], download: 0,
+            installed_delta: 0, peak: 0}
+        chosen = {}
+        order = []
+        wants = []
+        removing = {}
+        for id in req.remove ?? []:
+            removing[id] = true
+        update_set = {}
+        if req.update == true:
+            for id, rec in st.packages:
+                if not rec.pinned:
+                    update_set[id] = true
+        else:
+            for id in req.update ?? []:
+                update_set[id] = true
+
+        def entry_for(id):
+            inst = st.packages[id]
+            if inst != nil and inst.source != nil and srcs[inst.source] != nil:
+                rec = srcs[inst.source].pkgs[id]
+                if rec != nil:
+                    return {versions: rec.versions ?? {}, source: inst.source, trust: srcs[inst.source].src.trust ?? "user", rec: rec}
+            e = cat[id]
+            if e == nil or e.versions == nil or next(e.versions) == nil:
+                return nil
+            return {versions: e.versions, source: e.source, trust: e.trust, rec: e}
+
+        def need(id, range, auto, by):
+            if removing[id]:
+                p.conflicts[len(p.conflicts) + 1] = id .. " is being removed but " .. by .. " needs it"
+                return
+            c = chosen[id]
+            if c != nil:
+                if range != nil and not semver.satisfies(c.version, range):
+                    p.conflicts[len(p.conflicts) + 1] = by .. " needs " .. id .. " " .. range .. ", but " .. c.version .. " is chosen"
+                return
+            inst = st.packages[id]
+            if inst != nil and not update_set[id] and (range == nil or semver.satisfies(inst.version, range)):
+                return
+            if req.files != nil and req.files[id] != nil:
+                return
+            e = entry_for(id)
+            if e == nil:
+                p.missing[len(p.missing) + 1] = id .. (by != nil and (" (needed by " .. by .. ")") or "")
+                return
+            v = _pick(e.versions, range)
+            if v == nil:
+                p.missing[len(p.missing) + 1] = id .. " " .. tostring(range) .. (by != nil and (" (needed by " .. by .. ")") or "")
+                return
+            if inst != nil and inst.version == v:
+                return
+            if inst != nil and inst.pinned and by != nil:
+                p.conflicts[len(p.conflicts) + 1] = id .. " is pinned at " .. inst.version .. " but " .. by .. " needs " .. tostring(range)
+                return
+            vr = e.versions[v]
+            chosen[id] = {id: id, version: v, vrec: vr, source: e.source, trust: e.trust, auto: auto, from: inst != nil and inst.version or nil,
+                op: inst != nil and "update" or "install", meta: e.rec}
+            order[len(order) + 1] = id
+            for dep in _keys(vr.depends):
+                need(dep, vr.depends[dep], true, id)
+            for w in _keys(vr.want):
+                wants[len(wants) + 1] = {id: w, range: vr.want[w], by: id}
+
+        for spec in req.install ?? []:
+            id, ver = string.match(spec, "^([^@]+)@(.+)$")
+            if id == nil:
+                id = spec
+            if req.files != nil and req.files[id] != nil:
+                chosen[id] = {id: id, file: req.files[id], op: st.packages[id] != nil and "update" or "install", auto: false, source: "file",
+                    trust: "adhoc", from: st.packages[id] != nil and st.packages[id].version or nil}
+                order[len(order) + 1] = id
+            else:
+                if st.packages[id] != nil and ver == nil:
+                    p.warnings[len(p.warnings) + 1] = id .. " is already installed"
+                need(id, ver, false, nil)
+        for id, _ in update_set:
+            if st.packages[id] != nil:
+                need(id, nil, st.packages[id].auto, nil)
+        if not req.no_want:
+            for w in wants:
+                if chosen[w.id] == nil and st.packages[w.id] == nil and entry_for(w.id) != nil:
+                    need(w.id, w.range, true, w.by)
+
+        # удаление: кто ещё зависит, и осиротевшие авто-зависимости
+        changed = true
+        while changed:
+            changed = false
+            for id, rec in st.packages:
+                if not removing[id]:
+                    for dep, _ in rec.depends ?? {}:
+                        if removing[dep] and not (chosen[id] != nil):
+                            if req.cascade:
+                                removing[id] = true
+                                changed = true
+                            else:
+                                text = "cannot remove " .. dep .. ": " .. id .. " needs it"
+                                if not _in(p.conflicts, text):
+                                    p.conflicts[len(p.conflicts) + 1] = text
+            if len(req.remove ?? []) > 0:
+                for id, rec in st.packages:
+                    if rec.auto and not removing[id]:
+                        used = false
+                        for oid, orec in st.packages:
+                            if not removing[oid] and oid != id and (orec.depends ?? {})[id] != nil:
+                                used = true
+                        for cid, c in chosen:
+                            if c.vrec != nil and (c.vrec.depends ?? {})[id] != nil:
+                                used = true
+                        if not used:
+                            removing[id] = true
+                            changed = true
+        for id in _keys(removing):
+            if st.packages[id] == nil:
+                p.missing[len(p.missing) + 1] = id .. " is not installed"
+            else:
+                p.steps[len(p.steps) + 1] = {op: "remove", id: id, version: st.packages[id].version, auto: not _in(req.remove, id),
+                    size: 0, installed_size: 0}
+
+        # конфликты пакетов и одинаковые имена модулей
+        for id in order:
+            c = chosen[id]
+            if c.vrec != nil:
+                for x in c.vrec.conflicts ?? []:
+                    if (st.packages[x] != nil and not removing[x]) or chosen[x] != nil:
+                        p.conflicts[len(p.conflicts) + 1] = id .. " conflicts with " .. x
+
+        # хранение и место
+        boot = self:_boot_closure(cat, st)
+        mode = req.storage ?? "auto"
+        free, cap = self:_space()
+        reserve = math.max(cap != nil and math.floor(cap * 0.05) or 0, 20480)
+        steps = []
+        for id in order:
+            c = chosen[id]
+            size = c.vrec != nil and c.vrec.size or nil
+            isz = c.vrec != nil and c.vrec.installed_size or nil
+            if c.file != nil:
+                size = self.fs.getSize(c.file)
+                isz = size * 3
+            storage = mode
+            if boot[id] or (st.packages[id] != nil and st.packages[id].storage == "unpacked" and mode == "auto"):
+                storage = "unpacked"
+            elif mode == "auto":
+                storage = "unpacked"
+            step = {op: c.op, id: id, version: c.version, from: c.from, size: size, installed_size: isz, source: c.source, trust: c.trust,
+                auto: c.auto, storage: storage, file: c.file, auto_storage: mode == "auto" and not boot[id], priority: c.meta != nil and c.meta.priority or nil}
+            if size == nil:
+                p.warnings[len(p.warnings) + 1] = id .. ": size is unknown until download"
+            steps[len(steps) + 1] = step
+            perms = c.vrec != nil and c.vrec.permissions or nil
+            if perms != nil:
+                old = st.packages[id] != nil and (st.packages[id].permissions ?? {}) or {}
+                fresh = []
+                for kind in ["need", "want"]:
+                    for name in perms[kind] ?? []:
+                        if not _in((old ?? {})[kind], name):
+                            fresh[len(fresh) + 1] = name
+                if len(fresh) > 0:
+                    p.new_permissions[id] = fresh
+        def cost(s):
+            if s.storage == "packed":
+                return s.size ?? 0
+            return s.installed_size ?? s.size ?? 0
+        def totals():
+            delta = 0
+            dl = 0
+            unpacked_new = 0
+            for s in steps:
+                delta += cost(s)
+                dl += s.size ?? 0
+                if s.storage != "packed":
+                    unpacked_new += s.installed_size ?? 0
+                if s.op == "update" and st.packages[s.id] != nil:
+                    delta -= st.packages[s.id].size ?? 0
+            for s in p.steps:
+                delta -= st.packages[s.id] != nil and (st.packages[s.id].size ?? 0) or 0
+            return delta, dl, dl + unpacked_new
+        delta, dl, peak = totals()
+        # авто: если не влезает, сжимаем сначала optional, потом recommended, потом остальное (кроме загрузочных)
+        if mode == "auto" and (delta + reserve > free or peak + reserve > free):
+            for prio in ["optional", "recommended", "essential", nil]:
+                for s in steps:
+                    if s.auto_storage and s.storage == "unpacked" and (prio == nil or s.priority == prio):
+                        s.storage = "packed"
+                delta, dl, peak = totals()
+                if delta + reserve <= free and peak + reserve <= free:
+                    break
+        for s in steps:
+            p.steps[len(p.steps) + 1] = s
+        p.download = dl
+        p.installed_delta = delta
+        p.peak = peak
+        p.free = free
+        p.capacity = cap
+        p.reserve = reserve
+        p.fits = delta + reserve <= free and peak + reserve <= free
+        p.options = req.options ?? {}
+        p.ok = len(p.missing) == 0 and len(p.conflicts) == 0
+        if not p.fits:
+            p.warnings[len(p.warnings) + 1] = "not enough space: need " .. math.max(delta, peak) .. " + reserve " .. reserve .. ", free " .. free
+        return p
+
+    # загрузочные пакеты и все их зависимости (по каталогу и по установленному)
+    def _boot_closure(self, cat, st):
+        out = {}
+        def walk(id):
+            if out[id]:
+                return
+            out[id] = true
+            deps = {}
+            inst = st.packages[id]
+            if inst != nil:
+                deps = inst.depends ?? {}
+            e = cat[id]
+            if e != nil and e.latest != nil and e.versions[e.latest] != nil:
+                for d, r in e.versions[e.latest].depends ?? {}:
+                    deps[d] = r
+            for d, _ in deps:
+                walk(d)
+        for id in BOOT_SET:
+            walk(id)
+        return out
+
+    # ---------------------------------------------------------------- изменения
+
+    def apply(self, p, o=nil):
+        if not p.ok:
+            return {ok: false, error: "the plan has problems: " .. table.concat(p.missing, ", ") .. " " .. table.concat(p.conflicts, ", ")}
+        if not p.fits and not (o != nil and o.force):
+            return {ok: false, error: p.warnings[len(p.warnings)]}
+        return txn.run(self, p, o ?? {})
+
+    def install(self, ids, o=nil):
+        o = o ?? {}
+        p = self:plan({install: ids, storage: o.storage, options: o.options, no_want: o.no_want})
+        if not p.ok or not p.fits:
+            return {ok: false, plan: p, error: len(p.missing) > 0 and ("not found: " .. table.concat(p.missing, ", ")) or
+                (len(p.conflicts) > 0 and table.concat(p.conflicts, "; ") or p.warnings[len(p.warnings)])}
+        r = self:apply(p, o)
+        r.plan = p
+        return r
+
+    def install_file(self, path, o=nil):
+        a = cpk.open_file(path, self.fs)
+        m = a:manifest()
+        files = {}
+        files[m.id] = path
+        p = self:plan({install: [m.id], files: files, storage: (o ?? {}).storage, options: (o ?? {}).options})
+        r = self:apply(p, o ?? {})
+        r.plan = p
+        return r
+
+    def remove(self, ids, o=nil):
+        o = o ?? {}
+        p = self:plan({remove: ids, cascade: o.cascade})
+        if not p.ok:
+            return {ok: false, plan: p, error: table.concat(p.missing, ", ") .. table.concat(p.conflicts, "; ")}
+        r = self:apply(p, o)
+        r.plan = p
+        return r
+
+    def update(self, ids=nil, o=nil):
+        p = self:plan({update: ids ?? true, storage: (o ?? {}).storage})
+        r = self:apply(p, o ?? {})
+        r.plan = p
+        return r
+
+    def recover(self):
+        return txn.recover(self)
+
+    # ---------------------------------------------------------------- обслуживание
+
+    def pin(self, id, on=true):
+        st = self.db:load()
+        if st.packages[id] == nil:
+            error("stew: " .. id .. " is not installed", 0)
+        st.packages[id].pinned = on
+        self.db:save(st)
+
+    def options(self, id):
+        rec = self:installed()[id]
+        return rec != nil and (rec.options ?? {}) or nil
+
+    def set_storage(self, id, mode):
+        return txn.set_storage(self, id, mode)
+
+    def verify(self, id=nil):
+        out = []
+        for pid, rec in self:installed():
+            if id == nil or pid == id:
+                ok, err = txn.verify(self, rec)
+                out[len(out) + 1] = {id: pid, ok: ok, error: err}
+        table.sort(out, (a, b) => a.id < b.id)
+        return out
+
+    def clean(self):
+        freed = 0
+        for dir in [dbm.VAR .. "/cache", dbm.VAR .. "/tmp", dbm.VAR .. "/staging", dbm.VAR .. "/trash"]:
+            p = self.db:path(dir)
+            if self.fs.exists(p) and not self.fs.exists(self.db:path(dbm.VAR .. "/journal.json5")):
+                freed += txn.size_of(self.fs, p)
+                self.fs.delete(p)
+        return {freed: freed}
+
+    def rollback(self, id):
+        error("stew: rollback of " .. id .. " needs the old version, which is removed after a finished transaction; reinstall it with stew install " .. id .. "@<version>", 0)
+
+export def new(o=nil):
+    return Stew(o)

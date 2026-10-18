@@ -1,0 +1,378 @@
+# stew.txn: установка целиком (spec/package-manager.md, «Установка только целиком»). Скачивание в staging, проверка, журнал,
+# раскладка файлов с переносом старого в корзину, установщики пакетов, база и boot.idx, уборка. Любая ошибка: откат по журналу.
+# Журнал пишется после каждой операции: если питание пропало, s:recover() при загрузке откатывает недоделанное.
+#
+#   r = txn.run(s, plan, {on_progress: fn(stage, id, i, n), ask: fn(question) -> answer})   -> {ok, error, installed, removed}
+#   txn.recover(s)   txn.set_storage(s, id, mode)   txn.verify(s, rec) -> ok, err   txn.size_of(fs, path)
+
+import json5
+import cpk
+import crc32 as crc
+import stew.db as dbm
+
+def _arr(t=nil):
+    return setmetatable(t ?? {}, json5.array_mt)
+
+export def size_of(f, path):
+    if not f.exists(path):
+        return 0
+    if not f.isDir(path):
+        return math.max(f.getSize(path), 500)
+    total = 500
+    for name in f.list(path):
+        total += size_of(f, f.combine(path, name))
+    return total
+
+class Txn:
+    def init(self, s, plan, o):
+        self.s = s
+        self.fs = s.fs
+        self.db = s.db
+        self.plan = plan
+        self.o = o
+        self.id = tostring(os.epoch("utc"))
+        self.staging = dbm.VAR .. "/staging/" .. self.id
+        self.trash = dbm.VAR .. "/trash/" .. self.id
+        self.journal = {txn: self.id, state: "download", ops: _arr()}
+        self.arch = {}
+        self.setups = {}
+        self.ntrash = 0
+
+    def p(self, path):
+        return self.db:path(path)
+
+    def progress(self, stage, id, i, n):
+        if self.o.on_progress != nil:
+            self.o.on_progress(stage, id, i, n)
+
+    def save_journal(self):
+        self.db:write_json(dbm.VAR .. "/journal.json5", self.journal)
+
+    def op(self, kind, a, b=nil):
+        self.journal.ops[len(self.journal.ops) + 1] = {op: kind, a: a, b: b}
+        self:save_journal()
+
+    # перенести существующий путь в корзину транзакции (с записью в журнал)
+    def to_trash(self, path):
+        full = self:p(path)
+        if not self.fs.exists(full):
+            return
+        self.ntrash += 1
+        dest = self.trash .. "/" .. self.ntrash
+        self.fs.makeDir(self.fs.getDir(self:p(dest)))
+        self:op("moved", path, dest)
+        self.fs.move(full, self:p(dest))
+
+    def write_new(self, path, data):
+        full = self:p(path)
+        if self.fs.exists(full):
+            self:to_trash(path)
+        self:op("created", path)
+        self.fs.makeDir(self.fs.getDir(full))
+        h = self.fs.open(full, "wb")
+        if h == nil:
+            error("cannot write " .. path, 0)
+        h.write(data)
+        h.close()
+
+    # ---------------------------------------------------------------- шаги
+
+    def download(self):
+        n = 0
+        for st in self.plan.steps:
+            if st.op != "remove":
+                n += 1
+        i = 0
+        for st in self.plan.steps:
+            if st.op != "remove":
+                i += 1
+                self:progress("download", st.id, i, n)
+                dest = self.staging .. "/" .. st.id .. ".cpk"
+                self.fs.makeDir(self:p(self.staging))
+                if st.file != nil:
+                    self.fs.copy(st.file, self:p(dest))
+                else:
+                    src = self.s:source(st.source)
+                    if src == nil:
+                        error(st.id .. ": source '" .. tostring(st.source) .. "' is not configured", 0)
+                    meta = self.s:cached(st.source)[st.id] ?? {}
+                    self.s:adapter(src.kind).fetch(src, st.id, st.version, meta, self:p(dest), self.s:ctx())
+                self:progress("verify", st.id, i, n)
+                a = cpk.open_file(self:p(dest), self.fs)
+                ok, err = a:verify()
+                if not ok:
+                    error(st.id .. ": the downloaded package is damaged (" .. tostring(err) .. ")", 0)
+                m = a:manifest()
+                if m.id != st.id:
+                    error(st.id .. ": the package says it is " .. tostring(m.id), 0)
+                if st.version != nil and m.version != st.version:
+                    error(st.id .. ": expected version " .. st.version .. ", the package is " .. tostring(m.version), 0)
+                st.version = m.version
+                self.arch[st.id] = {a: a, m: m, path: dest}
+                self.s.yield()
+
+    # установщик пакета: setup.lua в архиве, ограниченный api (04-installers.md)
+    def setup_of(self, id):
+        rec = self.arch[id]
+        if rec == nil or rec.m.setup == nil:
+            return nil
+        if self.setups[id] != nil:
+            return self.setups[id]
+        path = string.gsub(rec.m.setup, "%.cub$", ".lua")
+        code = rec.a:read(path)
+        if code == nil:
+            error(id .. ": the installer " .. path .. " is missing from the package", 0)
+        env = setmetatable({}, {__index: _G})
+        fn, err = load(code, "=" .. id .. "/" .. path, "t", env)
+        if fn == nil:
+            error(id .. ": installer: " .. tostring(err), 0)
+        mod = fn(nil, nil)
+        self.setups[id] = mod ?? {}
+        return self.setups[id]
+
+    def setup_api(self, id):
+        t = self
+        base = dbm.PKG .. "/" .. id
+        data_dir = "/cubeos/var/pkgdata/" .. id
+        cfg_dir = "/cubeos/sys/cfg/pkg/" .. id
+        def inside(path):
+            if type(path) != "string" or string.find("/" .. path .. "/", "/../", 1, true) != nil:
+                error("installer: bad path " .. tostring(path), 0)
+            return path
+        api = {
+            id: id, options: t.plan.options[id] ?? {}, dir: base, data: data_dir, cfg: cfg_dir,
+            read: (rel) => t.db:read(data_dir .. "/" .. inside(rel)),
+            write: (rel, text) => t:write_new(data_dir .. "/" .. inside(rel), text),
+            write_cfg: (rel, text) => t:write_new(cfg_dir .. "/" .. inside(rel), text),
+            ask: (q) => t.o.ask != nil and t.o.ask(q) or q.default,
+            progress: (text) => t:progress("setup", id, 0, 0),
+            log: (text) => t.s.log(id .. ": " .. tostring(text)),
+            abort: (reason) => error(id .. ": installation aborted: " .. tostring(reason), 0),
+        }
+        return api
+
+    def run_setups(self, phase):
+        for st in self.plan.steps:
+            if st.op != "remove":
+                mod = self:setup_of(st.id)
+                if mod != nil:
+                    fname = phase
+                    if phase == "install" and st.op == "update":
+                        fname = "upgrade"
+                    f = mod[fname]
+                    if f != nil:
+                        self:progress("setup", st.id, 0, 0)
+                        f(self:setup_api(st.id), st.from)
+
+    def remove_old(self, rec):
+        loc = self.db:pkg_location(rec)
+        self:to_trash(loc.packed ?? loc.dir)
+        for path in rec.files ?? []:
+            self:to_trash(path)
+
+    def place(self, st):
+        rec = self.arch[st.id]
+        a = rec.a
+        files = _arr()
+        storage = st.storage ?? "unpacked"
+        if storage == "packed":
+            target = dbm.PKG .. "/" .. st.id .. ".cpk"
+            self:to_trash(target)
+            self:op("created", target)
+            self.fs.makeDir(self.fs.getDir(self:p(target)))
+            self.fs.move(self:p(rec.path), self:p(target))
+            # архив переехал: читаем его с нового места
+            a = cpk.open_file(self:p(target), self.fs)
+            rec.a = a
+        else:
+            dir = dbm.PKG .. "/" .. st.id
+            self:to_trash(dir)
+            self:op("created", dir)
+            self.fs.makeDir(self:p(dir))
+            self.db:write(dir .. "/package.json5", a.manifest_text)
+        for e in a:list():
+            pl = dbm.placement(st.id, e.path)
+            if pl != nil:
+                if pl.cfg and self.fs.exists(self:p(pl.to)):
+                    pass
+                else:
+                    self:write_new(pl.to, a:read(e.path))
+                    if not pl.cfg:
+                        files[len(files) + 1] = pl.to
+            elif storage != "packed":
+                full = self:p(dbm.PKG .. "/" .. st.id .. "/" .. e.path)
+                self.fs.makeDir(self.fs.getDir(full))
+                h = self.fs.open(full, "wb")
+                if h == nil:
+                    error("cannot write " .. full, 0)
+                h.write(a:read(e.path))
+                h.close()
+            self.s.yield()
+        return files, storage
+
+    def run(self):
+        st_db = self.db:load()
+        self:download()
+        # вопросы установщиков до любых изменений на диске
+        self:run_setups("ask")
+        self.journal.state = "place"
+        self:save_journal()
+        removed = []
+        installed = []
+        n = len(self.plan.steps)
+        for i in range[1, n]:
+            step = self.plan.steps[i]
+            self:progress("place", step.id, i, n)
+            old = st_db.packages[step.id]
+            if step.op == "remove":
+                if old != nil:
+                    self:remove_old(old)
+                st_db.packages[step.id] = nil
+                removed[len(removed) + 1] = step.id
+            else:
+                if old != nil:
+                    self:remove_old(old)
+                files, storage = self:place(step)
+                m = self.arch[step.id].m
+                loc = storage == "packed" and (dbm.PKG .. "/" .. step.id .. ".cpk") or (dbm.PKG .. "/" .. step.id)
+                size = size_of(self.fs, self:p(loc))
+                for f in files:
+                    size += size_of(self.fs, self:p(f))
+                st_db.packages[step.id] = {
+                    id: step.id, version: m.version, name: m.name, description: m.description, source: step.source, trust: step.trust,
+                    storage: storage, priority: m.priority ?? "optional", kind: m.kind, category: m.category, depends: m.depends ?? {},
+                    want: m.want ?? {}, modules: m.modules ?? {}, contributes: m.contributes ?? {}, permissions: m.permissions ?? {},
+                    options: self.plan.options[step.id] ?? (old != nil and old.options or {}), files: files,
+                    auto: old != nil and old.auto or step.auto, pinned: old != nil and old.pinned or false, size: size,
+                    installed_at: os.epoch("utc"),
+                }
+                installed[len(installed) + 1] = step.id
+        self.journal.state = "setup"
+        self:save_journal()
+        self:run_setups("install")
+        self:progress("commit", nil, 0, 0)
+        self.db:save(st_db)
+        self.db:write_index(st_db)
+        self.journal.state = "done"
+        self:save_journal()
+        cleanup(self.s, self.id)
+        return {ok: true, installed: installed, removed: removed}
+
+# откат по журналу: созданное удаляется, перенесённое возвращается (в обратном порядке)
+export def undo(s, journal):
+    f = s.fs
+    ops = journal.ops ?? []
+    i = len(ops) + 1
+    while i > 1:
+        i -= 1
+        o = ops[i]
+        if o.op == "created":
+            p = s.db:path(o.a)
+            if f.exists(p):
+                f.delete(p)
+        elif o.op == "moved":
+            src = s.db:path(o.b)
+            back = s.db:path(o.a)
+            if f.exists(src):
+                if f.exists(back):
+                    f.delete(back)
+                f.makeDir(f.getDir(back))
+                f.move(src, back)
+    cleanup(s, journal.txn)
+
+export def cleanup(s, id):
+    f = s.fs
+    for dir in [dbm.VAR .. "/staging/" .. tostring(id), dbm.VAR .. "/trash/" .. tostring(id)]:
+        p = s.db:path(dir)
+        if f.exists(p):
+            f.delete(p)
+    jp = s.db:path(dbm.VAR .. "/journal.json5")
+    if f.exists(jp):
+        f.delete(jp)
+
+export def run(s, plan, o):
+    if s.fs.exists(s.db:path(dbm.VAR .. "/journal.json5")):
+        recover(s)
+    t = Txn(s, plan, o)
+    ok, res = pcall(() => t:run())
+    if ok:
+        return res
+    if o.on_progress != nil:
+        o.on_progress("rollback", nil, 0, 0)
+    uok, uerr = pcall(undo, s, t.journal)
+    msg = tostring(res)
+    if not uok:
+        msg = msg .. " (rollback also failed: " .. tostring(uerr) .. ")"
+    return {ok: false, error: msg}
+
+export def recover(s):
+    j = s.db:read_json(dbm.VAR .. "/journal.json5", nil)
+    if j == nil:
+        return {ok: true, action: "none"}
+    if j.state == "done":
+        cleanup(s, j.txn)
+        return {ok: true, action: "cleaned"}
+    undo(s, j)
+    return {ok: true, action: "rolled back"}
+
+export def verify(s, rec):
+    if rec.storage == "packed":
+        p = s.db:path(dbm.PKG .. "/" .. rec.id .. ".cpk")
+        if not s.fs.exists(p):
+            return false, "package file is missing"
+        return cpk.open_file(p, s.fs):verify()
+    dir = dbm.PKG .. "/" .. rec.id
+    text = s.db:read(dir .. "/package.json5")
+    if text == nil:
+        return false, "package.json5 is missing"
+    m = json5.parse(text)
+    for path, info in m.listing ?? {}:
+        pl = dbm.placement(rec.id, path)
+        full = pl != nil and pl.to or (dir .. "/" .. path)
+        if pl == nil or not pl.cfg:
+            data = s.db:read(full)
+            if data == nil:
+                return false, "missing " .. full
+            if string.format("%08x", crc.crc32(data)) != info.crc:
+                return false, "changed " .. full
+    return true
+
+export def set_storage(s, id, mode):
+    st = s.db:load()
+    rec = st.packages[id]
+    if rec == nil:
+        error("stew: " .. id .. " is not installed", 0)
+    if rec.storage == mode:
+        return {ok: true}
+    f = s.fs
+    dir = dbm.PKG .. "/" .. id
+    file = dbm.PKG .. "/" .. id .. ".cpk"
+    if mode == "unpacked":
+        a = cpk.open_file(s.db:path(file), f)
+        f.makeDir(s.db:path(dir))
+        s.db:write(dir .. "/package.json5", a.manifest_text)
+        for e in a:list():
+            if dbm.placement(id, e.path) == nil:
+                s.db:write(dir .. "/" .. e.path, a:read(e.path))
+        f.delete(s.db:path(file))
+    elif mode == "packed":
+        text = s.db:read(dir .. "/package.json5")
+        m = json5.parse(text)
+        files = []
+        for path, _ in m.listing ?? {}:
+            if dbm.placement(id, path) == nil:
+                flags = string.match(path, "%.lua$") != nil and cpk.F_LUA or cpk.F_RES
+                files[len(files) + 1] = {path: path, data: s.db:read(dir .. "/" .. path), flags: flags}
+                mp = s.db:read(dir .. "/" .. path .. ".map")
+                if mp != nil:
+                    files[len(files) + 1] = {path: path .. ".map", data: mp, flags: cpk.F_MAP}
+        table.sort(files, (a, b) => a.path < b.path)
+        s.db:write(file, cpk.build(text, files, {}))
+        f.delete(s.db:path(dir))
+    else:
+        error("stew: storage must be packed or unpacked", 0)
+    rec.storage = mode
+    rec.size = size_of(f, s.db:path(mode == "packed" and file or dir))
+    s.db:save(st)
+    s.db:write_index(st)
+    return {ok: true}

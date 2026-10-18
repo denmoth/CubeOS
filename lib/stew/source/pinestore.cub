@@ -1,0 +1,648 @@
+# stew.source.pinestore: PineStore (pinestore.cc), каталог программ CraftOS (docs/packages/05-sources.md).
+# src = {name, kind: "pinestore", url?}: url необязателен (по умолчанию https://pinestore.cc).
+#
+#   refresh(src, ctx)  -> {packages: {"pinestore.<id>": запись}}: записи kind "legacy", версия "0.0.<ГГГГММДД>" (дата обновления),
+#                         размеров и хэшей нет. Лишние поля проекта (description_markdown и др.) не хранятся, нужное для скачивания
+#                         лежит в rec.pinestore = {id, install_command, download_url, target_file, run_command, downloads, likes}
+#   fetch(src, id, version, rec, dest, ctx) -> dest, info
+#                         собирает .cpk (kind "legacy") и пишет в dest; info = {sha256, size, installed_size, files: {путь: sha256},
+#                         content_sha256 (один хэш на всё содержимое: меняется, когда у проекта поменялись файлы), main, entry}
+#   parse_command(text)   разбор install_command: {kind: "get"|"run", url, file, args} или nil
+#   run_installer(code, args, ctx, {root, max_steps, time_limit, max_bytes, max_requests}) -> список записанных файлов
+#                         запуск установщика-скрипта в песочнице (виртуальная fs в папке root, shell.run/os.reboot/os.shutdown выключены)
+#
+# Откуда берутся файлы: установщик (pastebin run / wget run) запускается в песочнице; иначе download_url (+ target_file);
+# иначе pastebin get / wget из install_command. Если есть и установщик, и download_url, берётся установщик (download_url у таких
+# проектов обычно архив, который тянет сам установщик).
+# Песочница: ограничение по умолчанию, не полная изоляция (доверие community): чужой код не получает настоящих fs, http-запросов
+# мимо ctx.http, shell, term, os.reboot/shutdown, debug, peripheral, но делит с системой стандартные таблицы string/table/math.
+
+import json
+import json5
+import sha256
+import stew.source.http as shttp
+
+const PASTEBIN = "https://pastebin.com/raw/"
+const SENTINEL = {sandbox_exit: true}
+UNPACK = table.unpack ?? unpack
+
+def _arr():
+    return setmetatable({}, json5.array_mt)
+
+def _noop(*a):
+    return nil
+
+# строка или nil (json null и пустые строки тоже nil)
+def _s(v):
+    if type(v) == "string" and v != "":
+        return v
+    return nil
+
+def _num(v):
+    if type(v) == "number" and v > 0:
+        return v
+    return nil
+
+export def sanitize(text):
+    return (string.gsub(string.lower(tostring(text)), "[^a-z0-9_%-]", "-"))
+
+# теги PineStore -> категория магазина; первое правило, чей тег есть у проекта
+CATEGORY_RULES = [
+    ["library", "dev"], ["audio", "media"], ["turtle", "automation"], ["os", "system"], ["resourcep", "assets"],
+    ["mod", "assets"], ["action", "games"], ["puzzle", "games"], ["fun", "games"], ["utility", "apps"],
+]
+
+def _category(tags):
+    if type(tags) == "table":
+        for rule in CATEGORY_RULES:
+            for t in tags:
+                if t == rule[1]:
+                    return rule[2]
+    return "apps"
+
+def _version(p):
+    ms = _num(p.date_updated) ?? _num(p.date_publish) ?? _num(p.date_added)
+    if ms == nil:
+        return "0.0.0"
+    return "0.0." .. tonumber(os.date("!%Y%m%d", math.floor(ms / 1000)))
+
+def _meta(p):
+    return {
+        id: p.id, install_command: _s(p.install_command), download_url: _s(p.download_url), target_file: _s(p.target_file),
+        run_command: _s(p.run_command), downloads: p.downloads, likes: p.likes,
+    }
+
+def _record(p):
+    pid = tostring(p.id)
+    rec = {
+        name: _s(p.name) ?? pid, description: _s(p.description_short) ?? _s(p.description) ?? "", author: _s(p.owner_name) ?? "",
+        kind: "legacy", category: _category(p.tags), priority: "optional",
+        homepage: _s(p.repository) ?? ("https://pinestore.cc/project/" .. pid),
+        pinestore: _meta(p), versions: {},
+    }
+    rec.versions[_version(p)] = {
+        url: "pinestore:" .. pid, depends: {}, want: {}, conflicts: _arr(), provides: _arr(),
+        permissions: {need: _arr(), want: ["net.http"]}, cubeos: {min: "0.5.0"},
+    }
+    return rec
+
+def _base(src):
+    url = src.url
+    if type(url) != "string" or url == "":
+        return "https://pinestore.cc"
+    url = string.gsub(url, "/+$", "")
+    url = string.gsub(url, "/api/projects?$", "")
+    url = string.gsub(url, "/api$", "")
+    return url
+
+def _get_json(ctx, url):
+    body, err = ctx.http(url, false)
+    if body == nil:
+        error("cannot download " .. url .. ": " .. tostring(err ?? "no answer"), 0)
+    ok, v = pcall(json.parse, body)
+    if not ok:
+        error(url .. ": " .. tostring(v), 0)
+    if type(v) != "table" or v.success != true:
+        error(url .. ": PineStore answered with an error", 0)
+    return v
+
+export def refresh(src, ctx):
+    data = _get_json(ctx, _base(src) .. "/api/projects")
+    if type(data.projects) != "table":
+        error("PineStore: no project list in the answer", 0)
+    packages = {}
+    n = 0
+    for p in data.projects:
+        if type(p) == "table" and p.id != nil and p.visible != false:
+            packages["pinestore." .. sanitize(p.id)] = _record(p)
+            n += 1
+            if n % 40 == 0 and ctx.yield != nil:
+                ctx.yield()
+    return {packages: packages, format: 1}
+
+# --- разбор install_command ---
+
+def _words(text):
+    out = []
+    for w in string.gmatch(text, "%S+"):
+        if w != "...":
+            out[len(out) + 1] = w
+    return out
+
+def _from(w, i):
+    out = []
+    for k in range[i, len(w)]:
+        out[len(out) + 1] = w[k]
+    return out
+
+def _http_url(u):
+    return type(u) == "string" and string.match(u, "^https?://[^%s]+$") != nil
+
+export def parse_command(text):
+    if type(text) != "string":
+        return nil
+    w = _words(text)
+    if w[1] == "pastebin":
+        code = w[3]
+        if code != nil and string.match(code, "^%w+$") != nil:
+            if w[2] == "get":
+                return {kind: "get", url: PASTEBIN .. code, file: w[4]}
+            if w[2] == "run":
+                return {kind: "run", url: PASTEBIN .. code, args: _from(w, 4)}
+    elif w[1] == "wget":
+        if w[2] == "run":
+            if _http_url(w[3]):
+                return {kind: "run", url: w[3], args: _from(w, 4)}
+        elif _http_url(w[2]):
+            return {kind: "get", url: w[2], file: w[3]}
+    return nil
+
+# --- песочница ---
+
+# путь внутри песочницы: "a/b" или "" для корня; nil, если путь уходит выше корня
+export def norm_path(p):
+    parts = []
+    for seg in string.gmatch(tostring(p), "[^/\\]+"):
+        if seg == "..":
+            if len(parts) == 0:
+                return nil
+            table.remove(parts)
+        elif seg != ".":
+            parts[len(parts) + 1] = seg
+    return table.concat(parts, "/")
+
+def _wrap_write(h, st):
+    st.handles[len(st.handles) + 1] = h
+    def count(s):
+        if type(s) == "number":
+            s = string.char(s % 256)
+        else:
+            s = tostring(s)
+        st.bytes += len(s)
+        if st.bytes > st.max_bytes:
+            error("sandbox: too much data written", 0)
+        return s
+    def w_write(s):
+        h.write(count(s))
+    def w_line(s):
+        h.write(count(tostring(s) .. "\n"))
+    return {write: w_write, writeLine: w_line, flush: () => h.flush(), close: () => h.close()}
+
+def _reader(body, binary):
+    pos = {n: 1}
+    def r_all():
+        if pos.n > len(body):
+            return nil
+        s = string.sub(body, pos.n)
+        pos.n = len(body) + 1
+        return s
+    def r_line(trailing):
+        if pos.n > len(body):
+            return nil
+        e = string.find(body, "\n", pos.n, true)
+        if e == nil:
+            return r_all()
+        s = string.sub(body, pos.n, trailing and e or (e - 1))
+        pos.n = e + 1
+        return s
+    def r_read(n):
+        if pos.n > len(body):
+            return nil
+        if n == nil:
+            c = string.sub(body, pos.n, pos.n)
+            pos.n += 1
+            return binary and string.byte(c) or c
+        s = string.sub(body, pos.n, pos.n + n - 1)
+        pos.n += n
+        return s
+    return {readAll: r_all, readLine: r_line, read: r_read, close: _noop, getResponseCode: () => 200, getResponseHeaders: () => ({})}
+
+SAFE = [
+    "assert", "error", "getmetatable", "setmetatable", "ipairs", "pairs", "next", "pcall", "xpcall", "select", "tonumber",
+    "tostring", "type", "unpack", "rawequal", "rawget", "rawset", "string", "table", "math", "bit32", "bit", "utf8", "coroutine",
+    "colors", "colours", "keys", "vector", "_VERSION",
+]
+
+TEXTUTILS_NOISY = ["slowPrint", "slowWrite", "pagedPrint", "tabulate", "pagedTabulate", "coloredPrint", "coloredWrite"]
+
+def _sandbox(ctx, root, st):
+    fsys = ctx.fs
+    log = ctx.log ?? _noop
+    def real(p):
+        rel = norm_path(p)
+        if rel == nil:
+            return nil, nil
+        return fsys.combine(root, rel), rel
+    def denied(p):
+        error(tostring(p) .. ": Access denied", 0)
+    def x_exists(p):
+        r = real(p)
+        return r != nil and fsys.exists(r)
+    def x_isDir(p):
+        r = real(p)
+        return r != nil and fsys.isDir(r)
+    def x_list(p):
+        r = real(p)
+        if r == nil or not fsys.isDir(r):
+            error(tostring(p) .. ": Not a directory", 0)
+        return fsys.list(r)
+    def x_makeDir(p):
+        r = real(p)
+        if r == nil:
+            denied(p)
+        fsys.makeDir(r)
+    def x_delete(p):
+        r, rel = real(p)
+        if r == nil or rel == "":
+            denied(p)
+        if fsys.exists(r):
+            fsys.delete(r)
+    def x_open(p, mode):
+        r, rel = real(p)
+        if r == nil or rel == "":
+            return nil, "Access denied"
+        mode = mode ?? "r"
+        m = string.sub(mode, 1, 1)
+        if m == "r":
+            if not fsys.exists(r) or fsys.isDir(r):
+                return nil, "No such file"
+            rh = fsys.open(r, mode)
+            if rh != nil:
+                st.handles[len(st.handles) + 1] = rh
+            return rh
+        if m != "w" and m != "a":
+            return nil, "Unsupported mode"
+        if fsys.isDir(r):
+            return nil, "Cannot write to directory"
+        fsys.makeDir(fsys.getDir(r))
+        h = fsys.open(r, mode)
+        if h == nil:
+            return nil, "Access denied"
+        return _wrap_write(h, st)
+    def x_getSize(p):
+        r = real(p)
+        if r == nil or not fsys.exists(r):
+            error(tostring(p) .. ": No such file", 0)
+        return fsys.getSize(r)
+    def x_move(a, b):
+        ra = real(a)
+        rb = real(b)
+        if ra == nil or rb == nil:
+            denied(ra == nil and a or b)
+        fsys.makeDir(fsys.getDir(rb))
+        fsys.move(ra, rb)
+    def x_copy(a, b):
+        ra = real(a)
+        rb = real(b)
+        if ra == nil or rb == nil:
+            denied(ra == nil and a or b)
+        fsys.makeDir(fsys.getDir(rb))
+        fsys.copy(ra, rb)
+    def x_attributes(p):
+        r = real(p)
+        if r == nil or not fsys.exists(r):
+            error(tostring(p) .. ": No such file", 0)
+        return {size: fsys.getSize(r), isDir: fsys.isDir(r), isReadOnly: false, created: 0, modified: 0}
+    def x_free():
+        return math.max(0, st.max_bytes - st.bytes)
+    fsx = {
+        exists: x_exists, isDir: x_isDir, list: x_list, makeDir: x_makeDir, delete: x_delete, open: x_open, getSize: x_getSize,
+        move: x_move, copy: x_copy, attributes: x_attributes, getFreeSpace: x_free, getCapacity: () => st.max_bytes,
+        isReadOnly: () => false, getDrive: () => "hdd", combine: fsys.combine, getName: fsys.getName, getDir: fsys.getDir,
+    }
+
+    # сеть: только через ctx.http, с ограничением числа запросов и объёма
+    def h_get(url, headers, binary):
+        if type(url) == "table":
+            binary = url.binary
+            url = url.url
+        st.requests += 1
+        if st.requests > st.max_requests:
+            return nil, "sandbox: too many requests"
+        if not _http_url(url):
+            return nil, "Invalid URL"
+        body, err = ctx.http(url, binary == true)
+        if body == nil:
+            return nil, tostring(err ?? "Could not connect")
+        st.bytes_in += len(body)
+        if st.bytes_in > st.max_in:
+            return nil, "sandbox: too much data downloaded"
+        return _reader(body, binary == true)
+    def h_off(*a):
+        return nil, "sandbox: not available"
+    httpx = {get: h_get, post: h_off, websocket: h_off, checkURL: () => true}
+
+    def download(url, file):
+        h = h_get(url, nil, true)
+        if h == nil:
+            return false
+        out = x_open(file, "wb")
+        if out == nil:
+            return false
+        out.write(h.readAll() ?? "")
+        out.close()
+        return true
+    def sh_run(*cmd):
+        line = table.concat(cmd, " ")
+        w = _words(line)
+        c = w[1]
+        if c == "wget" and w[2] != nil and w[2] != "run" and w[3] != nil:
+            return download(w[2], w[3])
+        if c == "pastebin" and w[2] == "get" and w[3] != nil and w[4] != nil:
+            return download(PASTEBIN .. w[3], w[4])
+        if c == "mkdir" and w[2] != nil:
+            return (pcall(x_makeDir, w[2]))
+        if (c == "delete" or c == "rm") and w[2] != nil:
+            return (pcall(x_delete, w[2]))
+        log("installer: blocked shell command: " .. line)
+        return false
+    def sh_resolve(p):
+        return norm_path(p) ?? ""
+    shellx = setmetatable({
+        run: sh_run, execute: sh_run, resolve: sh_resolve, dir: () => "", getRunningProgram: () => "installer",
+        path: () => "", programs: () => ({}), aliases: () => ({}),
+    }, {__index: (t, k) => _noop})
+
+    # терминал: рисовать некуда, всё молча принимается
+    def t_size():
+        return 51, 19
+    def t_pos():
+        return 1, 1
+    termx = {}
+    termx = setmetatable({
+        getSize: t_size, getCursorPos: t_pos, getTextColor: () => 1, getBackgroundColor: () => 32768,
+        isColor: () => true, isColour: () => true, getCursorBlink: () => false, getPosition: t_pos,
+        current: () => termx, native: () => termx, redirect: () => termx,
+    }, {__index: (t, k) => _noop})
+
+    # os: настоящий, кроме выключения, запуска, меток и событий
+    osx = {}
+    for k, v in os:
+        osx[k] = v
+    def os_stop():
+        error(SENTINEL, 0)
+    def os_pull(filter):
+        st.steps += 1
+        i = 1
+        while i <= len(st.queue):
+            ev = st.queue[i]
+            if filter == nil or ev[1] == filter:
+                table.remove(st.queue, i)
+                return UNPACK(ev)
+            i += 1
+        coroutine.yield()
+        return filter ?? "key", filter == "timer" and st.timer or 1
+    def os_sleep(t):
+        st.steps += 1
+        coroutine.yield()
+    def os_timer(t):
+        st.timer += 1
+        return st.timer
+    def os_queue(*ev):
+        st.queue[len(st.queue) + 1] = ev
+    osx.reboot = os_stop
+    osx.shutdown = os_stop
+    osx.run = () => false
+    osx.loadAPI = () => false
+    osx.unloadAPI = _noop
+    osx.setComputerLabel = _noop
+    osx.pullEvent = os_pull
+    osx.pullEventRaw = os_pull
+    osx.sleep = os_sleep
+    osx.startTimer = os_timer
+    osx.cancelTimer = _noop
+    osx.queueEvent = os_queue
+
+    textutilsx = {}
+    for k, v in textutils:
+        textutilsx[k] = v
+    for name in TEXTUTILS_NOISY:
+        textutilsx[name] = _noop
+
+    env = {}
+    for name in SAFE:
+        env[name] = _G[name]
+    env._G = env
+    env.os = osx
+    env.fs = fsx
+    env.http = httpx
+    env.shell = shellx
+    env.term = termx
+    env.textutils = textutilsx
+    env.settings = setmetatable({get: (n, d) => d}, {__index: (t, k) => _noop})
+    env.sleep = os_sleep
+    env.require = require
+
+    def say(*parts):
+        out = []
+        for i in range[1, select("#", *parts)]:
+            out[i] = tostring(parts[i])
+        log("installer: " .. table.concat(out, " "))
+    env.print = say
+    env.printError = say
+    env.write = say
+    env.read = () => ""
+    env.io = {write: say, read: () => "", open: () => nil}
+    env.load = (chunk, name, mode, e) => load(chunk, name, "t", e ?? env)
+    env.loadstring = (chunk, name) => load(chunk, name, "t", env)
+    def x_loadfile(p, mode, e):
+        h = x_open(p, "rb")
+        if h == nil:
+            return nil, tostring(p) .. ": No such file"
+        src = h.readAll() ?? ""
+        h.close()
+        return load(src, "=" .. tostring(p), "t", e ?? env)
+    def x_dofile(p):
+        fn, err = x_loadfile(p)
+        if fn == nil:
+            error(err, 0)
+        return fn()
+    env.loadfile = x_loadfile
+    env.dofile = x_dofile
+    return env
+
+# все файлы под root (относительные пути, по порядку)
+def _collect(fsys, root):
+    out = []
+    def walk(dir, rel):
+        names = fsys.list(dir)
+        table.sort(names)
+        for name in names:
+            full = fsys.combine(dir, name)
+            r = rel == "" and name or (rel .. "/" .. name)
+            if fsys.isDir(full):
+                walk(full, r)
+            else:
+                out[len(out) + 1] = r
+    walk(root, "")
+    return out
+
+export def run_installer(code, args, ctx, opts=nil):
+    o = opts ?? {}
+    fsys = ctx.fs
+    root = o.root
+    if type(root) != "string":
+        error("run_installer: opts.root is required", 0)
+    fsys.makeDir(root)
+    st = {
+        bytes: 0, max_bytes: o.max_bytes ?? 4194304, bytes_in: 0, max_in: o.max_in ?? 8388608, requests: 0,
+        max_requests: o.max_requests ?? 60, steps: 0, max_steps: o.max_steps ?? 3000, queue: [], timer: 0, handles: [],
+    }
+    env = _sandbox(ctx, root, st)
+    fn, err = load(code, "=installer", "t", env)
+    if fn == nil:
+        error("installer: " .. tostring(err), 0)
+    co = coroutine.create(fn)
+    deadline = os.clock() + (o.time_limit ?? 60)
+    def hook():
+        if os.clock() > deadline:
+            error("installer stopped: too much time", 0)
+    if debug != nil and debug.sethook != nil:
+        pcall(debug.sethook, co, hook, "", 100000)
+    try:
+        ok, res = coroutine.resume(co, *(args ?? []))
+        rounds = 0
+        while ok and coroutine.status(co) == "suspended":
+            rounds += 1
+            if rounds > st.max_steps or st.steps > st.max_steps or os.clock() > deadline:
+                error("installer stopped: too many steps or too much time", 0)
+            if ctx.yield != nil:
+                ctx.yield()
+            ok, res = coroutine.resume(co)
+        if not ok and res != SENTINEL:
+            error("installer failed: " .. tostring(res), 0)
+    finally:
+        # дескрипторы, которые установщик не закрыл (иначе папку потом не удалить)
+        for h in st.handles:
+            pcall(h.close)
+    return _collect(fsys, root)
+
+# --- fetch ---
+
+def _basename(url):
+    path = string.match(url, "^https?://[^/]*(/[^?#]*)") ?? ""
+    name = string.match(path, "([^/]+)$")
+    return name ?? "program.lua"
+
+def _pid_of(id, rec):
+    if type(rec) == "table" and type(rec.pinestore) == "table" and rec.pinestore.id != nil:
+        return tostring(rec.pinestore.id)
+    pid = string.match(tostring(id), "^pinestore%.(.+)$")
+    if pid == nil:
+        error("not a PineStore package id: " .. tostring(id), 0)
+    return pid
+
+def _download(ctx, url):
+    body, err = ctx.http(url, true)
+    if body == nil:
+        error("cannot download " .. url .. ": " .. tostring(err ?? "no answer"), 0)
+    return body
+
+# складывает файлы проекта в root; возвращает подсказку, какой файл главный
+def _materialize(ctx, root, meta):
+    fsys = ctx.fs
+    cmd = parse_command(meta.install_command)
+    if cmd != nil and cmd.kind == "run":
+        body, err = ctx.http(cmd.url, false)
+        if body == nil:
+            error("cannot download the installer " .. cmd.url .. ": " .. tostring(err ?? "no answer"), 0)
+        run_installer(body, cmd.args, ctx, {root: root})
+        return meta.target_file
+    url = meta.download_url
+    name = _s(meta.target_file and string.match(meta.target_file, "^%s*(.-)%s*$"))
+    if cmd != nil and cmd.kind == "get":
+        url = url ?? cmd.url
+        name = name ?? cmd.file
+    if url == nil:
+        error("PineStore project " .. tostring(meta.id) .. ": no download address (install command: " .. tostring(meta.install_command) .. ")", 0)
+    name = name ?? _basename(url)
+    rel = norm_path(name)
+    if rel == nil or rel == "":
+        error("PineStore project " .. tostring(meta.id) .. ": unsafe file name " .. name, 0)
+    body = _download(ctx, url)
+    shttp.write_file(fsys, fsys.combine(root, rel), body)
+    return rel
+
+def _pick_entry(files, hint, name):
+    set = {}
+    for f in files:
+        set[f] = true
+    if hint != nil:
+        h = norm_path(hint)
+        if h != nil and set[h]:
+            return h
+    luas = []
+    for f in files:
+        if string.sub(f, -4) == ".lua":
+            luas[len(luas) + 1] = f
+    top = []
+    for f in luas:
+        if string.find(f, "/", 1, true) == nil:
+            top[len(top) + 1] = f
+    cands = len(top) > 0 and top or luas
+    if len(cands) == 0:
+        return nil
+    wanted = sanitize(name)
+    for f in cands:
+        base = string.gsub(string.gsub(f, "^.*/", ""), "%.lua$", "")
+        if sanitize(base) == wanted:
+            return f
+    for n in ["startup.lua", "main.lua", "init.lua"]:
+        for f in cands:
+            if f == n:
+                return f
+    return cands[1]
+
+def _build(ctx, id, version, rec, meta, root, dest):
+    fsys = ctx.fs
+    hint = _materialize(ctx, root, meta)
+    files = _collect(fsys, root)
+    if len(files) == 0:
+        error(id .. ": the project gave no files", 0)
+    name = rec.name ?? id
+    entry = _pick_entry(files, hint, name)
+    hashes = {}
+    sums = []
+    for f in files:
+        hashes[f] = sha256.hex(shttp.read_file(fsys, fsys.combine(root, f)))
+        sums[len(sums) + 1] = f .. "\0" .. hashes[f]
+        if ctx.yield != nil:
+            ctx.yield()
+    m = {
+        format: 1, id: id, name: name, version: version, kind: "legacy", category: rec.category ?? "apps", priority: "optional",
+        description: rec.description ?? "", author: rec.author ?? "", homepage: rec.homepage ?? "", files: ["**"],
+    }
+    if entry != nil:
+        m.contributes = {apps: [{id: sanitize(id), name: name, entry: entry, legacy: true, run: _s(meta.run_command)}]}
+    r = ctx.pack.build(fsys, root, {manifest_text: json5.stringify(m, {json5: true, indent: 1}), list: files})
+    if fsys.exists(dest):
+        fsys.delete(dest)
+    shttp.write_file(fsys, dest, r.data)
+    return {
+        sha256: r.entry.sha256, size: len(r.data), installed_size: r.entry.installed_size, files: hashes,
+        content_sha256: sha256.hex(table.concat(sums, "\n")), main: entry, entry: r.entry,
+    }
+
+export def fetch(src, id, version, rec, dest, ctx):
+    fsys = ctx.fs
+    pid = _pid_of(id, rec)
+    meta = type(rec) == "table" and rec.pinestore or nil
+    info_rec = rec
+    if meta == nil:
+        # записи из кэша нет: спросить сам проект (GET /api/project/<id>)
+        p = _get_json(ctx, _base(src) .. "/api/project/" .. pid).project
+        if type(p) != "table":
+            error("PineStore: no project " .. pid, 0)
+        meta = _meta(p)
+        info_rec = _record(p)
+    work = fsys.combine(ctx.tmp, "pinestore-" .. sanitize(pid))
+    if fsys.exists(work):
+        fsys.delete(work)
+    root = fsys.combine(work, "pkg")
+    fsys.makeDir(root)
+    ok, res = pcall(_build, ctx, id, version, info_rec, meta, root, dest)
+    if fsys.exists(work):
+        fsys.delete(work)
+    if not ok:
+        error(res, 0)
+    return dest, res

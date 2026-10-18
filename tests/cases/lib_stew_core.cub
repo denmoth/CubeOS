@@ -1,0 +1,170 @@
+import t
+import json5
+import cpk
+import stew
+import stew.pack as pack
+import stew.txn as txn
+eq = t.eq
+
+def put(path, text):
+    fs.makeDir(fs.getDir(path))
+    h = fs.open(path, "w")
+    h.write(text)
+    h.close()
+
+def read(path):
+    h = fs.open(path, "rb")
+    if h == nil:
+        return nil
+    s = h.readAll()
+    h.close()
+    return s
+
+W = "/tmp_stew_core"
+fs.delete(W)
+REPO = W .. "/repo"
+ROOT = W .. "/disk"
+fs.makeDir(ROOT)
+
+# пакет из папки: манифест + файлы
+def make(id, version, extra, files):
+    base = W .. "/src/" .. id .. "-" .. version
+    fs.delete(base)
+    m = "{ format: 1, id: \"" .. id .. "\", name: \"" .. id .. "\", version: \"" .. version .. "\", kind: \"app\", category: \"apps\"" .. (extra ?? "") .. " }"
+    put(base .. "/package.json5", m)
+    for path, text in files:
+        put(base .. "/" .. path, text)
+    r = pack.build(fs, base)
+    pack.write(fs, r, REPO)
+    return r
+
+def index_of(builds):
+    idx = {format: 1, packages: {}}
+    for r in builds:
+        e = r.entry
+        p = idx.packages[e.id] ?? {name: e.name, description: e.description, kind: e.kind, category: e.category, priority: e.priority, versions: {}}
+        v = {}
+        for k, val in e:
+            v[k] = val
+        v.url = r.name .. ".cpk"
+        p.versions[e.version] = v
+        idx.packages[e.id] = p
+    put(REPO .. "/index.json5", json5.stringify(idx, {json5: true}))
+
+lib1 = make("demo.lib", "1.0.0", "", {"lib/demo/util.lua": "return {v = 1}"})
+app1 = make("demo.app", "1.0.0", ", depends: { \"demo.lib\": \"^1.0\" }, contributes: { apps: [{ id: \"app\", name: \"App\", entry: \"app\", icon: \"assets/icon.cimg\" }] }",
+    {"lib/demo/app.lua": "local u = import('demo.util') return {main = function() return u.v end}", "assets/icon.cimg": "ICON"})
+sys1 = make("cubeos.thing", "1.0.0", "", {"sys/cfg/thing.conf": "{ a: 1 }", "assets/thing.txt": "hello", "lib/thing.lua": "return {}"})
+index_of([lib1, app1, sys1])
+
+s = stew.new({fs: fs, root: ROOT, yield: () => nil})
+s:save_sources([{name: "local", kind: "path", url: REPO, trust: "user"}])
+eq(s:refresh().ok, ["local"], "the path source refreshes")
+eq(len(s:catalog()), 3, "three packages in the catalog")
+eq(s:search("app")[1].id, "demo.app", "search finds by id")
+
+# план: зависимость тянется сама, место считается
+p = s:plan({install: ["demo.app"]})
+eq(p.ok, true, "the plan is fine")
+ids = []
+for st in p.steps:
+    ids[len(ids) + 1] = st.id .. ":" .. st.op
+eq(ids, ["demo.app:install", "demo.lib:install"], "the dependency is added")
+eq(p.steps[2].auto, true, "the dependency is marked automatic")
+eq(p.download, app1.entry.size + lib1.entry.size, "download size")
+eq(p.fits, true, "it fits")
+
+stages = {}
+r = s:apply(p, {on_progress: (stage, id) => rawset(stages, stage, true)})
+if not r.ok:
+    error("install failed: " .. tostring(r.error), 0)
+eq(r.ok, true, "installed: " .. tostring(r.error))
+eq([stages.download, stages.verify, stages.place, stages.commit], [true, true, true, true], "progress stages")
+inst = s:installed()
+eq(inst["demo.app"].version, "1.0.0", "the database has the app")
+eq(inst["demo.lib"].auto, true, "the dependency is automatic in the database")
+eq(read(ROOT .. "/cubeos/pkg/demo.app/lib/demo/app.lua") != nil, true, "unpacked files are in place")
+eq(fs.exists(ROOT .. "/cubeos/var/stew/journal.json5"), false, "no journal after success")
+eq(fs.exists(ROOT .. "/cubeos/var/stew/staging"), true and fs.list(ROOT .. "/cubeos/var/stew/staging")[1] == nil, "staging is clean")
+
+# загрузчик по boot.idx берёт модули из пакетов
+idx = loadfile(ROOT .. "/cubeos/var/stew/boot.idx")()
+eq(idx.modules["demo.app"][1], "demo.app", "boot.idx maps modules to packages")
+contrib = json5.parse(read(ROOT .. "/cubeos/var/stew/contrib.json5"))
+eq(contrib.apps[1].icon, ROOT .. "/cubeos/pkg/demo.app/assets/icon.cimg", "contrib.json5 has the app with a full icon path")
+idx.rt = "/repo/src/cubic/rt.lua"
+L = dofile("/repo/sys/boot/pkgload.lua").new(idx)
+eq(L.import("demo.app").main(), 1, "a Lua module imports another package's module")
+
+# системный пакет: файлы на своих местах, cfg не перезаписывается
+put(ROOT .. "/cubeos/sys/cfg/thing.conf", "{ a: 2 }")
+r = s:install(["cubeos.thing"])
+eq(r.ok, true, "a system package installs")
+eq(read(ROOT .. "/cubeos/share/assets/thing.txt"), "hello", "assets go to /cubeos/share/assets")
+eq(read(ROOT .. "/cubeos/sys/cfg/thing.conf"), "{ a: 2 }", "an existing setting is kept")
+
+# удалить зависимость нельзя, пока она нужна
+p = s:plan({remove: ["demo.lib"]})
+eq(p.ok, false, "a needed dependency is not removed")
+eq(p.conflicts[1], "cannot remove demo.lib: demo.app needs it", "the reason")
+
+# обновление и откат при ошибке
+app2 = make("demo.app", "1.1.0", ", depends: { \"demo.lib\": \"^1.0\" }", {"lib/demo/app.lua": "return {main = function() return 2 end}"})
+index_of([lib1, app1, app2, sys1])
+s:refresh()
+eq(s:info("demo.app").update, true, "an update is visible")
+# порча скачанного: sha256 не сходится, ничего не меняется
+good = read(REPO .. "/demo.app-1.1.0.cpk")
+put(REPO .. "/demo.app-1.1.0.cpk", string.sub(good, 1, 100) .. "X" .. string.sub(good, 102))
+r = s:update(["demo.app"])
+eq(r.ok, false, "a damaged download fails")
+eq(s:installed()["demo.app"].version, "1.0.0", "the old version stays after a failed update")
+eq(read(ROOT .. "/cubeos/pkg/demo.app/lib/demo/app.lua") != nil, true, "old files are back")
+h = fs.open(REPO .. "/demo.app-1.1.0.cpk", "wb")
+h.write(good)
+h.close()
+r = s:update(["demo.app"])
+eq(r.ok, true, "the update works: " .. tostring(r.error))
+eq(s:installed()["demo.app"].version, "1.1.0", "the new version")
+eq(s:installed()["demo.app"].auto, false, "an explicitly installed package stays explicit")
+
+# сжатое хранение и обратно
+r = s:set_storage("demo.app", "packed")
+eq(fs.exists(ROOT .. "/cubeos/pkg/demo.app.cpk") and not fs.exists(ROOT .. "/cubeos/pkg/demo.app"), true, "packed storage is one file")
+idx = loadfile(ROOT .. "/cubeos/var/stew/boot.idx")()
+eq(idx.packages["demo.app"].packed != nil, true, "boot.idx points to the archive")
+s:set_storage("demo.app", "unpacked")
+eq(read(ROOT .. "/cubeos/pkg/demo.app/lib/demo/app.lua") != nil, true, "unpacked again")
+eq(s:verify("demo.app")[1].ok, true, "verify passes")
+put(ROOT .. "/cubeos/pkg/demo.app/lib/demo/app.lua", "changed")
+eq(s:verify("demo.app")[1].ok, false, "verify finds a changed file")
+
+# питание пропало посреди транзакции: журнал откатывает
+put(ROOT .. "/cubeos/var/stew/trash/99/1", "old")
+put(ROOT .. "/cubeos/var/stew/journal.json5", json5.stringify({txn: "99", state: "place", ops: [
+    {op: "moved", a: "/cubeos/pkg/ghost.txt", b: "/cubeos/var/stew/trash/99/1"},
+    {op: "created", a: "/cubeos/pkg/new.txt"},
+]}))
+put(ROOT .. "/cubeos/pkg/new.txt", "new")
+eq(s:recover().action, "rolled back", "recover rolls back")
+eq(read(ROOT .. "/cubeos/pkg/ghost.txt"), "old", "moved files come back")
+eq(fs.exists(ROOT .. "/cubeos/pkg/new.txt"), false, "created files go away")
+
+# удаление вместе с осиротевшей зависимостью
+r = s:remove(["demo.app"])
+eq(r.ok, true, "removed")
+eq(s:installed()["demo.app"], nil, "the app is gone")
+eq(s:installed()["demo.lib"], nil, "the orphaned automatic dependency is removed too")
+eq(fs.exists(ROOT .. "/cubeos/pkg/demo.app"), false, "its files are gone")
+
+# установка из файла
+r = s:install_file(REPO .. "/demo.lib-1.0.0.cpk")
+eq(r.ok, true, "install from a file: " .. tostring(r.error))
+eq(s:installed()["demo.lib"].source, "file", "the source is file")
+
+# не хватает места
+s.free_space = () => 1000
+p = s:plan({install: ["demo.app"]})
+eq(p.fits, false, "not enough space is found before downloading")
+fs.delete(W)
+print("done")

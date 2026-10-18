@@ -1,0 +1,114 @@
+# stew.source.http: источник «адрес с index.json5» (docs/packages/05-sources.md, 09-stew-api.md).
+# src = {name, kind: "http", url}: url это адрес index.json5 (или папки с ним, если кончается на «/»).
+# Относительные url пакетов считаются от адреса индекса. Ту же работу делает cobble (stew.source.cobble) и ей же пользуется path:
+# общие помощники лежат здесь.
+#
+#   refresh(src, ctx)                      -> {packages: {id: запись}, format, generated}
+#   fetch(src, id, version, rec, dest, ctx) -> dest (пишет .cpk; проверяет размер и sha256, если они есть в записи)
+#   join_url(base, rel)                    разрешить относительный адрес
+#   check_blob(data, vrec, label)          ошибка, если размер или sha256 не совпали с записью версии (sha256 .cpk как у cpk:sha256_hex())
+#   version_record(rec, version)           запись версии (rec.versions[version]) или ошибка
+#   write_file(fsys, path, data)  read_file(fsys, path)
+#   refresh_url(url, ctx)  fetch_url(index_url, id, version, rec, dest, ctx)   то же по готовому адресу индекса
+# ctx = {fs, http (url, binary -> body | nil, err), tmp, pack, cubic, log, yield}
+
+import json5
+import sha256
+
+export def join_url(base, rel):
+    if string.match(rel, "^%a[%w%+%-%.]*://") != nil:
+        return rel
+    root, path = string.match(base, "^(%a[%w%+%-%.]*://[^/]*)(.*)$")
+    if root == nil:
+        error("bad base address: " .. tostring(base), 0)
+    cut = string.find(path, "[?#]")
+    if cut != nil:
+        path = string.sub(path, 1, cut - 1)
+    if string.sub(rel, 1, 1) == "/":
+        return root .. rel
+    dir = string.match(path, "^(.*)/") ?? ""
+    parts = []
+    for seg in string.gmatch(dir .. "/" .. rel, "[^/]+"):
+        if seg == "..":
+            if len(parts) > 0:
+                table.remove(parts)
+        elif seg != ".":
+            parts[len(parts) + 1] = seg
+    tail = string.sub(rel, -1) == "/" and "/" or ""
+    return root .. "/" .. table.concat(parts, "/") .. tail
+
+export def read_file(fsys, path):
+    h = fsys.open(path, "rb")
+    if h == nil:
+        error("cannot read " .. path, 0)
+    s = h.readAll() ?? ""
+    h.close()
+    return s
+
+export def write_file(fsys, path, data):
+    fsys.makeDir(fsys.getDir(path))
+    h = fsys.open(path, "wb")
+    if h == nil:
+        error("cannot write " .. path, 0)
+    h.write(data)
+    h.close()
+
+export def version_record(rec, version):
+    if type(rec) != "table":
+        error("no catalog record for the package", 0)
+    v = rec.versions != nil and rec.versions[version] or nil
+    if v == nil:
+        error("version " .. tostring(version) .. " is not in the catalog", 0)
+    return v
+
+export def check_blob(data, vrec, label):
+    if vrec.size != nil and type(vrec.size) == "number" and len(data) != vrec.size:
+        error(label .. ": size mismatch (catalog says " .. vrec.size .. " bytes, got " .. len(data) .. ")", 0)
+    if type(vrec.sha256) == "string" and vrec.sha256 != "":
+        # sha256 в каталоге это хэш .cpk (cpk:sha256_hex()): sha256 всего, что перед последними 34 байтами файла
+        got = sha256.hex(string.sub(data, 1, 4) == "CPK\1" and len(data) >= 38 and string.sub(data, 1, len(data) - 34) or data)
+        if got != string.lower(vrec.sha256):
+            error(label .. ": sha256 mismatch (catalog says " .. string.lower(vrec.sha256) .. ", got " .. got .. ")", 0)
+
+# разбор текста index.json5 в {packages, format, generated}
+export def parse_index(text, where):
+    ok, idx = pcall(json5.parse, text)
+    if not ok:
+        error(where .. ": " .. tostring(idx), 0)
+    if type(idx) != "table" or type(idx.packages) != "table":
+        error(where .. ": not a package index (no \"packages\")", 0)
+    return {packages: idx.packages, format: idx.format, generated: idx.generated}
+
+export def index_url(src):
+    url = src.url
+    if type(url) != "string" or url == "":
+        error("source " .. tostring(src.name) .. ": no url", 0)
+    if string.sub(url, -1) == "/":
+        return url .. "index.json5"
+    return url
+
+export def refresh_url(url, ctx):
+    body, err = ctx.http(url, false)
+    if body == nil:
+        error("cannot download " .. url .. ": " .. tostring(err ?? "no answer"), 0)
+    return parse_index(body, url)
+
+export def fetch_url(index, id, version, rec, dest, ctx):
+    vrec = version_record(rec, version)
+    if type(vrec.url) != "string":
+        error(id .. " " .. version .. ": the catalog has no url", 0)
+    url = join_url(index, vrec.url)
+    body, err = ctx.http(url, true)
+    if body == nil:
+        error("cannot download " .. url .. ": " .. tostring(err ?? "no answer"), 0)
+    check_blob(body, vrec, id .. " " .. version)
+    if ctx.fs.exists(dest):
+        ctx.fs.delete(dest)
+    write_file(ctx.fs, dest, body)
+    return dest
+
+export def refresh(src, ctx):
+    return refresh_url(index_url(src), ctx)
+
+export def fetch(src, id, version, rec, dest, ctx):
+    return fetch_url(index_url(src), id, version, rec, dest, ctx)

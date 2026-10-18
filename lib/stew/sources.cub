@@ -1,0 +1,9 @@
+# stew.sources: все виды источников первой версии (docs/packages/05-sources.md). stew подгружает этот модуль при первом обращении.
+
+import stew.source.path as path_src
+import stew.source.http as http_src
+import stew.source.cobble as cobble_src
+import stew.source.pinestore as pinestore_src
+
+export def adapters():
+    return {path: path_src, http: http_src, cobble: cobble_src, pinestore: pinestore_src}

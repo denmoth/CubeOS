@@ -61,3 +61,26 @@ PineStore (pinestore.cc) это существующий каталог прог
 
 Порядок в `sources.json5` задаёт приоритет при поиске. Пакет привязан к источнику, из которого поставлен, и обновляется только из
 него. Пакеты PineStore живут в своём пространстве `pinestore.*` и с пакетами Cobble не пересекаются.
+
+### Проверено на шаге 5b
+
+Проверка 2026-10-18 (curl, без ключей):
+
+- `GET /api/projects`: 188 проектов, 372 КБ. В каждом `visible: true`. Разбор `lib/json` в CraftOS-PC и перевод в записи stew: 0,16 с.
+- `GET /api/project/<id>` (в единственном числе) есть: `{ success, project: {...} }` с теми же полями, 1,5 КБ на проект. Адаптер ходит туда,
+  если в кэшированной записи нет поля `pinestore`. `/api/projects/<id>`, `/api/project/<id>/download` дают 404; `/api/projects/search` отвечает
+  `{success, projects: []}` на `q` и `query` (параметр не найден), поэтому поиск идёт по кэшу.
+- `date_updated` равен 0 у половины проектов (94 из 188): тогда берётся `date_publish` (есть у всех), потом `date_added`. Все даты это миллисекунды Unix.
+  Версия для stew `0.0.<ГГГГММДД>` (UTC).
+  `lib/semver` разбирает `0.0.0+<дата>`, но `compare` метаданные сборки игнорирует: два обновления с разными датами считались бы одинаковыми
+  версиями, поэтому дата стоит в патче.
+- Поля могут быть `null` (JSON): `download_url` (137 из 188 пустые), `target_file`, `run_command`, `repository`. Адаптер приводит их к `nil`.
+- `install_command`: `wget run <url>` 63, `pastebin run <код> [аргументы]` 34, `pastebin get <код> [файл]` 27, `wget <url> [файл]` около 10, пусто 23.
+  Иногда после адреса стоит литерал `...` (аргументы установщика не показаны), его адаптер отбрасывает. `target_file` бывает папкой, без расширения,
+  с пробелом на конце или путём вроде `/bin/hoof.lua`; `download_url` у `wget run` иногда архив (`datapack.zip`), который тянет сам установщик:
+  при `run`-команде берётся установщик, а не `download_url`.
+- Теги: utility 100, fun 89, library 39, quirky 31, audio 31, os 18, turtle 15, action 14, pocket 13, puzzle 9, emulator 8, mod 5, resourcep 2.
+  Категории stew: library -> dev, audio -> media, turtle -> automation, os -> system, mod/resourcep -> assets, action/puzzle/fun -> games, остальное apps.
+- Установщики это обычные Lua-скрипты (`https://pinestore.cc/d/psi/<id>` отдаёт текст). Адаптер запускает их в песочнице `run_installer`
+  (виртуальная fs в папке, сеть только через `ctx.http`, `shell.run`/`os.reboot`/`os.shutdown` выключены, лимиты на шаги, время, записанное и скачанное).
+  Это ограничение, а не полная изоляция: общие таблицы `string`/`table`/`math` у скрипта настоящие.

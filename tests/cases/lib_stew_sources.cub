@@ -1,0 +1,315 @@
+import t
+import cpk
+import json
+import json5
+import sha256
+import stew.pack as pack
+import stew.source.path as spath
+import stew.source.http as shttp
+import stew.source.cobble as scobble
+import stew.source.pinestore as pine
+eq = t.eq
+
+def err_of(f):
+    ok, e = pcall(f)
+    return not ok and tostring(e) or nil
+
+def has(text, part):
+    return text != nil and string.find(text, part, 1, true) != nil
+
+def put(path, text):
+    fs.makeDir(fs.getDir(path))
+    h = fs.open(path, "wb")
+    h.write(text)
+    h.close()
+
+def get(path):
+    h = fs.open(path, "rb")
+    s = h.readAll()
+    h.close()
+    return s
+
+def sorted_keys(d):
+    out = []
+    for k, v in d:
+        out[len(out) + 1] = k
+    table.sort(out)
+    return out
+
+TMP = "/tmp_src_test"
+fs.delete(TMP)
+
+# --- пакеты для проверок -----------------------------------------------------------------------------------------------
+def make_pkg(id, version, extra):
+    base = TMP .. "/src/" .. id .. "-" .. version
+    put(base .. "/package.json5", "{ format: 1, id: \"" .. id .. "\", name: \"" .. id .. "\", version: \"" .. version .. "\", kind: \"app\", category: \"apps\", description: \"d " .. id .. "\" }")
+    put(base .. "/src/init.lua", "return {main = function() return '" .. version .. extra .. "' end}\n")
+    r = pack.build(fs, base)
+    pack.write(fs, r, TMP .. "/repo")
+    return r
+
+a1 = make_pkg("test.alpha", "1.0.0", "")
+a2 = make_pkg("test.alpha", "1.1.0", "x")
+b1 = make_pkg("test.beta", "0.2.0", "")
+
+calls = []
+pages = {}
+def http_fn(url, binary):
+    calls[len(calls) + 1] = url
+    body = pages[url]
+    if body == nil:
+        return nil, "404 " .. url
+    return body
+
+ctx = {fs: fs, http: http_fn, tmp: TMP .. "/tmp", pack: pack, cubic: nil, log: (s) => nil, yield: () => nil}
+
+# --- path без index.json5: каталог из манифестов ----------------------------------------------------------------------
+src = {name: "disk", kind: "path", url: TMP .. "/repo"}
+idx = spath.refresh(src, ctx)
+eq(sorted_keys(idx.packages), ["test.alpha", "test.beta"], "path: two packages found")
+al = idx.packages["test.alpha"]
+eq(sorted_keys(al.versions), ["1.0.0", "1.1.0"], "path: both versions")
+eq(al.name, "test.alpha", "path: the record has the name")
+eq(al.versions["1.1.0"].sha256, a2.entry.sha256, "path: sha256 of the archive")
+eq(al.versions["1.1.0"].size, len(a2.data), "path: size of the archive")
+eq(al.versions["1.0.0"].url, "test.alpha-1.0.0.cpk", "path: url is the file name")
+eq(al.kind, "app", "path: kind")
+
+p = spath.fetch(src, "test.alpha", "1.1.0", al, TMP .. "/out/alpha.cpk", ctx)
+eq(p, TMP .. "/out/alpha.cpk", "path fetch returns dest")
+eq(get(p) == a2.data, true, "path fetch copies the package")
+
+bad = {versions: {"1.1.0": {url: "test.alpha-1.1.0.cpk", sha256: string.rep("0", 64), size: len(a2.data)}}}
+eq(has(err_of(() => spath.fetch(src, "test.alpha", "1.1.0", bad, TMP .. "/out/bad.cpk", ctx)), "sha256 mismatch"), true, "path: wrong hash is refused")
+bad2 = {versions: {"1.1.0": {url: "test.alpha-1.1.0.cpk", size: 5}}}
+eq(has(err_of(() => spath.fetch(src, "test.alpha", "1.1.0", bad2, TMP .. "/out/bad.cpk", ctx)), "size mismatch"), true, "path: wrong size is refused")
+eq(has(err_of(() => spath.fetch(src, "test.alpha", "9.9.9", al, TMP .. "/out/bad.cpk", ctx)), "not in the catalog"), true, "path: unknown version")
+eq(fs.exists(TMP .. "/out/bad.cpk"), false, "a refused package is not written")
+
+# --- path с index.json5 ------------------------------------------------------------------------------------------------
+put(TMP .. "/repo2/index.json5", "{ format: 1, packages: { \"test.beta\": { name: \"Beta\", kind: \"app\", versions: { \"0.2.0\": { url: \"b.cpk\", sha256: \"" .. b1.entry.sha256 .. "\", size: " .. len(b1.data) .. " } } } } }")
+put(TMP .. "/repo2/b.cpk", b1.data)
+put(TMP .. "/repo2/c.cpk", a1.data)
+src2 = {name: "disk2", kind: "path", url: TMP .. "/repo2"}
+idx2 = spath.refresh(src2, ctx)
+eq(sorted_keys(idx2.packages), ["test.beta"], "path with index: the index wins over the files")
+eq(idx2.packages["test.beta"].name, "Beta", "path with index: record from the index")
+spath.fetch(src2, "test.beta", "0.2.0", idx2.packages["test.beta"], TMP .. "/out/beta.cpk", ctx)
+eq(get(TMP .. "/out/beta.cpk") == b1.data, true, "path with index: fetch by relative url")
+
+# --- http: относительные адреса ----------------------------------------------------------------------------------------
+eq(shttp.join_url("https://example.com/cat/index.json5", "pkgs/a.cpk"), "https://example.com/cat/pkgs/a.cpk", "join: same folder")
+eq(shttp.join_url("https://example.com/cat/index.json5", "../other/b.cpk"), "https://example.com/other/b.cpk", "join: up one")
+eq(shttp.join_url("https://example.com/cat/index.json5?x=1", "/root.cpk"), "https://example.com/root.cpk", "join: from the root")
+eq(shttp.join_url("https://example.com/cat/index.json5", "https://cdn.net/z.cpk"), "https://cdn.net/z.cpk", "join: absolute stays")
+eq(shttp.join_url("https://example.com/cat/index.json5", "./a.cpk"), "https://example.com/cat/a.cpk", "join: ./")
+
+IDX = "https://example.com/cat/index.json5"
+pages[IDX] = "{ format: 1, packages: { \"test.alpha\": { name: \"Alpha\", versions: { \"1.0.0\": { url: \"pkgs/a.cpk\", sha256: \"" .. a1.entry.sha256 .. "\", size: " .. len(a1.data) .. " }, \"1.1.0\": { url: \"https://cdn.net/a2.cpk\", sha256: \"" .. string.upper(a2.entry.sha256) .. "\" } } } } }"
+pages["https://example.com/cat/pkgs/a.cpk"] = a1.data
+pages["https://cdn.net/a2.cpk"] = a2.data
+hsrc = {name: "web", kind: "http", url: IDX}
+hidx = shttp.refresh(hsrc, ctx)
+eq(sorted_keys(hidx.packages), ["test.alpha"], "http: index parsed")
+eq(calls[len(calls)], IDX, "http: the index url is requested")
+rec = hidx.packages["test.alpha"]
+shttp.fetch(hsrc, "test.alpha", "1.0.0", rec, TMP .. "/out/h1.cpk", ctx)
+eq(get(TMP .. "/out/h1.cpk") == a1.data, true, "http: relative url resolved against the index")
+eq(calls[len(calls)], "https://example.com/cat/pkgs/a.cpk", "http: requested address")
+shttp.fetch(hsrc, "test.alpha", "1.1.0", rec, TMP .. "/out/h2.cpk", ctx)
+eq(get(TMP .. "/out/h2.cpk") == a2.data, true, "http: absolute url, upper-case hash accepted")
+pages["https://example.com/cat/pkgs/a.cpk"] = a1.data .. "x"
+eq(has(err_of(() => shttp.fetch(hsrc, "test.alpha", "1.0.0", rec, TMP .. "/out/h3.cpk", ctx)), "size mismatch"), true, "http: a changed download is refused")
+pages["https://example.com/cat/pkgs/a.cpk"] = string.sub(a1.data, 1, 12) .. "Z" .. string.sub(a1.data, 14)
+eq(has(err_of(() => shttp.fetch(hsrc, "test.alpha", "1.0.0", rec, TMP .. "/out/h3.cpk", ctx)), "sha256 mismatch"), true, "http: hash mismatch with the right size")
+eq(fs.exists(TMP .. "/out/h3.cpk"), false, "http: nothing written on mismatch")
+eq(has(err_of(() => shttp.refresh({url: "https://example.com/none.json5"}, ctx)), "cannot download"), true, "http: missing index")
+pages["https://example.com/junk.json5"] = "[1, 2]"
+eq(has(err_of(() => shttp.refresh({url: "https://example.com/junk.json5"}, ctx)), "not a package index"), true, "http: not an index")
+pages["https://example.com/cat/index.json5"] = pages[IDX]
+eq(len(sorted_keys(shttp.refresh({url: "https://example.com/cat/"}, ctx).packages)), 1, "http: a folder url gets index.json5")
+
+# --- cobble: OWNER/cobble ----------------------------------------------------------------------------------------------
+CIDX = "https://raw.githubusercontent.com/Denmoth/cobble/main/index.json5"
+eq(scobble.index_url({url: "Denmoth/cobble"}), CIDX, "cobble: OWNER/cobble")
+eq(scobble.index_url({url: "Denmoth"}), CIDX, "cobble: OWNER alone means OWNER/cobble")
+eq(scobble.index_url({url: "Denmoth/mirror"}), "https://raw.githubusercontent.com/Denmoth/mirror/main/index.json5", "cobble: OWNER/REPO")
+eq(scobble.index_url({url: "https://example.org/x/index.json5"}), "https://example.org/x/index.json5", "cobble: a full address")
+pages[CIDX] = "{ format: 1, packages: { \"test.beta\": { name: \"Beta\", versions: { \"0.2.0\": { url: \"https://github.com/Denmoth/cobble/releases/download/test.beta-0.2.0/test.beta-0.2.0.cpk\", sha256: \"" .. b1.entry.sha256 .. "\", size: " .. len(b1.data) .. " } } } } }"
+pages["https://github.com/Denmoth/cobble/releases/download/test.beta-0.2.0/test.beta-0.2.0.cpk"] = b1.data
+csrc = {name: "cobble", kind: "cobble", url: "Denmoth/cobble"}
+cidx = scobble.refresh(csrc, ctx)
+eq(sorted_keys(cidx.packages), ["test.beta"], "cobble: refresh")
+scobble.fetch(csrc, "test.beta", "0.2.0", cidx.packages["test.beta"], TMP .. "/out/cb.cpk", ctx)
+eq(get(TMP .. "/out/cb.cpk") == b1.data, true, "cobble: fetch")
+
+# --- PineStore: refresh ------------------------------------------------------------------------------------------------
+API = "https://pinestore.cc/api/projects"
+projects = [
+    {id: 1, name: "Direct", description_short: "short one", description_markdown: string.rep("long ", 100), owner_name: "Xella",
+     tags: ["fun", "action"], install_command: "wget https://files.test/direct.lua direct.lua", download_url: "https://files.test/direct.lua",
+     target_file: json.null, run_command: json.null, repository: json.null, date_updated: 1699905234282, date_publish: 1694617285452,
+     downloads: 10, likes: 2, visible: true},
+    {id: 2, name: "Wgetter", description_short: "w", owner_name: "A", tags: ["library"], install_command: "wget https://files.test/lib/w.lua",
+     download_url: json.null, target_file: "w.lua", date_updated: 0, date_publish: 1694617285452, visible: true},
+    {id: 3, name: "Paste Get", description_short: "p", owner_name: "B", tags: ["audio"], install_command: "pastebin get AbC123 song.lua",
+     target_file: "song.lua", date_updated: 0, date_publish: 0, date_added: 1694617285452, visible: true},
+    {id: 4, name: "Installer", description_short: "i", owner_name: "C", tags: ["utility"], install_command: "wget run https://files.test/install.lua --fast ...",
+     target_file: "tool", download_url: json.null, visible: true, date_publish: 1694617285452},
+    {id: 5, name: "Hidden", tags: [], visible: false, date_publish: 1},
+    {id: 6, name: "No Tags", description_short: "n", tags: ["quirky"], install_command: json.null, download_url: json.null, visible: true, date_publish: 1694617285452},
+]
+pages[API] = json.stringify({success: true, projects: projects})
+psrc = {name: "pinestore", kind: "pinestore"}
+pidx = pine.refresh(psrc, ctx)
+eq(sorted_keys(pidx.packages), ["pinestore.1", "pinestore.2", "pinestore.3", "pinestore.4", "pinestore.6"], "pinestore: ids, hidden projects dropped")
+r1 = pidx.packages["pinestore.1"]
+eq(r1.name, "Direct", "pinestore: name")
+eq(r1.description, "short one", "pinestore: short description")
+eq(r1.author, "Xella", "pinestore: author")
+eq(r1.kind, "legacy", "pinestore: kind")
+eq(r1.category, "games", "pinestore: category from tags")
+eq(r1.homepage, "https://pinestore.cc/project/1", "pinestore: homepage falls back to the project page")
+eq(sorted_keys(r1.versions), ["0.0.20231113"], "pinestore: version from date_updated")
+eq(r1.versions["0.0.20231113"].sha256, nil, "pinestore: no hash")
+eq(r1.versions["0.0.20231113"].size, nil, "pinestore: no size")
+eq(r1.pinestore.download_url, "https://files.test/direct.lua", "pinestore: download_url kept")
+eq(r1.pinestore.target_file, nil, "pinestore: json null becomes nil")
+eq(r1.description_markdown, nil, "pinestore: the long description is dropped")
+eq(string.find(json.stringify(pidx), "long long", 1, true), nil, "pinestore: no markdown anywhere")
+eq(sorted_keys(pidx.packages["pinestore.2"].versions), ["0.0.20230913"], "pinestore: date_publish when date_updated is 0")
+eq(sorted_keys(pidx.packages["pinestore.3"].versions), ["0.0.20230913"], "pinestore: date_added as the last resort")
+eq([pidx.packages["pinestore.2"].category, pidx.packages["pinestore.3"].category, pidx.packages["pinestore.4"].category, pidx.packages["pinestore.6"].category], ["dev", "media", "apps", "apps"], "pinestore: categories")
+eq(pine.sanitize("Ab C.d_e-9"), "ab-c-d_e-9", "pinestore: id sanitizing")
+eq(pack.check_manifest({format: 1, id: "pinestore.1", name: "x", version: "0.0.20231113", kind: "legacy"}), [], "pinestore: id and version are valid for a manifest")
+
+# команды установки
+c = pine.parse_command("pastebin get AbC123 song.lua")
+eq([c.kind, c.url, c.file], ["get", "https://pastebin.com/raw/AbC123", "song.lua"], "command: pastebin get")
+c = pine.parse_command("pastebin run xLC8mABU a b ...")
+eq([c.kind, c.url, c.args], ["run", "https://pastebin.com/raw/xLC8mABU", ["a", "b"]], "command: pastebin run with arguments")
+c = pine.parse_command("wget https://x.test/a.lua")
+eq([c.kind, c.url, c.file], ["get", "https://x.test/a.lua", nil], "command: wget without a file")
+c = pine.parse_command("wget run https://x.test/i.lua one")
+eq([c.kind, c.url, c.args], ["run", "https://x.test/i.lua", ["one"]], "command: wget run")
+eq(pine.parse_command("git clone x"), nil, "command: unknown")
+eq(pine.parse_command(nil), nil, "command: nil")
+
+# --- PineStore: fetch --------------------------------------------------------------------------------------------------
+pages["https://files.test/direct.lua"] = "print('direct')\n"
+pages["https://files.test/lib/w.lua"] = "return {w = true}\n"
+pages["https://pastebin.com/raw/AbC123"] = "print('song')\n"
+
+def open_pkg(path):
+    return cpk.open(get(path))
+
+d1, info1 = pine.fetch(psrc, "pinestore.1", "0.0.20231113", r1, TMP .. "/ps/1.cpk", ctx)
+eq(d1, TMP .. "/ps/1.cpk", "pinestore fetch returns dest")
+a = open_pkg(d1)
+m = a:manifest()
+eq([m.id, m.version, m.kind, m.category], ["pinestore.1", "0.0.20231113", "legacy", "games"], "download_url: manifest")
+eq(m.contributes.apps[1].entry, "direct.lua", "download_url: entry is the downloaded file")
+eq(m.contributes.apps[1].legacy, true, "download_url: legacy app")
+eq(a:read("direct.lua"), "print('direct')\n", "download_url: the file is inside")
+eq(a:verify(), true, "download_url: the package is sound")
+eq(info1.sha256, a:sha256_hex(), "info has the package hash")
+eq(info1.files["direct.lua"], sha256.hex("print('direct')\n"), "info has the file hashes")
+eq(info1.main, "direct.lua", "info has the main file")
+eq(fs.exists(TMP .. "/tmp/pinestore-1"), false, "the work folder is removed")
+d1b, info1b = pine.fetch(psrc, "pinestore.1", "0.0.20231113", r1, TMP .. "/ps/1b.cpk", ctx)
+eq(info1b.content_sha256, info1.content_sha256, "the same content gives the same content hash")
+pages["https://files.test/direct.lua"] = "print('direct v2')\n"
+d1c, info1c = pine.fetch(psrc, "pinestore.1", "0.0.20231113", r1, TMP .. "/ps/1c.cpk", ctx)
+eq(info1c.content_sha256 != info1.content_sha256, true, "changed content changes the content hash")
+
+pine.fetch(psrc, "pinestore.2", "0.0.20230913", pidx.packages["pinestore.2"], TMP .. "/ps/2.cpk", ctx)
+a = open_pkg(TMP .. "/ps/2.cpk")
+eq(a:read("w.lua"), "return {w = true}\n", "wget: file saved under target_file")
+eq(a:manifest().category, "dev", "wget: category")
+
+pine.fetch(psrc, "pinestore.3", "0.0.20230913", pidx.packages["pinestore.3"], TMP .. "/ps/3.cpk", ctx)
+a = open_pkg(TMP .. "/ps/3.cpk")
+eq(a:read("song.lua"), "print('song')\n", "pastebin get: file from pastebin")
+eq(a:manifest().contributes.apps[1].entry, "song.lua", "pastebin get: entry")
+
+eq(has(err_of(() => pine.fetch(psrc, "pinestore.6", "0.0.20230913", pidx.packages["pinestore.6"], TMP .. "/ps/6.cpk", ctx)), "no download address"), true, "no way to download is an error")
+eq(fs.exists(TMP .. "/ps/6.cpk"), false, "nothing written for an error")
+
+# --- PineStore: установщик в песочнице ---------------------------------------------------------------------------------
+INSTALLER = """
+local args = {...}
+fs.makeDir("bin")
+local h = fs.open("bin/tool.lua", "w")
+h.write("print('tool " .. tostring(args[1]) .. "')\\n")
+h.close()
+local r = http.get("https://files.test/data.txt")
+fs.makeDir("data")
+local f = fs.open("data/data.txt", "w")
+f.write(r.readAll())
+f.close()
+-- побег наверх: open возвращает nil, запись не происходит
+local esc1 = fs.open("../escape.txt", "w")
+local esc2 = fs.open("/../../escape2.txt", "w")
+local esc3 = fs.open("a/../../escape3.txt", "w")
+local note = fs.open("note.txt", "w")
+note.write(tostring(esc1 == nil) .. tostring(esc2 == nil) .. tostring(esc3 == nil) .. tostring(fs.exists("../x")) .. tostring(shell.run("ls")))
+note.close()
+print("hello from the installer")
+shell.run("wget", "https://files.test/extra.lua", "extra/extra.lua")
+os.reboot()
+local late = fs.open("late.txt", "w")
+late.write("x")
+late.close()
+"""
+pages["https://files.test/install.lua"] = INSTALLER
+pages["https://files.test/data.txt"] = "DATA"
+pages["https://files.test/extra.lua"] = "return 1\n"
+
+SB = TMP .. "/sb/root"
+logs = []
+sctx = {fs: fs, http: http_fn, tmp: TMP .. "/tmp", pack: pack, cubic: nil, log: (s) => rawset(logs, len(logs) + 1, s), yield: () => nil}
+written = pine.run_installer(INSTALLER, ["fast"], sctx, {root: SB})
+eq(written, ["bin/tool.lua", "data/data.txt", "extra/extra.lua", "note.txt"], "sandbox: the installer's files are collected, os.reboot ends it")
+eq(get(SB .. "/bin/tool.lua"), "print('tool fast')\n", "sandbox: arguments are passed")
+eq(get(SB .. "/data/data.txt"), "DATA", "sandbox: http works")
+eq(get(SB .. "/note.txt"), "truetruetruefalsefalse", "sandbox: ../ is refused, shell.run is disabled")
+eq(fs.exists(TMP .. "/sb/escape.txt"), false, "sandbox: nothing written above the root (..)")
+eq(fs.exists(TMP .. "/sb/escape3.txt"), false, "sandbox: nothing written above the root (a/../..)")
+eq(fs.exists(TMP .. "/escape2.txt") or fs.exists("/escape2.txt") or fs.exists("/escape3.txt"), false, "sandbox: nothing written at the real root")
+eq(fs.exists(SB .. "/late.txt"), false, "sandbox: nothing runs after os.reboot")
+eq(logs, ["installer: blocked shell command: ls", "installer: hello from the installer"], "sandbox: print goes to the log, blocked commands are logged")
+
+# ошибки и пределы
+eq(has(err_of(() => pine.run_installer("fs.delete('..')", [], sctx, {root: TMP .. "/sb/r2"})), "Access denied"), true, "sandbox: delete outside is an error")
+eq(has(err_of(() => pine.run_installer("error('boom')", [], sctx, {root: TMP .. "/sb/r3"})), "boom"), true, "sandbox: errors are reported")
+eq(has(err_of(() => pine.run_installer("while true do os.sleep(1) end", [], sctx, {root: TMP .. "/sb/r4", max_steps: 20})), "too many steps"), true, "sandbox: the step limit stops loops")
+eq(has(err_of(() => pine.run_installer("local f = fs.open('big', 'w') for i = 1, 100 do f.write(string.rep('x', 100)) end", [], sctx, {root: TMP .. "/sb/r5", max_bytes: 1000})), "too much data"), true, "sandbox: the size limit")
+eq(has(err_of(() => pine.run_installer("local f = io.open('x') os.shutdown() syntax error here", [], sctx, {root: TMP .. "/sb/r6"})), "installer:"), true, "sandbox: syntax errors are reported")
+eq(pine.run_installer("print(peripheral == nil and debug == nil and rs == nil and io.open('x') == nil)", [], sctx, {root: TMP .. "/sb/r8"}), [], "sandbox: no peripheral, debug, rs")
+eq(logs[len(logs)], "installer: true", "sandbox: dangerous globals are absent")
+eq(pine.norm_path("a/../b/./c"), "b/c", "norm_path: dots")
+eq(pine.norm_path("../a"), nil, "norm_path: escaping")
+eq(pine.norm_path("/"), "", "norm_path: root")
+
+# wget run целиком: установщик -> .cpk
+r4 = pidx.packages["pinestore.4"]
+d4, info4 = pine.fetch(psrc, "pinestore.4", "0.0.20230913", r4, TMP .. "/ps/4.cpk", ctx)
+a = open_pkg(d4)
+names = []
+for e in a:list():
+    names[len(names) + 1] = e.path
+table.sort(names)
+eq(names, ["bin/tool.lua", "data/data.txt", "extra/extra.lua", "note.txt"], "wget run: the package holds what the installer wrote")
+eq(a:manifest().kind, "legacy", "wget run: kind")
+eq(a:manifest().contributes.apps[1].entry, "bin/tool.lua", "wget run: the only entry candidate named like the project is not found, first Lua file is used")
+eq(info4.main, "bin/tool.lua", "wget run: info.main")
+eq(a:read("bin/tool.lua"), "print('tool --fast')\n", "wget run: arguments after the url are passed")
+eq(fs.exists(TMP .. "/tmp/pinestore-4"), false, "wget run: work folder removed")
+
+# запись без pinestore-поля: проект запрашивается у API
+pages["https://pinestore.cc/api/project/2"] = json.stringify({success: true, project: projects[2]})
+d2b = pine.fetch(psrc, "pinestore.2", "0.0.20230913", {name: "Wgetter"}, TMP .. "/ps/2b.cpk", ctx)
+eq(open_pkg(d2b):read("w.lua"), "return {w = true}\n", "pinestore: a bare record asks /api/project/<id>")
+
+fs.delete(TMP)
+print("done")
