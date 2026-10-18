@@ -152,13 +152,13 @@ export class WM:
         prog = entry.program
         def app_main(sys, a):
             app_ok, app_err = pcall(prog, sys, a[1])
-            me:_app_exited(sys.getpid(), app_ok, app_err)
+            me:_app_exited(sys.getpid(), app_ok, app_err, entry)
         ok, res = pcall(self.sys.spawn, app_main, [ctx], {name: entry.opts.name ?? "app"})
         if not ok:
             self:_log("error", "cannot start " .. tostring(entry.opts.name) .. ": " .. tostring(res))
 
     # процесс приложения закончился (сам или с ошибкой): его окна закрываются
-    def _app_exited(self, pid, ok, err):
+    def _app_exited(self, pid, ok, err, entry=nil):
         for w in self.windows:
             if w.pid == pid:
                 w.closed = true
@@ -168,6 +168,12 @@ export class WM:
         if not ok:
             self.exits[len(self.exits) + 1] = {pid: pid, err: tostring(err)}
             pcall(self.sys.log, "error", "app " .. pid .. " crashed: " .. tostring(err))
+            # сессия показывает окно с причиной (cde.crashbox); само окно падения второй раз не показывается
+            if self.on_app_crash != nil and entry != nil and entry.opts.name != "crash":
+                let me = self
+                let e = entry
+                let msg = tostring(err)
+                self:defer(() => me.on_app_crash({name: e.opts.name ?? "app", err: msg, program: e.program, args: e.args, opts: e.opts}))
         self:_wake(nil)
 
     def _log(self, level, text):

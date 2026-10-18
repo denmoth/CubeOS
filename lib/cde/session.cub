@@ -18,6 +18,7 @@ import cde.startmenu as startmenu
 import cde.tray as tray_mod
 import cde.widgets as widgets_mod
 import cde.lock as lock_mod
+import cde.crashbox as crashbox
 import apps.axo as axo
 import apps.launcher as launcher
 import cde.theme as theme_mod
@@ -285,6 +286,12 @@ export def program(session, opts=nil):
         tray.clock = () => clock_obj.c
         tray:install()
         wm.on_clock = () => tray:open_clock()
+        # приложение упало: окно с причиной и кнопкой Restart
+        def app_crash(info):
+            def restart():
+                wm:defer(() => wm:launch(info.program, info.opts, info.args))
+            wm:launch(crashbox.main, {name: "crash"}, [{name: info.name, err: info.err, restart: restart}])
+        wm.on_app_crash = app_crash
         wm:hotkey("ctrl+space", toggle_menu)
         # виджеты рабочего стола: conf.widgets = [{id, x, y}], без настройки только часы справа сверху
         wlist = []

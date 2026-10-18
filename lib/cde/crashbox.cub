@@ -1,0 +1,31 @@
+# cde.crashbox: окно «приложение упало»: что за приложение, причина (файл и строка .cub: с Cubic 1.0 строки совпадают),
+# кнопки Restart и Close. Открывает его сессия через wm.on_app_crash; без окна падение было бы молчаливым (окна просто исчезали).
+#
+#   wm:launch(crashbox.main, {name: "crash"}, [{name, err, restart: () => ...}])
+
+import cdk
+import cgl.surface as surface_mod
+
+export def main(sys, ctx):
+    info = ctx.args != nil and ctx.args[1] or {}
+    name = tostring(info.name ?? "app")
+    err = tostring(info.err ?? "unknown error")
+    ui = cdk.open(sys, ctx, {title: name .. " stopped", w: 220, h: 104, icon: "warn"})
+    st = ui.style
+    lines = surface_mod.wrap(st.font, err, 200)
+    body = []
+    for i, ln in lines:
+        if i > 5:
+            body[len(body) + 1] = cdk.label("...", {variant: "dim"})
+            break
+        body[len(body) + 1] = cdk.label(ln, {variant: "dim"})
+    def restart(b):
+        if info.restart != nil:
+            info.restart()
+        ui:close()
+    buttons = [cdk.spacer(), cdk.button("Close", {on_click: (b) => ui:close()})]
+    if info.restart != nil:
+        buttons[len(buttons) + 1] = cdk.button("Restart", {variant: "primary", icon: "restart", on_click: restart})
+    ui:set_root(cdk.column({padding: 6, gap: 3}, [cdk.row({gap: 5, align: "center"}, [cdk.icon("warn", {color: st.danger}),
+        cdk.label(name .. " has stopped because of an error", {variant: "accent"})]), cdk.column({gap: 1, grow: 1}, body), cdk.row({gap: 4}, buttons)]))
+    ui:run()

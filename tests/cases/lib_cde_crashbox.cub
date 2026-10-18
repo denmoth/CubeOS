@@ -1,0 +1,21 @@
+import t
+import appenv
+import cde.crashbox as crashbox
+eq = t.eq
+
+env = appenv.new({user: "ann"})
+crashes = []
+env.wm.on_app_crash = (info) => rawset(crashes, len(crashes) + 1, info)
+def bad(sys, ctx):
+    error("boom here")
+    return 1
+env.launch(bad, [])
+env.settle(20)
+eq(len(crashes), 1, "a crashing app is reported to the session")
+eq(string.find(crashes[1].err, "boom here", 1, true) != nil, true, "with the reason")
+eq(crashes[1].program, bad, "and how to restart it")
+# окно падения
+env.wm:launch(crashbox.main, {name: "crash"}, [{name: "Calc", err: "apps/calc/init.cub:12: attempt to index a nil value", restart: () => nil}])
+env.settle(20)
+eq(env.wm.windows[len(env.wm.windows)].title, "Calc stopped", "the crash window names the app")
+print("done")
