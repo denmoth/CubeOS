@@ -1,7 +1,7 @@
 // Meta package: minimal plus all recommended packages.
 {
   format: 1,
-  id: "cubeos-desktop",
+  id: "cubeos.desktop",
   name: "CubeOS desktop",
   version: "0.5.0",
   description: "Minimal system plus the graphical desktop and its recommended apps.",
@@ -10,7 +10,7 @@
   kind: "meta",
   category: "system",
   depends: {
-    "cubeos-minimal": "^0.5",
+    "cubeos.minimal": "^0.5",
     "cubeos.app-kit": "^0.5",
     "cubeos.app-launcher": "^0.5",
     "cubeos.avatars": "^0.5",

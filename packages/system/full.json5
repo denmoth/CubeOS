@@ -1,7 +1,7 @@
 // Meta package: desktop plus all optional packages.
 {
   format: 1,
-  id: "cubeos-full",
+  id: "cubeos.full",
   name: "CubeOS full",
   version: "0.5.0",
   description: "The desktop plus every optional package.",
@@ -10,7 +10,7 @@
   kind: "meta",
   category: "system",
   depends: {
-    "cubeos-desktop": "^0.5",
+    "cubeos.desktop": "^0.5",
     "cubeos.brush": "^0.5",
     "cubeos.calc": "^0.5",
     "cubeos.cgl-3d": "^0.5",

@@ -85,21 +85,54 @@ def _split(p):
         out[len(out) + 1] = part
     return out
 
+# части шаблона: "**" как есть, остальное готовым шаблоном Lua (или строкой без масок для быстрого сравнения)
+compiled = {}
+def _compile(g):
+    c = compiled[g]
+    if c != nil:
+        return c
+    parts = []
+    prefix = []
+    literal = true
+    for seg in _split(g):
+        if seg == "**":
+            parts[len(parts) + 1] = {any: true}
+            literal = false
+        elif string.find(seg, "[%*%?]") != nil:
+            parts[len(parts) + 1] = {pat: _seg_pattern(seg)}
+            literal = false
+        else:
+            parts[len(parts) + 1] = {text: seg}
+            if literal:
+                prefix[len(prefix) + 1] = seg
+    c = {parts: parts, prefix: table.concat(prefix, "/")}
+    compiled[g] = c
+    return c
+
 def _match(gs, gi, ps, pi):
     if gi > len(gs):
         return pi > len(ps)
     g = gs[gi]
-    if g == "**":
+    if g.any:
         for k in range[pi, len(ps) + 1]:
             if _match(gs, gi + 1, ps, k):
                 return true
         return false
-    if pi > len(ps) or string.match(ps[pi], _seg_pattern(g)) == nil:
+    if pi > len(ps):
+        return false
+    if g.text != nil:
+        if ps[pi] != g.text:
+            return false
+    elif string.match(ps[pi], g.pat) == nil:
         return false
     return _match(gs, gi + 1, ps, pi + 1)
 
 export def glob_match(g, path):
-    return _match(_split(g), 1, _split(path), 1)
+    c = _compile(g)
+    pre = c.prefix
+    if pre != "" and string.sub(path, 1, len(pre)) != pre:
+        return false
+    return _match(c.parts, 1, _split(path), 1)
 
 # все файлы под base (относительные пути), без build/, .git и скрытых папок
 export def list_files(fsys, base):

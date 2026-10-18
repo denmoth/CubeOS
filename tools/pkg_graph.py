@@ -467,7 +467,7 @@ def main():
     if not soft:
         out("  нет")
     # наборы покрывают свои приоритеты
-    meta_need = {"cubeos-minimal": ("essential", None), "cubeos-desktop": ("recommended", "cubeos-minimal"), "cubeos-full": ("optional", "cubeos-desktop")}
+    meta_need = {"cubeos.minimal": ("essential", None), "cubeos.desktop": ("recommended", "cubeos.minimal"), "cubeos.full": ("optional", "cubeos.desktop")}
     for mid, (prio, base) in meta_need.items():
         if mid in pkgs:
             have = declared[mid]

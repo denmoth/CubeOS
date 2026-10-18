@@ -295,7 +295,9 @@ function C.new_loader(cfg)
         local runner = C.load(src, path, opts)
         result = runner()
       else
-        local fn, e = load(src, "=" .. path, "t", env)
+        -- модуль на Lua (пакеты на чистом Lua, docs/packages/02-manifest.md): import в своём окружении поверх env
+        local lua_env = setmetatable({ import = L.import_for(dirname(path)) }, { __index = env })
+        local fn, e = load(src, "=" .. path, "t", lua_env)
         if not fn then error(e, 0) end
         result = fn()
       end

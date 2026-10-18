@@ -1,7 +1,7 @@
 -- CubeOS: «рантайм» для ранних стадий загрузки (проверка пароля восстановления и, позже, загрузчик stage2).
 -- Единственное место, которое знает, откуда берётся код системы. Сейчас (разработка): исходники репозитория,
 -- каталог из `source` в boot.conf (по умолчанию /repo), модули Cubic компилируются на лету.
--- В установленной системе (шаг 9, D187) этот файл заменяется на вариант с готовым минифицированным Lua; интерфейс тот же.
+-- В установленной системе (есть /cubeos/var/stew/boot.idx) код берётся готовым Lua из пакетов через pkgload.lua; интерфейс тот же.
 --
 --   rt = dofile("/cubeos/sys/boot/runtime.lua")
 --   rt.import("cfs")                  модуль системы
@@ -20,10 +20,24 @@ end
 local conf = read("/cubeos/sys/cfg/boot.conf") or ""
 local source = conf:match("[%s{,\"']source[\"']?%s*:%s*[\"']([^\"']+)[\"']") or "/repo"
 
-local cubic = loadfile(source .. "/src/cubic/init.lua")(source .. "/src/cubic")
-local loader = cubic.new_loader({ roots = { source .. "/lib" } })
-
-local rt = { source = source, cubic = cubic, loader = loader, import = loader.import }
+-- Установленная система (docs/packages, шаг 3): stew пишет индекс пакетов, модули берутся готовым Lua из пакетов (сжатых или
+-- распакованных), компилятора может не быть. Без индекса (разработка): исходники из `source`, Cubic компилируется на лету.
+-- dev: true в boot.conf заставляет грузиться из исходников даже при установленных пакетах.
+local IDX = "/cubeos/var/stew/boot.idx"
+local rt
+if fs.exists(IDX) and not conf:match("[%s{,\"']dev[\"']?%s*:%s*true") then
+  local idx = dofile(IDX)
+  local loader = dofile("/cubeos/sys/boot/pkgload.lua").new(idx)
+  local cubic = idx.cubic and loadfile(idx.cubic .. "/init.lua")(idx.cubic) or nil
+  rt = { source = idx.share or "/cubeos/share", cubic = cubic or { rt = loader.rt }, loader = loader, import = loader.import,
+    installed = true, map_error = loader.map_error, has_compiler = cubic ~= nil }
+else
+  local cubic = loadfile(source .. "/src/cubic/init.lua")(source .. "/src/cubic")
+  local loader = cubic.new_loader({ roots = { source .. "/lib" } })
+  rt = { source = source, cubic = cubic, loader = loader, import = loader.import, has_compiler = true,
+    map_error = function(msg) return msg end }
+end
+local loader = rt.loader
 
 -- порядок модулей: зависимости раньше зависимых. Что не нашлось, пропускается (import сообщит об ошибке сам)
 function rt.plan(names)
@@ -31,11 +45,15 @@ function rt.plan(names)
   local function visit(name)
     if seen[name] then return end
     seen[name] = true
-    local ok, path = pcall(loader.resolve, name)
-    if not ok then return end
-    if path:sub(-4) == ".cub" then
-      local src = read(path) or ""
-      for dep in ("\n" .. src):gmatch("\n%s*import%s+([%w_%.]+)") do visit(dep) end
+    if rt.installed then
+      for _, dep in ipairs(loader.deps(name)) do visit(dep) end
+    else
+      local ok, path = pcall(loader.resolve, name)
+      if not ok then return end
+      if path:sub(-4) == ".cub" then
+        local src = read(path) or ""
+        for dep in ("\n" .. src):gmatch("\n%s*import%s+([%w_%.]+)") do visit(dep) end
+      end
     end
     order[#order + 1] = name
   end

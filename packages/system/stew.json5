@@ -14,8 +14,9 @@
   depends: {
     "cubeos.compress": "^0.5",
     "cubeos.cpk": "^0.5",
+    "cubeos.encoding": "^0.5",
     "cubeos.json": "^0.5",
     "cubeos.version": "^0.5",
   },
-  files: ["lib/stew/*"],
+  files: ["lib/stew/**"],
 }

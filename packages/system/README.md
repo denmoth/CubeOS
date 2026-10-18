@@ -2,7 +2,7 @@
 
 Манифесты всей системы, разбитой на мелкие пакеты (docs/packages/07-system-split.md). Один пакет это один файл
 `packages/system/<имя>.json5`, где `<имя>` это id без `cubeos.` (`cubeos.cfs` лежит в `cfs.json5`). Наборы: `minimal`, `desktop`, `full`,
-`dev` (`kind: "meta"`, только зависимости; их id пишется через дефис: `cubeos-minimal`).
+`dev` (`kind: "meta"`, только зависимости; их id пишется через дефис: `cubeos.minimal`).
 
 Системные пакеты собираются из самого репозитория, поэтому `files` это пути от корня репозитория (или шаблоны `*`, `**`), а не
 пути внутри исходников пакета. Каждый файл из `lib/`, `sys/boot`, `sys/startup.lua`, `sys/services`, `sys/cfg`, `src/cubic`
@@ -177,7 +177,7 @@ essential, recommended не от optional, наборы покрывают св�
 | `cubeos.wallpaper-night-city` | O | 1 | 1619 |
 | `cubeos.wallpaper-sunset` | O | 1 | 1221 |
 | `cubeos.wallpaper-sus` | O | 1 | 807 |
-| `cubeos-desktop` | - | 0 | 0 |
-| `cubeos-dev` | - | 0 | 0 |
-| `cubeos-full` | - | 0 | 0 |
-| `cubeos-minimal` | - | 0 | 0 |
+| `cubeos.desktop` | - | 0 | 0 |
+| `cubeos.dev` | - | 0 | 0 |
+| `cubeos.full` | - | 0 | 0 |
+| `cubeos.minimal` | - | 0 | 0 |

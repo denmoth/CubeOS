@@ -1,7 +1,7 @@
 // Meta package: development tools.
 {
   format: 1,
-  id: "cubeos-dev",
+  id: "cubeos.dev",
   name: "CubeOS developer tools",
   version: "0.5.0",
   description: "Cubic compiler, tooling and the publish client.",

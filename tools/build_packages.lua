@@ -17,7 +17,7 @@ local function read(p) local f = fs.open(p, "rb"); if not f then return nil end 
 local function write(p, d) fs.makeDir(fs.getDir(p)); local f = fs.open(p, "wb"); f.write(d); f.close() end
 
 local log = {}
-local function say(s) log[#log + 1] = s; print(s) end
+local function say(s) log[#log + 1] = s; print(s); write(ROOT .. "/build/build-packages.txt", table.concat(log, "\n") .. "\n") end
 local failed = 0
 
 local function build_one(base, opts)
@@ -52,7 +52,10 @@ else
   -- вся система из репозитория
   out_dir = ROOT .. "/build/packages"
   if fs.exists(out_dir) then fs.delete(out_dir) end
-  local list = pack.list_files(fs, ROOT)
+  local list = {}
+  for _, top in ipairs({ "assets", "lib", "src", "sys" }) do
+    for _, rel in ipairs(pack.list_files(fs, ROOT .. "/" .. top)) do list[#list + 1] = top .. "/" .. rel end
+  end
   local index = { format = 1, packages = {} }
   local names = fs.list(ROOT .. "/packages/system")
   table.sort(names)
@@ -60,6 +63,7 @@ else
   for _, name in ipairs(names) do
     if name:match("%.json5$") then
       local text = read(ROOT .. "/packages/system/" .. name)
+      local t0 = os.epoch("utc")
       local r = build_one(ROOT, { cubic = cubic, manifest_text = text, list = list, label = name,
         on_block = breathe, on_step = breathe, source = "CubeOS repo" })
       if r then
@@ -78,7 +82,7 @@ else
         p.versions[e.version] = v
         index.packages[e.id] = p
         total, total_raw = total + #r.data, total_raw + r.manifest.installed_size
-        say(string.format("ok   %-28s %7d bytes (%d installed)", r.name, #r.data, r.manifest.installed_size))
+        say(string.format("ok   %-28s %7d bytes (%d installed) %d ms", r.name, #r.data, r.manifest.installed_size, os.epoch("utc") - t0))
       end
       breathe()
     end

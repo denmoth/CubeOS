@@ -166,10 +166,10 @@
 
 | Набор | Состав |
 |---|---|
-| `cubeos-minimal` | все **E**: загрузка, текстовый режим, cush, stew |
-| `cubeos-desktop` | minimal + все **R** |
-| `cubeos-full` | desktop + все **O** |
-| `cubeos-dev` | `cubeos.cubic`, `cubeos.cubic-tools`, `cubeos.stew-publish` |
+| `cubeos.minimal` | все **E**: загрузка, текстовый режим, cush, stew |
+| `cubeos.desktop` | minimal + все **R** |
+| `cubeos.full` | desktop + все **O** |
+| `cubeos.dev` | `cubeos.cubic`, `cubeos.cubic-tools`, `cubeos.stew-publish` |
 
 ## Что меняется в коде из-за разбивки
 

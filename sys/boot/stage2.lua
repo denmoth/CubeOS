@@ -225,7 +225,7 @@ local function main()
         title = sys_.conf.title, notice = sys_.unclean and "The system was not shut down properly last time." or nil,
         busy = function(reason) ksys.busy(reason) end, cde = true })
     end or nil,
-    kernel = { rt = rt.cubic.rt, cubic = rt.cubic, pull = cckernel.pull },
+    kernel = { rt = rt.cubic.rt, cubic = rt.has_compiler and rt.cubic or nil, pull = cckernel.pull },
     power = power,
     bootlog = bootlog,
     input_log = ctx.input_log,

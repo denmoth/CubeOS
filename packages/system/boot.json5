@@ -15,6 +15,7 @@
     "cubeos.auth": "^0.5",
     "cubeos.cfs": "^0.5",
     "cubeos.console": "^0.5",
+    "cubeos.cpk": "^0.5",
     "cubeos.init": "^0.5",
     "cubeos.json": "^0.5",
     "cubeos.kernel": "^0.5",
@@ -33,6 +34,7 @@
     "sys/boot/stage1.lua",
     "sys/boot/stage2.lua",
     "sys/boot/runtime.lua",
+    "sys/boot/pkgload.lua",
     "sys/startup.lua",
   ],
 }

@@ -1,7 +1,7 @@
 // Meta package: all essential packages.
 {
   format: 1,
-  id: "cubeos-minimal",
+  id: "cubeos.minimal",
   name: "CubeOS minimal",
   version: "0.5.0",
   description: "Everything essential: boot, text mode, Cush shell and the package manager.",
