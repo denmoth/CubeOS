@@ -507,6 +507,9 @@ export class Stew:
         r.plan = p
         return r
 
+    def install_file_manifest(self, path):
+        return cpk.open_file(path, self.fs):manifest()
+
     def install_file(self, path, o=nil):
         a = cpk.open_file(path, self.fs)
         m = a:manifest()

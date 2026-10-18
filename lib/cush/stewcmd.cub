@@ -1,0 +1,285 @@
+# cush.stewcmd: команда stew (менеджер пакетов, docs/packages/09-stew-api.md). Регистрируется в cush.builtins.table_of при импорте;
+# описание в реестре cush.commands. Тот же API, что у магазина и установщика системы.
+
+import cush.builtins as builtins
+import stew
+import stew.pack as pack
+
+flags_of = builtins.flags_of
+
+def kb(n):
+    if n == nil:
+        return "?"
+    if n < 1024:
+        return n .. " B"
+    return string.format("%.1f KB", n / 1024)
+
+def breathe(sh):
+    sh.env.os.queueEvent("cush_breathe")
+    os.pullEvent("cush_breathe")
+
+export def make(sh):
+    return stew.new({fs: sh.env.fs, root: "/", yield: () => breathe(sh), log: (s) => sh:println(s)})
+
+def show_plan(sh, p):
+    for st in p.steps:
+        color = st.op == "remove" and "e" or (st.op == "update" and "4" or "5")
+        sh:write_color(color, string.format("  %-7s ", st.op))
+        line = st.id .. " " .. tostring(st.version ?? "")
+        if st.from != nil and st.op == "update":
+            line = st.id .. " " .. st.from .. " -> " .. tostring(st.version)
+        if st.op != "remove":
+            line = line .. "  " .. kb(st.size) .. "  [" .. tostring(st.source) .. ", " .. tostring(st.trust) .. ", " .. tostring(st.storage) .. "]"
+        if st.auto:
+            line = line .. "  (dependency)"
+        sh:println(line)
+    for id, perms in p.new_permissions:
+        sh:write_color("4", "  " .. id .. " asks for: " .. table.concat(perms, ", "))
+        sh:println("")
+    for w in p.warnings:
+        sh:write_color("4", "  warning: " .. w)
+        sh:println("")
+    for m in p.missing:
+        sh:write_color("e", "  not found: " .. m)
+        sh:println("")
+    for c in p.conflicts:
+        sh:write_color("e", "  conflict: " .. c)
+        sh:println("")
+    sh:println(string.format("  download %s, disk change %s, peak %s, free %s (reserve %s): %s", kb(p.download), kb(p.installed_delta), kb(p.peak),
+        kb(p.free), kb(p.reserve), p.fits and "fits" or "DOES NOT FIT"))
+
+def confirm(sh, yes):
+    if yes:
+        return true
+    sh:write_color("0", "Continue? [y/N] ")
+    answer = sh.env.read() ?? ""
+    return string.lower(string.sub(answer, 1, 1)) == "y"
+
+def progress(sh):
+    def on(stage, id, i, n):
+        if id != nil and stage != "verify":
+            sh:write_color("8", "  " .. stage .. " " .. id .. (n > 0 and (" (" .. i .. "/" .. n .. ")") or ""))
+            sh:println("")
+        breathe(sh)
+    return on
+
+def run_plan(sh, s, req, yes):
+    p = s:plan(req)
+    if len(p.steps) == 0 and len(p.missing) == 0 and len(p.conflicts) == 0:
+        sh:println("Nothing to do.")
+        return 0
+    show_plan(sh, p)
+    if not p.ok or not p.fits:
+        return 1
+    if not confirm(sh, yes):
+        sh:println("Cancelled.")
+        return 1
+    r = s:apply(p, {on_progress: progress(sh), ask: (q) => q.default})
+    if not r.ok:
+        sh:eprint("stew: " .. tostring(r.error) .. " (nothing was changed)")
+        return 1
+    sh:write_color("5", "Done.")
+    sh:println("")
+    return 0
+
+def opts_of(args):
+    out = {yes: false, storage: nil, options: {}, rest: []}
+    i = 1
+    while i <= len(args):
+        a = args[i]
+        if a == "-y" or a == "--yes":
+            out.yes = true
+        elif a == "--storage":
+            i += 1
+            out.storage = args[i]
+        elif a == "--opt":
+            i += 1
+            k, v = string.match(args[i] ?? "", "^([^=]+)=(.*)$")
+            if k != nil:
+                out.options[k] = v
+        else:
+            out.rest[len(out.rest) + 1] = a
+        i += 1
+    return out
+
+export def b_stew(sh, args):
+    cmd = args[1]
+    if cmd == nil or cmd == "help" or cmd == "--help":
+        sh:println("usage: stew list | search TEXT | info ID | install ID... | remove ID... | update [ID...] | plan ID... | refresh")
+        sh:println("       stew source list|add NAME KIND URL|remove NAME | pin ID | unpin ID | storage ID packed|unpacked")
+        sh:println("       stew verify [ID] | clean | recover | pack FOLDER | login | logout | publish FOLDER | publish --status")
+        return cmd == nil and 2 or 0
+    rest = []
+    for i in range[2, len(args)]:
+        rest[len(rest) + 1] = args[i]
+    o = opts_of(rest)
+    s = make(sh)
+    ok, code = pcall(() => _run(sh, s, cmd, o))
+    if not ok:
+        sh:eprint("stew: " .. tostring(code))
+        return 1
+    return code ?? 0
+
+def _run(sh, s, cmd, o):
+    r = o.rest
+    if cmd == "list":
+        inst = s:installed()
+        ids = []
+        for id, _ in inst:
+            ids[len(ids) + 1] = id
+        table.sort(ids)
+        total = 0
+        for id in ids:
+            rec = inst[id]
+            total += rec.size ?? 0
+            sh:println(string.format("%-30s %-10s %9s  %s%s%s", id, rec.version, kb(rec.size), rec.storage, rec.auto and ", dependency" or "",
+                rec.pinned and ", pinned" or ""))
+        sh:println(len(ids) .. " packages, " .. kb(total))
+        return 0
+    if cmd == "refresh":
+        res = s:refresh(nil, (name, i, n) => sh:println("  " .. name .. "..."))
+        for f in res.failed:
+            sh:eprint("  " .. f.name .. ": " .. f.error)
+        sh:println("Updated: " .. table.concat(res.ok, ", "))
+        return len(res.failed) == 0 and 0 or 1
+    if cmd == "search":
+        found = s:search(table.concat(r, " "))
+        for e in found:
+            mark = e.installed != nil and (e.update and "^" or "*") or " "
+            sh:write_color(e.installed != nil and "5" or "0", mark .. " " .. string.format("%-30s", e.id))
+            sh:println(" " .. tostring(e.latest ?? "") .. "  " .. e.description .. "  [" .. e.source .. "]")
+        sh:println(len(found) .. " found (* installed, ^ update available)")
+        return 0
+    if cmd == "info":
+        e = s:info(r[1] ?? "")
+        if e == nil:
+            sh:eprint("stew: no package " .. tostring(r[1]))
+            return 1
+        sh:println(e.name .. " (" .. e.id .. ")")
+        sh:println("  " .. e.description)
+        sh:println("  latest " .. tostring(e.latest) .. ", installed " .. tostring(e.installed ?? "no") .. ", source " .. tostring(e.source) .. " (" .. tostring(e.trust) .. ")")
+        v = e.latest != nil and e.versions[e.latest] or nil
+        if v != nil:
+            sh:println("  size " .. kb(v.size) .. ", installed " .. kb(v.installed_size))
+            deps = []
+            for d, range in v.depends ?? {}:
+                deps[len(deps) + 1] = d .. " " .. range
+            table.sort(deps)
+            if len(deps) > 0:
+                sh:println("  depends: " .. table.concat(deps, ", "))
+            perms = v.permissions ?? {}
+            if len(perms.need ?? []) + len(perms.want ?? []) > 0:
+                sh:println("  permissions: " .. table.concat(perms.need ?? [], ", ") .. " " .. table.concat(perms.want ?? [], ", "))
+        return 0
+    if cmd == "install":
+        files = {}
+        ids = []
+        for a in r:
+            if string.match(a, "%.cpk$") != nil:
+                path = sh:resolve(a)
+                m = s:install_file_manifest(path)
+                files[m.id] = path
+                ids[len(ids) + 1] = m.id
+            else:
+                ids[len(ids) + 1] = a
+        if len(ids) == 0:
+            sh:eprint("usage: stew install ID... (or a .cpk file)")
+            return 2
+        opts = {}
+        if len(ids) == 1:
+            opts[ids[1]] = o.options
+        return run_plan(sh, s, {install: ids, files: files, storage: o.storage, options: opts}, o.yes)
+    if cmd == "plan":
+        show_plan(sh, s:plan({install: r, storage: o.storage}))
+        return 0
+    if cmd == "remove":
+        return run_plan(sh, s, {remove: r}, o.yes)
+    if cmd == "update":
+        return run_plan(sh, s, {update: len(r) > 0 and r or true, storage: o.storage}, o.yes)
+    if cmd == "source":
+        sub = r[1]
+        if sub == "add":
+            s:source_add({name: r[2], kind: r[3], url: r[4], trust: "user"})
+            sh:println("Source " .. tostring(r[2]) .. " added. Run stew refresh.")
+        elif sub == "remove":
+            s:source_remove(r[2])
+            sh:println("Source " .. tostring(r[2]) .. " removed.")
+        else:
+            for src in s:sources():
+                sh:println(string.format("%-12s %-10s %-10s %s", src.name, src.kind, src.trust ?? "user", src.url ?? ""))
+        return 0
+    if cmd == "pin" or cmd == "unpin":
+        s:pin(r[1], cmd == "pin")
+        sh:println(r[1] .. (cmd == "pin" and " is pinned" or " is not pinned"))
+        return 0
+    if cmd == "storage":
+        s:set_storage(r[1], r[2])
+        sh:println(r[1] .. " is now " .. tostring(r[2]))
+        return 0
+    if cmd == "verify":
+        bad = 0
+        for v in s:verify(r[1]):
+            if not v.ok:
+                bad += 1
+                sh:eprint("  " .. v.id .. ": " .. tostring(v.error))
+        sh:println(bad == 0 and "All packages are intact." or (bad .. " damaged"))
+        return bad == 0 and 0 or 1
+    if cmd == "clean":
+        sh:println("Freed " .. kb(s:clean().freed))
+        return 0
+    if cmd == "recover":
+        sh:println("Recover: " .. s:recover().action)
+        return 0
+    if cmd == "pack":
+        if r[1] == nil:
+            sh:eprint("usage: stew pack FOLDER")
+            return 2
+        res = pack.build(sh.env.fs, sh:resolve(r[1]), {on_step: (rel) => breathe(sh)})
+        out = pack.write(sh.env.fs, res, sh:resolve(r[1]) .. "/build")
+        sh:println("Built /" .. out .. " (" .. kb(len(res.data)) .. ", installed " .. kb(res.manifest.installed_size) .. ")")
+        return 0
+    if cmd == "login" or cmd == "logout" or cmd == "publish":
+        import stew.publish as publish
+        args_ = [cmd]
+        for a in r:
+            args_[len(args_) + 1] = a
+        return publish.command(args_, publish_ctx(sh), (line) => sh:println(line))
+    sh:eprint("stew: unknown command " .. cmd .. " (stew help)")
+    return 2
+
+# контекст клиента публикации: http и хранилище ключа (в защищённой папке пользователя, docs/14-data-protection.md)
+def publish_ctx(sh):
+    key_path = sh:resolve("~/.config/stew/publish.key")
+    f = sh.env.fs
+    def get():
+        h = f.open(key_path, "r")
+        if h == nil:
+            return nil
+        k = h.readAll()
+        h.close()
+        return k
+    def set(k):
+        f.makeDir(f.getDir(key_path))
+        h = f.open(key_path, "w")
+        h.write(k)
+        h.close()
+    def clear():
+        if f.exists(key_path):
+            f.delete(key_path)
+    def post(url, body, headers):
+        h, err = http.post(url, body, headers)
+        if h == nil:
+            return nil, err
+        t = h.readAll()
+        h.close()
+        return t
+    def get_(url, headers):
+        h, err = http.get(url, headers)
+        if h == nil:
+            return nil, err
+        t = h.readAll()
+        h.close()
+        return t
+    return {fs: f, http_post: post, http_get: get_, gate: "https://cobble-gate.OWNER.workers.dev", key_store: {get: get, set: set, clear: clear}}
+
+builtins.table_of["stew"] = b_stew

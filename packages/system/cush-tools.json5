@@ -22,9 +22,11 @@
     "cubeos.hal": "^0.5",
     "cubeos.json": "^0.5",
     "cubeos.std": "^0.5",
+    "cubeos.stew": "^0.5",
     "cubeos.term": "^0.5",
     "cubeos.text": "^0.5",
     "cubeos.version": "^0.5",
   },
-  files: ["lib/cush/tools.cub", "lib/cush/tools2.cub"],
+  files: ["lib/cush/tools.cub", "lib/cush/tools2.cub",
+    "lib/cush/stewcmd.cub"],
 }

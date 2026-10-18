@@ -22,6 +22,7 @@ import cush.fetch as fetch
 import cush.help as help_mod
 import cush.tools as tools_mod
 import cush.tools2 as tools2_mod
+import cush.stewcmd as stewcmd_mod
 import cush.nettools as nettools_mod
 import i18n
 import clock

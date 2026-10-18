@@ -117,6 +117,11 @@ local function main()
   splash = ctx.splash or import("boot.splash").new({ caps = ctx.caps, term = term, assets = rt.source .. "/assets", title = version.full(), tr = tr })
   splash:open()
   local json5 = import("json5")
+  -- установленная система: недоделанная транзакция stew (пропало питание посреди установки) откатывается до запуска служб
+  if rt.installed then
+    local ok, err = pcall(function() import("stew").new({ fs = fs }):recover() end)
+    if not ok then print("stew recover: " .. tostring(err)) end
+  end
   load_boot_lang(json5, rt.source .. "/assets")
   -- веса по прошлой загрузке (финал «login» не считается: он идёт по своему времени)
   pcall(function()

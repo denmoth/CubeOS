@@ -108,6 +108,12 @@ msgstr "Положить файл в буфер терминала"
 msgid "Copies the file, or what comes through a pipe, so Ctrl+Shift+V pastes it. CC cannot put text into the Windows clipboard."
 msgstr "Копирует файл или то, что пришло по пайпу, чтобы Ctrl+Shift+V вставил. Класть текст в буфер Windows CC не умеет."
 
+msgid "Install, update and remove packages"
+msgstr "Установка, обновление и удаление пакетов"
+
+msgid "The package manager. 'stew refresh' downloads the catalogs, 'stew search' finds packages, 'stew install' shows the plan (what is downloaded, disk space, permissions) and installs everything or nothing. Packages come from Cobble, PineStore, folders or .cpk files."
+msgstr "Менеджер пакетов. 'stew refresh' скачивает каталоги, 'stew search' ищет пакеты, 'stew install' показывает план (что скачается, место на диске, разрешения) и ставит всё целиком или ничего. Пакеты берутся из Cobble, PineStore, папок и файлов .cpk."
+
 msgid "Pack files and folders into a .cbx archive"
 msgstr "Упаковать файлы и папки в архив .cbx"
 
@@ -683,6 +689,30 @@ msgstr "Скопировать файл"
 
 msgid "Copy a list"
 msgstr "Скопировать список"
+
+msgid "Do not ask for confirmation"
+msgstr "Не спрашивать подтверждения"
+
+msgid "packed (one compressed file) or unpacked (plain files, faster start)"
+msgstr "packed (один сжатый файл) или unpacked (обычные файлы, быстрее старт)"
+
+msgid "A package option as name=value"
+msgstr "Опция пакета в виде имя=значение"
+
+msgid "Download the package catalogs"
+msgstr "Скачать каталоги пакетов"
+
+msgid "Find games"
+msgstr "Найти игры"
+
+msgid "Install a package with its dependencies"
+msgstr "Установить пакет вместе с зависимостями"
+
+msgid "Update everything"
+msgstr "Обновить всё"
+
+msgid "Build myapp/build/<id>-<version>.cpk"
+msgstr "Собрать myapp/build/<id>-<version>.cpk"
 
 msgid "Strong compression (smaller, slower)"
 msgstr "Сильное сжатие (меньше, медленнее)"

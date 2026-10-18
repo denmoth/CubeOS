@@ -77,6 +77,13 @@ export const COMMANDS = {
         about: "Copies the file, or what comes through a pipe, so Ctrl+Shift+V pastes it. CC cannot put text into the Windows clipboard.",
         flags: [], examples: [["clip notes.txt", "Copy a file"], ["ls | clip", "Copy a list"]], see: ["paste"]},
 
+    stew: {cat: "system", summary: "Install, update and remove packages", usage: "stew command [args...]",
+        about: "The package manager. 'stew refresh' downloads the catalogs, 'stew search' finds packages, 'stew install' shows the plan (what is downloaded, disk space, permissions) and installs everything or nothing. Packages come from Cobble, PineStore, folders or .cpk files.",
+        flags: [["-y", "Do not ask for confirmation"], ["--storage", "packed (one compressed file) or unpacked (plain files, faster start)"],
+            ["--opt", "A package option as name=value"]],
+        examples: [["stew refresh", "Download the package catalogs"], ["stew search game", "Find games"], ["stew install denmoth.snake", "Install a package with its dependencies"],
+            ["stew update", "Update everything"], ["stew pack myapp", "Build myapp/build/<id>-<version>.cpk"]],
+        see: ["box"]},
     box: {cat: "files", summary: "Pack files and folders into a .cbx archive", usage: "box [-9] archive.cbx path...",
         about: "Puts the files and folders (with everything inside) into one compressed .cbx file. The fast method is the default: the strong one packs smaller but is slow in CC.",
         flags: [["-9", "Strong compression (smaller, slower)"]], examples: [["box backup.cbx ~/documents", "Pack your documents"]], see: ["unbox"]},
