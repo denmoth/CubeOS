@@ -1,0 +1,257 @@
+# stew.pack: сборка пакета .cpk из исходников (docs/packages/03-build.md). Работает без компилятора: пакет на Lua собирается
+# как есть, .cub компилируется, только если передан компилятор (opts.cubic, пакет cubeos.cubic), иначе понятная ошибка.
+#
+#   r = pack.build(fsys, base, {manifest_text: nil, cubic: nil, maps: true, block: 32768, list: nil, on_step: fn, source: nil})
+#       fsys: CraftOS-подобный fs; base: папка исходников (там же package.json5, если manifest_text не передан)
+#       r = {data, manifest (итоговая таблица), entry (запись для каталога), name ("<id>-<version>")}
+#   errs = pack.check_manifest(m)          список ошибок манифеста (пустой: всё верно)
+#   pack.glob_match(pattern, path)         "src/**", "lib/cfs/*.cub", "assets/x.cimg"
+#   pack.write(fsys, r, out_dir)           пишет <id>-<version>.cpk и .entry.json5
+
+import cpk
+import json5
+import semver
+import crc32 as crc
+
+export const FORMAT = 1
+export const VERSION = "1.0.0"
+export const KINDS = ["app", "lib", "service", "driver", "theme", "font", "lang", "data", "de", "meta", "tool", "legacy"]
+export const CATEGORIES = ["system", "desktop", "apps", "games", "dev", "network", "automation", "media", "assets"]
+export const PRIORITIES = ["essential", "recommended", "optional"]
+# уже сжатое: кладётся без сжатия
+RAW_EXT = {cimg: true, dfpwm: true, png: true, cpk: true, cbx: true}
+
+def _arr():
+    return setmetatable({}, json5.array_mt)
+
+def _in(list, v):
+    for x in list:
+        if x == v:
+            return true
+    return false
+
+export def check_manifest(m):
+    errs = []
+    def bad(text):
+        errs[len(errs) + 1] = text
+    if type(m) != "table":
+        return ["manifest is not an object"]
+    if m.format != FORMAT:
+        bad("format must be " .. FORMAT)
+    if type(m.id) != "string" or string.match(m.id, "^[a-z0-9][a-z0-9_-]*%.[a-z0-9][a-z0-9_.-]*$") == nil:
+        bad("id must look like author.name (lowercase letters, digits, - _ .)")
+    if type(m.name) != "string" or m.name == "":
+        bad("name is required")
+    if type(m.version) != "string" or not semver.valid(m.version):
+        bad("version must be SemVer like 1.2.0")
+    if not _in(KINDS, m.kind):
+        bad("kind must be one of: " .. table.concat(KINDS, ", "))
+    if m.kind != "meta" and m.category != nil and not _in(CATEGORIES, m.category):
+        bad("category must be one of: " .. table.concat(CATEGORIES, ", "))
+    if m.priority != nil and not _in(PRIORITIES, m.priority):
+        bad("priority must be essential, recommended or optional")
+    if m.lang != nil and m.lang != "lua" and m.lang != "cubic":
+        bad("lang must be lua or cubic")
+    for field in ["depends", "want"]:
+        deps = m[field]
+        if deps != nil:
+            if type(deps) != "table":
+                bad(field .. " must be an object {id: range}")
+            else:
+                for id, range in deps:
+                    if type(id) != "string" or type(range) != "string":
+                        bad(field .. ": every entry is \"id\": \"range\"")
+    if m.modules != nil and type(m.modules) != "table":
+        bad("modules must be an object {name: file}")
+    return errs
+
+# glob по частям пути: ** любое число папок (в том числе ни одной), * любые символы внутри части, ? один символ
+def _seg_pattern(seg):
+    out = ["^"]
+    for i in range[1, string.len(seg)]:
+        c = string.sub(seg, i, i)
+        if c == "*":
+            out[len(out) + 1] = ".*"
+        elif c == "?":
+            out[len(out) + 1] = "."
+        else:
+            out[len(out) + 1] = string.gsub(c, "%p", "%%%0")
+    out[len(out) + 1] = "$"
+    return table.concat(out)
+
+def _split(p):
+    out = []
+    for part in string.gmatch(p, "[^/]+"):
+        out[len(out) + 1] = part
+    return out
+
+def _match(gs, gi, ps, pi):
+    if gi > len(gs):
+        return pi > len(ps)
+    g = gs[gi]
+    if g == "**":
+        for k in range[pi, len(ps) + 1]:
+            if _match(gs, gi + 1, ps, k):
+                return true
+        return false
+    if pi > len(ps) or string.match(ps[pi], _seg_pattern(g)) == nil:
+        return false
+    return _match(gs, gi + 1, ps, pi + 1)
+
+export def glob_match(g, path):
+    return _match(_split(g), 1, _split(path), 1)
+
+# все файлы под base (относительные пути), без build/, .git и скрытых папок
+export def list_files(fsys, base):
+    out = []
+    def walk(dir, rel):
+        names = fsys.list(dir)
+        table.sort(names)
+        for name in names:
+            full = fsys.combine(dir, name)
+            r = rel == "" and name or (rel .. "/" .. name)
+            if fsys.isDir(full):
+                if not (rel == "" and name == "build") and string.sub(name, 1, 1) != ".":
+                    walk(full, r)
+            else:
+                out[len(out) + 1] = r
+    walk(base, "")
+    return out
+
+def _read(fsys, path):
+    h = fsys.open(path, "rb")
+    if h == nil:
+        error("cannot read " .. path, 0)
+    s = h.readAll() ?? ""
+    h.close()
+    return s
+
+def _hex(n):
+    return string.format("%08x", n)
+
+def _ext(path):
+    return string.lower(string.match(path, "%.([%w]+)$") ?? "")
+
+# имя модуля из пути файла внутри пакета: "lib/cfs/core.lua" -> "cfs.core" (только если файл под lib/)
+export def module_of(path):
+    rest = string.match(path, "^lib/(.+)%.lua$")
+    if rest == nil:
+        return nil
+    rest = string.gsub(rest, "/init$", "")
+    return string.gsub(rest, "/", ".")
+
+export def build(fsys, base, opts=nil):
+    o = opts ?? {}
+    text = o.manifest_text
+    if text == nil:
+        mpath = fsys.combine(base, "package.json5")
+        if not fsys.exists(mpath):
+            error("no package.json5 in " .. base, 0)
+        text = _read(fsys, mpath)
+    ok, m = pcall(json5.parse, text)
+    if not ok:
+        error("package.json5: " .. tostring(m), 0)
+    errs = check_manifest(m)
+    if len(errs) > 0:
+        error("package.json5: " .. table.concat(errs, "; "), 0)
+    all = o.list ?? list_files(fsys, base)
+    globs = m.files
+    picked = []
+    seen = {}
+    for rel in all:
+        take = false
+        if globs == nil:
+            take = rel != "package.json5"
+        else:
+            for g in globs:
+                if glob_match(g, rel):
+                    take = true
+                    break
+        if take and not seen[rel]:
+            seen[rel] = true
+            picked[len(picked) + 1] = rel
+    files = []
+    maps = []
+    listing = {}
+    installed = 0
+    has_cub = false
+    for rel in picked:
+        src = _read(fsys, fsys.combine(base, rel))
+        ext = _ext(rel)
+        out_path = rel
+        data = src
+        flags = 0
+        method = nil
+        if ext == "cub":
+            has_cub = true
+            if o.cubic == nil:
+                error("this package has Cubic sources (" .. rel .. "): building it needs the package cubeos.cubic", 0)
+            out_path = string.gsub(rel, "%.cub$", ".lua")
+            lua_ok, code, linemap = pcall(o.cubic.compile, src, rel, {minify: true, banner: false, release: true})
+            if not lua_ok or type(code) != "string":
+                error(rel .. ": " .. tostring(code), 0)
+            data = code
+            flags = cpk.F_LUA
+            if o.maps != false and linemap != nil:
+                maps[len(maps) + 1] = {path: out_path .. ".map", data: o.cubic.map_to_string(linemap, rel), flags: cpk.F_MAP}
+        elif ext == "lua":
+            fn, err = load(src, "=" .. rel, "t", {})
+            if fn == nil:
+                error(rel .. ": " .. tostring(err), 0)
+            flags = cpk.F_LUA
+        else:
+            flags = cpk.F_RES
+            if RAW_EXT[ext]:
+                method = cpk.STORE
+        files[len(files) + 1] = {path: out_path, data: data, flags: flags, method: method}
+        listing[out_path] = {size: len(data), crc: _hex(crc.crc32(data))}
+        installed += len(data)
+        if o.on_step != nil:
+            o.on_step(rel)
+    for mp in maps:
+        files[len(files) + 1] = mp
+    # модули: явные из манифеста (пути .cub переводятся в .lua) плюс файлы под lib/
+    modules = {}
+    for name, path in m.modules ?? {}:
+        modules[name] = string.gsub(path, "%.cub$", ".lua")
+    for f in files:
+        if f.flags == cpk.F_LUA:
+            name = module_of(f.path)
+            if name != nil and modules[name] == nil:
+                modules[name] = f.path
+    for name, path in modules:
+        if listing[path] == nil:
+            error("modules: " .. name .. " points to " .. path .. ", which is not in the package", 0)
+    if m.lang == nil:
+        m.lang = has_cub and "cubic" or "lua"
+    m.modules = modules
+    m.installed_size = installed
+    m.listing = listing
+    m.built_by = "stew " .. VERSION .. (o.cubic != nil and ("; cubic " .. tostring(o.cubic.VERSION)) or "")
+    if o.source != nil:
+        m.source = o.source
+    m.files = nil
+    mtext = json5.stringify(m, {json5: true, indent: 1})
+    data = cpk.build(mtext, files, {method: cpk.STRONG, block: o.block ?? 32768, on_block: o.on_block})
+    a = cpk.open(data)
+    entry = {
+        id: m.id, name: m.name, description: m.description ?? "", author: m.author ?? "", kind: m.kind,
+        category: m.category ?? "apps", priority: m.priority ?? "optional", homepage: m.homepage ?? "",
+        version: m.version, sha256: a:sha256_hex(), size: len(data), installed_size: installed,
+        depends: m.depends ?? {}, want: m.want ?? {}, conflicts: m.conflicts ?? _arr(),
+        provides: m.provides ?? _arr(),
+        permissions: m.permissions ?? {need: _arr(), want: _arr()},
+        cubeos: m.cubeos ?? {min: "0.5.0"},
+    }
+    return {data: data, manifest: m, entry: entry, name: m.id .. "-" .. m.version}
+
+export def write(fsys, r, out_dir):
+    fsys.makeDir(out_dir)
+    path = fsys.combine(out_dir, r.name .. ".cpk")
+    h = fsys.open(path, "wb")
+    h.write(r.data)
+    h.close()
+    h = fsys.open(fsys.combine(out_dir, r.name .. ".entry.json5"), "w")
+    h.write(json5.stringify(r.entry, {json5: true, indent: 2}) .. "\n")
+    h.close()
+    return path

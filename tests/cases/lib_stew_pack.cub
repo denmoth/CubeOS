@@ -1,0 +1,80 @@
+import t
+import cpk
+import stew.pack as pack
+eq = t.eq
+
+def err_of(f):
+    ok, e = pcall(f)
+    return not ok and tostring(e) or nil
+
+def put(path, text):
+    fs.makeDir(fs.getDir(path))
+    h = fs.open(path, "w")
+    h.write(text)
+    h.close()
+
+# шаблоны путей
+eq(pack.glob_match("src/**", "src/a/b.lua"), true, "** spans folders")
+eq(pack.glob_match("src/**", "src"), true, "** may be empty")
+eq(pack.glob_match("**/*.lua", "init.lua"), true, "**/ at the start matches the root")
+eq(pack.glob_match("lib/cfs/*.cub", "lib/cfs/core.cub"), true, "* inside a part")
+eq(pack.glob_match("lib/cfs/*.cub", "lib/cfs/x/core.cub"), false, "* does not cross /")
+eq(pack.glob_match("assets/icon.cimg", "assets/icon.cimg"), true, "a plain path")
+eq(pack.glob_match("a?c", "abc"), true, "? is one character")
+eq(pack.module_of("lib/cfs/core.lua"), "cfs.core", "module name from lib/")
+eq(pack.module_of("lib/cdk/init.lua"), "cdk", "init is the folder module")
+eq(pack.module_of("src/init.lua"), nil, "only lib/ gives module names")
+
+# манифест
+eq(len(pack.check_manifest({format: 1, id: "a.b", name: "B", version: "1.0.0", kind: "app"})), 0, "a minimal manifest is fine")
+errs = pack.check_manifest({format: 1, id: "Bad", name: "", version: "1", kind: "toy"})
+eq(len(errs), 4, "id, name, version and kind are reported")
+
+# пакет на Lua без компилятора
+base = "/tmp_pack/hello"
+fs.delete("/tmp_pack")
+put(base .. "/package.json5", "{ format: 1, id: \"denmoth.hello\", name: \"Hello\", version: \"1.0.0\", kind: \"app\", category: \"apps\",\n  modules: { hello: \"src/init.lua\" }, depends: { \"cubeos.cdk\": \"^0.5\" } }")
+put(base .. "/src/init.lua", "local M = {}\nfunction M.main() return 'hi' end\nreturn M\n")
+put(base .. "/assets/icon.cimg", "CIMG....")
+put(base .. "/build/old.cpk", "junk")
+r = pack.build(fs, base)
+eq(r.name, "denmoth.hello-1.0.0", "the output name")
+a = cpk.open(r.data)
+names = []
+for e in a:list():
+    names[len(names) + 1] = e.path
+table.sort(names)
+eq(names, ["assets/icon.cimg", "src/init.lua"], "build/ and the manifest itself are not packed")
+m = a:manifest()
+eq(m.modules.hello, "src/init.lua", "modules are kept")
+eq(m.lang, "lua", "lang is detected")
+eq(m.installed_size, len("CIMG....") + len("local M = {}\nfunction M.main() return 'hi' end\nreturn M\n"), "installed size")
+eq(m.listing["src/init.lua"].size > 0, true, "a listing with sizes")
+eq(r.entry.sha256, a:sha256_hex(), "the catalog entry has the archive hash")
+eq(r.entry.depends["cubeos.cdk"], "^0.5", "the entry keeps depends")
+eq(r.entry.size, len(r.data), "the entry has the archive size")
+eq(pack.build(fs, base).data == r.data, true, "the same sources give the same archive")
+out = pack.write(fs, r, "/tmp_pack/out")
+eq(fs.exists("/tmp_pack/out/denmoth.hello-1.0.0.entry.json5"), true, "the entry file is written")
+eq(fs.getSize(out), len(r.data), "the .cpk file is written")
+
+# синтаксическая ошибка в Lua ловится до упаковки
+put(base .. "/src/bad.lua", "function (")
+eq(string.find(err_of(() => pack.build(fs, base)) ?? "", "src/bad.lua", 1, true) != nil, true, "broken Lua is refused")
+fs.delete(base .. "/src/bad.lua")
+
+# Cubic без компилятора: понятная ошибка; с компилятором: готовый Lua и карта строк
+put(base .. "/lib/hello/util.cub", "export def twice(x):\n    return x * 2\n")
+eq(string.find(err_of(() => pack.build(fs, base)) ?? "", "needs the package cubeos.cubic", 1, true) != nil, true, "Cubic needs the compiler package")
+cubic = loadfile("/repo/src/cubic/init.lua")("/repo/src/cubic")
+r2 = pack.build(fs, base, {cubic: cubic})
+b = cpk.open(r2.data)
+eq(b:exists("lib/hello/util.lua"), true, ".cub becomes .lua")
+eq(b:exists("lib/hello/util.cub"), false, "no .cub in the package")
+eq(b:exists("lib/hello/util.lua.map"), true, "a line map is packed")
+eq(b:manifest().modules["hello.util"], "lib/hello/util.lua", "modules under lib/ get names")
+eq(b:manifest().lang, "cubic", "lang cubic")
+eq(cpk.has_flag(b.index["lib/hello/util.lua.map"].flags, cpk.F_MAP), true, "the map has its flag")
+eq(pack.build(fs, base, {cubic: cubic, maps: false}).data == r2.data, false, "maps can be left out")
+fs.delete("/tmp_pack")
+print("done")

@@ -1,0 +1,74 @@
+import t
+import cpk
+eq = t.eq
+
+def err_of(f):
+    ok, e = pcall(f)
+    return not ok and tostring(e) or nil
+
+manifest = "{ format: 1, id: \"test.pkg\", version: \"1.0.0\" }"
+big = string.rep("local x = 1\n", 2000)
+files = [
+    {path: "init.lua", data: "return {main: 1}", flags: cpk.F_LUA},
+    {path: "ui/view.lua", data: "return 'view'", flags: cpk.F_LUA},
+    {path: "big.lua", data: big, flags: cpk.F_LUA},
+    {path: "empty.txt", data: "", flags: 0},
+    {path: "icon.cimg", data: "IMGDATA", flags: cpk.F_RES, method: cpk.STORE},
+]
+data = cpk.build(manifest, files, {method: cpk.STRONG, block: 1024})
+eq(string.sub(data, 1, 4), "CPK\1", "signature and version")
+a = cpk.open(data, "t")
+eq(a.manifest_text, manifest, "the manifest is stored as is")
+eq(a:manifest().id, "test.pkg", "the manifest parses")
+eq(len(a:list()), 5, "five files")
+eq(a:read("ui/view.lua"), "return 'view'", "a small file")
+eq(a:read("big.lua") == big, true, "a big file (own block)")
+eq(a:read("empty.txt"), "", "an empty file")
+eq(a:read("icon.cimg"), "IMGDATA", "a stored resource")
+eq(a:read("nope"), nil, "a missing file is nil")
+eq(a:exists("init.lua"), true, "exists")
+eq(a:is_dir("ui"), true, "folders are implied by paths")
+eq(a:children(""), ["big.lua", "empty.txt", "icon.cimg", "init.lua", "ui"], "children of the root")
+eq(a:children("ui"), ["view.lua"], "children of a folder")
+eq(a:verify(), true, "verify passes")
+info = a:size_info()
+eq(info.raw, len(big) + 16 + 13 + 7, "raw size of all blocks")
+eq(info.stored < info.raw, true, "code is compressed")
+eq(len(a.blocks), 3, "small files share a block, the big file and the stored resource have their own")
+eq(len(a:sha256_hex()), 64, "sha256 in hex")
+
+# одинаковый вход даёт одинаковый архив
+eq(cpk.build(manifest, files, {method: cpk.STRONG, block: 1024}) == data, true, "builds are reproducible")
+
+# порча
+broken = string.sub(data, 1, len(data) - 40) .. "X" .. string.sub(data, len(data) - 38)
+eq(select(2, cpk.open(broken):verify()), "sha256 mismatch", "a changed byte is found")
+eq(err_of(() => cpk.open("ZIP!xxxx")), "cpk: not a .cpk package", "not a package")
+eq(err_of(() => cpk.open("CPK\2xxxx")), "cpk: package format 2 is newer than this system understands", "newer format")
+eq(err_of(() => cpk.build(manifest, [{path: "../x", data: ""}])), "cpk: bad path in package: ../x", "path escaping the package")
+eq(err_of(() => cpk.build(manifest, [{path: "a", data: ""}, {path: "a", data: ""}])), "cpk: file twice in package: a", "duplicate path")
+eq([cpk.safe_path("a/b.lua"), cpk.safe_path("/a"), cpk.safe_path("a//b"), cpk.safe_path("a/./b")], [true, false, false, false], "safe paths")
+
+# ленивая загрузка: блок распаковывается один раз и берётся из кэша
+cpk.cache_clear()
+reads = {n: 0}
+src = {size: len(data), read: (off, n) => rawset(reads, "n", reads.n + 1) and string.sub(data, off + 1, off + n)}
+b = cpk.Archive(src, "lazy")
+before = reads.n
+b:read("init.lua")
+b:read("ui/view.lua")
+eq(reads.n - before, 1, "two files of one block cost one read")
+
+# с диска
+path = "/tmp_cpk_test.cpk"
+h = fs.open(path, "wb")
+h.write(data)
+h.close()
+d = cpk.open_file(path)
+eq(d:read("ui/view.lua"), "return 'view'", "reading from a file")
+eq(d:verify(), true, "verify from a file")
+cpk.extract(d, fs, "/tmp_cpk_out")
+eq(fs.exists("/tmp_cpk_out/ui/view.lua"), true, "extract writes files")
+fs.delete(path)
+fs.delete("/tmp_cpk_out")
+print("done")
