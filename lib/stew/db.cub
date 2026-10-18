@@ -84,8 +84,8 @@ export class Db:
             error("stew: " .. p .. " is damaged: " .. tostring(v), 0)
         return v
 
-    def write_json(self, p, v):
-        self:write(p, json5.stringify(v, {json5: true, indent: 2}) .. "\n")
+    def write_json(self, p, v, pretty=false):
+        self:write(p, json5.stringify(v, {json5: true, indent: pretty and 2 or 0}) .. "\n")
 
     def load(self):
         st = self:read_json(VAR .. "/installed.json5", nil) ?? {format: 1, packages: {}}

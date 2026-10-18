@@ -190,6 +190,7 @@ class Txn:
             self:op("created", dir)
             self.fs.makeDir(self:p(dir))
             self.db:write(dir .. "/package.json5", a.manifest_text)
+            self.db:write_json(dir .. "/listing.json5", listing_of(a))
         for e in a:list():
             pl = dbm.placement(st.id, e.path)
             if pl != nil:
@@ -315,6 +316,14 @@ export def recover(s):
     undo(s, j)
     return {ok: true, action: "rolled back"}
 
+# путь -> {size, crc} для всех файлов архива (кроме карт строк)
+export def listing_of(a):
+    out = {}
+    for e in a:list():
+        if not cpk.has_flag(e.flags, cpk.F_MAP):
+            out[e.path] = {size: e.size, crc: string.format("%08x", crc.crc32(a:read(e.path)))}
+    return out
+
 export def verify(s, rec):
     if rec.storage == "packed":
         p = s.db:path(dbm.PKG .. "/" .. rec.id .. ".cpk")
@@ -322,11 +331,10 @@ export def verify(s, rec):
             return false, "package file is missing"
         return cpk.open_file(p, s.fs):verify()
     dir = dbm.PKG .. "/" .. rec.id
-    text = s.db:read(dir .. "/package.json5")
-    if text == nil:
-        return false, "package.json5 is missing"
-    m = json5.parse(text)
-    for path, info in m.listing ?? {}:
+    listing = s.db:read_json(dir .. "/listing.json5", nil)
+    if listing == nil:
+        return false, "listing.json5 is missing"
+    for path, info in listing:
         pl = dbm.placement(rec.id, path)
         full = pl != nil and pl.to or (dir .. "/" .. path)
         if pl == nil or not pl.cfg:
@@ -351,15 +359,16 @@ export def set_storage(s, id, mode):
         a = cpk.open_file(s.db:path(file), f)
         f.makeDir(s.db:path(dir))
         s.db:write(dir .. "/package.json5", a.manifest_text)
+        s.db:write_json(dir .. "/listing.json5", listing_of(a))
         for e in a:list():
             if dbm.placement(id, e.path) == nil:
                 s.db:write(dir .. "/" .. e.path, a:read(e.path))
         f.delete(s.db:path(file))
     elif mode == "packed":
         text = s.db:read(dir .. "/package.json5")
-        m = json5.parse(text)
+        listing = s.db:read_json(dir .. "/listing.json5", {})
         files = []
-        for path, _ in m.listing ?? {}:
+        for path, _ in listing:
             if dbm.placement(id, path) == nil:
                 flags = string.match(path, "%.lua$") != nil and cpk.F_LUA or cpk.F_RES
                 files[len(files) + 1] = {path: path, data: s.db:read(dir .. "/" .. path), flags: flags}

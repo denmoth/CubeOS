@@ -14,8 +14,9 @@ import stew.txn as txn
 import stew.pack as pack
 
 export const VERSION = "1.0.0"
-# без этих пакетов не прочитать сжатый пакет: всегда распакованы (вместе с их зависимостями)
-export const BOOT_SET = ["cubeos.boot", "cubeos.cubic-rt", "cubeos.cpk", "cubeos.stew"]
+# без этих пакетов не прочитать сжатый пакет: всегда распакованы (вместе с их зависимостями). Файлы загрузки (sys/boot) лежат
+# на своих местах при любом способе хранения.
+export const BOOT_SET = ["cubeos.cubic-rt", "cubeos.cpk"]
 export const DEFAULT_SOURCES = [
     {name: "cobble", kind: "cobble", url: "OWNER/cobble", trust: "official"},
     {name: "pinestore", kind: "pinestore", url: "https://pinestore.cc", trust: "community"},
@@ -128,6 +129,8 @@ export class Stew:
         p = self.db:path(dbm.VAR .. "/cache/" .. name .. ".json5")
         if self.fs.exists(p):
             self.fs.delete(p)
+        if self.memo != nil:
+            self.memo[name] = nil
 
     def source(self, name):
         for s in self:sources():
@@ -146,15 +149,25 @@ export class Stew:
                 ok, data = pcall(() => self:adapter(src.kind).refresh(src, self:ctx()))
                 if ok and type(data) == "table":
                     self.db:write_json(dbm.VAR .. "/cache/" .. src.name .. ".json5", {fetched: os.epoch("utc"), packages: data.packages ?? {}})
+                    self.memo = self.memo ?? {}
+                    self.memo[src.name] = data.packages ?? {}
                     res.ok[len(res.ok) + 1] = src.name
                 else:
                     res.failed[len(res.failed) + 1] = {name: src.name, error: tostring(data)}
                 self.yield()
         return res
 
+    # разобранные каталоги держатся в памяти: разбор большого каталога долгий (PineStore почти 200 проектов)
     def cached(self, name):
+        self.memo = self.memo ?? {}
+        hit = self.memo[name]
+        if hit != nil:
+            return hit
         c = self.db:read_json(dbm.VAR .. "/cache/" .. name .. ".json5", nil)
-        return c != nil and (c.packages ?? {}) or {}
+        pkgs = c != nil and (c.packages ?? {}) or {}
+        self.memo[name] = pkgs
+        self.yield()
+        return pkgs
 
     def installed(self):
         return self.db:load().packages
@@ -325,8 +338,11 @@ export class Stew:
             order[len(order) + 1] = id
             for dep in _keys(vr.depends):
                 need(dep, vr.depends[dep], true, id)
-            for w in _keys(vr.want):
-                wants[len(wants) + 1] = {id: w, range: vr.want[w], by: id}
+            # want: «поставить, если есть место», только у того, что попросили явно (у подтянутых зависимостей нет: иначе
+            # минимальный набор тянул бы рабочий стол через want загрузки)
+            if not auto:
+                for w in _keys(vr.want):
+                    wants[len(wants) + 1] = {id: w, range: vr.want[w], by: id}
 
         for spec in req.install ?? []:
             id, ver = string.match(spec, "^([^@]+)@(.+)$")

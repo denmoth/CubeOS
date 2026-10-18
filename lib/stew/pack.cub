@@ -193,7 +193,9 @@ export def build(fsys, base, opts=nil):
     seen = {}
     for rel in all:
         take = false
-        if globs == nil:
+        if m.kind == "meta":
+            take = false
+        elif globs == nil:
             take = rel != "package.json5"
         else:
             for g in globs:
@@ -259,7 +261,6 @@ export def build(fsys, base, opts=nil):
         m.lang = has_cub and "cubic" or "lua"
     m.modules = modules
     m.installed_size = installed
-    m.listing = listing
     m.built_by = "stew " .. VERSION .. (o.cubic != nil and ("; cubic " .. tostring(o.cubic.VERSION)) or "")
     if o.source != nil:
         m.source = o.source
