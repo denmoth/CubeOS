@@ -16,7 +16,9 @@
 # Подшаг 5: место «Network» (сопряжённые компьютеры, их общие папки, подключение одним кликом: netd mount), «Share on the network»
 # и «Stop sharing» в меню папки (netd share), Ctrl+P свойства (размер папки, права, действующее правило; «Change access» пишет своё
 # правило через permd). Не администратору действие подтверждается именем и паролем администратора (окно в духе UAC).
-# Настройки $cfg/axo.conf: show_hidden, show_places, show_info, confirm_trash, confirm_delete, minimal.
+# Настройки $cfg/axo.conf: show_hidden, show_places, show_info, confirm_trash, confirm_delete, minimal, ext_marks.
+# Расширители (подшаг 6.4, служба extd): точка на значке у файлов расширителя (ext_marks), серые строки, пока он не на связи;
+# «Extend with...» у папки, «Detach» у расширенной папки, окно «Extenders...» в меню и на Ctrl+E (список, как диск, снять).
 
 import cdk
 import cfs.path as paths
@@ -54,6 +56,7 @@ export class Axo:
         self.conf = self:_read_conf()
         self.show_hidden = self.conf.show_hidden == true
         self.minimal = self.conf.minimal == true
+        self.ext_marks = self.conf.ext_marks != false
         start = ctx.args != nil and ctx.args[1] or "$home"
         self.tabs = [self:_new_tab(self:_expand(start))]
         self.cur = 1
@@ -215,9 +218,17 @@ export class Axo:
 
     def _row_for(self, e, base, now, cut, name=nil):
         kind = types.kind(e, base)
-        return {cells: {name: name ?? e.name, size: e.type == "dir" and "" or types.human_size(e.size), modified: types.date_text(e.modified, now)},
+        row = {cells: {name: name ?? e.name, size: e.type == "dir" and "" or types.human_size(e.size), modified: types.date_text(e.modified, now)},
             icon: types.icon(kind), icon_color: self:_kind_color(kind), dim: e.hidden or cut[paths.join(base, name ?? e.name)] == true, data: e,
             kind: kind}
+        # лежит на расширителе: точка на значке; расширитель не на связи: строка серая, «away» вместо даты
+        if e.layer == "ext":
+            if e.offline:
+                row.dim = true
+                row.cells.modified = "away"
+            if self.ext_marks or e.offline:
+                row.badge = e.offline and self.ui.style.dim or self.ui.style.accent
+        return row
 
     # перечитать папку панели i (по умолчанию активной); cursor_name: на каком имени поставить курсор
     def refresh_pane(self, i, cursor_name=nil):
@@ -547,6 +558,9 @@ export class Axo:
             lines[len(lines) + 1] = ["Hidden", "dim"]
         if e.readonly:
             lines[len(lines) + 1] = ["Read only", "dim"]
+        if e.layer == "ext" or e.layer == "both":
+            lines[len(lines) + 1] = [(e.layer == "both" and "Also on " or "On ") .. tostring(e.label ?? "extender") .. (e.offline and " (away)" or ""),
+                e.offline and "dim" or "accent"]
         img = nil
         if row.kind == "image":
             img = self:_picture(self:_full(e), self.info.w - 8, 44)
@@ -758,6 +772,7 @@ export class Axo:
             {text: "Information panel", icon: "info", shortcut: "Ctrl+I", checked: self.info.visible, on_select: (it) => me:toggle_info()},
             {text: "Show hidden files", icon: "eye", shortcut: "Ctrl+H", checked: self.show_hidden, on_select: (it) => me:toggle_hidden()},
             {separator: true},
+            {text: "Extenders...", icon: "drive", shortcut: "Ctrl+E", on_select: (it) => me:extenders()},
             {text: "Settings...", icon: "gear", on_select: (it) => me:settings()},
             {text: "About Axo", icon: "axo", on_select: (it) => cdk.message(me.ui, "Axo", "Axo (Axolotl) file manager for CubeOS.")}]
         cdk.menu(self.ui, items, b.x + b.w - 118, b.y + b.h + 1)
@@ -772,6 +787,7 @@ export class Axo:
         c_trash = cdk.checkbox("Ask before moving to trash", {checked: self.conf.confirm_trash != false})
         c_delete = cdk.checkbox("Ask before deleting forever", {checked: self.conf.confirm_delete != false})
         c_min = cdk.checkbox("Minimal mode (no animations)", {checked: self.minimal})
+        c_marks = cdk.checkbox("Mark files on extenders", {checked: self.ext_marks})
         def done(save):
             ui:close_layer(card)
             ui:set_focus(me.table)
@@ -788,7 +804,11 @@ export class Axo:
             me.minimal = c_min.checked
             me.tabbar.animate = not me.minimal
             me:_save("minimal", me.minimal)
-        card = cdk.card({padding: 6, gap: 3}, [cdk.label("Axo settings", {variant: "accent"}), c_places, c_info, c_hidden, c_trash, c_delete, c_min,
+            if c_marks.checked != me.ext_marks:
+                me.ext_marks = c_marks.checked
+                me:_save("ext_marks", me.ext_marks)
+                me:refresh()
+        card = cdk.card({padding: 6, gap: 3}, [cdk.label("Axo settings", {variant: "accent"}), c_places, c_info, c_hidden, c_trash, c_delete, c_min, c_marks,
             cdk.row({gap: 4}, [cdk.spacer(), cdk.button("Cancel", {on_click: (b) => done(false)}),
                 cdk.button("Save", {variant: "primary", on_click: (b) => done(true)})])])
         card.on_escape = () => done(false)
@@ -816,6 +836,8 @@ export class Axo:
             self:start_search()
         elif k == keys.p and ev.ctrl:
             self:properties()
+        elif k == keys.e and ev.ctrl:
+            self:extenders()
         elif k == keys.i and ev.ctrl:
             self:toggle_info()
         elif k == keys.f9:
@@ -1000,6 +1022,7 @@ export class Axo:
             items[len(items) + 1] = {separator: true}
             if e.type == "dir":
                 items[len(items) + 1] = {text: "Share on the network...", icon: "netfolder", on_select: (it) => me:share_dialog(e)}
+                items[len(items) + 1] = self:_ext_item(self:_full(e))
             items[len(items) + 1] = {text: "Properties", icon: "info", shortcut: "Ctrl+P", on_select: (it) => me:properties()}
         else:
             items = [{text: "New folder", icon: "folder", shortcut: "Ctrl+Shift+N", on_select: (it) => me:new_folder()},
@@ -1007,6 +1030,9 @@ export class Axo:
                 {separator: true},
                 {text: "Show hidden files", icon: "eye", shortcut: "Ctrl+H", checked: self.show_hidden, on_select: (it) => me:toggle_hidden()},
                 {text: "Refresh", icon: "restart", shortcut: "F5", on_select: (it) => me:refresh()}]
+            if string.sub(self:tab().path, 1, 8) != "network:":
+                items[len(items) + 1] = {separator: true}
+                items[len(items) + 1] = self:_ext_item(self:tab().path)
         cdk.menu(self.ui, items, ev.x, ev.y)
 
     def _open_tab(self, e):
@@ -1301,6 +1327,177 @@ export class Axo:
         card.on_escape = () => done(false)
         ui:open_layer(card, {center: true, modal: true, dismiss: false})
         ui:set_focus(name)
+
+    # ------------------------------------------------------------ расширители (служба extd)
+
+    def _err_text(self, err):
+        return string.gsub(tostring(err), "^.-: ", "", 1)
+
+    # точка расширителя, которой является папка path: (расширитель, точка) или nil
+    def _ext_point(self, path, list=nil):
+        for x in list ?? (self:_rpc("extd", "list") ?? []):
+            for p in x.points ?? []:
+                if p.path == path:
+                    return x, p
+        return nil, nil
+
+    def _ext_item(self, path):
+        let me = self
+        x, p = self:_ext_point(path)
+        if x != nil:
+            return {text: "Detach " .. tostring(x.label), icon: "drive", on_select: (it) => me:ext_detach(x, path)}
+        return {text: "Extend with...", icon: "drive", on_select: (it) => me:extend_dialog(path)}
+
+    # куда можно расширить: известные расширители на связи и подключённые устройства без метки
+    def _ext_choices(self, list):
+        out = []
+        for x in list:
+            if x.online:
+                out[len(out) + 1] = {text: tostring(x.label), icon: "drive", detail: x.free != nil and (types.human_size(x.free) .. " free") or "",
+                    kind: "ext", id: x.id, label: x.label}
+        for s in self:_rpc("extd", "sources") ?? []:
+            if s.id == nil and not s.readonly:
+                out[len(out) + 1] = {text: paths.basename(s.path), icon: "drive", detail: "new", color: self.ui.style.dim, kind: "src", path: s.path}
+        return out
+
+    # сделать устройство расширителем (имя спрашивается), потом then(id, label)
+    def _ext_make(self, it, label, then):
+        let me = self
+        name = label != "" and label or it.text
+        def made(res, err):
+            if err != nil:
+                me:_note("Cannot make an extender: " .. me:_err_text(err))
+                return
+            then(res.id, res.label)
+        self:_admin_call("extd", "make", {source: it.path, label: name}, "Make \"" .. it.text .. "\" a storage extender named \"" .. name .. "\".", made)
+
+    def extend_dialog(self, path):
+        list, err = self:_rpc("extd", "list")
+        if list == nil:
+            self:_note("The extender service is not running")
+            return
+        choices = self:_ext_choices(list)
+        if len(choices) == 0:
+            self:_note("Connect a floppy disk or a network folder first")
+            return
+        ui = self.ui
+        let me = self
+        card = nil
+        lv = cdk.list_view({items: choices, width: 160, height: math.min(60, 4 + len(choices) * 11)})
+        name = cdk.text_input({width: 160, placeholder: "Name for a new extender"})
+        prefer = cdk.checkbox("New files stay here while there is room", {checked: false})
+        def done(ok):
+            ui:close_layer(card)
+            ui:set_focus(me.table)
+            if not ok or lv.selected == 0:
+                return
+            it = choices[lv.selected]
+            def attach(id, label):
+                def attached(res, err):
+                    if err != nil:
+                        me:_note("Cannot extend: " .. me:_err_text(err))
+                        return
+                    me:_note(paths.basename(path) .. " is extended with " .. tostring(label))
+                    me:refresh()
+                me:_admin_call("extd", "add_point", {id: id, path: path, mode: "folder", priority: prefer.checked and "local" or "extender"},
+                    "Extend \"" .. paths.basename(path) .. "\" with " .. tostring(label) .. ".", attached)
+            if it.kind == "src":
+                me:_ext_make(it, name.text, attach)
+            else:
+                attach(it.id, it.label)
+        lv.on_activate = (i, it) => done(true)
+        card = cdk.card({padding: 6, gap: 3}, [cdk.row({gap: 4, align: "center"}, [cdk.icon("drive", {color: ui.style.accent}),
+                cdk.label("Extend \"" .. paths.basename(path) .. "\"", {variant: "accent"})]),
+            cdk.label("New files go to the extender.", {variant: "dim"}),
+            lv, name, prefer,
+            cdk.row({gap: 4}, [cdk.spacer(), cdk.button("Cancel", {on_click: (b) => done(false)}),
+                cdk.button("Extend", {variant: "primary", icon: "drive", on_click: (b) => done(true)})])])
+        card.on_escape = () => done(false)
+        ui:open_layer(card, {center: true, modal: true, dismiss: false})
+        ui:set_focus(lv)
+
+    def ext_detach(self, x, path, after=nil):
+        let me = self
+        def removed(res, err):
+            me:_note(err == nil and (tostring(x.label) .. " detached from " .. paths.basename(path)) or ("Cannot detach: " .. me:_err_text(err)))
+            me:refresh()
+            if after != nil:
+                after()
+        def go(v):
+            if v == true:
+                me:_admin_call("extd", "remove_point", {id: x.id, path: path}, "Detach " .. tostring(x.label) .. " from \"" .. path .. "\".", removed)
+        cdk.dialog(self.ui, {title: "Detach " .. tostring(x.label) .. "?", icon: "drive",
+            text: "Its files leave with it; files on this computer stay.",
+            buttons: [{text: "Cancel", value: false}, {text: "Detach", variant: "danger", value: true}], on_result: go})
+
+    # окно всех расширителей: что подключено, куда, сколько места; открыть, подключить как диск, снять
+    def extenders(self):
+        list, err = self:_rpc("extd", "list")
+        if list == nil:
+            self:_note("The extender service is not running")
+            return
+        ui = self.ui
+        st = ui.style
+        let me = self
+        card = nil
+        items = []
+        for x in list:
+            state = x.online and (x.free != nil and (types.human_size(x.free) .. " free") or "connected") or "away"
+            items[len(items) + 1] = {text: tostring(x.label), icon: "drive", detail: state, color: x.online and st.text or st.dim, kind: "ext", x: x}
+            for p in x.points ?? []:
+                items[len(items) + 1] = {text: "  " .. (self:_alias(p.path) ?? p.path), icon: p.mode == "disk" and "drive" or "folder",
+                    detail: p.mode == "disk" and "disk" or (p.priority == "local" and "here first" or ""), color: x.online and st.text or st.dim,
+                    kind: "point", x: x, point: p}
+        for it in self:_ext_choices(list):
+            if it.kind == "src":
+                it.text = it.text .. " (not an extender)"
+                items[len(items) + 1] = it
+        if len(items) == 0:
+            items = [{text: "No extenders. Connect a floppy disk or a network folder.", color: st.dim, kind: "none"}]
+        lv = cdk.list_view({items: items, width: 190, height: math.min(90, 4 + len(items) * 11)})
+        def close():
+            ui:close_layer(card)
+            ui:set_focus(me.table)
+        def picked():
+            return lv.selected > 0 and items[lv.selected] or nil
+        def open():
+            it = picked()
+            if it != nil and it.kind == "point":
+                close()
+                me:go(it.point.path)
+        def as_disk():
+            it = picked()
+            if it == nil or it.kind == "none" or it.kind == "point":
+                return
+            close()
+            def attach(id, label):
+                point = "/cubeos/mnt/" .. string.gsub(tostring(label), "[^%w%-_]", "_")
+                def done(res, err):
+                    if err != nil:
+                        me:_note("Cannot attach: " .. me:_err_text(err))
+                        return
+                    me:go(point)
+                me:_admin_call("extd", "add_point", {id: id, path: point, mode: "disk"}, "Attach " .. tostring(label) .. " as a disk.", done)
+            if it.kind == "src":
+                me:_ext_make(it, "", attach)
+            else:
+                attach(it.x.id, it.x.label)
+        def detach():
+            it = picked()
+            if it != nil and it.kind == "point":
+                close()
+                me:ext_detach(it.x, it.point.path)
+        lv.on_activate = (i, it) => open()
+        card = cdk.card({padding: 6, gap: 3}, [cdk.row({gap: 4, align: "center"}, [cdk.icon("drive", {color: st.accent}),
+                cdk.label("Storage extenders", {variant: "accent"})]),
+            cdk.label("Extra space from floppies and other PCs.", {variant: "dim"}), lv,
+            cdk.row({gap: 4}, [cdk.button("Open", {icon: "folder", on_click: (b) => open()}),
+                cdk.button("As a disk", {icon: "drive", on_click: (b) => as_disk()}),
+                cdk.button("Detach", {variant: "danger", on_click: (b) => detach()}), cdk.spacer(),
+                cdk.button("Close", {on_click: (b) => close()})])])
+        card.on_escape = () => close()
+        ui:open_layer(card, {center: true, modal: true, dismiss: false})
+        ui:set_focus(lv)
 
     # ------------------------------------------------------------ свойства
 

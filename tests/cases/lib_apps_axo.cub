@@ -289,4 +289,29 @@ key(keys.up, true)
 key(keys.up, true)
 settle(20)
 
+# ---------------------------------------------------------------- подшаг 6.4: расширитель в списке
+import cfs.extend as extend
+dev = cfs.memory()
+dev:write("/level.dat", "lvl")
+xlink = {up: true}
+extend.over(fsys, home .. "/games", dev, {label: "cube-2", online: () => xlink.up})
+key(keys.l, true)
+key(keys.a, true)
+for ch in ["$", "h", "o", "m", "e", "/", "g", "a", "m", "e", "s"]:
+    k:feed("char", ch)
+key(keys.enter)
+settle(20)
+def row_named(n):
+    for r in app.table.rows:
+        if r.data.name == n:
+            return r
+    return nil
+eq([app:tab().path, names_now()], [home .. "/games", ["snake", "New folder", "level.dat", "data.zzq"]], "an extended folder lists both layers")
+eq([row_named("level.dat").badge != nil, row_named("snake").badge], [true, nil], "files on the extender get a mark, own ones do not")
+xlink.up = false
+key(keys.f5)
+settle(10)
+eq([row_named("level.dat").dim, row_named("level.dat").cells.modified], [true, "away"], "while the extender is away its files are grey")
+xlink.up = true
+
 print("done")

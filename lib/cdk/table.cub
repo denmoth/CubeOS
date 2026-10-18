@@ -8,7 +8,7 @@
 # Выбор: клик, Ctrl+клик добавляет и убирает, Shift+клик и Shift+стрелки выделяют подряд, Ctrl+A всё. Двойной клик и Enter:
 # on_activate (ev.ctrl: с Ctrl). Буквы прыгают к строке, имя которой начинается с набранного (сброс через секунду). Колесо и полоса
 # справа листают, PageUp/PageDown, Home/End. Клик по заголовку столбца сортирует (повторно в обратную сторону), стрелка у заголовка.
-# Строка с dim: true рисуется тускло (скрытые файлы). Рисуются только видимые строки.
+# Строка с dim: true рисуется тускло (скрытые файлы); badge: цвет точки в углу значка. Рисуются только видимые строки.
 
 import cdk.widget as widget
 import cdk.icons as icons
@@ -248,6 +248,12 @@ export class Table(widget.Widget):
                     if row.dim:
                         ic = st.dim
                     icons.draw(s, row.icon, x + 3, y + math.floor((rh - 9) / 2), ic, st:darker(ic))
+                    if row.badge != nil:
+                        # метка в углу значка (например, файл на расширителе): точка с тёмной обводкой
+                        bx = x + 10
+                        bdy = y + math.floor((rh - 9) / 2) + 5
+                        s:fill_rect(bx - 1, bdy - 1, 5, 5, self.sel[i] and (self.focused and st.sel or st.ctrl) or st.bg)
+                        s:fill_rect(bx, bdy, 3, 3, row.badge)
                     tx = x + 15
                 room = x + w - tx - 3
                 if room > st.fw:

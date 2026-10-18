@@ -204,3 +204,45 @@ settle(5)
 press(keys.p, true)
 settle(10)
 dump(wm, "ui_axo_11_props")
+# расширитель: папка игр расширена дискетой cube-2 (точки у её файлов), окно расширителей, «Extend with...»
+import cfs.extend as extend
+press(256)
+dev = cfs.memory({limit: 90000})
+dev:mkdir("/minecraft")
+dev:write("/level.dat", string.rep("x", 6200))
+dev:write("/tetris.lua", string.rep("x", 1800))
+extend.over(fsys, home .. "/games", dev, {label: "cube-2"})
+xh = {}
+xh.list = (q, f) => [{id: "a1b2", label: "cube-2", online: true, free: 81000, points: [{path: home .. "/games", mode: "folder", priority: "extender"}]},
+    {id: "c3d4", label: "old-disk", online: false, points: [{path: "/cubeos/mnt/old-disk", mode: "disk"}]}]
+xh.sources = (q, f) => [{path: "/cubeos/drives/floppy/cube-2", name: "floppy", label: "cube-2", id: "a1b2", readonly: false, free: 81000},
+    {path: "/cubeos/drives/floppy/disk-7", name: "floppy", readonly: false, free: 120000}]
+k:spawn(service("extd", xh), [], {name: "extd"})
+press(keys.l, true)
+press(keys.a, true)
+for ch in ["$", "h", "o", "m", "e", "/", "g", "a", "m", "e", "s"]:
+    k:feed("char", ch)
+press(keys.enter)
+settle(20)
+press(keys.i, true)
+press(keys.down)
+press(keys.down)
+settle(10)
+dump(wm, "ui_axo_12_extended")
+press(keys.i, true)
+press(keys.e, true)
+settle(20)
+dump(wm, "ui_axo_13_extenders")
+press(256)
+press(keys.backspace)
+settle(20)
+w = wm.windows[1]
+k:feed("mouse_click", 2, w:content_x() + 120, w:content_y() + 40)
+k:feed("mouse_up", 2, w:content_x() + 120, w:content_y() + 40)
+settle(10)
+press(keys.up)
+settle(5)
+dump(wm, "ui_axo_14_menu_extend")
+press(keys.enter)
+settle(20)
+dump(wm, "ui_axo_15_extend_with")
