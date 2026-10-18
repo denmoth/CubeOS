@@ -1,0 +1,18 @@
+// System package cubeos.rescue (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.rescue",
+  name: "Rescue",
+  version: "0.5.0",
+  description: "Rescue mode and boot from a disk.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "lua",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.crypto": "^0.5",
+  },
+  files: ["sys/boot/rescue.lua", "sys/boot/diskboot.lua"],
+}

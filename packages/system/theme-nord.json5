@@ -1,0 +1,20 @@
+// System package cubeos.theme-nord (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.theme-nord",
+  name: "Theme Nord",
+  version: "0.5.0",
+  description: "Nord desktop theme.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "theme",
+  lang: "lua",
+  category: "assets",
+  priority: "optional",
+  files: ["assets/themes/nord.theme"],
+  contributes: {
+    themes: [
+      { id: "nord", file: "assets/themes/nord.theme" },
+    ],
+  },
+}

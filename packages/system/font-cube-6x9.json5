@@ -1,0 +1,20 @@
+// System package cubeos.font-cube-6x9 (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.font-cube-6x9",
+  name: "Font cube-6x9",
+  version: "0.5.0",
+  description: "The cube-6x9 bitmap font.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "font",
+  lang: "lua",
+  category: "assets",
+  priority: "essential",
+  files: ["assets/fonts/cube-6x9.font", "assets/fonts/CREDITS"],
+  contributes: {
+    fonts: [
+      { id: "cube-6x9", file: "assets/fonts/cube-6x9.font" },
+    ],
+  },
+}

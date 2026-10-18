@@ -1,0 +1,20 @@
+// System package cubeos.cde-wallpaper (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.cde-wallpaper",
+  name: "CDE wallpaper",
+  version: "0.5.0",
+  description: "Wallpaper drawing, including live wallpapers.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "de",
+  lang: "cubic",
+  category: "desktop",
+  priority: "recommended",
+  depends: {
+    "cubeos.cde-theme": "^0.5",
+    "cubeos.cgl": "^0.5",
+    "cubeos.cgl-image": "^0.5",
+  },
+  files: ["lib/cde/wallpaper.cub", "lib/cde/wallpaper_live.cub"],
+}

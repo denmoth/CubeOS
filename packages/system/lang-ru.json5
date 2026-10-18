@@ -1,0 +1,20 @@
+// System package cubeos.lang-ru (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.lang-ru",
+  name: "Language Russian",
+  version: "0.5.0",
+  description: "Russian translation and keyboard layout.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lang",
+  lang: "lua",
+  category: "assets",
+  priority: "optional",
+  files: ["assets/lang/ru/*"],
+  contributes: {
+    langs: [
+      { id: "ru", dir: "assets/lang/ru" },
+    ],
+  },
+}

@@ -1,0 +1,18 @@
+// System package cubeos.greeter (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.greeter",
+  name: "Text greeter",
+  version: "0.5.0",
+  description: "Text mode login.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.auth": "^0.5",
+  },
+  files: ["lib/boot/greeter.cub"],
+}

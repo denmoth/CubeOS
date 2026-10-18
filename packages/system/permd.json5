@@ -1,0 +1,26 @@
+// System package cubeos.permd (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.permd",
+  name: "Permission service",
+  version: "0.5.0",
+  description: "Permission checks for programs.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "service",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.cfs": "^0.5",
+    "cubeos.cfs-base": "^0.5",
+    "cubeos.json": "^0.5",
+    "cubeos.rpc": "^0.5",
+  },
+  files: ["lib/svc/permd.cub", "sys/services/permd.conf"],
+  contributes: {
+    services: [
+      { name: "permd", module: "svc.permd", conf: "sys/services/permd.conf" },
+    ],
+  },
+}

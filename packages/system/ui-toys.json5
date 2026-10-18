@@ -1,0 +1,19 @@
+// System package cubeos.ui-toys (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.ui-toys",
+  name: "UI toys",
+  version: "0.5.0",
+  description: "Demo widgets for the text UI.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "optional",
+  depends: {
+    "cubeos.text": "^0.5",
+    "cubeos.ui": "^0.5",
+  },
+  files: ["lib/ui/toys.cub"],
+}

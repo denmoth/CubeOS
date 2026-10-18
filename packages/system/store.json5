@@ -1,0 +1,21 @@
+// System package cubeos.store (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+// Planned: the code does not exist yet; the manifest fixes the id, priority and dependencies.
+{
+  format: 1,
+  id: "cubeos.store",
+  name: "Store",
+  version: "0.5.0",
+  description: "Package store. Planned: step 7, no code yet.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "app",
+  lang: "cubic",
+  category: "apps",
+  priority: "recommended",
+  depends: {
+    "cubeos.app-kit": "^0.5",
+    "cubeos.cdk": "^0.5",
+    "cubeos.stew": "^0.5",
+  },
+  files: [],
+}

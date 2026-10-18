@@ -1,0 +1,19 @@
+// System package cubeos.cde-terminal (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.cde-terminal",
+  name: "CDE terminal",
+  version: "0.5.0",
+  description: "Terminal window for the desktop.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "de",
+  lang: "cubic",
+  category: "desktop",
+  priority: "recommended",
+  depends: {
+    "cubeos.cde": "^0.5",
+    "cubeos.term-session": "^0.5",
+  },
+  files: ["lib/cde/terminal.cub"],
+}

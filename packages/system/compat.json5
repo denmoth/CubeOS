@@ -1,0 +1,19 @@
+// System package cubeos.compat (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.compat",
+  name: "CraftOS compatibility",
+  version: "0.5.0",
+  description: "Runs ordinary CraftOS programs: bios, env, proc, varargs.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.term-chars": "^0.5",
+    "cubeos.version": "^0.5",
+  },
+  files: ["lib/compat/*"],
+}

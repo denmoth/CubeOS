@@ -1,0 +1,15 @@
+// System package cubeos.rpc (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.rpc",
+  name: "Service RPC",
+  version: "0.5.0",
+  description: "Message passing between services, and the stub service.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  files: ["lib/svc/rpc.cub", "lib/svc/stub.cub"],
+}

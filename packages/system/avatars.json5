@@ -1,0 +1,15 @@
+// System package cubeos.avatars (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.avatars",
+  name: "Avatars",
+  version: "0.5.0",
+  description: "Avatar pictures for user accounts.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "data",
+  lang: "lua",
+  category: "assets",
+  priority: "recommended",
+  files: ["assets/avatars/*"],
+}

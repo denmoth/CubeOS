@@ -1,0 +1,23 @@
+// System package cubeos.auth (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.auth",
+  name: "Authentication",
+  version: "0.5.0",
+  description: "User login checks and disk key.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.cfs": "^0.5",
+    "cubeos.cfs-base": "^0.5",
+    "cubeos.crypto": "^0.5",
+    "cubeos.inputd": "^0.5",
+    "cubeos.json": "^0.5",
+    "cubeos.text": "^0.5",
+  },
+  files: ["lib/boot/auth.cub", "lib/boot/diskkey.cub"],
+}

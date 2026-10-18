@@ -1,0 +1,15 @@
+// System package cubeos.cfs-base (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.cfs-base",
+  name: "CFS base",
+  version: "0.5.0",
+  description: "CFS path handling and error codes (split out so that trash and legacy do not form a cycle with the core).",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  files: ["lib/cfs/path.cub", "lib/cfs/errors.cub"],
+}

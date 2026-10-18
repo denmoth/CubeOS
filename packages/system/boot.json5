@@ -1,0 +1,38 @@
+// System package cubeos.boot (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.boot",
+  name: "Boot",
+  version: "0.5.0",
+  description: "Boot stages 1 and 2, the module runtime and startup.lua.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "lua",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.auth": "^0.5",
+    "cubeos.cfs": "^0.5",
+    "cubeos.console": "^0.5",
+    "cubeos.init": "^0.5",
+    "cubeos.json": "^0.5",
+    "cubeos.kernel": "^0.5",
+    "cubeos.log": "^0.5",
+    "cubeos.logd": "^0.5",
+    "cubeos.splash": "^0.5",
+    "cubeos.term-session": "^0.5",
+    "cubeos.time": "^0.5",
+    "cubeos.version": "^0.5",
+  },
+  want: {
+    "cubeos.cde-login": "^0.5",
+    "cubeos.cde-session": "^0.5",
+  },
+  files: [
+    "sys/boot/stage1.lua",
+    "sys/boot/stage2.lua",
+    "sys/boot/runtime.lua",
+    "sys/startup.lua",
+  ],
+}

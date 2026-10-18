@@ -1,0 +1,32 @@
+// System package cubeos.audiod (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.audiod",
+  name: "Audio service",
+  version: "0.5.0",
+  description: "Sound and music playback service (note speakers).",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "service",
+  lang: "cubic",
+  category: "media",
+  priority: "essential",
+  depends: {
+    "cubeos.json": "^0.5",
+    "cubeos.rpc": "^0.5",
+  },
+  files: [
+    "lib/svc/audiod.cub",
+    "sys/services/audiod.conf",
+    "sys/cfg/audio.conf",
+    "assets/sounds.txt",
+  ],
+  contributes: {
+    services: [
+      { name: "audiod", module: "svc.audiod", conf: "sys/services/audiod.conf" },
+    ],
+    sounds: [
+      { file: "assets/sounds.txt" },
+    ],
+  },
+}

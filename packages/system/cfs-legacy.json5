@@ -1,0 +1,18 @@
+// System package cubeos.cfs-legacy (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.cfs-legacy",
+  name: "CFS legacy view",
+  version: "0.5.0",
+  description: "Access to the plain CraftOS file system through CFS.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.cfs-base": "^0.5",
+  },
+  files: ["lib/cfs/legacy.cub"],
+}

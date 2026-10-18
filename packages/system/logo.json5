@@ -1,0 +1,15 @@
+// System package cubeos.logo (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.logo",
+  name: "Logo",
+  version: "0.5.0",
+  description: "The CubeOS logo drawn in text and graphics.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  files: ["lib/logo.cub"],
+}

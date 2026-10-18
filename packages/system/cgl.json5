@@ -1,0 +1,27 @@
+// System package cubeos.cgl (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.cgl",
+  name: "CubeOS graphics",
+  version: "0.5.0",
+  description: "CC:Graphics library: surfaces, colors, drawing, quantizer, teletext, mirror.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.cgl-anim": "^0.5",
+    "cubeos.text": "^0.5",
+  },
+  files: [
+    "lib/cgl/init.cub",
+    "lib/cgl/graphics.cub",
+    "lib/cgl/surface.cub",
+    "lib/cgl/color.cub",
+    "lib/cgl/mirror.cub",
+    "lib/cgl/quant.cub",
+    "lib/cgl/teletext.cub",
+  ],
+}

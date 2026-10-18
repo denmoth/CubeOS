@@ -1,0 +1,15 @@
+// System package cubeos.json (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.json",
+  name: "JSON and JSON5",
+  version: "0.5.0",
+  description: "JSON and JSON5 parsers and writers.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  files: ["lib/json.cub", "lib/json5.cub"],
+}

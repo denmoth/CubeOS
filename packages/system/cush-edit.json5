@@ -1,0 +1,20 @@
+// System package cubeos.cush-edit (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.cush-edit",
+  name: "Cush editors",
+  version: "0.5.0",
+  description: "Line editor and the text editor of the shell.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.term": "^0.5",
+    "cubeos.term-chars": "^0.5",
+    "cubeos.text": "^0.5",
+  },
+  files: ["lib/cush/editor.cub", "lib/cush/textedit.cub"],
+}

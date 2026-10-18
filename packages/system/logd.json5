@@ -1,0 +1,26 @@
+// System package cubeos.logd (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.logd",
+  name: "Log service",
+  version: "0.5.0",
+  description: "System log service.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "service",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.json": "^0.5",
+    "cubeos.rpc": "^0.5",
+    "cubeos.std": "^0.5",
+    "cubeos.time": "^0.5",
+  },
+  files: ["lib/svc/logd.cub", "sys/services/logd.conf", "sys/cfg/log.conf"],
+  contributes: {
+    services: [
+      { name: "logd", module: "svc.logd", conf: "sys/services/logd.conf" },
+    ],
+  },
+}

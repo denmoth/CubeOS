@@ -1,0 +1,26 @@
+// System package cubeos.term (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.term",
+  name: "Terminal",
+  version: "0.5.0",
+  description: "Virtual terminal, palette, views and windows.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.inputd": "^0.5",
+    "cubeos.term-chars": "^0.5",
+    "cubeos.text": "^0.5",
+    "cubeos.ui": "^0.5",
+  },
+  files: [
+    "lib/term/palette.cub",
+    "lib/term/vterm.cub",
+    "lib/term/view.cub",
+    "lib/term/window.cub",
+  ],
+}

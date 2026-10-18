@@ -1,0 +1,20 @@
+// System package cubeos.music-nether-lullaby (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.music-nether-lullaby",
+  name: "Music nether-lullaby",
+  version: "0.5.0",
+  description: "Jukebox track nether lullaby.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "data",
+  lang: "lua",
+  category: "media",
+  priority: "optional",
+  files: ["assets/music/nether-lullaby.csc"],
+  contributes: {
+    music: [
+      { id: "nether-lullaby", file: "assets/music/nether-lullaby.csc" },
+    ],
+  },
+}

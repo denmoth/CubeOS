@@ -1,0 +1,20 @@
+// System package cubeos.font-cube-5x7 (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.font-cube-5x7",
+  name: "Font cube-5x7",
+  version: "0.5.0",
+  description: "The cube-5x7 bitmap font.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "font",
+  lang: "lua",
+  category: "assets",
+  priority: "optional",
+  files: ["assets/fonts/cube-5x7.font"],
+  contributes: {
+    fonts: [
+      { id: "cube-5x7", file: "assets/fonts/cube-5x7.font" },
+    ],
+  },
+}

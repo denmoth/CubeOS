@@ -1,0 +1,23 @@
+// System package cubeos.clipboard (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.clipboard",
+  name: "Clipboard service",
+  version: "0.5.0",
+  description: "Clipboard shared between programs.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "service",
+  lang: "cubic",
+  category: "system",
+  priority: "recommended",
+  depends: {
+    "cubeos.rpc": "^0.5",
+  },
+  files: ["lib/svc/clipboard.cub", "sys/services/clipboard.conf"],
+  contributes: {
+    services: [
+      { name: "clipboard", module: "svc.clipboard", conf: "sys/services/clipboard.conf" },
+    ],
+  },
+}

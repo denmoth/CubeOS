@@ -1,0 +1,15 @@
+// System package cubeos.std (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.std",
+  name: "Standard library",
+  version: "0.5.0",
+  description: "Standard library: strings, lists, dicts, paths, time, formatting.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  files: ["lib/std/*"],
+}

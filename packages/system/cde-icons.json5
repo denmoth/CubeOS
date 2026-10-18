@@ -1,0 +1,15 @@
+// System package cubeos.cde-icons (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.cde-icons",
+  name: "CDE icons",
+  version: "0.5.0",
+  description: "Built-in icon set of the desktop.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "de",
+  lang: "cubic",
+  category: "desktop",
+  priority: "recommended",
+  files: ["lib/cde/icons.cub"],
+}

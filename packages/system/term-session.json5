@@ -1,0 +1,28 @@
+// System package cubeos.term-session (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.term-session",
+  name: "Terminal session",
+  version: "0.5.0",
+  description: "Terminal application and session, and the windowed output.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.cfs": "^0.5",
+    "cubeos.compat": "^0.5",
+    "cubeos.console": "^0.5",
+    "cubeos.cush-shell": "^0.5",
+    "cubeos.font": "^0.5",
+    "cubeos.greeter": "^0.5",
+    "cubeos.json": "^0.5",
+    "cubeos.rpc": "^0.5",
+    "cubeos.term": "^0.5",
+    "cubeos.timed": "^0.5",
+    "cubeos.ui": "^0.5",
+  },
+  files: ["lib/term/app.cub", "lib/term/session.cub", "lib/cde/winout.cub"],
+}

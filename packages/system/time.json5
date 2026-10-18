@@ -1,0 +1,19 @@
+// System package cubeos.time (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.time",
+  name: "Time",
+  version: "0.5.0",
+  description: "Clock and the time zone database.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.json": "^0.5",
+    "cubeos.std": "^0.5",
+  },
+  files: ["lib/clock.cub", "lib/tzdata.cub"],
+}

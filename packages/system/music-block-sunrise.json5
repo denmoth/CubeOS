@@ -1,0 +1,20 @@
+// System package cubeos.music-block-sunrise (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.music-block-sunrise",
+  name: "Music block-sunrise",
+  version: "0.5.0",
+  description: "Jukebox track block sunrise.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "data",
+  lang: "lua",
+  category: "media",
+  priority: "optional",
+  files: ["assets/music/block-sunrise.csc"],
+  contributes: {
+    music: [
+      { id: "block-sunrise", file: "assets/music/block-sunrise.csc" },
+    ],
+  },
+}

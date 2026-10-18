@@ -1,0 +1,19 @@
+// System package cubeos.cde-crashbox (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.cde-crashbox",
+  name: "CDE crash box",
+  version: "0.5.0",
+  description: "Window with the reason and a Restart button when an app crashes.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "de",
+  lang: "cubic",
+  category: "desktop",
+  priority: "recommended",
+  depends: {
+    "cubeos.cdk": "^0.5",
+    "cubeos.cgl": "^0.5",
+  },
+  files: ["lib/cde/crashbox.cub"],
+}

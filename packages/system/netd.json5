@@ -1,0 +1,26 @@
+// System package cubeos.netd (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.netd",
+  name: "Network service",
+  version: "0.5.0",
+  description: "CubeNet: modems, names, pairing, shared folders.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "service",
+  lang: "cubic",
+  category: "network",
+  priority: "recommended",
+  depends: {
+    "cubeos.cfs-base": "^0.5",
+    "cubeos.crypto": "^0.5",
+    "cubeos.json": "^0.5",
+    "cubeos.rpc": "^0.5",
+  },
+  files: ["lib/svc/netd.cub", "lib/net/*", "sys/services/netd.conf", "sys/cfg/net.conf"],
+  contributes: {
+    services: [
+      { name: "netd", module: "svc.netd", conf: "sys/services/netd.conf" },
+    ],
+  },
+}

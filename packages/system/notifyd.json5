@@ -1,0 +1,23 @@
+// System package cubeos.notifyd (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.notifyd",
+  name: "Notification service",
+  version: "0.5.0",
+  description: "Desktop notifications.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "service",
+  lang: "cubic",
+  category: "system",
+  priority: "recommended",
+  depends: {
+    "cubeos.rpc": "^0.5",
+  },
+  files: ["lib/svc/notifyd.cub", "sys/services/notifyd.conf"],
+  contributes: {
+    services: [
+      { name: "notifyd", module: "svc.notifyd", conf: "sys/services/notifyd.conf" },
+    ],
+  },
+}

@@ -1,0 +1,19 @@
+// System package cubeos.cgl-image (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.cgl-image",
+  name: "CGL images",
+  version: "0.5.0",
+  description: "CIMG image format and loader.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "recommended",
+  depends: {
+    "cubeos.cgl": "^0.5",
+    "cubeos.compress": "^0.5",
+  },
+  files: ["lib/cgl/cimg.cub"],
+}

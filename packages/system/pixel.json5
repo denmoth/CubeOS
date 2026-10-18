@@ -1,0 +1,27 @@
+// System package cubeos.pixel (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.pixel",
+  name: "Pixel",
+  version: "0.5.0",
+  description: "Picture viewer.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "app",
+  lang: "cubic",
+  category: "apps",
+  priority: "optional",
+  depends: {
+    "cubeos.app-kit": "^0.5",
+    "cubeos.cdk": "^0.5",
+    "cubeos.cfs-base": "^0.5",
+    "cubeos.cgl": "^0.5",
+    "cubeos.cgl-image": "^0.5",
+  },
+  files: ["lib/apps/pixel/*"],
+  contributes: {
+    apps: [
+      { id: "pixel", name: "Pixel", entry: "apps.pixel", icon: "image", category: "media" },
+    ],
+  },
+}

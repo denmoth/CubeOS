@@ -1,0 +1,21 @@
+// System package cubeos.font (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.font",
+  name: "Fonts (code)",
+  version: "0.5.0",
+  description: "Font loader and registry. The fonts themselves are separate packages.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.compress": "^0.5",
+    "cubeos.json": "^0.5",
+    "cubeos.pixelbuf": "^0.5",
+    "cubeos.text": "^0.5",
+  },
+  files: ["lib/font.cub", "lib/fonts.cub"],
+}

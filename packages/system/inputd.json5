@@ -1,0 +1,26 @@
+// System package cubeos.inputd (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.inputd",
+  name: "Input service",
+  version: "0.5.0",
+  description: "Keyboard input service and keyboard layouts.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "service",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.i18n": "^0.5",
+    "cubeos.json": "^0.5",
+    "cubeos.rpc": "^0.5",
+    "cubeos.text": "^0.5",
+  },
+  files: ["lib/svc/inputd.cub", "lib/input/*", "sys/services/inputd.conf"],
+  contributes: {
+    services: [
+      { name: "inputd", module: "svc.inputd", conf: "sys/services/inputd.conf" },
+    ],
+  },
+}

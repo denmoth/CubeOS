@@ -1,0 +1,20 @@
+// System package cubeos.theme-tokyo-night (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.theme-tokyo-night",
+  name: "Theme Tokyo Night",
+  version: "0.5.0",
+  description: "Tokyo Night desktop theme.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "theme",
+  lang: "lua",
+  category: "assets",
+  priority: "optional",
+  files: ["assets/themes/tokyo-night.theme"],
+  contributes: {
+    themes: [
+      { id: "tokyo-night", file: "assets/themes/tokyo-night.theme" },
+    ],
+  },
+}

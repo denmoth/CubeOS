@@ -1,0 +1,24 @@
+// System package cubeos.cubic (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.cubic",
+  name: "Cubic compiler",
+  version: "0.5.0",
+  description: "Cubic language compiler (not needed on an installed system).",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "tool",
+  lang: "lua",
+  category: "dev",
+  priority: "optional",
+  files: [
+    "src/cubic/builtins.lua",
+    "src/cubic/checker.lua",
+    "src/cubic/codegen.lua",
+    "src/cubic/init.lua",
+    "src/cubic/lexer.lua",
+    "src/cubic/modtypes.lua",
+    "src/cubic/parser.lua",
+    "src/cubic/util.lua",
+  ],
+}

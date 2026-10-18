@@ -1,0 +1,29 @@
+// System package cubeos.timed (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.timed",
+  name: "Time service",
+  version: "0.5.0",
+  description: "Time service and its client.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "service",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.rpc": "^0.5",
+    "cubeos.time": "^0.5",
+  },
+  files: [
+    "lib/svc/timed.cub",
+    "lib/svc/timeclient.cub",
+    "sys/services/timed.conf",
+    "sys/cfg/time.conf",
+  ],
+  contributes: {
+    services: [
+      { name: "timed", module: "svc.timed", conf: "sys/services/timed.conf" },
+    ],
+  },
+}

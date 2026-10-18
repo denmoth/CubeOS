@@ -1,0 +1,25 @@
+// System package cubeos.pulse (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.pulse",
+  name: "Pulse",
+  version: "0.5.0",
+  description: "Task manager.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "app",
+  lang: "cubic",
+  category: "apps",
+  priority: "recommended",
+  depends: {
+    "cubeos.app-kit": "^0.5",
+    "cubeos.cde-theme": "^0.5",
+    "cubeos.cdk": "^0.5",
+  },
+  files: ["lib/apps/pulse/*"],
+  contributes: {
+    apps: [
+      { id: "pulse", name: "Pulse", entry: "apps.pulse", icon: "gauge", category: "system" },
+    ],
+  },
+}

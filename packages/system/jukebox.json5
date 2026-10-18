@@ -1,0 +1,27 @@
+// System package cubeos.jukebox (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.jukebox",
+  name: "Jukebox",
+  version: "0.5.0",
+  description: "Music player (tracks are separate packages).",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "app",
+  lang: "cubic",
+  category: "media",
+  priority: "optional",
+  depends: {
+    "cubeos.app-kit": "^0.5",
+    "cubeos.cde-theme": "^0.5",
+    "cubeos.cdk": "^0.5",
+    "cubeos.cfs-base": "^0.5",
+    "cubeos.rpc": "^0.5",
+  },
+  files: ["lib/apps/jukebox/*"],
+  contributes: {
+    apps: [
+      { id: "jukebox", name: "Jukebox", entry: "apps.jukebox", icon: "music", category: "media" },
+    ],
+  },
+}

@@ -1,0 +1,15 @@
+// System package cubeos.cubic-rt (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.cubic-rt",
+  name: "Cubic runtime",
+  version: "0.5.0",
+  description: "Runtime for all code compiled from Cubic.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "lua",
+  category: "system",
+  priority: "essential",
+  files: ["src/cubic/rt.lua"],
+}

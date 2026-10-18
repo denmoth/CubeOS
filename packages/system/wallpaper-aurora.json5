@@ -1,0 +1,20 @@
+// System package cubeos.wallpaper-aurora (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.wallpaper-aurora",
+  name: "Wallpaper aurora",
+  version: "0.5.0",
+  description: "The aurora wallpaper.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "data",
+  lang: "lua",
+  category: "assets",
+  priority: "recommended",
+  files: ["assets/wallpapers/aurora.cimg"],
+  contributes: {
+    wallpapers: [
+      { id: "aurora", file: "assets/wallpapers/aurora.cimg" },
+    ],
+  },
+}

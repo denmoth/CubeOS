@@ -1,0 +1,22 @@
+// System package cubeos.log (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.log",
+  name: "Logging",
+  version: "0.5.0",
+  description: "Log API, chained log and crash reports.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.compress": "^0.5",
+    "cubeos.crypto": "^0.5",
+    "cubeos.json": "^0.5",
+    "cubeos.std": "^0.5",
+    "cubeos.version": "^0.5",
+  },
+  files: ["lib/log.cub", "lib/chainlog.cub", "lib/crash.cub"],
+}

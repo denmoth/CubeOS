@@ -1,0 +1,20 @@
+// System package cubeos.wallpaper-sunset (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.wallpaper-sunset",
+  name: "Wallpaper sunset",
+  version: "0.5.0",
+  description: "The sunset wallpaper.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "data",
+  lang: "lua",
+  category: "assets",
+  priority: "optional",
+  files: ["assets/wallpapers/sunset.cimg"],
+  contributes: {
+    wallpapers: [
+      { id: "sunset", file: "assets/wallpapers/sunset.cimg" },
+    ],
+  },
+}

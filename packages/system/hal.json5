@@ -1,0 +1,18 @@
+// System package cubeos.hal (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.hal",
+  name: "Hardware layer",
+  version: "0.5.0",
+  description: "Hardware abstraction layer and the sysfs view of devices.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.version": "^0.5",
+  },
+  files: ["lib/hal.cub", "lib/sysfs.cub"],
+}

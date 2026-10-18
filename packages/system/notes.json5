@@ -1,0 +1,25 @@
+// System package cubeos.notes (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.notes",
+  name: "Notes",
+  version: "0.5.0",
+  description: "Text editor.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "app",
+  lang: "cubic",
+  category: "apps",
+  priority: "recommended",
+  depends: {
+    "cubeos.cdk": "^0.5",
+    "cubeos.cfs-base": "^0.5",
+    "cubeos.text": "^0.5",
+  },
+  files: ["lib/apps/notes/*"],
+  contributes: {
+    apps: [
+      { id: "notes", name: "Notes", entry: "apps.notes", icon: "notepad", category: "apps" },
+    ],
+  },
+}

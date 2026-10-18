@@ -1,0 +1,31 @@
+// System package cubeos.cush (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.cush",
+  name: "Cush core",
+  version: "0.5.0",
+  description: "Cush shell: lexer, history, command table, help and builtin commands.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.crypto": "^0.5",
+    "cubeos.font": "^0.5",
+    "cubeos.i18n": "^0.5",
+    "cubeos.json": "^0.5",
+    "cubeos.logd": "^0.5",
+    "cubeos.term-chars": "^0.5",
+    "cubeos.text": "^0.5",
+    "cubeos.time": "^0.5",
+  },
+  files: [
+    "lib/cush/lex.cub",
+    "lib/cush/hist.cub",
+    "lib/cush/commands.cub",
+    "lib/cush/help.cub",
+    "lib/cush/builtins.cub",
+  ],
+}

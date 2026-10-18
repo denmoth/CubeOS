@@ -1,0 +1,25 @@
+// System package cubeos.devd (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.devd",
+  name: "Device service",
+  version: "0.5.0",
+  description: "Device discovery service.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "service",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.cfs": "^0.5",
+    "cubeos.hal": "^0.5",
+    "cubeos.rpc": "^0.5",
+  },
+  files: ["lib/svc/devd.cub", "sys/services/devd.conf"],
+  contributes: {
+    services: [
+      { name: "devd", module: "svc.devd", conf: "sys/services/devd.conf" },
+    ],
+  },
+}

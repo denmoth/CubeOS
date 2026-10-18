@@ -1,0 +1,20 @@
+// System package cubeos.music-neon-drive (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.music-neon-drive",
+  name: "Music neon-drive",
+  version: "0.5.0",
+  description: "Jukebox track neon drive.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "data",
+  lang: "lua",
+  category: "media",
+  priority: "optional",
+  files: ["assets/music/neon-drive.csc"],
+  contributes: {
+    music: [
+      { id: "neon-drive", file: "assets/music/neon-drive.csc" },
+    ],
+  },
+}

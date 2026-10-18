@@ -1,0 +1,20 @@
+// System package cubeos.wallpaper-sus (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.wallpaper-sus",
+  name: "Wallpaper sus",
+  version: "0.5.0",
+  description: "The sus wallpaper.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "data",
+  lang: "lua",
+  category: "assets",
+  priority: "optional",
+  files: ["assets/wallpapers/sus.cimg"],
+  contributes: {
+    wallpapers: [
+      { id: "sus", file: "assets/wallpapers/sus.cimg" },
+    ],
+  },
+}

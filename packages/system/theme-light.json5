@@ -1,0 +1,20 @@
+// System package cubeos.theme-light (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.theme-light",
+  name: "Theme Light",
+  version: "0.5.0",
+  description: "Light desktop theme.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "theme",
+  lang: "lua",
+  category: "assets",
+  priority: "optional",
+  files: ["assets/themes/light.theme"],
+  contributes: {
+    themes: [
+      { id: "light", file: "assets/themes/light.theme" },
+    ],
+  },
+}

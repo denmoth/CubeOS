@@ -1,0 +1,18 @@
+// System package cubeos.term-chars (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.term-chars",
+  name: "Terminal characters",
+  version: "0.5.0",
+  description: "Box and block characters shared by the terminal and the UI.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.text": "^0.5",
+  },
+  files: ["lib/term/chars.cub"],
+}

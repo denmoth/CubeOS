@@ -1,0 +1,20 @@
+// System package cubeos.stew-publish (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+// Planned: the code does not exist yet; the manifest fixes the id, priority and dependencies.
+{
+  format: 1,
+  id: "cubeos.stew-publish",
+  name: "Stew publish",
+  version: "0.5.0",
+  description: "Login and publish client. Planned: step 5c, no code yet.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "tool",
+  lang: "cubic",
+  category: "dev",
+  priority: "optional",
+  depends: {
+    "cubeos.crypto": "^0.5",
+    "cubeos.stew": "^0.5",
+  },
+  files: [],
+}

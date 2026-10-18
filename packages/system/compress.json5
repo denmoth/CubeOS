@@ -1,0 +1,15 @@
+// System package cubeos.compress (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.compress",
+  name: "Compression",
+  version: "0.5.0",
+  description: "Deflate, LZ and CRC32. The unpacker is always kept unpacked.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  files: ["lib/deflate.cub", "lib/lzfast.cub", "lib/compress.cub", "lib/crc32.cub"],
+}

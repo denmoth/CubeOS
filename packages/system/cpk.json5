@@ -1,0 +1,20 @@
+// System package cubeos.cpk (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.cpk",
+  name: "CPK reader",
+  version: "0.5.0",
+  description: "Reads and writes .cpk package archives (mounting arrives in step 3).",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "lib",
+  lang: "cubic",
+  category: "system",
+  priority: "essential",
+  depends: {
+    "cubeos.compress": "^0.5",
+    "cubeos.crypto": "^0.5",
+    "cubeos.json": "^0.5",
+  },
+  files: ["lib/cpk.cub"],
+}

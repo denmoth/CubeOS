@@ -1,0 +1,31 @@
+// System package cubeos.extender (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.extender",
+  name: "Storage extender",
+  version: "0.5.0",
+  description: "Connects floppy disks and shared folders as extra storage.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "service",
+  lang: "cubic",
+  category: "system",
+  priority: "recommended",
+  depends: {
+    "cubeos.cfs": "^0.5",
+    "cubeos.cfs-base": "^0.5",
+    "cubeos.json": "^0.5",
+    "cubeos.rpc": "^0.5",
+  },
+  files: [
+    "lib/cfs/extend.cub",
+    "lib/cfs/extlabel.cub",
+    "lib/svc/extd.cub",
+    "sys/services/extd.conf",
+  ],
+  contributes: {
+    services: [
+      { name: "extd", module: "svc.extd", conf: "sys/services/extd.conf" },
+    ],
+  },
+}

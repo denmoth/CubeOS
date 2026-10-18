@@ -1,0 +1,20 @@
+// System package cubeos.wallpaper-night-city (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.wallpaper-night-city",
+  name: "Wallpaper night-city",
+  version: "0.5.0",
+  description: "The night city wallpaper.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "data",
+  lang: "lua",
+  category: "assets",
+  priority: "optional",
+  files: ["assets/wallpapers/night-city.cimg"],
+  contributes: {
+    wallpapers: [
+      { id: "night-city", file: "assets/wallpapers/night-city.cimg" },
+    ],
+  },
+}

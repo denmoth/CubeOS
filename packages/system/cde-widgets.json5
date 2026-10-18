@@ -1,0 +1,20 @@
+// System package cubeos.cde-widgets (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.cde-widgets",
+  name: "CDE widgets",
+  version: "0.5.0",
+  description: "Desktop widgets.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "de",
+  lang: "cubic",
+  category: "desktop",
+  priority: "recommended",
+  depends: {
+    "cubeos.cde": "^0.5",
+    "cubeos.cde-theme": "^0.5",
+    "cubeos.cgl": "^0.5",
+  },
+  files: ["lib/cde/widgets.cub"],
+}

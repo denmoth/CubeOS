@@ -1,0 +1,19 @@
+// System package cubeos.cde-startmenu (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.cde-startmenu",
+  name: "CDE start menu",
+  version: "0.5.0",
+  description: "Start menu and the application registry.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "de",
+  lang: "cubic",
+  category: "desktop",
+  priority: "recommended",
+  depends: {
+    "cubeos.cdk": "^0.5",
+    "cubeos.text": "^0.5",
+  },
+  files: ["lib/cde/startmenu.cub", "lib/cde/apps.cub"],
+}

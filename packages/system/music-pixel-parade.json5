@@ -1,0 +1,20 @@
+// System package cubeos.music-pixel-parade (docs/packages/07-system-split.md). Generated from the import graph by tools/pkg_graph.py checks.
+{
+  format: 1,
+  id: "cubeos.music-pixel-parade",
+  name: "Music pixel-parade",
+  version: "0.5.0",
+  description: "Jukebox track pixel parade.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "data",
+  lang: "lua",
+  category: "media",
+  priority: "optional",
+  files: ["assets/music/pixel-parade.csc"],
+  contributes: {
+    music: [
+      { id: "pixel-parade", file: "assets/music/pixel-parade.csc" },
+    ],
+  },
+}
