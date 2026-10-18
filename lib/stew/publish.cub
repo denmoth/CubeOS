@@ -1,0 +1,310 @@
+# stew.publish: publishing a package from the game through the cobble-gate Worker
+# (cobble-gate/README.md, section "Протокол для stew"; docs/packages/06-cobble.md).
+#
+#   publish.login_start(ctx)         -> {session, user_code, verification_uri, interval, expires_in} | {error}
+#   publish.login_poll(ctx, session) -> {key, login} | {pending: true, interval} | {error}
+#                                       on success the key is already saved with ctx.key_store.set
+#   publish.logout(ctx)              -> {ok: true} | {error}; the stored key is cleared
+#   publish.send(ctx, folder)        -> {pr, number, branch, updated, id, version} | {error}
+#   publish.status(ctx, number)      -> the Worker answer {number, pr, state, merged, checks, summary, runs} | {error}
+#   publish.command(args, ctx, out)  -> exit code (0 ok, 1 failure); args = {"login"} | {"logout"} | {"publish", folder}
+#                                       | {"publish", "--status", number?}; out(text) prints one line (text may hold many)
+#
+# Errors are returned as {error: "readable message", status: http code or nil}, never thrown.
+#
+# ctx = {
+#   fs: CraftOS-like fs,
+#   http_post(url, body, headers) -> body | nil, err      body and err are strings; err may be the JSON error body
+#   http_get(url, headers)        -> body | nil, err
+#   gate: "https://cobble-gate.<account>.workers.dev"     base URL of the Worker, no trailing slash needed
+#   key_store: {get() -> key | nil, set(key), clear()}    see below
+#   cubic: compiler (package cubeos.cubic), needed only to check packages with .cub sources
+#   sleep(seconds): optional, default os.sleep
+#   max_bytes: optional, default 262144 (the Worker limit for the request body)
+#   last_pr: optional {get() -> number | nil, set(number)}, remembers the last PR for `stew publish --status`
+# }
+#
+# The publishing key (cg_...) is a password for publishing in the player's name. It must not lie in plain text in a
+# world-readable place (a plain file under /cubeos/var, settings, the package database). CubeOS backs key_store with its
+# protected storage (docs/14-data-protection.md); the module only calls get/set/clear and never writes the key itself.
+# The login session id is kept in memory only.
+
+import base64
+import json
+import stew.pack as pack
+
+export DEFAULT_MAX_BYTES = 262144
+MAX_FILES = 300
+
+def _gate(ctx):
+    g = tostring(ctx.gate ?? "")
+    return string.gsub(g, "/+$", "")
+
+def _fail(msg, status=nil):
+    return {error: msg, status: status}
+
+# text of an error answer: {"error": "..."} from the Worker, or the transport message as is
+def _error_text(err):
+    if type(err) == "table" and err.readAll != nil:
+        txt = err.readAll()
+        err = txt
+    if type(err) != "string" or err == "":
+        return "no answer from " .. "the publishing server (check the internet connection and the gate address)", nil
+    ok, v = pcall(json.parse, err)
+    if ok and type(v) == "table" and type(v.error) == "string":
+        return v.error, nil
+    return err, nil
+
+# one request; returns the decoded JSON answer or {error}
+def _call(ctx, method, path, body, key):
+    headers = {accept: "application/json"}
+    if key != nil:
+        headers.authorization = "Bearer " .. key
+    url = _gate(ctx) .. path
+    raw = nil
+    err = nil
+    if method == "POST":
+        headers["content-type"] = "application/json"
+        raw, err = ctx.http_post(url, body ?? "", headers)
+    else:
+        raw, err = ctx.http_get(url, headers)
+    if raw == nil:
+        msg = _error_text(err)
+        return _fail(msg)
+    ok, v = pcall(json.parse, raw)
+    if not ok or type(v) != "table":
+        return _fail("the publishing server sent something that is not JSON")
+    if type(v.error) == "string":
+        return _fail(v.error)
+    return v
+
+def _need_gate(ctx):
+    if _gate(ctx) == "":
+        return _fail("the publishing server address is not set")
+    return nil
+
+# ---------- login ----------
+
+export def login_start(ctx):
+    bad = _need_gate(ctx)
+    if bad != nil:
+        return bad
+    r = _call(ctx, "POST", "/login/start", "", nil)
+    if r.error != nil:
+        return r
+    if type(r.session) != "string" or type(r.user_code) != "string":
+        return _fail("unexpected answer from the login server")
+    return {
+        session: r.session, user_code: r.user_code,
+        verification_uri: r.verification_uri ?? "https://github.com/login/device",
+        interval: r.interval ?? 5, expires_in: r.expires_in ?? 900,
+    }
+
+export def login_poll(ctx, session):
+    bad = _need_gate(ctx)
+    if bad != nil:
+        return bad
+    r = _call(ctx, "POST", "/login/poll", json.stringify({session: session}), nil)
+    if r.error != nil:
+        return r
+    if r.status == "pending":
+        return {pending: true, interval: r.interval ?? 5}
+    if r.status == "ok" and type(r.key) == "string":
+        ctx.key_store.set(r.key)
+        return {key: r.key, login: r.login}
+    return _fail("unexpected answer from the login server")
+
+export def logout(ctx):
+    key = ctx.key_store.get()
+    if key == nil:
+        return {ok: true, was_logged_in: false}
+    bad = _need_gate(ctx)
+    r = bad
+    if bad == nil:
+        r = _call(ctx, "POST", "/logout", "", key)
+    # the key is removed locally in any case: the player asked to log out
+    ctx.key_store.clear()
+    if r.error != nil:
+        return {ok: true, was_logged_in: true, warning: "the key was removed here, but the server did not confirm: " .. r.error}
+    return {ok: true, was_logged_in: true}
+
+# ---------- publish ----------
+
+def _read(fsys, path):
+    h = fsys.open(path, "rb")
+    if h == nil:
+        error("cannot read " .. path, 0)
+    s = h.readAll() ?? ""
+    h.close()
+    return s
+
+export def send(ctx, folder):
+    key = ctx.key_store.get()
+    if key == nil:
+        return _fail("you are not logged in: run `stew login` first")
+    bad = _need_gate(ctx)
+    if bad != nil:
+        return bad
+    fsys = ctx.fs
+    if folder == nil or not fsys.isDir(folder):
+        return _fail("no such folder: " .. tostring(folder))
+    if not fsys.exists(fsys.combine(folder, "package.json5")):
+        return _fail("no package.json5 in " .. folder)
+    # the local check: the same build `stew pack` does; nothing is sent if it fails
+    ok, built = pcall(pack.build, fsys, folder, {cubic: ctx.cubic})
+    if not ok:
+        return _fail("the package does not build: " .. tostring(built))
+    m = built.manifest
+    paths = pack.list_files(fsys, folder)
+    if len(paths) > MAX_FILES:
+        return _fail("too many files: " .. len(paths) .. " (at most " .. MAX_FILES .. ")")
+    files = {}
+    for rel in paths:
+        rok, data = pcall(_read, fsys, fsys.combine(folder, rel))
+        if not rok:
+            return _fail(tostring(data))
+        files[rel] = base64.encode(data)
+    body = json.stringify({id: m.id, version: m.version, files: files})
+    limit = ctx.max_bytes ?? DEFAULT_MAX_BYTES
+    if len(body) > limit:
+        return _fail("the package is too big to publish: " .. len(body) .. " bytes after encoding, the limit is " .. limit)
+    r = _call(ctx, "POST", "/publish", body, key)
+    if r.error != nil:
+        return r
+    if r.number == nil:
+        return _fail("unexpected answer from the publishing server")
+    if ctx.last_pr != nil:
+        ctx.last_pr.set(r.number)
+    return {pr: r.pr, number: r.number, branch: r.branch, updated: r.updated == true, id: m.id, version: m.version}
+
+export def status(ctx, number):
+    key = ctx.key_store.get()
+    if key == nil:
+        return _fail("you are not logged in: run `stew login` first")
+    bad = _need_gate(ctx)
+    if bad != nil:
+        return bad
+    n = tonumber(number)
+    if n == nil or n < 1 or n != math.floor(n):
+        return _fail("the PR number must be a whole number like 42")
+    return _call(ctx, "GET", "/publish/status?pr=" .. string.format("%d", n), nil, key)
+
+# ---------- terminal command ----------
+
+def _box(out, lines):
+    width = 0
+    for l in lines:
+        if len(l) > width:
+            width = len(l)
+    edge = "+" .. string.rep("-", width + 4) .. "+"
+    out(edge)
+    for l in lines:
+        out("|  " .. l .. string.rep(" ", width - len(l)) .. "  |")
+    out(edge)
+
+def _sleep(ctx, seconds):
+    if ctx.sleep != nil:
+        ctx.sleep(seconds)
+    else:
+        os.sleep(seconds)
+
+def _cmd_login(ctx, out):
+    s = login_start(ctx)
+    if s.error != nil:
+        out("Login failed: " .. s.error)
+        return 1
+    out("")
+    out("To log in to GitHub for publishing:")
+    out("  1. Open this page in a browser (on any device):")
+    out("")
+    out("       " .. s.verification_uri)
+    out("")
+    out("  2. Enter this code:")
+    out("")
+    _box(out, ["", "     " .. s.user_code .. "     ", ""])
+    out("")
+    out("Waiting for you to confirm (the code is valid for " .. math.floor(s.expires_in / 60) .. " minutes)...")
+    waited = 0
+    interval = s.interval
+    while waited < s.expires_in:
+        _sleep(ctx, interval)
+        waited += interval
+        r = login_poll(ctx, s.session)
+        if r.error != nil:
+            out("Login failed: " .. r.error)
+            out("Run `stew login` to try again.")
+            return 1
+        if r.pending:
+            interval = math.max(r.interval ?? interval, interval)
+        else:
+            out("Logged in as " .. tostring(r.login) .. ". You can now run `stew publish <folder>`.")
+            return 0
+    out("The code expired before it was confirmed. Run `stew login` to get a new one.")
+    return 1
+
+def _cmd_logout(ctx, out):
+    r = logout(ctx)
+    if not r.was_logged_in:
+        out("You are not logged in.")
+        return 0
+    if r.warning != nil:
+        out("Logged out. Warning: " .. r.warning)
+    else:
+        out("Logged out. The key was revoked on the server and removed from this computer.")
+    out("To take back GitHub access fully, open github.com/settings/applications (Authorized OAuth Apps).")
+    return 0
+
+def _cmd_publish(ctx, folder, out):
+    out("Checking " .. folder .. " ...")
+    r = send(ctx, folder)
+    if r.error != nil:
+        out("Not published: " .. r.error)
+        return 1
+    out("Sent " .. r.id .. " " .. r.version .. (r.updated and " (this version was already published, its pull request is updated)" or ""))
+    out("Pull request #" .. r.number .. ": " .. tostring(r.pr))
+    out("The catalog checks it now. See how it goes with: stew publish --status " .. r.number)
+    return 0
+
+def _cmd_status(ctx, number, out):
+    n = number
+    if n == nil and ctx.last_pr != nil:
+        n = ctx.last_pr.get()
+    if n == nil:
+        out("Give the pull request number: stew publish --status <number>")
+        return 1
+    r = status(ctx, n)
+    if r.error != nil:
+        out("Cannot get the status: " .. r.error)
+        return 1
+    out("Pull request #" .. tostring(r.number) .. ": " .. tostring(r.pr))
+    if r.merged:
+        out("Accepted: the package is merged and will appear in the catalog soon.")
+    elif r.state == "closed":
+        out("Closed without merging. Look at the page above for the reason.")
+    else:
+        out("Open. Checks: " .. tostring(r.checks))
+    s = r.summary
+    if s != nil:
+        out("Checks total " .. tostring(s.total) .. ": passed " .. tostring(s.passed) .. ", failed " .. tostring(s.failed) .. ", pending " .. tostring(s.pending))
+    for run in r.runs ?? []:
+        result = run.conclusion
+        if result == nil or result == json.null:
+            result = run.status
+        out("  " .. tostring(run.name) .. ": " .. tostring(result))
+    return 0
+
+export def command(args, ctx, out):
+    sub = args[1]
+    if sub == "login":
+        return _cmd_login(ctx, out)
+    if sub == "logout":
+        return _cmd_logout(ctx, out)
+    if sub == "publish":
+        if args[2] == "--status":
+            return _cmd_status(ctx, args[3], out)
+        if args[2] == nil or string.sub(args[2], 1, 2) == "--":
+            out("Usage: stew publish <folder>   or   stew publish --status [number]")
+            return 1
+        return _cmd_publish(ctx, args[2], out)
+    out("Usage: stew login | stew logout | stew publish <folder> | stew publish --status [number]")
+    return 1

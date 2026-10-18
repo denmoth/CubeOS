@@ -1,0 +1,180 @@
+import t
+import json
+import base64
+import stew.publish as publish
+eq = t.eq
+
+def put(path, text):
+    fs.makeDir(fs.getDir(path))
+    h = fs.open(path, "w")
+    h.write(text)
+    h.close()
+
+# a fake Worker
+GATE = "https://gate.test"
+state = {polls: 0, key: nil, calls: [], posted: nil, fail_publish: nil}
+stored = {key: nil}
+def ks_get():
+    return stored.key
+def ks_set(k):
+    stored.key = k
+def ks_clear():
+    stored.key = nil
+key_store = {get: ks_get, set: ks_set, clear: ks_clear}
+lines = []
+def out(text):
+    lines[len(lines) + 1] = text
+def all_text():
+    return table.concat(lines, "\n")
+
+def post(url, body, headers):
+    state.calls[len(state.calls) + 1] = "POST " .. url
+    if url == GATE .. "/login/start":
+        return json.stringify({session: "sess1", user_code: "WDJB-MJHT", verification_uri: "https://github.com/login/device", interval: 5, expires_in: 900})
+    if url == GATE .. "/login/poll":
+        if json.parse(body).session != "sess1":
+            return nil, json.stringify({error: "unknown session"})
+        state.polls += 1
+        if state.polls < 3:
+            return json.stringify({status: "pending", interval: 5})
+        return json.stringify({status: "ok", key: "cg_secret", login: "alice"})
+    if url == GATE .. "/logout":
+        if headers.authorization != "Bearer cg_secret":
+            return nil, json.stringify({error: "bad key"})
+        return json.stringify({status: "ok"})
+    if url == GATE .. "/publish":
+        if headers.authorization != "Bearer cg_secret":
+            return nil, json.stringify({error: "missing key"})
+        state.posted = json.parse(body)
+        if state.fail_publish != nil:
+            return nil, json.stringify({error: state.fail_publish})
+        return json.stringify({pr: "https://github.com/cubeos/cobble/pull/42", number: 42, branch: "publish/alice.snake-1.0.0", updated: false})
+    return nil, "Could not connect"
+
+def get(url, headers):
+    state.calls[len(state.calls) + 1] = "GET " .. url
+    if url == GATE .. "/publish/status?pr=42":
+        return json.stringify({number: 42, pr: "https://github.com/cubeos/cobble/pull/42", state: "open", merged: false, checks: "pending",
+            summary: {total: 2, passed: 1, failed: 0, pending: 1},
+            runs: [{name: "build", status: "completed", conclusion: "success"}, {name: "check", status: "in_progress", conclusion: json.null}]})
+    return nil, json.stringify({error: "not your PR"})
+
+slept = []
+last = {n: nil}
+def fake_sleep(s):
+    slept[len(slept) + 1] = s
+def lp_get():
+    return last.n
+def lp_set(n):
+    last.n = n
+ctx = {
+    fs: fs, http_post: post, http_get: get, gate: GATE .. "/", key_store: key_store,
+    sleep: fake_sleep,
+    last_pr: {get: lp_get, set: lp_set},
+}
+
+# not logged in
+r = publish.send(ctx, "/tmp_pub/snake")
+eq(r.error != nil and string.find(r.error, "stew login") != nil, true, "publishing needs a login")
+
+# login_start / login_poll directly
+s = publish.login_start(ctx)
+eq(s.user_code, "WDJB-MJHT", "device code")
+eq(s.session, "sess1", "session")
+eq(s.interval, 5, "interval")
+eq(publish.login_poll(ctx, s.session).pending, true, "first poll is pending")
+eq(publish.login_poll(ctx, "other").error, "unknown session", "unknown session is an error")
+eq(publish.login_poll(ctx, s.session).pending, true, "second poll is pending")
+r = publish.login_poll(ctx, s.session)
+eq(r.key, "cg_secret", "the key arrives")
+eq(stored.key, "cg_secret", "the key goes to the key store only")
+stored.key = nil
+
+# the command: login (pending, pending, ok)
+state.polls = 0
+code = publish.command(["login"], ctx, out)
+eq(code, 0, "login exit code")
+text = all_text()
+eq(string.find(text, "WDJB-MJHT", 1, true) != nil, true, "the code is printed")
+eq(string.find(text, "https://github.com/login/device", 1, true) != nil, true, "the url is printed")
+eq(string.find(text, "Logged in as alice", 1, true) != nil, true, "the login is reported")
+eq(stored.key, "cg_secret", "the key is stored")
+eq(slept, [5, 5, 5], "waits the interval between polls")
+
+# a package
+base = "/tmp_pub/snake"
+fs.delete("/tmp_pub")
+put(base .. "/package.json5", "{ format: 1, id: \"alice.snake\", name: \"Snake\", version: \"1.0.0\", kind: \"app\", category: \"games\" }")
+put(base .. "/snake.lua", "return {}\n")
+put(base .. "/assets/icon.bin", "\0\1\2\255binary")
+put(base .. "/build/old.cpk", "junk")
+put(base .. "/.hidden/x.txt", "secret")
+
+lines = []
+code = publish.command(["publish", base], ctx, out)
+eq(code, 0, "publish exit code")
+p = state.posted
+eq(p.id, "alice.snake", "id")
+eq(p.version, "1.0.0", "version")
+names = []
+for k, v in p.files:
+    names[len(names) + 1] = k
+table.sort(names)
+eq(names, ["assets/icon.bin", "package.json5", "snake.lua"], "build/ and dot folders are skipped")
+eq(base64.decode(p.files["snake.lua"]), "return {}\n", "files are base64")
+eq(base64.decode(p.files["assets/icon.bin"]), "\0\1\2\255binary", "binary files survive")
+text = all_text()
+eq(string.find(text, "#42", 1, true) != nil, true, "the PR number is printed")
+eq(last.n, 42, "the PR number is remembered")
+
+# status
+lines = []
+code = publish.command(["publish", "--status"], ctx, out)
+eq(code, 0, "status exit code")
+text = all_text()
+eq(string.find(text, "Checks: pending", 1, true) != nil, true, "checks state")
+eq(string.find(text, "build: success", 1, true) != nil, true, "a run")
+eq(string.find(text, "check: in_progress", 1, true) != nil, true, "a running check")
+st = publish.status(ctx, 42)
+eq(st.state, "open", "status api")
+eq(publish.status(ctx, 7).error, "not your PR", "an error answer")
+eq(publish.status(ctx, "abc").error != nil, true, "a bad number is refused")
+lines = []
+eq(publish.command(["publish", "--status", "7"], ctx, out), 1, "status error code")
+eq(string.find(all_text(), "not your PR", 1, true) != nil, true, "the server message is shown")
+
+# server refusal
+state.fail_publish = "package 'alice.snake' belongs to someone else"
+lines = []
+eq(publish.command(["publish", base], ctx, out), 1, "refused publish fails")
+eq(string.find(all_text(), "belongs to someone else", 1, true) != nil, true, "the refusal is shown")
+state.fail_publish = nil
+
+# the local check stops a broken package before anything is sent
+put("/tmp_pub/broken/package.json5", "{ format: 1, id: \"alice.bad\", name: \"Bad\", version: \"1.0.0\", kind: \"app\" }")
+put("/tmp_pub/broken/bad.lua", "this is not lua (")
+before = len(state.calls)
+r = publish.send(ctx, "/tmp_pub/broken")
+eq(r.error != nil and string.find(r.error, "does not build", 1, true) != nil, true, "a build error stops sending")
+eq(len(state.calls), before, "nothing was sent")
+r = publish.send(ctx, "/tmp_pub/nothing")
+eq(string.find(r.error, "no such folder", 1, true) != nil, true, "a missing folder")
+
+# transport failure without a body
+def dead(u, b, h):
+    return nil
+ctx2 = {fs: fs, http_post: dead, http_get: get, gate: GATE, key_store: key_store}
+eq(publish.login_start(ctx2).error != nil, true, "no answer is an error")
+
+# logout
+lines = []
+eq(publish.command(["logout"], ctx, out), 0, "logout exit code")
+eq(stored.key, nil, "the key is cleared")
+eq(string.find(all_text(), "Logged out", 1, true) != nil, true, "logout message")
+lines = []
+eq(publish.command(["logout"], ctx, out), 0, "logout twice is fine")
+eq(string.find(all_text(), "not logged in", 1, true) != nil, true, "already logged out")
+eq(publish.command(["bogus"], ctx, out), 1, "usage on unknown command")
+
+fs.delete("/tmp_pub")
+print("done")
