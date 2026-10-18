@@ -11,6 +11,7 @@ import cdk
 import cfs.path as paths
 import cgl.cimg as cimg
 import cgl.color as color
+import clock as clock_mod
 import cde.wallpaper as wallpaper_mod
 import cde.theme as theme
 import apps.kit as kit
@@ -18,8 +19,8 @@ import svc.rpc as rpc
 import version
 
 export const NAME = "Settings"
-const SECTIONS = [["Appearance", "star"], ["Desktop", "desktop"], ["Panel", "menu"], ["Login", "lock"], ["Sound", "volume"],
-    ["Keyboard", "terminal"], ["Network", "wifi"], ["Storage", "drive"], ["About", "info"]]
+const SECTIONS = [["Appearance", "star"], ["Desktop", "desktop"], ["Panel", "menu"], ["Time", "clock"], ["Login", "lock"], ["Startup", "play"],
+    ["Sound", "volume"], ["Keyboard", "terminal"], ["Network", "wifi"], ["Storage", "drive"], ["About", "info"]]
 const SCALES = [["Auto", "auto"], ["1x", 1], ["2x", 2], ["3x", 3], ["4x", 4]]
 const MODES = ["fill", "fit", "stretch", "center", "tile"]
 
@@ -72,9 +73,9 @@ export class Settings:
         items = []
         for i, s in SECTIONS:
             items[i] = {text: s[1], icon: s[2]}
-        self.list = cdk.list_view({width: 92, grow: 1, items: items, on_select: (i, it) => me:show(i)})
+        self.list = cdk.list_view({width: 92, min_w: 92, grow: 1, items: items, on_select: (i, it) => me:show(i)})
         self.note = cdk.label("", {variant: "dim"})
-        self.pages = [self:_appearance(), self:_desktop(), self:_panel(), self:_login(), self:_sound(), self:_keyboard(), self:_network(), self:_storage(), self:_about()]
+        self.pages = [self:_appearance(), self:_desktop(), self:_panel(), self:_time(), self:_login(), self:_startup(), self:_sound(), self:_keyboard(), self:_network(), self:_storage(), self:_about()]
         wrapped = []
         for i, p in self.pages:
             sv = cdk.scroll(p, {grow: 1})
@@ -91,11 +92,12 @@ export class Settings:
         for i, w in self.wrapped:
             w:set_visible(i == n)
         self.note:set_text("")
-        if n == 5:
+        name = SECTIONS[n][1]
+        if name == "Sound":
             self:_sound_refresh()
-        elif n == 7:
+        elif name == "Network":
             self:_network_refresh()
-        elif n == 8:
+        elif name == "Storage":
             self:_storage_refresh()
 
     # ------------------------------------------------------------ Appearance
@@ -193,11 +195,80 @@ export class Settings:
         self.p_pos = cdk.dropdown({items: ["bottom", "top"], index: pos == "top" and 2 or 1, on_change: (i, t) => me:_set_panel({position: t})})
         self.p_align = cdk.dropdown({items: ["left", "center"], index: al == "center" and 2 or 1, on_change: (i, t) => me:_set_panel({align: t})})
         return cdk.column({gap: 4, padding: 2}, [head("Taskbar"), line("Position", self.p_pos), line("Buttons", self.p_align),
-            cdk.label("Ctrl+Alt+P and Ctrl+Alt+O do the same.", {variant: "dim"})])
+            cdk.label("Also Ctrl+Alt+P and Ctrl+Alt+O.", {variant: "dim"})])
 
     def _set_panel(self, change):
         if self.d != nil:
             self.d.set_panel(change)
+
+    # ------------------------------------------------------------ Time
+
+    def _time(self):
+        let me = self
+        d = self.d
+        c = d != nil and d.clock_conf() or {}
+        self.t_source = cdk.dropdown({items: ["Real time", "Minecraft time"], index: c.source == "ingame" and 2 or 1,
+            on_change: (i, t) => me:_time_set({source: i == 2 and "ingame" or "utc"})})
+        self.t_format = cdk.dropdown({items: ["24 hours", "12 hours"], index: c.format == "12h" and 2 or 1, on_change: (i, t) => me:_time_set({format: i == 2 and "12h" or "24h"})})
+        self.t_seconds = cdk.switch("Seconds on the panel", {on: c.seconds == true, on_change: (v) => me:_time_set({seconds: v})})
+        self.t_tz = cdk.text_input({width: 120, placeholder: "type a city or zone", text: "", on_change: (t) => me:_zones(t)})
+        self.t_zones = cdk.list_view({height: 48, items: [], on_select: (i, it) => me:_pick_zone(i)})
+        self.t_now = cdk.label("Zone: " .. tostring(c.tz ?? "UTC"), {variant: "dim"})
+        self.zone_names = []
+        return cdk.column({gap: 4, padding: 2}, [head("Panel clock"), line("Shows", self.t_source), line("Format", self.t_format), self.t_seconds,
+            head("Time zone"), self.t_now, self.t_tz, self.t_zones, cdk.label("Click the panel clock: Minecraft time.", {variant: "dim"})])
+
+    def _zones(self, text):
+        names = clock_mod.zone_names(text != "" and text or nil)
+        self.zone_names = []
+        items = []
+        for i, n in names:
+            if i > 40:
+                break
+            self.zone_names[i] = n
+            items[i] = {text: n, icon: "clock"}
+        self.t_zones:set_items(items)
+
+    def _pick_zone(self, i):
+        n = self.zone_names[i]
+        if n != nil:
+            self:_time_set({tz: n})
+            self.t_now:set_text("Zone: " .. n)
+
+    def _time_set(self, partial):
+        if self.d != nil:
+            self.d.set_time(partial)
+        res, err = self:_rpc("timed", "set_conf", partial)
+        if err != nil:
+            self:_say("Panel updated; not saved for everyone: " .. string.gsub(tostring(err), "^.-: ", "", 1))
+
+    # ------------------------------------------------------------ Startup
+
+    def _startup(self):
+        let me = self
+        d = self.d
+        apps = d != nil and d.apps() or []
+        on = {}
+        for id in (d != nil and d.autostart() or []):
+            on[id] = true
+        self.start_switches = []
+        rows = []
+        for a in apps:
+            let id = a.id
+            sw = cdk.switch(a.name, {on: on[id] == true, on_change: (v) => me:_startup_changed()})
+            self.start_switches[len(self.start_switches) + 1] = {id: id, w: sw}
+            rows[len(rows) + 1] = sw
+        if len(rows) == 0:
+            rows[1] = cdk.label("Open this from the desktop to choose startup apps.", {variant: "dim"})
+        return cdk.column({gap: 4, padding: 2}, [head("Open after login"), cdk.label("The terminal always opens first.", {variant: "dim"}), cdk.column({gap: 3}, rows)])
+
+    def _startup_changed(self):
+        out = []
+        for e in self.start_switches:
+            if e.w.on:
+                out[len(out) + 1] = e.id
+        if self.d != nil:
+            self.d.set_autostart(out)
 
     # ------------------------------------------------------------ Login & lock
 
@@ -283,7 +354,7 @@ export class Settings:
         self.kb_second = cdk.dropdown({items: layouts, index: idx, on_change: (i, t) => me:_set_kb({keyboard: t})})
         self.kb_mode = cdk.dropdown({items: ["auto", "manual"], index: info != nil and info.mode == "manual" and 2 or 1, on_change: (i, t) => me:_set_kb({mode: t})})
         return cdk.column({gap: 4, padding: 2}, [head("Keyboard layouts"), line("Second", self.kb_second), line("Switching", self.kb_mode),
-            cdk.label("English is always there. Switch with Ctrl+Shift or the tray.", {variant: "dim"})])
+            cdk.label("English is always there.", {variant: "dim"})])
 
     def _set_kb(self, q):
         let me = self
@@ -298,7 +369,7 @@ export class Settings:
         self.net_peers = cdk.list_view({height: 48, items: []})
         return cdk.column({gap: 4, padding: 2}, [head("This computer"), line("Name", cdk.row({gap: 3}, [self.net_name, cdk.button("Apply", {on_click: (b) => me:_set_name()})])),
             self.net_info, head("Computers nearby"), self.net_peers,
-            cdk.label("Pair in a terminal: net pair, then Axo shows their folders.", {variant: "dim"})])
+            cdk.label("Pair in a terminal: net pair.", {variant: "dim"})])
 
     def _network_refresh(self):
         st, err = self:_rpc("netd", "status")
@@ -323,7 +394,7 @@ export class Settings:
         self.disks = cdk.column({gap: 4}, [])
         self.ext_info = cdk.column({gap: 2}, [])
         return cdk.column({gap: 4, padding: 2}, [head("Disks"), self.disks, head("Storage extenders"), self.ext_info,
-            cdk.label("Connect or detach them in Axo (Ctrl+E).", {variant: "dim"})])
+            cdk.label("Manage them in Axo (Ctrl+E).", {variant: "dim"})])
 
     def _storage_refresh(self):
         st = self.ui.style

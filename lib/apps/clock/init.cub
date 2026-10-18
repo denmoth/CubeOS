@@ -143,7 +143,8 @@ export class Clock:
         self.digital = cdk.label("00:00:00", {variant: "title", align: "center"})
         self.date = cdk.label("", {variant: "dim", align: "center"})
         self.zone_label = cdk.label("", {variant: "dim", align: "center"})
-        p1 = cdk.row({grow: 1, gap: 6, align: "center"}, [self.face, cdk.column({gap: 2, grow: 1}, [cdk.spacer(), self.digital, self.date, self.zone_label, cdk.spacer()])])
+        self.game = cdk.label("", {align: "center", color: ui.style.accent})
+        p1 = cdk.row({grow: 1, gap: 6, align: "center"}, [self.face, cdk.column({gap: 2, grow: 1}, [cdk.spacer(), self.digital, self.date, self.zone_label, self.game, cdk.spacer()])])
         # 2: мир
         self.world = cdk.list_view({grow: 1, items: []})
         p2 = cdk.column({grow: 1}, [self.world])
@@ -201,13 +202,19 @@ export class Clock:
             self.date:set_text(c:format("%a %d %b %Y"))
             z = c:zone()
             self.zone_label:set_text(z.name .. "  " .. clock_mod.format_offset(z.offset_min))
+            okg, g = pcall(() => c:ingame())
+            if okg and g != nil:
+                self.game:set_text("Minecraft: day " .. g.day .. "  " .. two(g.hour) .. ":" .. two(g.min))
         elif self.tab == 2:
             rows = []
+            okg, g = pcall(() => c:ingame())
+            if okg and g != nil:
+                rows[1] = {text: "Minecraft", icon: "cube", detail: two(g.hour) .. ":" .. two(g.min) .. " day " .. g.day}
             base = c:parts()
             for i, zz in self.zones:
                 p = zz.clock:parts()
                 diff = p.day != base.day and (p.day > base.day or p.month > base.month) and "+1 day" or (p.day != base.day and "-1 day" or "")
-                rows[i] = {text: zz.name, icon: "clock", detail: two(p.hour) .. ":" .. two(p.min) .. " " .. diff}
+                rows[len(rows) + 1] = {text: zz.name, icon: "clock", detail: two(p.hour) .. ":" .. two(p.min) .. " " .. diff}
             self.world:set_items(rows)
         elif self.tab == 3 and self.sw.running:
             self:_sw_update(now)

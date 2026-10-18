@@ -340,6 +340,9 @@ export class Panel:
         if it.kind == "start":
             if wm.on_start != nil:
                 wm.on_start()
+        elif it.kind == "clock":
+            if wm.on_clock != nil:
+                wm.on_clock()
         elif it.kind == "desk":
             wm:toggle_desktop()
         elif it.kind == "task":

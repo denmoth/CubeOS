@@ -57,7 +57,7 @@ export class Calc:
             cdk.button("M+", {variant: "flat", on_click: (x) => me:mem("+")}), cdk.button("M-", {variant: "flat", on_click: (x) => me:mem("-")}),
             cdk.spacer(), cdk.button("Sci", {variant: "flat", on_click: (x) => me:toggle_sci()})])
         left = cdk.column({gap: 1}, [self.input, cdk.row({gap: 4, align: "center"}, [self.note, cdk.spacer(), self.result]), mem, self.pad])
-        ui:set_root(cdk.row({gap: 4, padding: 2}, [left, self.sci_pad, self.hist]))
+        ui:set_root(cdk.row({gap: 4, padding: 2}, [cdk.spacer(), left, self.sci_pad, self.hist, cdk.spacer()]))
         ui:set_focus(self.input)
         ui.on_key = (ev) => me:key(ev)
 

@@ -281,7 +281,10 @@ export def program(session, opts=nil):
         def toggle_menu():
             startmenu.toggle(wm, reg, menu_opts)
         wm.on_start = toggle_menu
-        tray_mod.new(wm):install()
+        tray = tray_mod.new(wm)
+        tray.clock = () => clock_obj.c
+        tray:install()
+        wm.on_clock = () => tray:open_clock()
         wm:hotkey("ctrl+space", toggle_menu)
         # виджеты рабочего стола: conf.widgets = [{id, x, y}], без настройки только часы справа сверху
         wlist = []
@@ -366,6 +369,12 @@ export def program(session, opts=nil):
                 th = theme_mod.find(name, wm.theme_dirs)
                 out[len(out) + 1] = {name: name, display: th.display ?? name}
             return out
+        def app_list():
+            out = []
+            for e in reg:entries():
+                if (e.kind ?? "app") == "app" and e.id != "terminal" and e.id != "widgets":
+                    out[len(out) + 1] = {id: e.id, name: e.name, icon: e.icon}
+            return out
         def widget_list():
             out = []
             for spec in widgets_mod.CATALOG:
@@ -380,12 +389,23 @@ export def program(session, opts=nil):
             set_wallpaper: (spec) => wm:defer(() => set_wall(spec)),
             set_panel: (change) => wm:defer(() => run_panel(change)(wm)),
             set_widget: (id, on) => wm:defer(() => set_widget(id, on)),
-            lock: () => wm:defer(lock_screen), logout: () => wm:defer(logout)}
+            lock: () => wm:defer(lock_screen), logout: () => wm:defer(logout),
+            apps: () => app_list(),
+            clock_conf: () => clock_obj.c != nil and clock_obj.c.conf or {},
+            set_time: (partial) => wm:defer(() => clock_obj.c != nil and clock_obj.c:set_conf(partial)),
+            autostart: () => type(conf.autostart) == "table" and conf.autostart or [],
+            set_autostart: (list) => save("autostart", list)}
         wm:hotkey("ctrl+alt+o", panel_align)
         wm:hotkey("ctrl+alt+k", () => wm:launch(gallery.main, {name: "gallery"}))
         wm:hotkey("ctrl+alt+equals", () => zoom(1))
         wm:hotkey("ctrl+alt+minus", () => zoom(-1))
         open_terminal()
+        # программы, которые пользователь велел открывать после входа (Настройки, раздел Startup): conf.autostart = [id, ...]
+        if type(conf.autostart) == "table":
+            for id in conf.autostart:
+                e = reg:find(id)
+                if e != nil and id != "terminal":
+                    pcall(e.run, wm)
         sys.log("info", "desktop started for " .. tostring(session.user))
         if o.ready != nil:
             o.ready(wm)

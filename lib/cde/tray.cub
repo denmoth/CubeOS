@@ -145,6 +145,36 @@ def _net_spec():
             cdk.row({align: "center", gap: 4}, [cdk.button("Scan", {icon: "search", variant: "flat", on_click: scan}), cdk.spacer(), status])]
     return {w: 146, h: 124, build: build}
 
+# окошко часов: время и дата, время мира Minecraft (в часах панели его показать можно переключателем; наведения мыши в CC нет, поэтому клик)
+def _clock_spec():
+    def build(ui, st, sys, tray):
+        c = tray.clock != nil and tray.clock() or nil
+        if c == nil:
+            return [_title_row(st, "bell", "Time"), cdk.label("No clock.", {variant: "dim"})]
+        real = cdk.label("", {variant: "title", align: "center"})
+        date = cdk.label("", {variant: "dim", align: "center"})
+        game = cdk.label("", {align: "center"})
+        phase = cdk.label("", {variant: "dim", align: "center"})
+        def fill():
+            p = c:parts()
+            real:set_text(c:format("%H:%M:%S"))
+            date:set_text(c:format("%a %d %b %Y"))
+            okg, g = pcall(() => c:ingame())
+            if okg and g != nil:
+                game:set_text("Minecraft: day " .. g.day .. "  " .. string.format("%02d:%02d", g.hour, g.min))
+                h = g.hour
+                phase:set_text((h >= 6 and h < 12) and "morning" or ((h >= 12 and h < 18) and "afternoon" or ((h >= 18 and h < 21) and "evening" or "night")))
+        fill()
+        ui:every(1, fill)
+        ingame = c.conf != nil and c.conf.source == "ingame"
+        def flip(v):
+            partial = {source: v and "ingame" or "utc"}
+            c:set_conf(partial)
+            _ask(sys, "timed", "set_conf", partial)
+        return [_title_row(st, "bell", "Time"), real, date, cdk.separator(), game, phase,
+            cdk.switch("Minecraft time on panel", {on: ingame, on_change: flip})]
+    return {w: 170, h: 104, build: build}
+
 def _layout_spec():
     def build(ui, st, sys, tray):
         kb = tray.data.kb
@@ -181,6 +211,8 @@ export class Tray:
         self.data = {}
         self.items = []
         self.running = false
+        # функция, дающая часы (cde.session ставит её после создания)
+        self.clock = nil
 
     # значки в панель и процесс опроса служб
     def install(self):
@@ -208,6 +240,10 @@ export class Tray:
         wm.panel.tray = self.items
         self.running = true
         wm:launch(_poller, {name: "tray"}, [self])
+
+    def open_clock(self):
+        if self.wm.panel != nil:
+            self:open("clock", _clock_spec(), self.wm.panel)
 
     # новые данные от служб (в процессе менеджера)
     def set(self, data):

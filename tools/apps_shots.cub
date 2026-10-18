@@ -14,6 +14,8 @@ import apps.notes as notes
 import apps.clock as clockapp
 import apps.pulse as pulse
 import apps.settings as settings
+import cde.tray as tray_mod
+import clock as clock_mod
 
 def make_term(cols, rows):
     api = {}
@@ -236,6 +238,8 @@ d = {wm: wm, conf: conf, user: "denmoth",
     avatars: () => ["letter", "custom", "astronaut", "cat", "creeper", "cube", "fox", "ghost", "robot"],
     widgets: () => [{id: "clock", name: "Clock", on: true}, {id: "calendar", name: "Calendar", on: false}, {id: "system", name: "System", on: true}],
     save: (a, b) => nil, save_login: (a, b) => nil, set_theme: (n) => nil, set_scale: (x) => nil, set_animation: (a, b) => nil, set_wallpaper: (s) => nil,
+    clock_conf: () => {source: "utc", format: "24h", seconds: false, tz: "Europe/Kyiv"}, set_time: (p) => nil, apps: () => [{id: "axo", name: "Axo"}, {id: "jukebox", name: "Jukebox"}, {id: "clock", name: "Clock"}, {id: "pulse", name: "Pulse"}],
+    autostart: () => ["clock"], set_autostart: (l) => nil,
     set_panel: (c) => nil, set_widget: (a, b) => nil, lock: () => nil}
 app, w = open_app(settings.main, [nil, {view: vw, desktop: d, assets: "/repo/assets", ready: (p) => rawset(got, "app", p)}])
 dump(wm, "ui_app_settings")
@@ -244,13 +248,32 @@ key(keys.down)
 dump(wm, "ui_app_settings2")
 key(keys.down)
 key(keys.down)
+dump(wm, "ui_app_settings_time")
+key(keys.down)
 dump(wm, "ui_app_settings_login")
+key(keys.down)
+dump(wm, "ui_app_settings_startup")
 key(keys.down)
 settle(10)
 dump(wm, "ui_app_settings_sound")
-key(keys.down)
-key(keys.down)
-key(keys.down)
-key(keys.down)
+for i in range[1, 5]:
+    key(keys.down)
 dump(wm, "ui_app_settings_about")
 close_app(w)
+
+# ---------------------------------------------------------------- окошко часов на панели (клик по времени)
+wm:set_state(wm.windows[1], "min")
+settle(10)
+tray = tray_mod.new(wm)
+tray.clock = () => clock_mod.new({tz: "Europe/Kyiv", source: "ingame", seconds: true})
+wm.on_clock = () => tray:open_clock()
+cit = nil
+for it in wm.panel.items:
+    if it.key == "clock":
+        cit = it
+cx = wm.panel.rect.x + cit.x + math.floor(cit.w / 2)
+cy = wm.panel.rect.y + cit.y + math.floor(cit.h / 2)
+k:feed("mouse_click", 1, cx, cy)
+k:feed("mouse_up", 1, cx, cy)
+settle(30)
+dump(wm, "ui_app_clock_popup")

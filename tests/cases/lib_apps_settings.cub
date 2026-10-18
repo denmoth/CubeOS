@@ -13,10 +13,12 @@ d = {wm: env.wm, conf: conf, user: "ann",
     save: (k, v) => rawset(log, len(log) + 1, "save:" .. k .. "=" .. tostring(v)), save_login: (k, v) => rawset(log, len(log) + 1, "login:" .. k .. "=" .. tostring(v)),
     set_theme: (n) => rawset(log, len(log) + 1, "theme:" .. n), set_scale: (v) => rawset(log, len(log) + 1, "scale:" .. tostring(v)),
     set_animation: (k, v) => rawset(log, len(log) + 1, "anim:" .. k .. "=" .. tostring(v)), set_wallpaper: (s) => rawset(log, len(log) + 1, "wall:" .. tostring(type(s) == "table" and s.name .. "/" .. s.mode or s)),
+    clock_conf: () => {source: "utc", format: "24h", seconds: false, tz: "UTC"}, set_time: (p) => rawset(log, len(log) + 1, "time:" .. tostring(p.source or p.tz or p.format)),
+    apps: () => [{id: "calc", name: "Calc"}, {id: "clock", name: "Clock"}], autostart: () => ["clock"], set_autostart: (l) => rawset(log, len(log) + 1, "autostart:" .. table.concat(l, ",")),
     set_panel: (c) => rawset(log, len(log) + 1, "panel:" .. tostring(c.position or c.align)), set_widget: (id, on) => rawset(log, len(log) + 1, "widget:" .. id .. "=" .. tostring(on)),
     lock: () => rawset(log, len(log) + 1, "lock")}
 app = env.launch(settings.main, [nil, {view: env.view, desktop: d, assets: "/repo/assets", ready: (p) => rawset(env.got, "app", p)}])
-eq(len(app.pages), 9, "nine sections")
+eq(len(app.pages), 11, "eleven sections")
 eq(app.themes.selected, 1, "the current theme is selected")
 # выбор темы стрелкой в списке тем
 app.ui:set_focus(app.themes)
@@ -32,10 +34,15 @@ env.key(keys.f)
 app.ui:set_focus(app.list)
 env.key(keys.down)
 env.key(keys.down)
-eq(app.page, 4, "the login section")
+env.key(keys.down)
+eq(app.page, 5, "the login section")
 eq(app.av_list.items[3].text, "cat", "avatars are listed")
 app.ui:set_focus(app.av_list)
 env.key(keys.down)
-eq(string.find(log[len(log)], "save:avatar=", 1, true) != nil, true, "choosing an avatar saves it") 
+eq(string.find(log[len(log)], "save:avatar=", 1, true) != nil, true, "choosing an avatar saves it")
+eq(app.t_source.index, 1, "the time page knows the clock shows real time")
+app:show(6)
+app.start_switches[1].w:set(true)
+eq(log[len(log)], "autostart:calc,clock", "startup apps are saved") 
 eq(env.alive(), true, "the app is still running (it did not crash)")
 print("done")
