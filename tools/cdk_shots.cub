@@ -73,6 +73,7 @@ def shoot(cols, rows, tag, theme_name):
     sliders = []
     buttons = []
     def walk(w):
+        outer field
         if w.kind == "input":
             field = w
         elif w.kind == "checkbox":

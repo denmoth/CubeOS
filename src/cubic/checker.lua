@@ -1174,10 +1174,35 @@ function M.check(ast, file, genv, hdr, opts)
 
   ---------------------------------------------------------------- присваивание
 
+  -- переменная, которой присваивают: своя функция (до её границы), а внешняя только по outer
+  local function fn_scope_of()
+    local s = scope
+    while s and s.kind ~= "fn" do s = s.parent end
+    return s
+  end
+
+  local function lookup_own(name)
+    local s = scope
+    while s do
+      local v = s.vars[name]
+      if v then return v end
+      if s.kind == "fn" then
+        if s.outers and s.outers[name] then return lookup_var(name) end
+        return nil
+      end
+      s = s.parent
+    end
+    return nil
+  end
+
   local function assign_name(name, vt, line)
-    local rec = lookup_var(name)
+    local rec = lookup_own(name)
     if not rec then
+      local fs_ = fn_scope_of()
+      local save = scope
+      if fs_ then scope = fs_ end
       declare(name, vt.k == "nil" and ANY or vt, false)
+      scope = save
       return
     end
     if rec.type == nil or rec.pending then
@@ -1362,6 +1387,14 @@ function M.check(ast, file, genv, hdr, opts)
   end
 
   function C.Pass() end
+
+  function C.Outer(s)
+    local fs_ = fn_scope_of()
+    if fs_ then
+      fs_.outers = fs_.outers or {}
+      for _, n in ipairs(s.names) do fs_.outers[n] = true end
+    end
+  end
   function C.Break() end
   function C.Continue() end
   function C.TypeAlias(s)

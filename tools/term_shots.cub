@@ -23,6 +23,7 @@ def make_term(cols, rows):
     return api
 
 def dump(screen, name):
+    outer f
     s = screen.surface
     pal = screen.palette
     f = fs.open("/repo/build/" .. name .. ".ppm", "wb")

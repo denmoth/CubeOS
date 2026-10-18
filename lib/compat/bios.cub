@@ -22,6 +22,7 @@ export def write_text(env, text):
     x, y = term.getCursorPos()
     lines = 0
     def new_line():
+        outer y, x
         if y + 1 <= h:
             term.setCursorPos(1, y + 1)
         else:
@@ -129,6 +130,7 @@ export def read_line(env, replace_char=nil, history=nil, complete=nil, default=n
             return string.rep(replace_char, chars.length(s))
         return s
     def redraw(clear_char=nil):
+        outer scroll, text, h, w
         w, h = term.getSize()
         room = w - sx + 1
         if pos < scroll:
@@ -152,6 +154,7 @@ export def read_line(env, replace_char=nil, history=nil, complete=nil, default=n
                     term.setTextColor(old_fg)
         term.setCursorPos(sx + pos - scroll, sy)
     def recompute_completions():
+        outer completion_index, completions
         completions = {}
         completion_index = 0
         if complete != nil and pos == chars.length(line):

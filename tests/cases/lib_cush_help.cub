@@ -82,6 +82,7 @@ eq(i18n.parse("msgid \"a \\\"b\\\"\"\nmsgstr \"x\\ny\"\n")["a \"b\""], "x\ny", "
 
 # ------------------------------------------------------------ в оболочке
 def make(unicode_ok, lang=nil):
+    outer proc, vt
     vt = vterm.new(60, 19, {history: 400})
     env = compat_env.new({vterm: vt})
     if lang != nil:

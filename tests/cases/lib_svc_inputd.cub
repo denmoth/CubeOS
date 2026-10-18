@@ -22,6 +22,7 @@ for i in range[1, 5]:
 
 answers = {}
 def ask(sys, args):
+    outer res
     res, err = rpc.call(sys, "inputd", args.op, args.q)
     answers[args.tag] = res ?? err
 user = rules.subject("bob", ["user"])

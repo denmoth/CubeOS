@@ -97,6 +97,7 @@ settle()
 
 # ---------------------------------------------------------------- нажатия на кнопки
 def click(it, button=1):
+    outer pressed
     px = it.x + 3
     py = p.rect.y + it.y + 3
     k:feed("mouse_click", button, px, py)

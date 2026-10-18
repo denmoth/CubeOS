@@ -5,7 +5,7 @@ local unpack = table.unpack or unpack
 local setmetatable, getmetatable, type, pairs, ipairs, next, select, pcall, error, rawget, rawset, tostring =
   setmetatable, getmetatable, type, pairs, ipairs, next, select, pcall, error, rawget, rawset, tostring
 
-rt.VERSION = "0.3.0"
+rt.VERSION = "1.0.0"
 
 -- Маркеры управления потоком для try
 rt.RET = {}
@@ -146,6 +146,44 @@ function rt.len(x)
   if t ~= "table" then error("len() expects a string or a table, got " .. t, 2) end
   local n = #x
   if n > 0 then return n end
+  local c = 0
+  for _ in next, x do c = c + 1 end
+  return c
+end
+
+-- то, что перебирает for x in e: таблица как есть, строка списком символов, функция-итератор списком значений
+function rt.seq(e)
+  local t = type(e)
+  if t == "table" then return e end
+  if t == "string" then return rt.chars(e) end
+  if t == "function" then
+    local out = {}
+    for v in e do out[#out + 1] = v end
+    return out
+  end
+  error("cannot iterate over a " .. t, 2)
+end
+
+-- список символов строки (UTF-8 целиком: «ё» один символ): for ch in chars(s)
+function rt.chars(s)
+  local out = {}
+  for ch in tostring(s):gmatch("[%z\1-\127\194-\244][\128-\191]*") do out[#out + 1] = ch end
+  return out
+end
+
+-- len() в сборке для разработки: как #, но словарь (ключи без списка) это ошибка с подсказкой
+function rt.lenc(x)
+  local t = type(x)
+  if t == "string" then return #x end
+  if t ~= "table" then error("len() expects a list or a string, got " .. t, 2) end
+  local n = #x
+  if n == 0 and next(x) ~= nil then error("len() of a dictionary (it has keys, not list items): use count(d)", 2) end
+  return n
+end
+
+-- число ключей таблицы (len() это длина списка или строки, как # в Lua)
+function rt.count(x)
+  if type(x) ~= "table" then error("count() expects a table, got " .. type(x), 2) end
   local c = 0
   for _ in next, x do c = c + 1 end
   return c

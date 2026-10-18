@@ -5,6 +5,7 @@ import cfs.journal as journal
 eq = t.eq
 
 def fresh():
+    outer store, fsys
     fsys = cfs.new({})
     fsys:mount("/", cfs.memory())
     fsys:mkdir(nil, "/cfg", {parents: true})

@@ -59,6 +59,7 @@ export def main(sys, args):
     handlers.read = mark_read
 
     def clear(q, sender):
+        outer items
         items = []
         return true
     handlers.clear = clear

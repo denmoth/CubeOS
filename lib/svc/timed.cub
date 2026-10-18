@@ -49,6 +49,7 @@ export def main(sys, args):
         return true
 
     def tick():
+        outer last_minute
         utc = c:now()
         if c:check_drift(utc, sys.now()):
             notify({event: "time_changed", reason: "drift"})

@@ -41,6 +41,17 @@ function M.generate(ast, file, opts)
   local idseq = 0
   local exports = {}
 
+  -- вызывают ли где-нибудь в модуле функцию с именованными аргументами: тогда подписи нужны всем функциям модуля
+  local uses_kwargs = false
+  local function scan_kwargs(node)
+    if type(node) ~= "table" or uses_kwargs then return end
+    if node.kwargs and (node.tag == "Call" or node.tag == "Method") then uses_kwargs = true return end
+    for k, v in pairs(node) do
+      if type(v) == "table" and k ~= "comments" then scan_kwargs(v) end
+    end
+  end
+  scan_kwargs(ast)
+
   -- минификация: уникальные короткие имена для всех переменных модуля
   local avoid, keep = {}, {}
   local short_n = 0
@@ -74,6 +85,8 @@ function M.generate(ast, file, opts)
     warnings[#warnings + 1] = file .. ":" .. (line or curline) .. ": warning: " .. msg
   end
 
+  -- raw[k]: строка k это вставка lua: или комментарий; к ней нельзя дописывать код (он мог бы оказаться в комментарии)
+  local raw = {}
   local function emit(s)
     if minify then
       out[#out + 1] = s
@@ -81,6 +94,11 @@ function M.generate(ast, file, opts)
       out[#out + 1] = string.rep("  ", level) .. s
     end
     lmap[#lmap + 1] = curline
+  end
+
+  local function emit_raw(s)
+    emit(s)
+    raw[#out] = true
   end
 
   -- комментарии (--keep-comments)
@@ -91,7 +109,7 @@ function M.generate(ast, file, opts)
       local c = comments[cidx]
       local save = curline
       curline = c.line
-      emit("--" .. c.text)
+      emit_raw("--" .. c.text)
       curline = save
       cidx = cidx + 1
     end
@@ -101,6 +119,16 @@ function M.generate(ast, file, opts)
     idseq = idseq + 1
     return idseq
   end
+
+  -- имя служебной переменной: при минификации короткое
+  local function temp_name(prefix)
+    if minify then return short_name() end
+    return prefix .. nextid()
+  end
+
+  -- функции, которые возвращают итератор Lua (for x in string.gmatch(...) идёт напрямую)
+  local NATIVE_ITER = U.set({ "gmatch", "gfind", "lines" })
+  local NATIVE_FN_ITER = U.set({ "pairs", "ipairs", "next" })
 
   ---------------------------------------------------------------- области видимости
 
@@ -169,7 +197,7 @@ function M.generate(ast, file, opts)
   end
 
   -- собирает имена, которые инструкции объявляют на уровне функции (как переменные Python)
-  local function collect(stmts, names, seen)
+  local function collect(stmts, names, seen, outers)
     local function add(name, line, is_def)
       local e = seen[name]
       if e then
@@ -193,40 +221,60 @@ function M.generate(ast, file, opts)
         add(s.name, s.line)
       elseif tag == "FromImport" then
         for _, n in ipairs(s.names) do add(n.alias, n.line, true) end
+      elseif tag == "Outer" then
+        for _, n in ipairs(s.names) do
+          if outers then outers[n] = s.line end
+        end
       elseif tag == "If" then
-        collect(s.body, names, seen)
-        for _, e in ipairs(s.elifs) do collect(e.body, names, seen) end
-        if s.orelse then collect(s.orelse, names, seen) end
+        collect(s.body, names, seen, outers)
+        for _, e in ipairs(s.elifs) do collect(e.body, names, seen, outers) end
+        if s.orelse then collect(s.orelse, names, seen, outers) end
       elseif tag == "While" or tag == "ForRange" or tag == "ForIn" or tag == "With" or tag == "ModeBlock" then
-        collect(s.body, names, seen)
+        collect(s.body, names, seen, outers)
       elseif tag == "Try" then
-        collect(s.body, names, seen)
-        for _, h in ipairs(s.handlers) do collect(h.body, names, seen) end
-        if s.finally then collect(s.finally, names, seen) end
+        collect(s.body, names, seen, outers)
+        for _, h in ipairs(s.handlers) do collect(h.body, names, seen, outers) end
+        if s.finally then collect(s.finally, names, seen, outers) end
       elseif tag == "Match" then
         for _, c in ipairs(s.cases) do
           pattern_names(c.pattern, add)
-          collect(c.body, names, seen)
+          collect(c.body, names, seen, outers)
         end
       end
     end
   end
 
   -- объявляет собранные имена локальными переменными текущей функции и выдаёт `local ...`
+  -- Cubic 1.0, области как в Python: всё, чему функция присваивает, её локальная переменная; поменять переменную внешней
+  -- функции или модуля можно, только объявив её словом outer
   local function hoist(stmts)
-    local names = {}
-    collect(stmts, names, {})
+    local names, outers = {}, {}
+    collect(stmts, names, {}, outers)
     local decl = {}
+    for name, line in pairs(outers) do
+      if not scope.parent then
+        fail(line, "'outer' is only allowed inside a function")
+      end
+      if not lookup_from(scope.parent, name) then
+        fail(line, "'outer " .. name .. "': there is no variable '" .. name .. "' outside this function")
+      end
+    end
     for _, n in ipairs(names) do
       local name = n.name
-      local outer = lookup_from(scope.parent, name)
-      if not scope.names[name] and not outer then
+      if not outers[name] and not scope.names[name] then
+        local outer = scope.parent and lookup_from(scope.parent, name) or nil
         if B.PROTECTED[name] then protected_error(name, n.line) end
         if B.SHADOW_WARN[name] then warn(n.line, "'" .. name .. "' hides the CC global of the same name in this scope") end
         decl[#decl + 1] = declare(name, "local", n.line)
-        scope.names[name].is_def = n.def
-      elseif outer and outer.is_def and not n.def and not scope.names[name] then
-        warn(n.line, "assignment to '" .. name .. "' replaces the function/class/import of the same name in the enclosing scope; use 'let " .. name .. " = ...' for a local variable")
+        local info = scope.names[name]
+        info.is_def = n.def
+        -- тот же имя есть снаружи: чтение до первого присваивания здесь почти наверняка ошибка (нужно outer)
+        if outer then
+          if opts.report_shadow then warn(n.line, "shadow-outer " .. name) end
+          info.shadow = true
+          info.assigned = false
+          info.fn = scope
+        end
       end
     end
     if #decl > 180 then
@@ -235,10 +283,31 @@ function M.generate(ast, file, opts)
     if #decl > 0 then emit("local " .. table.concat(decl, ", ")) end
   end
 
+  local function fn_scope()
+    local sc = scope
+    while sc and not sc.is_fn do sc = sc.parent end
+    return sc
+  end
+
+  local function read_check(name, info, line)
+    if info.shadow and not info.assigned and info.fn == fn_scope() then
+      fail(line, "'" .. name .. "' is assigned later in this function, so here it is a new local variable without a value; "
+        .. "to use or change the outer '" .. name .. "', write 'outer " .. name .. "' at the start of the function, or pick another name")
+    end
+  end
+
+  local function mark_assigned(name)
+    local info = lookup(name)
+    if info then info.assigned = true end
+  end
+
   local function ref(name, line)
     check_name(name, line)
     local info = lookup(name)
-    if info then return info.lname end
+    if info then
+      read_check(name, info, line)
+      return info.lname
+    end
     if name == "super" then
       local cls = class_stack[#class_stack]
       if not cls then fail(line, "'super' can only be used inside a class") end
@@ -450,6 +519,12 @@ function M.generate(ast, file, opts)
   end
 
   function E.Call(n)
+    -- len(x) это # в Lua (длина списка или строки в байтах), без вызова рантайма
+    if n.fn.tag == "Name" and n.fn.name == "len" and not lookup("len") and not n.kwargs and #n.args == 1 and n.args[1].tag ~= "Spread" then
+      -- сборка для разработки (по умолчанию) проверяет, что это не словарь; выпуск (opts.release) пишет голый #
+      if not opts.release then return "__rt.lenc(" .. expr(n.args[1]) .. ")" end
+      return "#" .. base_expr(n.args[1])
+    end
     local args = call_args(n.args)
     if n.kwargs then
       local all = { kw_table(n.kwargs) }
@@ -479,13 +554,29 @@ function M.generate(ast, file, opts)
 
   local SIMPLE_NODE = U.set({ "Number", "String", "Bool", "Nil", "Name" })
 
+  -- имя или цепочка полей от имени (a, a.b, a.b.c): читать дважды безопасно и дёшево
+  local function pure_path(node)
+    local depth = 0
+    while node.tag == "Attr" and not node.opt do
+      node = node.obj
+      depth = depth + 1
+      if depth > 3 then return false end
+    end
+    return node.tag == "Name"
+  end
+
   function E.Binary(n)
     local op = n.op
     local l, r = expr(n.l), expr(n.r)
     if op == "and" or op == "or" then
       return "(" .. l .. " " .. op .. " " .. r .. ")"
     elseif op == "??" then
-      if SIMPLE_NODE[n.r.tag] then
+      -- слева простая ссылка, справа значение, которое не бывает false/nil: без вызова функции
+      local safe_r = SAFE_TRUTHY[n.r.tag] or (n.r.tag == "Bool" and n.r.v)
+      if safe_r and pure_path(n.l) then
+        return "(" .. l .. " == nil and " .. r .. " or " .. l .. ")"
+      end
+      if SIMPLE_NODE[n.r.tag] or safe_r then
         return "__rt.nvl(" .. l .. ", " .. r .. ")"
       end
       return "__rt.nvl_lazy(" .. l .. ", function() return " .. r .. " end)"
@@ -682,6 +773,7 @@ function M.generate(ast, file, opts)
       if info.kind == "const" then
         fail(t.line, "cannot assign to constant '" .. t.name .. "'")
       end
+      info.assigned = true
       return info.lname
     elseif t.tag == "Index" then
       return base_expr(t.obj) .. "[" .. expr(t.idx) .. "]"
@@ -691,6 +783,9 @@ function M.generate(ast, file, opts)
   end
 
   function S.Pass() end
+
+  -- outer x: объявление уже учтено при подъёме имён функции
+  function S.Outer() end
 
   function S.TypeAlias() end
 
@@ -776,9 +871,11 @@ function M.generate(ast, file, opts)
   function S.AugAssign(s)
     local t = s.target
     if t.tag == "Name" then
-      if not lookup(t.name) then
+      local info = lookup(t.name)
+      if not info then
         fail(s.line, "variable '" .. t.name .. "' is used in '" .. s.op .. "=' before it is defined")
       end
+      read_check(t.name, info, s.line)
       local name = target_code(t)
       emit(name .. " = " .. binop_code(s.op, name, expr(s.value)))
     elseif t.obj.tag == "Name" and (t.tag == "Attr" or t.idx.tag == "Number" or t.idx.tag == "String" or t.idx.tag == "Name") then
@@ -910,8 +1007,50 @@ function M.generate(ast, file, opts)
       if B.PROTECTED[v] or B.SHADOW_WARN[v] then warn(s.line, "loop variable '" .. v .. "' shadows a builtin") end
       vars[k] = declare(v, "local", s.line)
     end
-    local it = (#s.vars == 1) and "__rt.iter1(" or "__rt.iter2("
-    emit("for " .. table.concat(vars, ", ") .. " in " .. it .. src .. ") do")
+    if #s.vars == 1 then
+      local it = s.iter
+      local x = vars[1]
+      if it.tag == "Call" or it.tag == "Method" then
+        -- вызов может вернуть и список, и функцию-итератор: известные итераторы Lua идут прямо в for, остальное через __rt.iter1
+        -- string.gmatch(...), s:gmatch(...), io.lines(...); pairs/ipairs/next, если это встроенные, а не свои функции
+        local native = false
+        if it.tag == "Method" then native = NATIVE_ITER[it.name] == true
+        elseif it.fn.tag == "Attr" then native = NATIVE_ITER[it.fn.name] == true
+        elseif it.fn.tag == "Name" then native = NATIVE_FN_ITER[it.fn.name] == true and not lookup(it.fn.name) end
+        if native then
+          emit("for " .. x .. " in " .. src .. " do")
+        else
+          emit("for " .. x .. " in __rt.iter1(" .. src .. ") do")
+        end
+        local lc = loop_body()
+        level = level + 1
+        block(s.body)
+        level = level - 1
+        end_loop(lc)
+        pop_scope()
+        return
+      end
+      -- список: числовой цикл, он втрое быстрее итератора (строка становится списком символов, функция-итератор списком значений:
+      -- __rt.seq один раз до цикла); список-литерал без проверки
+      local tv = temp_name("__t")
+      if it.tag == "List" or it.tag == "ListComp" then
+        emit("do local " .. tv .. " = " .. src)
+      else
+        emit("do local " .. tv .. " = __rt.seq(" .. src .. ")")
+      end
+      local wrapped = true
+      local iv = temp_name("__i")
+      emit("for " .. iv .. " = 1, #" .. tv .. " do local " .. x .. " = " .. tv .. "[" .. iv .. "]")
+      local lc = loop_body()
+      level = level + 1
+      block(s.body)
+      level = level - 1
+      end_loop(lc)
+      if wrapped then emit("end") end
+      pop_scope()
+      return
+    end
+    emit("for " .. table.concat(vars, ", ") .. " in __rt.iter2(" .. src .. ") do")
     local lc = loop_body()
     level = level + 1
     block(s.body)
@@ -967,7 +1106,11 @@ function M.generate(ast, file, opts)
     local info = lookup(s.name)
     if info and info.kind == "const" then fail(s.line, "cannot redefine constant '" .. s.name .. "'") end
     local target = lname_of(s.name)
-    function_body(target .. " = __rt.sig(function", s.params, s.vararg, s.body, s.line, true)
+    mark_assigned(s.name)
+    -- подпись (имена параметров для вызова с именованными аргументами) нужна экспортам и модулям, где такие вызовы есть;
+    -- регистрация дорогая (слабая таблица на каждое создание функции), остальным её не даём
+    local want = #s.params > 0 and (s.exported or uses_kwargs)
+    function_body(target .. (want and " = __rt.sig(function" or " = function"), s.params, s.vararg, s.body, s.line, want)
     apply_decorators(s.decorators, target)
     if s.exported then record_export(s.name, s.line) end
   end
@@ -976,6 +1119,7 @@ function M.generate(ast, file, opts)
     local info = lookup(s.name)
     if info and info.kind == "const" then fail(s.line, "cannot redefine constant '" .. s.name .. "'") end
     local cname = lname_of(s.name)
+    mark_assigned(s.name)
     emit(cname .. " = __rt.class(" .. U.quote(s.name) .. ", " .. (s.base and expr(s.base) or "nil") .. ")")
     class_stack[#class_stack + 1] = cname
     for _, m in ipairs(s.body) do
@@ -983,7 +1127,9 @@ function M.generate(ast, file, opts)
       if opts.keep_comments then flush_comments(curline) end
       if m.tag == "FuncDef" then
         local target = U.is_lua_name(m.name) and (cname .. "." .. m.name) or (cname .. "[" .. U.quote(m.name) .. "]")
-        function_body(target .. " = __rt.sig(function", m.params, m.vararg, m.body, m.line, true)
+        -- методы: подпись только конструктору и модулям, где есть вызовы с именованными аргументами
+        local want = #m.params > 1 and (uses_kwargs or m.name == "init")
+        function_body(target .. (want and " = __rt.sig(function" or " = function"), m.params, m.vararg, m.body, m.line, want)
         apply_decorators(m.decorators, target)
       elseif m.tag == "Assign" and #m.targets == 1 and m.targets[1].tag == "Name" and #m.values == 1 then
         local fname = m.targets[1].name
@@ -1006,6 +1152,7 @@ function M.generate(ast, file, opts)
   end
 
   function S.Import(s)
+    mark_assigned(s.name)
     emit(lname_of(s.name) .. " = __import(" .. U.quote(s.path) .. ")")
     if s.exported then record_export(s.name, s.line) end
   end
@@ -1017,6 +1164,7 @@ function M.generate(ast, file, opts)
     for _, n in ipairs(s.names) do
       local info = lookup(n.alias)
       if info and info.kind == "const" then fail(n.line, "cannot assign to constant '" .. n.alias .. "'") end
+      mark_assigned(n.alias)
       emit("  " .. lname_of(n.alias) .. " = " .. attr_access(m, n.name))
     end
     emit("end")
@@ -1027,7 +1175,7 @@ function M.generate(ast, file, opts)
     local k = 0
     for line in (s.code .. "\n"):gmatch("([^\n]*)\n") do
       curline = base + k
-      emit(line)
+      emit_raw(line)
       k = k + 1
     end
     curline = base
@@ -1245,10 +1393,11 @@ function M.generate(ast, file, opts)
 
   curline = 1
   if opts.banner ~= false then
-    emit("-- Generated by Cubic " .. (opts.version or "?") .. " from " .. file .. " (" .. (opts.src_info or "") .. "). Do not edit.")
+    emit_raw("-- Generated by Cubic " .. (opts.version or "?") .. " from " .. file .. " (" .. (opts.src_info or "") .. "). Do not edit.")
   end
   emit("local __rt, __import = ...")
-  emit("local __floor, __tostring, __tonumber, __error, __type = math.floor, tostring, tonumber, error, type")
+  emit("")
+  local helpers_at = #out
   if opts.yield then emit("local __s = 0") end
   emit("local __exports = {}")
   push_scope(true)
@@ -1261,7 +1410,47 @@ function M.generate(ast, file, opts)
   end
   emit("return __exports")
 
-  return table.concat(out, "\n") .. "\n", lmap, warnings
+  -- короткие ссылки на функции Lua объявляются, только если код ими пользуется
+  do
+    local body = table.concat(out, "\n", helpers_at + 1)
+    local names, values = {}, {}
+    for _, h in ipairs({ { "__floor", "math.floor" }, { "__tostring", "tostring" }, { "__tonumber", "tonumber" }, { "__error", "error" }, { "__type", "type" } }) do
+      if body:find(h[1], 1, true) then
+        names[#names + 1] = h[1]
+        values[#values + 1] = h[2]
+      end
+    end
+    out[helpers_at] = #names > 0 and ("local " .. table.concat(names, ", ") .. " = " .. table.concat(values, ", ")) or ""
+  end
+
+  if minify then
+    return table.concat(out, "\n") .. "\n", lmap, warnings
+  end
+  -- без минификации строки Lua совпадают со строками .cub: ошибка в любой момент работы программы показывает настоящую строку
+  -- исходника, без карт. Код одной строки исходника пишется в одну строку Lua, пропуски заполняются пустыми строками
+  local lines, map = {}, {}
+  local last_raw = false
+  for k, text in ipairs(out) do
+    if text ~= "" then
+      local want = lmap[k] or (#lines + 1)
+      local n = #lines
+      if n < want then
+        while #lines < want - 1 do lines[#lines + 1] = "" end
+        lines[#lines + 1] = text
+      elseif raw[k] or last_raw or n == 0 then
+        lines[#lines + 1] = text
+      else
+        local stripped = text:gsub("^%s+", "")
+        lines[n] = (lines[n] == "" and "" or (lines[n] .. " ")) .. stripped
+      end
+      last_raw = raw[k] or false
+      map[#lines] = want
+    end
+  end
+  for i = 1, #lines do
+    if not map[i] then map[i] = i end
+  end
+  return table.concat(lines, "\n") .. "\n", map, warnings
 end
 
 return M

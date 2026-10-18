@@ -325,6 +325,7 @@ export def program(session, opts=nil):
                 sys.secret_input(want)
 
         def pull():
+            outer last
             serve_pending()
             sync_secret()
             wait = nil

@@ -16,6 +16,7 @@ for p in [HIST, DIR]:
         fs.delete(p)
 fs.makeDir(DIR .. "/a/b")
 def put(path, text):
+    outer f
     f = fs.open(DIR .. "/" .. path, "w")
     f.write(text)
     f.close()

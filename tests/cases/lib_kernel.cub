@@ -103,6 +103,7 @@ eq(log, ["key1", "key2"], "queued input is delivered in order after the pause")
 log = []
 k = mk()
 def timeout_prog(sys, args):
+    outer v
     ev = sys.wait_event(["never"], 2)
     say("timeout:" .. tostring(ev))
     ev2, v = sys.wait_event(["go"], 10)
@@ -244,6 +245,7 @@ k:run_ready()
 eq(log[3], "kill other: true", "admin may kill")
 eq(k:alive(tgt), false, "target killed by admin")
 def spawn_as_prog(sys, args):
+    outer pid
     pid = sys.spawn(target_prog, [], {name: "y", subject: other, detached: true})
     say("system spawn ok " .. pid)
 k:spawn(spawn_as_prog, [], {subject: system})

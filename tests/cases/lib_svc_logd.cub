@@ -21,6 +21,7 @@ def settle(k):
 
 system = rules.subject("system", ["system"])
 def make(conf_text, old_log):
+    outer k, view, fsys
     fsys = cfs.new({})
     fsys:mount("/", cfs.memory())
     fsys:mkdir(nil, "/cubeos/sys/cfg", {parents: true})

@@ -35,7 +35,7 @@ local function read_file(path)
 end
 
 local C = {}
-C.VERSION = "0.3.0"
+C.VERSION = "1.0.0"
 C.rt = rt
 C.util = U
 
@@ -191,7 +191,9 @@ function C.load(src, file, opts)
   opts = opts or {}
   file = file or "?"
   local lua, linemap, warnings = C.compile(src, file, opts)
-  local chunkname = "=" .. file
+  local short = file:gsub("^/repo/", ""):gsub("^lib/", ""):gsub("^/cubeos/", "")
+  if #short > 58 then short = "..." .. short:sub(-55) end
+  local chunkname = "=" .. short
   local fn, err = load(lua, chunkname, "t", opts.env or _G)
   if not fn then
     error("internal compiler error: generated Lua does not load: " .. tostring(err) .. "\n" .. lua, 0)
@@ -202,7 +204,7 @@ function C.load(src, file, opts)
   local runner = function()
     local ok, res = pcall(fn, rt, import)
     if not ok then
-      error(C.map_error(res, linemap, file, file), 0)
+      error(C.map_error(res, linemap, short, short), 0)
     end
     return res
   end

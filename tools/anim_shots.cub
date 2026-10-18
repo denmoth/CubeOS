@@ -42,6 +42,7 @@ def now():
     return clock.now
 
 def setup(theme_name):
+    outer k, wm
     wm = cde.wm.new({term: make_term(51, 19), assets: "/repo/assets", clock: now, theme: theme_name})
     k = kernel.new({clock: now})
     def desk(sys, args):

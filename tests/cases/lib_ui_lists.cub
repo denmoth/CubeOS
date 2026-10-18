@@ -31,6 +31,7 @@ class StubOut:
         pass
 
 def make(root, cols=30, rows=10):
+    outer ui, out
     out = StubOut(cols, rows)
     ui = runtime.new(out, {})
     ui:set_root(root)

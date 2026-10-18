@@ -10,6 +10,7 @@ if fs.exists(HIST):
     fs.delete(HIST)
 
 def make(w, h):
+    outer proc, env, vt
     vt = vterm.new(w, h, {history: 200})
     env = compat_env.new({vterm: vt})
     env.cush_opts = {history_path: HIST, greeting: false, user: "tester", host: "cube"}

@@ -92,6 +92,7 @@ fixed_lit = nil
 fixed_dist = nil
 
 def _fixed_tables():
+    outer fixed_lit, fixed_dist
     if fixed_lit == nil:
         lengths = []
         for i in range[1, 144]:
@@ -381,6 +382,7 @@ len_extra_bits = nil
 len_extra_val = nil
 
 def _build_len_tables():
+    outer len_sym, len_extra_val, len_extra_bits
     if len_sym != nil:
         return
     len_sym = []

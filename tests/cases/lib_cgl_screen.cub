@@ -31,7 +31,7 @@ tm, log = make_term(10, 4, true)
 sc = cgl.open({term: tm})
 eq(sc.kind, "graphics", "graphics backend picked")
 eq([sc.w, sc.h], [60, 36], "screen size in pixels")
-eq(log[1], "mode 2", "mode 2 requested first")
+eq([log[1], log[2]], ["freeze", "mode 2"], "the screen freezes, then mode 2 is requested")
 sc.surface:set(1, 1, 5)
 n = sc:present()
 eq(n, 60 * 36, "first frame is full")
@@ -88,7 +88,7 @@ eq(count, 3, "update can stop the loop")
 # своя палитра и 16 цветов
 tm, log = make_term(10, 4, true)
 sc = cgl.open({term: tm, mode: 1, dither: true})
-eq(log[1], "mode 1", "mode 1 requested")
+eq(log[2], "mode 1", "mode 1 requested")
 sc:close()
 
 # анимация палитры: режим 2 меняет только палитру терминала
@@ -112,6 +112,7 @@ eq([sc.w, sc.h], [60, 36], "mirror size")
 sc.surface:set(3, 3, 5)
 sc:present()
 def count_draws(log):
+    outer n
     n = 0
     for l in log:
         if string.sub(l, 1, 4) == "draw":

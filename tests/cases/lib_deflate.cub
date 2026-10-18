@@ -15,6 +15,7 @@ def to_hex(s):
     return (string.gsub(s, ".", (c) => string.format("%02x", string.byte(c))))
 
 def read_lines(path):
+    outer h
     h = fs.open(path, "r")
     lines = []
     line = h.readLine()

@@ -985,6 +985,16 @@ local function make(toks, file, src, hdr)
   function parse_simple(exported)
     local tok = peek()
     local t = tok.t
+    -- outer x, y: менять переменные внешней функции или модуля (контекстное слово: outer = 5 и outer.x остаются обычным кодом)
+    if t == "name" and (tok.v == "outer" or tok.v == "nonlocal") and peek(1).t == "name" then
+      next_tok()
+      local names = {}
+      repeat
+        local n = expect_name("a variable name after '" .. tok.v .. "'")
+        names[#names + 1] = n.v
+      until not accept(",")
+      return { tag = "Outer", names = names, line = tok.line }
+    end
     if t == "return" then
       next_tok()
       local values = {}

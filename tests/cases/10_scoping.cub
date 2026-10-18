@@ -1,13 +1,20 @@
 x = 1
 
 def outer():
-    x = 100      # меняет внешнюю x (как в Lua)
+    x = 100      # своя локальная x (Cubic 1.0, как в Python)
     def inner():
         y = 5
         return y
     return inner()
 
 print(outer(), x)
+
+def change_x():
+    outer x      # а так меняется внешняя
+    x = 50
+    return x
+
+print(change_x(), x)
 
 def shadow():
     let x = 7    # новая локальная переменная

@@ -35,6 +35,7 @@ def fake_net(op, args):
     return nil, "unknown"
 
 def make(lang=nil):
+    outer proc, vt
     vt = vterm.new(70, 19, {history: 400})
     env = compat_env.new({vterm: vt})
     if lang != nil:

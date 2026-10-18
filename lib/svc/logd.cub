@@ -210,6 +210,7 @@ export def main(sys, args):
             " for " .. conf.input_ttl_minutes .. " minutes")
 
     def flush_input():
+        outer ipending
         if len(ipending) == 0:
             return
         parts = []
@@ -268,6 +269,7 @@ export def main(sys, args):
             input_start("the boot menu")
 
     def flush():
+        outer pending
         while len(pending) > 0:
             rec = table.remove(pending, 1)
             if not conf.kernel and rec.source == "kernel":
@@ -337,6 +339,7 @@ export def main(sys, args):
     handlers.rotate = rotate_now
 
     def set_level(q, sender):
+        outer min_rank
         r = rank(q.level)
         if r == nil:
             raise Error("unknown level: " .. tostring(q.level))

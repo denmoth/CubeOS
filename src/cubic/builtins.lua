@@ -4,12 +4,14 @@ local U = ...
 local B = {}
 
 -- Ядро Lua и встроенные функции Cubic: присвоение или объявление без `override` это ошибка
+-- Cubic 1.0: короткие слова, которые естественно брать для своих переменных (copy, load, next, len, str, num, select...),
+-- больше не защищены: присвоение делает локальную переменную, она скрывает встроенную только в своей области
 B.PROTECTED = U.set({
-  "assert", "collectgarbage", "dofile", "error", "getfenv", "getmetatable", "ipairs", "load", "loadfile",
-  "loadstring", "next", "pairs", "pcall", "print", "rawequal", "rawget", "rawset", "require", "select",
-  "setfenv", "setmetatable", "tonumber", "tostring", "type", "unpack", "xpcall", "_G", "_ENV", "_VERSION",
+  "assert", "collectgarbage", "error", "getfenv", "getmetatable", "ipairs", "loadstring",
+  "pairs", "pcall", "print", "rawequal", "rawget", "rawset", "setfenv", "setmetatable", "tonumber", "tostring",
+  "type", "xpcall", "_G", "_ENV", "_VERSION",
   "math", "string", "table", "os", "io", "coroutine", "debug", "bit", "bit32", "utf8", "package",
-  "copy", "deepcopy", "len", "str", "num", "isinstance", "Error",
+  "isinstance", "Error",
 })
 
 -- API CC: Tweaked: перекрытие даёт предупреждение (локальная переменная скрывает глобальный API)
@@ -24,6 +26,8 @@ B.MAP = {
   copy = "__rt.copy",
   deepcopy = "__rt.deepcopy",
   len = "__rt.len",
+  count = "__rt.count",
+  chars = "__rt.chars",
   str = "__tostring",
   num = "__tonumber",
   isinstance = "__rt.isinstance",

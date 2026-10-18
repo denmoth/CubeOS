@@ -37,6 +37,7 @@ def crash_at(stage):
     return hook
 
 def attempt(path, data, stage):
+    outer ok, err
     ok, err = pcall(() => atomic.write(store, path, data, crash_at(stage)))
     eq(ok, false, "the simulated crash at " .. stage .. " interrupts the write")
 

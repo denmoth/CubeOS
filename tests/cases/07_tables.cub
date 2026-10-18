@@ -4,7 +4,7 @@ xs[2] = 99
 print(xs[2])
 d = {name: "Ann", age: 30, "two words": 1, [1 + 1]: "two"}
 print(d.name, d.age, d["two words"], d[2])
-print(len(d))
+print(count(d))
 total = 0
 for x in xs:
     total += x

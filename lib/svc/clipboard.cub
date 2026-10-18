@@ -38,6 +38,7 @@ export def main(sys, args):
     handlers.history = history
 
     def clear(q, sender):
+        outer items
         items = []
         return true
     handlers.clear = clear

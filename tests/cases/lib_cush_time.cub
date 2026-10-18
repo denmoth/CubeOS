@@ -19,6 +19,7 @@ def save(changes):
     return true
 
 def make():
+    outer proc, vt
     vt = vterm.new(70, 24, {history: 200})
     env = compat_env.new({vterm: vt})
     env.cush_opts = {history_path: HIST, greeting: false, user: "tester", host: "cube", time: clock.new({tz: "Europe/Kyiv"}, src), time_save: save}

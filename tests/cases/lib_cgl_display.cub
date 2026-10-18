@@ -322,7 +322,7 @@ eq(got[r140 .. "," .. g140 .. "," .. b140], true, "the second picture color is i
 # после адаптации кадр уходит заново и точно этими цветами
 o.cells = {}
 d:present(s)
-eq(len(o.cells) > 0, true, "frame is resent after adapt")
+eq(count(o.cells) > 0, true, "frame is resent after adapt")
 d:close()
 std = color.cc_palette()
 sr, sg, sb = std:get(0)

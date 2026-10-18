@@ -58,6 +58,7 @@ class Btn(w.Widget):
         c:text(self.x, self.y, self.name)
 
 def make(cols, rows):
+    outer ui, out
     out = StubOut(cols, rows)
     ui = runtime.new(out, {})
     return ui, out

@@ -87,6 +87,7 @@ export class TermConsole:
         shift = {on: false}
         pending = []
         def put(text):
+            outer buf
             buf = buf .. text
             # кириллицу обычный терминал CC не рисует: видна как «?», в скрытом поле звёздочки по числу букв
             shown = hidden and string.rep("*", unicode.length(text)) or string.gsub(text, "[\128-\255][\128-\191]*", "?")

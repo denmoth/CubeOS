@@ -58,6 +58,7 @@ def settle(n=6):
 log = []
 slots = {}
 def app_main(sys, ctx):
+    outer win
     win = cde.app.open(sys, ctx, {title: "Big", w: 60, h: 30, x: 10, y: 10})
     win.canvas:clear(40)
     mine = win:alloc_colors(3)
