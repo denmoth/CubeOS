@@ -1,0 +1,91 @@
+import t
+import std.list as lists
+import cfs
+import cfs.extlabel as extlabel
+eq = t.eq
+
+fsys = cfs.new({})
+fsys:mount("/", cfs.memory())
+fsys:mkdir(nil, "/home/games", {parents: true})
+fsys:mkdir(nil, "/home/music", {parents: true})
+fsys:write_file(nil, "/home/games/mine.txt", "mine")
+
+dev = cfs.memory({limit: 10000})
+dev:write("/old.txt", "old")
+
+def names(path):
+    out = []
+    for e in fsys:list(nil, path, {hidden: true}):
+        out[len(out) + 1] = e.name
+    return out
+
+# не расширитель, пока нет метки
+eq(extlabel.read(dev), nil, "a plain device has no label")
+ok, err = pcall(() => extlabel.create(dev, "bad/name"))
+eq(ok, false, "names are checked")
+lab = extlabel.create(dev, "cube-2", {id: "abcd1234", now: 5})
+eq(lab.id, "abcd1234", "the label has an id")
+eq(extlabel.read(dev).label, "cube-2", "the label is written to the device")
+ok, err = pcall(() => extlabel.create(dev, "again"))
+eq(ok, false, "a device is labelled once")
+eq(string.len(extlabel.create(cfs.memory(), "x").id), 8, "a random id has 8 hex digits")
+ok, err = pcall(() => extlabel.create(cfs.memory({readonly: true}), "ro"))
+eq(ok, false, "a read-only device cannot be an extender")
+
+# точки подключения: свои у каждого компьютера
+extlabel.set_point(lab, "pc-1", {path: "/home/games/", mode: "folder"})
+extlabel.set_point(lab, "pc-1", {path: "/cubeos/mnt/cube-2", mode: "disk"})
+extlabel.set_point(lab, "pc-2", {path: "/home/music", priority: "local"})
+extlabel.set_point(lab, "pc-1", {path: "/home/games", mode: "folder", priority: "local"})
+eq(len(extlabel.points(lab, "pc-1")), 2, "setting the same path again replaces it")
+eq(extlabel.points(lab, "pc-1")[2].priority, "local", "with the new settings")
+eq(extlabel.points(lab, "pc-1")[2].path, "/home/games", "paths are normalized")
+extlabel.save(dev, lab)
+back = extlabel.read(dev)
+eq(len(back.hosts["pc-1"]), 2, "points survive saving")
+eq(back.hosts["pc-2"][1].path, "/home/music", "per host")
+
+# подключение на pc-1: папка слоёная, устройство целиком как диск, метки не видно
+r = extlabel.attach(fsys, dev, back, "pc-1")
+eq(len(r.attached), 2, "both points attached")
+eq(len(r.skipped), 0, "nothing skipped")
+eq(names("/home/games"), ["mine.txt", "old.txt"], "the folder shows both, without the label file")
+eq(names("/cubeos/mnt/cube-2"), ["old.txt"], "the disk mount hides the label too")
+eq(fsys:read_file(nil, "/cubeos/mnt/cube-2/old.txt"), "old", "disk mode reads")
+ok, err = pcall(() => fsys:write_file(nil, "/cubeos/mnt/cube-2/.cubeos-extender", "x"))
+eq(ok, false, "the label cannot be overwritten through the file system")
+eq(extlabel.read(dev).label, "cube-2", "and stays intact")
+fsys:write_file(nil, "/home/games/new.txt", "n")
+eq(dev:stat("/new.txt"), nil, "the point priority (local) is used for new files")
+
+# снятие: только своё
+eq(extlabel.detach(fsys, back, "pc-1"), 2, "both points detached")
+eq(names("/home/games"), ["mine.txt", "new.txt"], "the device files left with it")
+eq(fsys:stat(nil, "/cubeos/mnt/cube-2"), nil, "the disk mount is gone")
+fsys:mount("/cubeos/mnt/cube-2", cfs.memory(), {name: "someone"})
+eq(extlabel.detach(fsys, back, "pc-1"), 0, "a foreign mount at the same place is left alone")
+
+# пропуски: занято, папки нет, проверка отказала
+r = extlabel.attach(fsys, dev, back, "pc-1")
+eq(len(r.attached), 1, "the free point attaches")
+eq(r.skipped[1].path, "/cubeos/mnt/cube-2", "the busy one is skipped")
+extlabel.detach(fsys, back, "pc-1")
+fsys:umount("/cubeos/mnt/cube-2")
+extlabel.set_point(back, "pc-3", {path: "/home/gone"})
+r = extlabel.attach(fsys, dev, back, "pc-3")
+eq(r.skipped[1].reason, "the folder is gone", "a missing folder is skipped with a reason")
+r = extlabel.attach(fsys, dev, back, "pc-2", {check: (p) => "system folder"})
+eq(r.skipped[1].reason, "system folder", "the check can refuse a point")
+eq(len(extlabel.attach(fsys, dev, back, "pc-9").attached), 0, "an unknown host attaches nothing")
+
+# индекс для офлайна приходит снаружи (хранит служба)
+store = {}
+r = extlabel.attach(fsys, dev, back, "pc-2", {index_for: (p) => store, on_index: (p) => nil})
+names("/home/music")
+eq(store["/"]["old.txt"].type, "file", "the listing index goes where the caller keeps it")
+extlabel.detach(fsys, back, "pc-2")
+
+eq(extlabel.drop_point(back, "pc-2", "/home/music"), true, "drop a point")
+eq(back.hosts["pc-2"], nil, "the host entry goes when empty")
+
+print("done")

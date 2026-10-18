@@ -1,0 +1,195 @@
+# cfs.extlabel: метка расширителя (docs/21-axo.md, подшаг 6.2). В корне устройства лежит файл .cubeos-extender: кто это и куда его
+# подключать на каждом компьютере. Вставили дискету или появилась общая папка: её подключают туда же, где она была; вынули: снимают.
+#
+#   lab = extlabel.read(provider)                     метка или nil (устройство ещё не расширитель)
+#   lab = extlabel.create(provider, "cube-2", {id})   сделать устройство расширителем (метка пишется на него)
+#   extlabel.set_point(lab, host, {path, mode: "folder"|"disk", priority, user}); extlabel.drop_point(lab, host, path)
+#   extlabel.save(provider, lab)
+#   r = extlabel.attach(fsys, provider, lab, host, opts) -> {attached: [{path, mode, layer}], skipped: [{path, reason}]}
+#   extlabel.detach(fsys, lab, host) -> число снятых
+#
+# Файл (json5): {id: "a1b2c3d4", label: "cube-2", created: мс, hosts: {"pc-5": [{path, mode, priority, user}]}}
+# host: имя компьютера (строка, например "pc-" .. os.getComputerID()). mode "folder": папка path становится слоёной (cfs.extend.over);
+# mode "disk": устройство целиком монтируется в path (обычно /cubeos/mnt/<label>). Сама метка в списках не видна и не меняется
+# через файловую систему.
+
+import cfs.path as paths
+import cfs.errors as errors
+import cfs.extend as extend
+import json5
+
+export const FILE = ".cubeos-extender"
+const NAME_RX = "^[%w][%w%-_ ]*$"
+
+# ------------------------------------------------------------ метка без файла метки в списках
+
+export class Hidden:
+    def init(self, provider):
+        self.p = provider
+
+    def _is_label(self, rel):
+        return rel == "/" .. FILE
+
+    def is_readonly(self):
+        return self.p:is_readonly()
+
+    def stat(self, rel):
+        if self:_is_label(rel):
+            return nil
+        return self.p:stat(rel)
+
+    def list(self, rel):
+        out = []
+        for n in self.p:list(rel):
+            if not (rel == "/" and n == FILE):
+                out[len(out) + 1] = n
+        return out
+
+    def read(self, rel):
+        if self:_is_label(rel):
+            errors.fail("ENOENT", "no such file", rel)
+        return self.p:read(rel)
+
+    def _guard(self, rel):
+        if self:_is_label(rel):
+            errors.fail("EACCES", "the extender label is not a normal file", rel)
+
+    def write(self, rel, data):
+        self:_guard(rel)
+        return self.p:write(rel, data)
+
+    def mkdir(self, rel):
+        self:_guard(rel)
+        return self.p:mkdir(rel)
+
+    def remove(self, rel):
+        self:_guard(rel)
+        return self.p:remove(rel)
+
+    def move(self, a, b):
+        self:_guard(a)
+        self:_guard(b)
+        return self.p:move(a, b)
+
+    def free_space(self):
+        return self.p:free_space()
+
+    def capacity(self):
+        return self.p:capacity()
+
+    def set_modified(self, rel, t):
+        if self.p.set_modified != nil:
+            return self.p:set_modified(rel, t)
+
+# ------------------------------------------------------------ файл метки
+
+def _new_id():
+    s = ""
+    for i in range[1, 8]:
+        s = s .. string.format("%x", math.random(0, 15))
+    return s
+
+export def valid_name(name):
+    return type(name) == "string" and string.len(name) <= 24 and string.match(name, NAME_RX) != nil
+
+export def read(provider):
+    ok, st = pcall(() => provider:stat("/" .. FILE))
+    if not ok or st == nil or st.type != "file":
+        return nil
+    ok2, data = pcall(() => json5.parse(provider:read("/" .. FILE)))
+    if not ok2 or type(data) != "table" or type(data.id) != "string" or type(data.label) != "string":
+        return nil
+    if type(data.hosts) != "table":
+        data.hosts = {}
+    return data
+
+export def save(provider, lab):
+    provider:write("/" .. FILE, json5.stringify(lab, {json5: true, indent: 2}) .. "\n")
+
+export def create(provider, label, opts=nil):
+    o = opts ?? {}
+    if not valid_name(label):
+        errors.fail("EINVAL", "an extender name is letters, digits, spaces, - and _ (up to 24)", label)
+    if provider:is_readonly():
+        errors.fail("EROFS", "a read-only device cannot be an extender", "")
+    if read(provider) != nil:
+        errors.fail("EEXIST", "this device is already an extender", "")
+    lab = {id: o.id ?? _new_id(), label: label, created: o.now ?? 0, hosts: {}}
+    save(provider, lab)
+    return lab
+
+export def points(lab, host):
+    return lab.hosts[host] ?? []
+
+export def set_point(lab, host, point):
+    if type(point) != "table" or type(point.path) != "string":
+        errors.fail("EINVAL", "a point needs a path", "")
+    mode = point.mode == "disk" and "disk" or "folder"
+    entry = {path: paths.normalize(point.path), mode: mode, priority: point.priority == "local" and "local" or "extender",
+        user: point.user}
+    list = []
+    for p in points(lab, host):
+        if p.path != entry.path:
+            list[len(list) + 1] = p
+    list[len(list) + 1] = entry
+    lab.hosts[host] = list
+    return entry
+
+export def drop_point(lab, host, path):
+    norm = paths.normalize(path)
+    list = []
+    found = false
+    for p in points(lab, host):
+        if p.path == norm:
+            found = true
+        else:
+            list[len(list) + 1] = p
+    lab.hosts[host] = len(list) > 0 and list or nil
+    return found
+
+# ------------------------------------------------------------ подключение
+
+# opts: {online, atomic, index_for(path) -> таблица, on_index(path), show_offline, reserve, check(point) -> nil | причина отказа}
+export def attach(fsys, provider, lab, host, opts=nil):
+    o = opts ?? {}
+    out = {attached: [], skipped: []}
+    dev = Hidden(provider)
+    for p in points(lab, host):
+        reason = o.check != nil and o.check(p) or nil
+        if reason == nil:
+            for m in fsys.mounts:
+                if m.path == p.path:
+                    reason = "something is already mounted there"
+        if reason == nil:
+            if p.mode == "disk":
+                ok, err = pcall(() => fsys:mount(p.path, dev, {name: "extender:" .. lab.label}))
+                if ok:
+                    out.attached[len(out.attached) + 1] = {path: p.path, mode: "disk"}
+                else:
+                    reason = tostring(err)
+            else:
+                ipath = p.path
+                ok, lay = pcall(() => extend.over(fsys, p.path, dev, {label: lab.label, priority: p.priority, online: o.online,
+                    atomic: o.atomic, index: o.index_for != nil and o.index_for(ipath) or nil,
+                    on_index: o.on_index != nil and (() => o.on_index(ipath)) or nil,
+                    show_offline: o.show_offline, reserve: o.reserve}))
+                if ok:
+                    out.attached[len(out.attached) + 1] = {path: p.path, mode: "folder", layer: lay}
+                else:
+                    reason = errors.is_code(lay, "ENOTDIR") and "the folder is gone" or tostring(lay)
+        if reason != nil:
+            out.skipped[len(out.skipped) + 1] = {path: p.path, reason: reason}
+    return out
+
+export def detach(fsys, lab, host):
+    n = 0
+    mine = {}
+    mine["extender:" .. lab.label] = true
+    mine["extended:" .. lab.label] = true
+    for p in points(lab, host):
+        # снимается только своё: чужое, смонтированное на том же месте, не трогаем
+        for m in fsys.mounts:
+            if m.path == p.path and mine[m.name] and fsys:umount(p.path):
+                n = n + 1
+                break
+    return n
