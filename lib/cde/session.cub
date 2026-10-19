@@ -28,6 +28,19 @@ import json5
 
 const SCALES = ["auto", 1, 2, 3, 4]
 
+# сводка stew об установленных пакетах (приложения для «Пуска»); нет файла: система из исходников, весь встроенный каталог
+def _contrib(o):
+    path = o.contrib ?? "/cubeos/var/stew/contrib.json5"
+    if not fs.exists(path):
+        return nil
+    h = fs.open(path, "r")
+    if h == nil:
+        return nil
+    text = h.readAll()
+    h.close()
+    ok, v = pcall(json5.parse, text)
+    return ok and v or nil
+
 export def program(session, opts=nil):
     o = opts ?? {}
 
@@ -160,7 +173,7 @@ export def program(session, opts=nil):
             run: (w) => open_terminal()})
         # API рабочего стола для приложений (Настройки, Pixel): собирается в конце, пока там пусто
         holder = {}
-        app_env = {session: session, assets: o.assets ?? "/repo/assets", desktop: () => holder.api}
+        app_env = {session: session, assets: o.assets ?? "/repo/assets", desktop: () => holder.api, import: o.import, contrib: _contrib(o)}
         reg:add({id: "axo", name: "Axo", icon: "axo", detail: "Files", keywords: ["axolotl", "files", "explorer", "folders", "файлы", "проводник", "аксолотль", "папки"],
             run: (w) => w:launch(axo.main, {name: "axo"}, ["$home", {session: session, assets: o.assets ?? "/repo/assets", desktop: holder.api,
                 open_app: (id, p) => w:defer(() => launcher.open(id, w, app_env, p))}])})

@@ -3,36 +3,31 @@
 #
 #   launcher.add_all(reg, wm, env)               записи в каталог «Пуска» (Terminal и Axo добавляет сессия)
 #   launcher.open(id, wm, env, path)              запустить приложение id, path: файл (или nil)
-#   env = {session, assets, desktop: () => api}   desktop лениво: API рабочего стола (cde.session) появляется позже самих приложений
+#   env = {session, assets, desktop: () => api, import, contrib}
+#       desktop лениво: API рабочего стола (cde.session) появляется позже самих приложений
+#       import: загрузчик модулей системы (приложения грузятся по имени модуля, только когда их открывают)
+#       contrib: сводка stew (/cubeos/var/stew/contrib.json5) в установленной системе: встроенные приложения показываются, только
+#                если их пакет стоит, и добавляются приложения других пакетов. nil (разработка): весь встроенный каталог.
 
-import apps.pixel as pixel
-import apps.brush as brush
-import apps.jukebox as jukebox
-import apps.calc as calc
-import apps.notes as notes
-import apps.clock as clock
-import apps.pulse as pulse
-import apps.settings as settings
-import apps.store as store
 
 export const CATALOG = [
-    {id: "settings", name: "Settings", icon: "sliders", detail: "System", main: settings.main,
+    {id: "settings", name: "Settings", icon: "sliders", detail: "System", module: "apps.settings",
         keywords: ["preferences", "options", "theme", "wallpaper", "sound", "настройки", "параметры", "тема", "обои", "налаштування"]},
-    {id: "pixel", name: "Pixel", icon: "image", detail: "Pictures", main: pixel.main,
+    {id: "pixel", name: "Pixel", icon: "image", detail: "Pictures", module: "apps.pixel",
         keywords: ["image", "viewer", "photo", "picture", "cimg", "картинки", "просмотр", "изображения", "фото"]},
-    {id: "brush", name: "Brush", icon: "brush", detail: "Paint", main: brush.main,
+    {id: "brush", name: "Brush", icon: "brush", detail: "Paint", module: "apps.brush",
         keywords: ["paint", "draw", "drawing", "sketch", "рисовалка", "рисовать", "рисунок", "малювати"]},
-    {id: "jukebox", name: "Jukebox", icon: "music", detail: "Music", main: jukebox.main,
+    {id: "jukebox", name: "Jukebox", icon: "music", detail: "Music", module: "apps.jukebox",
         keywords: ["music", "player", "songs", "audio", "disc", "minecraft", "музыка", "плеер", "проигрыватель", "пластинки", "музика"]},
-    {id: "notes", name: "Notes", icon: "notepad", detail: "Text editor", main: notes.main,
+    {id: "notes", name: "Notes", icon: "notepad", detail: "Text editor", module: "apps.notes",
         keywords: ["editor", "text", "write", "notepad", "блокнот", "редактор", "заметки", "текст"]},
-    {id: "calc", name: "Calc", icon: "calc", detail: "Calculator", main: calc.main,
+    {id: "calc", name: "Calc", icon: "calc", detail: "Calculator", module: "apps.calc",
         keywords: ["calculator", "math", "sum", "калькулятор", "посчитать", "арифметика"]},
-    {id: "clock", name: "Clock", icon: "clock", detail: "Time", main: clock.main,
+    {id: "clock", name: "Clock", icon: "clock", detail: "Time", module: "apps.clock",
         keywords: ["time", "timer", "alarm", "stopwatch", "world", "часы", "таймер", "будильник", "секундомер", "годинник"]},
-    {id: "pulse", name: "Pulse", icon: "gauge", detail: "Task manager", main: pulse.main,
+    {id: "pulse", name: "Pulse", icon: "gauge", detail: "Task manager", module: "apps.pulse",
         keywords: ["tasks", "processes", "monitor", "performance", "kill", "диспетчер", "задачи", "процессы", "нагрузка"]},
-    {id: "store", name: store.NAME, icon: "store", detail: "Packages", main: store.main,
+    {id: "store", name: "Store", icon: "store", detail: "Packages", module: "apps.store",
         keywords: ["packages", "apps", "install", "update", "stew", "cobble", "pinestore", "магазин", "пакеты", "установить", "обновить", "крамниця"]},
 ]
 
@@ -48,14 +43,82 @@ def _args(id, wm, env, path):
     return [path, {session: env.session, assets: env.assets, desktop: api, view: env.view,
         edit: (p) => wm:defer(() => open("brush", wm, env, p)), open_app: (name, p) => wm:defer(() => open(name, wm, env, p))}]
 
+# встроенные приложения без загрузчика (тесты, старый запуск): ленивые импорты, модуль грузится при первом открытии
+def _builtin(module):
+    if module == "apps.settings":
+        import apps.settings as m
+        return m
+    if module == "apps.pixel":
+        import apps.pixel as m
+        return m
+    if module == "apps.brush":
+        import apps.brush as m
+        return m
+    if module == "apps.jukebox":
+        import apps.jukebox as m
+        return m
+    if module == "apps.notes":
+        import apps.notes as m
+        return m
+    if module == "apps.calc":
+        import apps.calc as m
+        return m
+    if module == "apps.clock":
+        import apps.clock as m
+        return m
+    if module == "apps.pulse":
+        import apps.pulse as m
+        return m
+    if module == "apps.store":
+        import apps.store as m
+        return m
+    return nil
+
+# главный модуль приложения: через загрузчик системы, если он есть, иначе встроенный
+def _main_of(e, env):
+    mod = nil
+    if env.import != nil:
+        ok, m = pcall(env.import, e.module)
+        if ok:
+            mod = m
+    if mod == nil:
+        mod = _builtin(e.module)
+    return mod != nil and mod.main or nil
+
+# каталог с учётом установленного: встроенные, чьи пакеты стоят, и приложения других пакетов из contrib
+export def entries(env):
+    if env.contrib == nil:
+        return CATALOG
+    installed = {}
+    extra = []
+    for a in env.contrib.apps ?? []:
+        if a.entry != nil and not a.legacy:
+            installed[a.entry] = true
+            if entry_of(a.id) == nil:
+                extra[len(extra) + 1] = {id: a.id, name: a.name ?? a.id, icon: a.icon ?? "cube", detail: a.detail ?? a.category ?? "",
+                    module: a.entry, keywords: a.keywords ?? [], package: a.package}
+    out = []
+    for e in CATALOG:
+        if installed[e.module]:
+            out[len(out) + 1] = e
+    for e in extra:
+        out[len(out) + 1] = e
+    return out
+
 export def open(id, wm, env, path=nil):
-    e = entry_of(id)
+    e = nil
+    for x in entries(env):
+        if x.id == id:
+            e = x
     if e == nil:
         return false
-    wm:launch(e.main, {name: id}, _args(id, wm, env, path))
+    main = _main_of(e, env)
+    if main == nil:
+        return false
+    wm:launch(main, {name: id}, _args(id, wm, env, path))
     return true
 
 export def add_all(reg, wm, env):
-    for e in CATALOG:
+    for e in entries(env):
         let id = e.id
         reg:add({id: id, name: e.name, icon: e.icon, detail: e.detail, keywords: e.keywords, run: (w) => open(id, wm, env, nil)})

@@ -16,4 +16,19 @@ eq([first("pict"), first("notep"), first("sett")], ["Pixel", "Notes", "Settings"
 reg:search("calc")[1].run(wm)
 eq(launched, ["calc"], "running an entry launches the app by name")
 eq(launcher.open("nope", wm, {}), false, "an unknown app is refused")
+
+# установленная система: только приложения стоящих пакетов, сторонние из contrib, загрузка по имени модуля через import
+contrib = {apps: [{id: "calc", entry: "apps.calc", package: "cubeos.calc"}, {id: "snake", name: "Snake", entry: "denmoth.snake", icon: "game", package: "denmoth.snake"},
+    {id: "old", name: "Old", entry: "old.lua", legacy: true}]}
+loaded = []
+fake_import = (name) => rawset(loaded, len(loaded) + 1, name) and {main: () => nil}
+env2 = {contrib: contrib, import: fake_import}
+ids = []
+for e in launcher.entries(env2):
+    ids[len(ids) + 1] = e.id
+eq(ids, ["calc", "snake"], "only installed built-in apps plus apps of other packages (CraftOS programs are not in the menu)")
+launched = []
+eq(launcher.open("snake", wm, env2), true, "an app from another package opens")
+eq([loaded[1], launched[1]], ["denmoth.snake", "snake"], "its module is loaded by name only when opened")
+eq(launcher.open("pixel", wm, env2), false, "an app whose package is not installed does not open")
 print("done")

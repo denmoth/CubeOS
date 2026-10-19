@@ -11,12 +11,13 @@
   lang: "cubic",
   category: "desktop",
   priority: "recommended",
-  depends: {
+  depends: {},
+  // приложения грузятся лениво по имени модуля (lib/apps/launcher.cub): ни одно не обязательно
+  want: {
     "cubeos.notes": "^0.5",
     "cubeos.pulse": "^0.5",
     "cubeos.settings": "^0.5",
-  },
-  want: {
+    "cubeos.store": "^0.5",
     "cubeos.brush": "^0.5",
     "cubeos.calc": "^0.5",
     "cubeos.clock": "^0.5",

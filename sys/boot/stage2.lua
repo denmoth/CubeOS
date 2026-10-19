@@ -220,7 +220,7 @@ local function main()
     import = rt.import,
     shell = ctx.shell or function(session)
       if want_cde and not (session.env and session.env.de == "tui") then
-        return import("cde.session").program(session, { assets = rt.source .. "/assets" })
+        return import("cde.session").program(session, { assets = rt.source .. "/assets", import = rt.installed and import or nil })
       end
       return import("term.session").program(session, { assets = rt.source .. "/assets" })
     end,
