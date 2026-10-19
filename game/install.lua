@@ -281,7 +281,7 @@ local function u(s, at, n)
   return v
 end
 
--- unpack every file except line maps into dest; returns the manifest text
+-- unpack every file except line maps into dest; returns the manifest text and the paths
 local function unpack_cpk(data, dest)
   if sub(data, 1, 4) ~= "CPK\1" then error("not a .cpk package", 0) end
   local ml = u(data, 5, 4)
@@ -289,7 +289,7 @@ local function unpack_cpk(data, dest)
   local nb, blocks, raw = u(data, p, 2), {}, {}
   p = p + 2
   for j = 1, nb do blocks[j] = { u(data, p, 4), u(data, p + 4, 4), byte(data, p + 12) }; p = p + 17 end
-  local nf = u(data, p, 2)
+  local nf, paths = u(data, p, 2), {}
   p = p + 2
   for _ = 1, nf do
     local pl = u(data, p, 2)
@@ -305,9 +305,10 @@ local function unpack_cpk(data, dest)
         breathe()
       end
       write(dest .. "/" .. path, sub(raw[bi], off + 1, off + size))
+      paths[#paths + 1] = path
     end
   end
-  return sub(data, 9, 8 + ml)
+  return sub(data, 9, 8 + ml), paths
 end
 
 -- a loader like sys/boot/pkgload.lua (unpacked packages, absolute module names): Cubic chunks get (rt, import), Lua modules
@@ -380,8 +381,14 @@ local function main()
       error(e.id .. ": damaged download (size or sha256)", 0)
     end
     local dir = TMP .. "/pkg/" .. e.id
-    local man = json5(unpack_cpk(data, dir))
+    local mtext, paths = unpack_cpk(data, dir)
+    local man = json5(mtext)
     idx.packages[e.id] = { dir = dir }
+    -- modules: lib/a/b.lua is a.b (lib/a/init.lua is a), plus the manifest's own
+    for _, path in ipairs(paths) do
+      local r = path:match("^lib/(.+)%.lua$")
+      if r then idx.modules[(r:gsub("/init$", ""):gsub("/", "."))] = { e.id, path } end
+    end
     for name, path in pairs(man.modules or {}) do idx.modules[name] = { e.id, path } end
     if fs.exists(dir .. "/src/cubic/rt.lua") then idx.rt = dir .. "/src/cubic/rt.lua" end
   end

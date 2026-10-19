@@ -13,6 +13,7 @@
 | [06-cobble.md](06-cobble.md) | каталог Cobble на GitHub, сборка в Actions, публикация прямо из игры |
 | [07-system-split.md](07-system-split.md) | вся система, разбитая на много мелких пакетов |
 | [08-setup-and-store.md](08-setup-and-store.md) | установка системы на чистый компьютер, экраны настройки, магазин |
+| [10-second-computer.md](10-second-computer.md) | второй компьютер как хранилище пакетов: `pkghost.lua`, протокол, `stew host`, установщик |
 
 Старые документы, которые остаются в силе, если здесь не сказано иначе: [spec/package-manager.md](../spec/package-manager.md)
 (транзакции, расчёт места, доверие, команды `stew`), [03-file-formats.md](../03-file-formats.md) (`.cpk`, `.stp`, `.cbx`),

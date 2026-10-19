@@ -29,7 +29,10 @@ def show_plan(sh, p):
         if st.from != nil and st.op == "update":
             line = st.id .. " " .. st.from .. " -> " .. tostring(st.version)
         if st.op != "remove":
-            line = line .. "  " .. kb(st.size) .. "  [" .. tostring(st.source) .. ", " .. tostring(st.trust) .. ", " .. tostring(st.storage) .. "]"
+            where = tostring(st.storage)
+            if st.storage == "remote":
+                where = "second computer #" .. tostring(st.host)
+            line = line .. "  " .. kb(st.size) .. "  [" .. tostring(st.source) .. ", " .. tostring(st.trust) .. ", " .. where .. "]"
         if st.auto:
             line = line .. "  (dependency)"
         sh:println(line)
@@ -44,6 +47,10 @@ def show_plan(sh, p):
         sh:println("")
     for c in p.conflicts:
         sh:write_color("e", "  conflict: " .. c)
+        sh:println("")
+    if p.remote != nil:
+        sh:write_color("3", "  second computer #" .. p.remote.host .. " (" .. tostring(p.remote.label) .. "): " .. p.remote.count .. " packages, " ..
+            kb(p.remote.bytes) .. " go there, " .. kb(p.remote.left) .. " of " .. kb(p.remote.free) .. " free after")
         sh:println("")
     sh:println(string.format("  download %s, disk change %s, peak %s, free %s (reserve %s): %s", kb(p.download), kb(p.installed_delta), kb(p.peak),
         kb(p.free), kb(p.reserve), p.fits and "fits" or "DOES NOT FIT"))
@@ -106,7 +113,8 @@ export def b_stew(sh, args):
     cmd = args[1]
     if cmd == nil or cmd == "help" or cmd == "--help":
         sh:println("usage: stew list | search TEXT | info ID | install ID... | remove ID... | update [ID...] | plan ID... | refresh")
-        sh:println("       stew source list|add NAME KIND URL|remove NAME | pin ID | unpin ID | storage ID packed|unpacked")
+        sh:println("       stew source list|add NAME KIND URL|remove NAME | pin ID | unpin ID | storage ID packed|unpacked|remote [HOST]")
+        sh:println("       stew host pair CODE [HOST] | host list | host info ID | host clean ID | host forget ID  (second computer, pkghost.lua)")
         sh:println("       stew verify [ID] | clean | recover | maps [ID...] | pack FOLDER | login | logout | publish FOLDER | publish --status")
         return cmd == nil and 2 or 0
     rest = []
@@ -213,9 +221,14 @@ def _run(sh, s, cmd, o):
         sh:println(r[1] .. (cmd == "pin" and " is pinned" or " is not pinned"))
         return 0
     if cmd == "storage":
-        s:set_storage(r[1], r[2])
-        sh:println(r[1] .. " is now " .. tostring(r[2]))
+        if r[1] == nil or r[2] == nil:
+            sh:eprint("usage: stew storage ID packed|unpacked|remote [HOST]")
+            return 2
+        res = s:set_storage(r[1], r[2], tonumber(r[3]))
+        sh:println(r[1] .. " is now " .. tostring(r[2]) .. (res.host != nil and (" on the second computer #" .. res.host) or ""))
         return 0
+    if cmd == "host":
+        return host_cmd(sh, s, r)
     if cmd == "verify":
         bad = 0
         for v in s:verify(r[1]):
@@ -252,6 +265,55 @@ def _run(sh, s, cmd, o):
         return publish.command(args_, publish_ctx(sh), (line) => sh:println(line))
     sh:eprint("stew: unknown command " .. cmd .. " (stew help)")
     return 2
+
+# stew host ...: the second computer that keeps packages (docs/packages/10-second-computer.md)
+def host_cmd(sh, s, r):
+    sub = r[1]
+    if sub == "pair":
+        if r[2] == nil:
+            sh:eprint("usage: stew host pair CODE [HOST]  (the code is on the screen of the computer that runs pkghost)")
+            return 2
+        h, err = s:host_pair(r[2], tonumber(r[3]))
+        if h == nil:
+            sh:eprint("stew: " .. tostring(err))
+            return 1
+        sh:println("Paired with computer #" .. h.id .. " (" .. h.label .. "), " .. kb(h.free) .. " free. Packages that do not fit here can go there.")
+        return 0
+    if sub == "forget":
+        s:host_forget(tonumber(r[2]) ?? -1, r[3] == "--force")
+        sh:println("Unpaired.")
+        return 0
+    if sub == "info":
+        info, err = s:host_info(tonumber(r[2]) ?? -1)
+        if info == nil:
+            sh:eprint("stew: " .. tostring(err))
+            return 1
+        sh:println("#" .. r[2] .. " " .. tostring(info.label) .. ": " .. kb(info.free) .. " free")
+        names = []
+        for name, size in info.files ?? {}:
+            names[len(names) + 1] = name .. "  " .. kb(size)
+        table.sort(names)
+        for line in names:
+            sh:println("  " .. line)
+        return 0
+    if sub == "clean":
+        gone, err = s:host_clean(tonumber(r[2]) ?? -1)
+        if gone == nil:
+            sh:eprint("stew: " .. tostring(err))
+            return 1
+        sh:println("Removed " .. len(gone) .. " unused files from the host.")
+        return 0
+    n = 0
+    for h in s:hosts():
+        n += 1
+        used = 0
+        for id, rec in s:installed():
+            if rec.storage == "remote" and rec.host == h.id:
+                used += 1
+        sh:println("#" .. h.id .. "  " .. tostring(h.label) .. "  " .. used .. " packages")
+    if n == 0:
+        sh:println("No second computer is paired. Run pkghost.lua there, then: stew host pair CODE")
+    return 0
 
 # контекст клиента публикации: http и хранилище ключа (в защищённой папке пользователя, docs/14-data-protection.md)
 def publish_ctx(sh):

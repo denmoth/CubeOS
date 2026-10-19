@@ -714,6 +714,9 @@ msgstr "Обновить всё"
 msgid "Build myapp/build/<id>-<version>.cpk"
 msgstr "Собрать myapp/build/<id>-<version>.cpk"
 
+msgid "Use a second computer (running pkghost) as extra storage"
+msgstr "Второй компьютер (с pkghost) как дополнительное хранилище"
+
 msgid "Strong compression (smaller, slower)"
 msgstr "Сильное сжатие (меньше, медленнее)"
 
@@ -1442,6 +1445,9 @@ msgstr "нет такого файла"
 
 msgid "cannot write"
 msgstr "нельзя записать"
+
+msgid "this command comes with a package that is not installed"
+msgstr ""
 
 msgid "command not found"
 msgstr "команда не найдена"

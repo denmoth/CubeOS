@@ -73,6 +73,12 @@ r = s:apply(p, {on_progress: fn(stage, id, i, n), ask: fn(question) -> answer})
 `s:rollback(id)` (если старая версия ещё в корзине), `s:clean()` (кэш, корзина, ненужные авто-зависимости),
 `s:source_add(src)`, `s:source_remove(name)`, `s:options(id)`, `s:reconfigure(id, values)`.
 
+## Второй компьютер (10-second-computer.md)
+
+`s:hosts()`, `s:host(id)`, `s:host_pair(code, hid=nil)`, `s:host_forget(id, force)`, `s:host_info(id)`, `s:host_clean(id)`;
+`stew.new({remote: {modem, wait, ...}})` подставляет транспорт; `s:plan({remote: id})` переносит на хост то, что не влезает
+(`step.storage = "remote"`, `p.remote`); `s:set_storage(id, "remote", host)`; запись базы `storage = "remote", host, rname, rsize`.
+
 ## Адаптеры источников
 
 `stew.source.<kind>` (05-sources.md):

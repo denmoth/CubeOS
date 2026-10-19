@@ -50,23 +50,43 @@ local function map_line(starts, n)
 end
 
 function P.new(idx)
+  -- early boot runs in this coroutine; code in a kernel process is in another one (stew.remote waits for the modem differently there)
+  if rawget(_G, "__cubeos_boot_co") == nil then rawset(_G, "__cubeos_boot_co", coroutine.running()) end
   local rtlib = dofile(idx.rt)
   local cache, loading, chunks, maps, archives = {}, {}, {}, {}, {}
   local L = { rt = rtlib, idx = idx, cache = cache }
-  local cpk
+  local cpk, rclient
+
+  -- a package kept on the second computer (docs/packages/10-second-computer.md): blocks come over the modem when a module is
+  -- imported; the host being away is an error that names the package (stew.remote retries and times out by itself)
+  local function remote_archive(pkgid, p)
+    local libs = idx.libs or {} -- idx.libs: tests hand over modules they already loaded
+    if not cpk then cpk = libs.cpk or L.import("cpk") end
+    local host = idx.hosts and idx.hosts[p.remote.host]
+    if not host then error("the second computer #" .. tostring(p.remote.host) .. " is not paired: package " .. pkgid, 0) end
+    local R = libs["stew.remote"] or L.import("stew.remote")
+    rclient = rclient or R.new(idx.remote_ctx or {}) -- idx.remote_ctx: tests give a fake modem
+    local src = rclient:reader({ id = p.remote.host, key = host.key }, p.remote.name, p.remote.size, pkgid)
+    return cpk.open_src(src, pkgid)
+  end
+
+  local function archive_of(pkgid, p)
+    local a = archives[pkgid]
+    if not a then
+      if p.remote then a = remote_archive(pkgid, p)
+      else
+        if not cpk then cpk = L.import("cpk") end
+        a = cpk.open_file(p.packed)
+      end
+      archives[pkgid] = a
+    end
+    return a
+  end
 
   function L.read(pkgid, path)
     local p = idx.packages[pkgid]
     if not p then return nil end
-    if p.packed then
-      if not cpk then cpk = L.import("cpk") end
-      local a = archives[pkgid]
-      if not a then
-        a = cpk.open_file(p.packed)
-        archives[pkgid] = a
-      end
-      return a:read(path)
-    end
+    if p.packed or p.remote then return archive_of(pkgid, p):read(path) end
     return read_plain(p.dir .. "/" .. path)
   end
 
@@ -76,11 +96,8 @@ function P.new(idx)
   local function find_in(pkgid, base)
     for _, cand in ipairs({ base .. ".lua", base .. "/init.lua", base }) do
       local p = idx.packages[pkgid]
-      if p and p.packed then
-        if not cpk then cpk = L.import("cpk") end
-        local a = archives[pkgid] or cpk.open_file(p.packed)
-        archives[pkgid] = a
-        if a:exists(cand) then return cand end
+      if p and (p.packed or p.remote) then
+        if archive_of(pkgid, p):exists(cand) then return cand end
       elseif p and fs.exists(p.dir .. "/" .. cand) and not fs.isDir(p.dir .. "/" .. cand) then
         return cand
       end

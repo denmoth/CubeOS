@@ -66,7 +66,7 @@ export class Setup:
         self.gui = nil
         self.plans = {}
         self.reveal = env.animate == false and 1 or 0
-        self.st = {lang: 1, license: false, profile: 2, explicit: nil, storage: 3, options: {},
+        self.st = {lang: 1, license: false, profile: 2, explicit: nil, storage: 3, options: {}, remote: nil,
             user: {display: "", name: "", password: "", repeat: "", avatar: 1, name_edited: false}, prefs: prefs.defaults("en"),
             prefs_touched: false}
         self.focus = 1
@@ -379,11 +379,11 @@ export class Setup:
         return set
 
     def plan(self, ids, storage):
-        key = table.concat(ids, ",") .. "|" .. storage
+        key = table.concat(ids, ",") .. "|" .. storage .. "|" .. tostring(self.st.remote)
         p = self.plans[key]
         if p == nil:
             let me = self
-            ok, res = pcall(() => me.s:plan({install: ids, remove: [], update: [], storage: storage, options: me.st.options}))
+            ok, res = pcall(() => me.s:plan({install: ids, remove: [], update: [], storage: storage, options: me.st.options, remote: me.st.remote}))
             if ok and type(res) == "table":
                 p = res
             else:
@@ -554,7 +554,7 @@ export def new(env):
 export def main(env):
     if env.stew == nil:
         stew_mod = env.import("stew")
-        env.stew = stew_mod.new({fs: env.fs ?? fs, root: env.root ?? "/", http: env.http})
+        env.stew = stew_mod.new({fs: env.fs ?? fs, root: env.root ?? "/", http: env.http, remote: env.remote})
     s = Setup(env)
     ok, res = pcall(() => s:run())
     s:close_gui()

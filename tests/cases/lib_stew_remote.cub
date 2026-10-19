@@ -1,0 +1,350 @@
+import t
+import json5
+import cpk
+import stew
+import stew.pack as pack
+import stew.remote as remote
+eq = t.eq
+
+def put(path, text):
+    fs.makeDir(fs.getDir(path))
+    h = fs.open(path, "wb")
+    h.write(text)
+    h.close()
+
+def read(path):
+    h = fs.open(path, "rb")
+    if h == nil:
+        return nil
+    s = h.readAll()
+    h.close()
+    return s
+
+# incompressible bytes, the same every run
+def noise(n, seed):
+    out = []
+    x = seed
+    for i in range[1, n]:
+        x = (x * 69069 + 1) % 4294967296
+        out[i] = string.char(math.floor(x / 65536) % 256)
+    return table.concat(out)
+
+def clone(v):
+    if type(v) != "table":
+        return v
+    c = {}
+    for k, x in v:
+        c[k] = clone(x)
+    return c
+
+W = "/tmp_stew_remote"
+fs.delete(W)
+REPO = W .. "/repo"
+ROOT = W .. "/disk"
+HOSTDIR = W .. "/host"
+fs.makeDir(ROOT)
+
+# ------------------------------------------------------------ the second computer and a modem cable to it, in one process
+H = loadfile("/repo/game/pkghost.lua")("module")
+clock = 1700000000000
+ctr = {n: 0}
+def rnd():
+    ctr.n += 1
+    return H.sha256_hex("seed" .. ctr.n)
+host = H.new({fs: fs, dir: HOSTDIR, id: 7, label: "store", now: () => clock, random: rnd})
+net = {inbox: [], wire: [], reqs: [], down: false, tamper: nil, fail_after: nil, sent: 0}
+
+def transmit(ch, reply, msg):
+    net.sent += 1
+    clock += 5
+    net.reqs[len(net.reqs) + 1] = clone(msg)
+    net.wire[len(net.wire) + 1] = remote.canon(msg)
+    if net.fail_after != nil and net.sent > net.fail_after:
+        net.down = true
+    if net.down:
+        return 1
+    r = host:handle(clone(msg))
+    if r != nil:
+        if net.tamper != nil:
+            r = net.tamper(r)
+        net.inbox[len(net.inbox) + 1] = ["modem_message", "back", reply, ch, clone(r), nil]
+    return 1
+
+def wait(filter, seconds):
+    if len(net.inbox) == 0:
+        return nil
+    return table.remove(net.inbox, 1)
+
+CTX = {modem: {open: (ch) => nil, transmit: transmit}, wait: wait, id: 12, now: () => clock, random: rnd, timeout: 1, retries: 2}
+
+# ------------------------------------------------------------ pairing
+c = remote.new(CTX)
+h, err = c:pair("000000")
+eq(h, nil, "a wrong code does not pair")
+eq(err, "wrong code", "the reason")
+eq(host.clients[12], nil, "the host did not remember the wrong client")
+code = host.code
+h, err = c:pair(code)
+eq(h != nil, true, "the right code pairs: " .. tostring(err))
+eq(h.id, 7, "the host id")
+eq(h.label, "store", "the host label")
+eq(h.key, host.clients[12].key, "both sides derived the same key")
+eq(host.code != code, true, "the code changes after a pairing")
+leak = false
+for line in net.wire:
+    if string.find(line, code, 1, true) != nil or string.find(line, h.key, 1, true) != nil:
+        leak = true
+eq(leak, false, "neither the code nor the key went over the cable")
+h2, err2 = c:pair(code)
+eq(h2, nil, "an old code is dead")
+# three wrong tries change the code
+before = host.code
+for i in range[1, 3]:
+    c:pair("111111")
+eq(host.code != before, true, "three wrong tries change the code")
+
+# ------------------------------------------------------------ put / read / delete / info
+data = noise(20000, 5)
+progress = []
+def on_prog(sent, total):
+    progress[len(progress) + 1] = sent
+ok, err = c:put(h, "a.cpk", data, on_prog)
+eq(ok, true, "put works: " .. tostring(err))
+eq(progress, [8192, 16384, 20000], "put goes in chunks")
+eq(read(HOSTDIR .. "/a.cpk"), data, "the host stored the file")
+eq(fs.exists(HOSTDIR .. "/a.cpk.part"), false, "no half file stays")
+info = c:info(h)
+eq(info.files["a.cpk"], 20000, "info lists the file")
+eq(info.free > 0, true, "info has the free space")
+src = c:reader(h, "a.cpk", 20000, "demo.pkg")
+eq(src.size, 20000, "the reader knows the size")
+eq(src.read(0, 10), string.sub(data, 1, 10), "a small read")
+eq(src.read(5, 20), string.sub(data, 6, 25), "a read inside the window")
+eq(src.read(100, 15000), string.sub(data, 101, 15100), "a big read in pieces")
+eq(src.read(19990, 100), string.sub(data, 19991), "a read past the end is cut")
+# the host checks the whole file
+bad, err = c:call(h, "put", {name: "b.cpk", offset: 0, data: "abc", total: 3, last: true, sha: string.rep("0", 64)})
+eq(bad, nil, "a wrong checksum is refused")
+eq(err, "checksum mismatch", "the reason")
+eq(fs.exists(HOSTDIR .. "/b.cpk"), false, "nothing is stored")
+bad, err = c:call(h, "put", {name: "../evil", offset: 0, data: "x", total: 1, last: true, sha: "x"})
+eq(bad, nil, "a bad name is refused")
+ok = c:delete(h, "a.cpk")
+eq(ok, true, "delete works")
+eq(fs.exists(HOSTDIR .. "/a.cpk"), false, "the file is gone")
+
+# ------------------------------------------------------------ signatures and replay
+c:put(h, "a.cpk", "hello", nil)
+def tamper_data(r):
+    r.data = "evil"
+    return r
+net.tamper = tamper_data
+s1 = c:reader(h, "a.cpk", 5, "x")
+ok2, e2 = pcall(s1.read, 0, 5)
+eq(ok2, false, "a tampered answer is not accepted")
+eq(string.find(tostring(e2), "signature", 1, true) != nil, true, "the error says why: " .. tostring(e2))
+net.tamper = nil
+net.inbox = []
+eq(s1.read(0, 5), "hello", "the same read works without tampering")
+c:delete(h, "a.cpk")
+# a replayed old request
+c:info(h)
+c:info(h)
+infos = []
+for m in net.reqs:
+    if m.op == "info":
+        infos[len(infos) + 1] = m
+rep = host:handle(clone(infos[1]))
+eq(rep.ok, false, "a replayed request is refused")
+eq(rep.err, "stale request", "as stale")
+# a request signed with another key is dropped without an answer
+forged = clone(infos[len(infos)])
+forged.n = forged.n + 100
+eq(host:handle(forged), nil, "a changed request fails the signature check")
+# the answer to someone else's request is not accepted
+net.inbox = []
+net.down = true
+ok3, e3 = c:info(h)
+eq(ok3, nil, "no answer when the host is away")
+eq(e3, "computer #7 does not answer", "the message")
+net.down = false
+
+# ------------------------------------------------------------ packages
+def make(id, version, extra, files):
+    base = W .. "/src/" .. id .. "-" .. version
+    fs.delete(base)
+    m = "{ format: 1, id: \"" .. id .. "\", name: \"" .. id .. "\", version: \"" .. version .. "\", kind: \"app\", category: \"apps\"" .. (extra ?? "") .. " }"
+    put(base .. "/package.json5", m)
+    for path, text in files:
+        put(base .. "/" .. path, text)
+    r = pack.build(fs, base)
+    pack.write(fs, r, REPO)
+    return r
+
+def index_of(builds):
+    idx = {format: 1, packages: {}}
+    for r in builds:
+        e = r.entry
+        p = idx.packages[e.id] ?? {name: e.name, description: e.description, kind: e.kind, category: e.category, priority: e.priority, versions: {}}
+        v = {}
+        for k, val in e:
+            v[k] = val
+        v.url = r.name .. ".cpk"
+        p.versions[e.version] = v
+        idx.packages[e.id] = p
+    put(REPO .. "/index.json5", json5.stringify(idx, {json5: true}))
+
+core = make("demo.core", "1.0.0", ", priority: \"essential\"", {"lib/demo/core.lua": "return {name = 'core'}", "assets/blob.bin": noise(5000, 1)})
+rec = make("demo.rec", "1.0.0", ", priority: \"recommended\"", {"lib/demo/rec.lua": "return {name = 'rec'}", "assets/blob.bin": noise(6000, 2)})
+opt1 = make("demo.opt1", "1.0.0", ", priority: \"optional\"", {"lib/demo/opt1.lua": "return {name = 'opt1', n = 11}", "assets/blob.bin": noise(8000, 3)})
+opt2 = make("demo.opt2", "1.0.0", ", priority: \"optional\"", {"lib/demo/opt2.lua": "return {name = 'opt2'}", "assets/blob.bin": noise(9000, 4)})
+index_of([core, rec, opt1, opt2])
+
+space = {free: 20480 + 22000, cap: 100000}
+def free_space():
+    return space.free, space.cap
+
+s = stew.new({fs: fs, root: ROOT, yield: () => nil, remote: CTX, free_space: free_space})
+s:save_sources([{name: "local", kind: "path", url: REPO, trust: "user"}])
+s:refresh()
+ALL = ["demo.core", "demo.rec", "demo.opt1", "demo.opt2"]
+
+# no second computer yet: it does not fit
+p = s:plan({install: ALL, no_want: true})
+eq(p.fits, false, "without a second computer it does not fit")
+eq(p.remote, nil, "nothing is moved")
+
+# pair through stew: the key goes into hosts.json5
+h3, err = s:host_pair(host.code)
+eq(h3 != nil, true, "stew pairs: " .. tostring(err))
+c = s:remote()
+h = h3
+eq(s:hosts()[1].id, 7, "the host is stored")
+eq(s:hosts()[1].key, host.clients[12].key, "with its key")
+eq(read(ROOT .. "/cubeos/var/stew/hosts.json5") != nil, true, "hosts.json5 exists")
+
+p = s:plan({install: ALL, no_want: true})
+eq(p.fits, true, "with the second computer it fits")
+where = {}
+for st in p.steps:
+    where[st.id] = st.storage
+eq(where["demo.opt1"], "remote", "an optional package goes to the second computer")
+eq(where["demo.opt2"], "remote", "so does the other one")
+eq(where["demo.core"] != "remote", true, "an essential package stays")
+eq(where["demo.rec"] != "remote", true, "a recommended one stays when optional ones are enough")
+eq(p.remote.host, 7, "the plan names the host")
+eq(p.remote.count, 2, "two packages moved")
+eq(p.remote.free > p.remote.left, true, "the plan shows the free space of the host")
+
+# install: the files are on the host, not here
+r = s:apply(p, {})
+eq(r.ok, true, "install with remote packages: " .. tostring(r.error))
+inst = s:installed()
+eq(inst["demo.opt1"].storage, "remote", "the database says remote")
+eq(inst["demo.opt1"].host, 7, "and where")
+eq(fs.exists(HOSTDIR .. "/" .. inst["demo.opt1"].rname), true, "the package file is on the host")
+eq(fs.exists(ROOT .. "/cubeos/pkg/demo.opt1") or fs.exists(ROOT .. "/cubeos/pkg/demo.opt1.cpk"), false, "nothing of it is local")
+eq(fs.exists(ROOT .. "/cubeos/var/stew/journal.json5"), false, "no journal after success")
+eq(len(fs.list(ROOT .. "/cubeos/var/stew/staging")), 0, "staging is clean")
+eq(inst["demo.opt1"].modules["demo.opt1"] != nil, true, "modules are known from the file list")
+idx = loadfile(ROOT .. "/cubeos/var/stew/boot.idx")()
+eq(idx.packages["demo.opt1"].remote.host, 7, "boot.idx has the remote package")
+eq(idx.packages["demo.opt1"].remote.name, inst["demo.opt1"].rname, "with its name")
+eq(idx.hosts[7].key, host.clients[12].key, "and the key of the host")
+
+# the loader imports a module of a remote package over the modem
+idx.rt = "/repo/src/cubic/rt.lua"
+idx.remote_ctx = CTX
+idx.libs = {cpk: cpk, "stew.remote": remote}
+L = dofile("/repo/sys/boot/pkgload.lua").new(idx)
+before = net.sent
+eq(L.import("demo.opt1").n, 11, "a module of a remote package loads")
+eq(net.sent > before, true, "it came over the modem")
+eq(L.import("demo.core").name, "core", "a local package still loads")
+net.down = true
+ok4, e4 = pcall(L.import, "demo.opt2")
+eq(ok4, false, "a missing second computer is an error")
+eq(string.find(tostring(e4), "the second computer #7 does not answer", 1, true) != nil, true, "it says which computer: " .. tostring(e4))
+eq(string.find(tostring(e4), "package demo.opt2", 1, true) != nil, true, "and which package: " .. tostring(e4))
+net.down = false
+net.inbox = []
+
+# verify over the network
+v = s:verify("demo.opt1")
+eq(v[1].ok, true, "verify checks a remote package by sha256: " .. tostring(v[1].error))
+orig = read(HOSTDIR .. "/" .. inst["demo.opt1"].rname)
+put(HOSTDIR .. "/" .. inst["demo.opt1"].rname, string.sub(orig, 1, 200) .. "X" .. string.sub(orig, 202))
+eq(s:verify("demo.opt1")[1].ok, false, "verify finds a damaged remote package")
+put(HOSTDIR .. "/" .. inst["demo.opt1"].rname, orig)
+eq(s:verify("demo.opt1")[1].ok, true, "and passes again")
+
+# move between the computers
+r = s:set_storage("demo.rec", "remote")
+eq(r.ok, true, "moved to the second computer")
+eq(s:installed()["demo.rec"].storage, "remote", "recorded")
+eq(fs.exists(ROOT .. "/cubeos/pkg/demo.rec") or fs.exists(ROOT .. "/cubeos/pkg/demo.rec.cpk"), false, "the local copy is gone")
+eq(s:verify("demo.rec")[1].ok, true, "it verifies there")
+rname = s:installed()["demo.rec"].rname
+r = s:set_storage("demo.rec", "packed")
+eq(s:installed()["demo.rec"].storage, "packed", "brought back packed")
+eq(fs.exists(ROOT .. "/cubeos/pkg/demo.rec.cpk"), true, "the file is local again")
+eq(fs.exists(HOSTDIR .. "/" .. rname), false, "the host copy is deleted")
+eq(s:verify("demo.rec")[1].ok, true, "intact after the trip")
+okp = pcall(s.set_storage, s, "demo.core", "remote")
+eq(okp, false, "an essential package cannot be moved")
+
+# rollback: the host is fine, a later package fails -> the uploaded one is deleted from the host
+opt3 = make("demo.opt3", "1.0.0", ", priority: \"optional\"", {"lib/demo/opt3.lua": "return {}", "assets/blob.bin": noise(17000, 7)})
+loc = make("demo.loc", "1.0.0", ", priority: \"recommended\"", {"lib/demo/loc.lua": "return {}"})
+index_of([core, rec, opt1, opt2, opt3, loc])
+s:refresh()
+p = s:plan({install: ["demo.opt3", "demo.loc"], no_want: true})
+for st in p.steps:
+    if st.id == "demo.opt3":
+        st.storage = "remote"
+        st.host = 7
+good = read(REPO .. "/demo.loc-1.0.0.cpk")
+put(REPO .. "/demo.loc-1.0.0.cpk", string.sub(good, 1, 60) .. "X" .. string.sub(good, 62))
+files_before = count(host:files())
+r = s:apply(p, {})
+eq(r.ok, false, "a damaged local package fails the transaction")
+eq(count(host:files()), files_before, "the upload is deleted from the host by the rollback")
+eq(s:installed()["demo.opt3"], nil, "and not recorded")
+put(REPO .. "/demo.loc-1.0.0.cpk", good)
+
+# rollback: the host disappears in the middle of an upload
+p = s:plan({install: ["demo.opt3"], no_want: true})
+p.steps[1].storage = "remote"
+p.steps[1].host = 7
+net.fail_after = net.sent + 1
+r = s:apply(p, {})
+eq(r.ok, false, "the host vanishing fails the upload")
+eq(string.find(tostring(r.error), "second computer #7", 1, true) != nil, true, "the error names the computer: " .. tostring(r.error))
+eq(s:installed()["demo.opt3"], nil, "nothing is recorded")
+eq(fs.exists(ROOT .. "/cubeos/var/stew/journal.json5"), false, "no journal left")
+eq(len(fs.list(ROOT .. "/cubeos/var/stew/staging")), 0, "no staging left")
+net.fail_after = nil
+net.down = false
+net.inbox = []
+
+# stray files on the host are found and removed
+c:put(h, "stray.cpk", "x")
+gone = s:host_clean(7)
+eq(gone, ["stray.cpk"], "host_clean removes what no package uses")
+
+# remove deletes on the host
+rn = s:installed()["demo.opt1"].rname
+r = s:remove(["demo.opt1"])
+eq(r.ok, true, "remove works: " .. tostring(r.error))
+eq(fs.exists(HOSTDIR .. "/" .. rn), false, "the file is deleted on the host")
+eq(s:installed()["demo.opt1"], nil, "and from the database")
+
+# unpairing
+okp = pcall(s.host_forget, s, 7)
+eq(okp, false, "a host with packages cannot be forgotten")
+s:remove(["demo.opt2"])
+eq(s:host_forget(7), true, "an empty host is forgotten")
+eq(len(s:hosts()), 0, "no hosts left")
+eq(host.clients[12], nil, "the host forgot the client too")
+fs.delete(W)
+print("done")

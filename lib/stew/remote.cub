@@ -1,0 +1,305 @@
+# stew.remote: client of the package host on a second computer (game/pkghost.lua, docs/packages/10-second-computer.md).
+# A host keeps .cpk files; this client pairs with it, uploads packages, reads them back by offset (a src for cpk.Archive) and deletes.
+#
+#   r = remote.new({modem: {open(ch), transmit(ch, reply, msg) -> count}, wait: (filter, seconds) => event list or nil,
+#                   id: computer id, now: () => ms, random: () => string, timeout: 3, retries: 3})    (everything has a default)
+#   host, err = r:pair("123456", host_id=nil)       -> {id, key, label, free}
+#   info, err = r:info(host)                        -> {free, cap, label, files: {name: size}}
+#   ok, err = r:put(host, name, data, on_progress)  data: string; the host checks the sha256 of the whole file
+#   src = r:reader(host, name, size, pkg)           -> {size, read(offset, length)} for cpk.Archive; errors say what does not answer
+#   ok, err = r:delete(host, name)    r:forget(host)
+# Every request and answer carries an HMAC with a sequence number, see the document. Nothing here knows about stew or CubeOS.
+
+import sha256
+
+export const CHANNEL = 4277
+export const PROTO = "cpkhost"
+export const VERSION = 1
+export const CHUNK = 8192
+export const READ_MAX = 12288
+export const AHEAD = 4096
+
+state = {main: nil}
+
+def _hex(raw):
+    return sha256.to_hex(raw)
+
+def _unhex(s):
+    return (string.gsub(s, "%x%x", (x) => string.char(tonumber(x, 16))))
+
+# the same canonical text as game/pkghost.lua
+export def canon(v):
+    t = type(v)
+    if t == "string":
+        return "s" .. len(v) .. ":" .. v
+    if t == "number":
+        return "#" .. string.format("%.0f", v) .. ";"
+    if t == "boolean":
+        return v and "T" or "F"
+    if t == "table":
+        names = []
+        for k, _ in v:
+            names[len(names) + 1] = k
+        table.sort(names)
+        parts = ["{"]
+        for k in names:
+            parts[len(parts) + 1] = canon(k)
+            parts[len(parts) + 1] = canon(v[k])
+        parts[len(parts) + 1] = "}"
+        return table.concat(parts)
+    return "n"
+
+def _mac(key_hex, msg):
+    copy = {}
+    for k, v in msg:
+        if k != "mac":
+            copy[k] = v
+    return _hex(sha256.hmac(_unhex(key_hex), canon(copy)))
+
+def _same(a, b):
+    if type(a) != "string" or type(b) != "string" or len(a) != len(b):
+        return false
+    x = 0
+    for i in range[1, len(a)]:
+        if string.byte(a, i) != string.byte(b, i):
+            x = 1
+    return x == 0
+
+# ---------------------------------------------------------------- the real modems and the waiting
+
+# every attached modem (wired and wireless) as one: open on all, transmit through all
+export def default_modem():
+    def names():
+        out = []
+        if peripheral != nil:
+            for name in peripheral.getNames():
+                if peripheral.getType(name) == "modem":
+                    out[len(out) + 1] = name
+        return out
+    def open(ch):
+        for name in names():
+            pcall(peripheral.call, name, "open", ch)
+    def transmit(ch, reply, msg):
+        n = 0
+        for name in names():
+            if pcall(peripheral.call, name, "transmit", ch, reply, msg):
+                n += 1
+        return n
+    return {open: open, transmit: transmit}
+
+# Waiting for a modem_message works in two worlds (document, "Waiting for the answer"):
+#  - before the kernel and in plain CraftOS (stage2 preload, the installer): os.pullEventRaw with a timer; other events that
+#    arrive meanwhile are put back in order;
+#  - inside a kernel process (an app imported later, cush): the same system call net.link uses, a yield of {op: "wait_event",
+#    net: true}; the kernel wakes the process on modem_message and keeps its other events. pkgload.lua records the boot coroutine
+#    in the global __cubeos_boot_co: a different running coroutine means "inside a kernel process".
+export def pull_modem(timeout):
+    boot = rawget(_G, "__cubeos_boot_co")
+    if state.main != nil:
+        boot = state.main
+    if boot != nil and coroutine.running() != boot:
+        ms = math.floor(math.min(math.max(timeout, 0), 10) * 1000)
+        ok, res = pcall(coroutine.yield, {op: "wait_event", filter: ["modem_message"], timeout_ms: ms, keep: true, net: true})
+        if ok and type(res) == "table" and res[1] == "modem_message":
+            return res
+        return nil
+    timer = os.startTimer(timeout)
+    stash = []
+    found = nil
+    while true:
+        ev = table.pack(os.pullEventRaw())
+        if ev[1] == "modem_message":
+            os.cancelTimer(timer)
+            found = []
+            for i in range[1, ev.n]:
+                found[i] = ev[i]
+            break
+        if ev[1] == "timer" and ev[2] == timer:
+            break
+        stash[len(stash) + 1] = ev
+        if ev[1] == "terminate":
+            os.cancelTimer(timer)
+            break
+    for i in range[1, len(stash)]:
+        os.queueEvent(table.unpack(stash[i], 1, stash[i].n))
+    return found
+
+export def configure(o):
+    state.main = o.main
+
+def _random():
+    return sha256.hex(tostring(os.epoch("utc")) .. ":" .. tostring(os.clock()) .. ":" .. math.random(1, 1073741824) .. ":" .. tostring({}))
+
+export def default_ctx(o=nil):
+    c = o ?? {}
+    c.modem = c.modem ?? default_modem()
+    c.wait = c.wait ?? ((filter, seconds) => pull_modem(seconds))
+    return c
+
+# ---------------------------------------------------------------- the client
+
+export class Client:
+    def init(self, ctx):
+        c = default_ctx(ctx)
+        self.modem = c.modem
+        self.wait = c.wait
+        self.now = c.now ?? (() => os.epoch("utc"))
+        self.id = c.id ?? os.getComputerID()
+        self.timeout = c.timeout ?? 3
+        self.retries = c.retries ?? 3
+        self.random = c.random ?? _random
+        self.reply = c.reply ?? (20000 + self.id % 20000)
+        self.last_n = 0
+        self.opened = false
+        self.bad = false
+
+    def _send(self, msg):
+        if not self.opened:
+            self.modem.open(self.reply)
+            self.opened = true
+        n = self.modem.transmit(CHANNEL, self.reply, msg)
+        if n == 0 or n == false:
+            return false
+        return true
+
+    # the next message for us that satisfies ok(m); nil on timeout (self.bad tells that something arrived but failed the check)
+    def _await(self, ok, seconds):
+        for _ in range[1, 60]:
+            ev = self.wait(["modem_message"], seconds)
+            if ev == nil:
+                return nil
+            m = ev[5]
+            if type(m) == "table" and m.p == PROTO and m.cid == self.id:
+                r = ok(m)
+                if r == true:
+                    return m
+                if r == "bad":
+                    self.bad = true
+        return nil
+
+    def pair(self, code, host_id=nil):
+        cn = string.sub(self.random(), 1, 32)
+        hello = {p: PROTO, v: VERSION, op: "hello", cid: self.id, cn: cn}
+        hello.hid = host_id
+        if not self:_send(hello):
+            return nil, "no modem is attached to this computer"
+        h = self:_await((m) => m.op == "hello_ok" and m.re == cn and type(m.hn) == "string" and (host_id == nil or m.hid == host_id), self.timeout)
+        if h == nil:
+            return nil, "no package host answers (run pkghost on the other computer and check the modem)"
+        hid = h.hid
+        pk = sha256.hmac(tostring(code), "cpkhost-pair" .. cn .. h.hn)
+        proof = _hex(sha256.hmac(pk, "C" .. cn .. h.hn .. self.id .. hid))
+        if not self:_send({p: PROTO, v: VERSION, op: "pair", cid: self.id, hid: hid, cn: cn, hn: h.hn, proof: proof}):
+            return nil, "no modem is attached to this computer"
+        want = _hex(sha256.hmac(pk, "H" .. cn .. h.hn .. self.id .. hid))
+        a = self:_await((m) => (m.op == "pair_ok" or m.op == "denied") and m.re == cn and m.hid == hid, self.timeout)
+        if a == nil:
+            return nil, "the host did not answer the pairing"
+        if a.op == "denied":
+            return nil, "wrong code"
+        if not _same(a.proof, want):
+            return nil, "the host could not prove it knows the code (not the computer you meant?)"
+        return {id: hid, key: _hex(sha256.hmac(pk, "K" .. cn .. h.hn)), label: a.label ?? ("computer " .. hid), free: a.free}
+
+    # a signed request and its signed answer; the same sequence number on retries (the host repeats its answer)
+    def call(self, host, op, fields=nil):
+        n = math.max(self.last_n + 1, self.now())
+        self.last_n = n
+        msg = {p: PROTO, v: VERSION, op: op, cid: self.id, hid: host.id, n: n}
+        for k, v in fields ?? {}:
+            msg[k] = v
+        msg.mac = _mac(host.key, msg)
+        self.bad = false
+        unpaired = false
+        for attempt in range[1, self.retries]:
+            if not self:_send(msg):
+                return nil, "no modem is attached to this computer"
+            m = self:_await((a) => self:_check(host, n, a), self.timeout)
+            if m != nil:
+                if m.ok == false:
+                    if m.mac == nil:
+                        return nil, "the host has forgotten this computer (pair again)"
+                    return nil, tostring(m.err ?? "refused")
+                return m
+        if self.bad:
+            return nil, "the answer of computer #" .. host.id .. " failed the signature check (tampered, or a wrong key)"
+        return nil, "computer #" .. host.id .. " does not answer"
+
+    def _check(self, host, n, a):
+        if a.op != "res" or a.re != n or a.hid != host.id:
+            return false
+        if a.mac == nil:
+            return a.ok == false and a.err == "not paired"
+        if _same(_mac(host.key, a), a.mac):
+            return true
+        return "bad"
+
+    def info(self, host):
+        return self:call(host, "info")
+
+    def put(self, host, name, data, on_progress=nil):
+        total = len(data)
+        sum = sha256.hex(data)
+        off = 0
+        while true:
+            piece = string.sub(data, off + 1, off + CHUNK)
+            last = off + len(piece) >= total
+            f = {name: name, offset: off, data: piece, total: total, last: last}
+            if last:
+                f.sha = sum
+            r, err = self:call(host, "put", f)
+            if r == nil:
+                return nil, err
+            off += len(piece)
+            if on_progress != nil:
+                on_progress(off, total)
+            if last:
+                return true
+
+    def delete(self, host, name):
+        r, err = self:call(host, "delete", {name: name})
+        if r == nil:
+            return nil, err
+        return true
+
+    def forget(self, host):
+        r, err = self:call(host, "forget")
+        if r == nil:
+            return nil, err
+        return true
+
+    # src for cpk.Archive. A small read-ahead window turns the header reads into one request; blocks are read in pieces.
+    # Errors name the package: "the second computer #12 does not answer: package demo.app".
+    def reader(self, host, name, size, pkg=nil):
+        me = self
+        win = {off: 0, data: ""}
+        what = pkg ?? name
+        def fetch(off, n):
+            r, err = me:call(host, "read", {name: name, offset: off, length: n})
+            if r == nil:
+                error("the second computer #" .. host.id .. (string.find(err, "does not answer", 1, true) != nil and " does not answer" or (": " .. err)) ..
+                    ": package " .. what, 0)
+            return r.data
+        def read(off, n):
+            if n <= 0:
+                return ""
+            if off >= win.off and off + n <= win.off + len(win.data):
+                return string.sub(win.data, off - win.off + 1, off - win.off + n)
+            if n < AHEAD:
+                data = fetch(off, math.min(AHEAD, size - off))
+                win.off = off
+                win.data = data
+                return string.sub(data, 1, n)
+            parts = []
+            got = 0
+            while got < n:
+                piece = fetch(off + got, math.min(READ_MAX, n - got))
+                if len(piece) == 0:
+                    break
+                parts[len(parts) + 1] = piece
+                got += len(piece)
+            return table.concat(parts)
+        return {size: size, read: read}
+
+export def new(ctx=nil):
+    return Client(ctx)

@@ -12,6 +12,7 @@ import cpk
 import stew.db as dbm
 import stew.txn as txn
 import stew.pack as pack
+import stew.remote as remotem
 
 export const VERSION = "1.0.0"
 # без этих пакетов не прочитать сжатый пакет: всегда распакованы (вместе с их зависимостями). Файлы загрузки (sys/boot) лежат
@@ -78,6 +79,78 @@ export class Stew:
         self.yield = o.yield ?? _default_yield
         self.adapters = o.adapters
         self.free_space = o.free_space
+        self.remote_ctx = o.remote
+
+    # ---------------------------------------------------------------- второй компьютер (docs/packages/10-second-computer.md)
+
+    # the client of the package host; o.remote = {modem, wait, now, id, random, timeout, retries} (tests give a fake modem)
+    def remote(self):
+        if self.client == nil:
+            self.client = remotem.new(self.remote_ctx ?? {})
+        return self.client
+
+    def hosts(self):
+        return self.db:hosts()
+
+    def host(self, id):
+        for h in self.db:hosts():
+            if h.id == tonumber(id):
+                return h
+        return nil
+
+    # pairs with the host that shows this code; hid (optional) says which computer when several show a code
+    def host_pair(self, code, hid=nil):
+        h, err = self:remote():pair(code, hid)
+        if h == nil:
+            return nil, err
+        list = []
+        for x in self.db:hosts():
+            if x.id != h.id:
+                list[len(list) + 1] = x
+        list[len(list) + 1] = {id: h.id, key: h.key, label: h.label}
+        self.db:save_hosts(list)
+        return h
+
+    # unpairs; packages kept there must come home first (force: forget anyway, they stay unreachable)
+    def host_forget(self, id, force=false):
+        h = self:host(id)
+        if h == nil:
+            error("stew: no second computer #" .. tostring(id) .. " is paired", 0)
+        if not force:
+            for pid, rec in self:installed():
+                if rec.storage == "remote" and rec.host == h.id:
+                    error("stew: " .. pid .. " lives on the second computer #" .. h.id .. "; bring it home first (stew storage " .. pid .. " packed)", 0)
+        pcall(() => self:remote():forget(h))
+        list = []
+        for x in self.db:hosts():
+            if x.id != h.id:
+                list[len(list) + 1] = x
+        self.db:save_hosts(list)
+        return true
+
+    def host_info(self, id):
+        h = self:host(id)
+        if h == nil:
+            return nil, "no second computer #" .. tostring(id) .. " is paired"
+        return self:remote():info(h)
+
+    # files on the host that no installed package uses (left by a failed deletion or a lost connection)
+    def host_clean(self, id):
+        h = self:host(id)
+        info, err = self:host_info(id)
+        if info == nil:
+            return nil, err
+        used = {}
+        for _, rec in self:installed():
+            if rec.storage == "remote" and rec.host == h.id:
+                used[rec.rname] = true
+        gone = []
+        for name, _ in info.files ?? {}:
+            if not used[name]:
+                self:remote():delete(h, name)
+                gone[len(gone) + 1] = name
+        table.sort(gone)
+        return gone
 
     # ---------------------------------------------------------------- источники и каталог
 
@@ -238,7 +311,15 @@ export class Stew:
         if rec == nil:
             return nil
         text = nil
-        if rec.storage == "packed":
+        if rec.storage == "remote":
+            h = self:host(rec.host)
+            if h == nil:
+                return nil
+            ok, a = pcall(() => cpk.open_src(self:remote():reader(h, rec.rname, rec.rsize, id), id))
+            if not ok:
+                return nil
+            text = a.manifest_text
+        elif rec.storage == "packed":
             p = self.db:path(dbm.PKG .. "/" .. id .. ".cpk")
             if self.fs.exists(p):
                 text = cpk.open_file(p, self.fs).manifest_text
@@ -421,12 +502,18 @@ export class Stew:
                 size = self.fs.getSize(c.file)
                 isz = size * 3
             storage = mode
-            if boot[id] or (st.packages[id] != nil and st.packages[id].storage == "unpacked" and mode == "auto"):
+            keep_host = nil
+            old_rec = st.packages[id]
+            if old_rec != nil and old_rec.storage == "remote" and mode == "auto" and not boot[id] and self:host(old_rec.host) != nil:
+                keep_host = old_rec.host
+            if keep_host != nil:
+                storage = "remote"
+            elif boot[id] or (st.packages[id] != nil and st.packages[id].storage == "unpacked" and mode == "auto"):
                 storage = "unpacked"
             elif mode == "auto":
                 storage = "unpacked"
             step = {op: c.op, id: id, version: c.version, from: c.from, size: size, installed_size: isz, source: c.source, trust: c.trust,
-                auto: c.auto, storage: storage, file: c.file, auto_storage: mode == "auto" and not boot[id], priority: c.meta != nil and c.meta.priority or nil}
+                auto: c.auto, storage: storage, host: keep_host, file: c.file, auto_storage: mode == "auto" and not boot[id], priority: c.meta != nil and c.meta.priority or nil}
             if size == nil:
                 p.warnings[len(p.warnings) + 1] = id .. ": size is unknown until download"
             steps[len(steps) + 1] = step
@@ -441,6 +528,8 @@ export class Stew:
                 if len(fresh) > 0:
                     p.new_permissions[id] = fresh
         def cost(s):
+            if s.storage == "remote":
+                return 0
             if s.storage == "packed":
                 return s.size ?? 0
             return s.installed_size ?? s.size ?? 0
@@ -448,16 +537,22 @@ export class Stew:
             delta = 0
             dl = 0
             unpacked_new = 0
+            remote_sum = 0
+            remote_max = 0
             for s in steps:
                 delta += cost(s)
                 dl += s.size ?? 0
-                if s.storage != "packed":
+                if s.storage == "remote":
+                    # uploaded one by one and deleted from the staging at once
+                    remote_sum += s.size ?? 0
+                    remote_max = math.max(remote_max, s.size ?? 0)
+                elif s.storage != "packed":
                     unpacked_new += s.installed_size ?? 0
                 if s.op == "update" and st.packages[s.id] != nil:
                     delta -= st.packages[s.id].size ?? 0
             for s in p.steps:
                 delta -= st.packages[s.id] != nil and (st.packages[s.id].size ?? 0) or 0
-            return delta, dl, dl + unpacked_new
+            return delta, dl, dl - remote_sum + remote_max + unpacked_new
         delta, dl, peak = totals()
         # авто: если не влезает, сжимаем сначала optional, потом recommended, потом остальное (кроме загрузочных)
         if mode == "auto" and (delta + reserve > free or peak + reserve > free):
@@ -468,6 +563,36 @@ export class Stew:
                 delta, dl, peak = totals()
                 if delta + reserve <= free and peak + reserve <= free:
                     break
+        # still too big: move packages to the second computer, optional first, then recommended; never essential ones and never the boot set
+        if not (delta + reserve <= free and peak + reserve <= free):
+            hrec = req.remote != nil and self:host(req.remote) or self:hosts()[1]
+            if req.remote != nil and hrec == nil:
+                p.warnings[len(p.warnings) + 1] = "the second computer #" .. tostring(req.remote) .. " is not paired"
+            if hrec != nil:
+                okh, info = pcall(() => self:remote():info(hrec))
+                if not okh or info == nil:
+                    p.warnings[len(p.warnings) + 1] = "the second computer #" .. hrec.id .. " does not answer"
+                else:
+                    keep_home = self:_boot_closure(cat, st, ["cubeos.stew"])
+                    hfree = (info.free ?? 0) - 4096
+                    moved = 0
+                    moved_bytes = 0
+                    for prio in ["optional", "recommended"]:
+                        cands = []
+                        for s in steps:
+                            if s.op != "remove" and s.storage != "remote" and s.priority == prio and not keep_home[s.id] and (s.size ?? 0) > 0:
+                                cands[len(cands) + 1] = s
+                        table.sort(cands, (a, b) => (a.size ?? 0) > (b.size ?? 0))
+                        for s in cands:
+                            if not (delta + reserve <= free and peak + reserve <= free) and (s.size ?? 0) + 4096 <= hfree:
+                                s.storage = "remote"
+                                s.host = hrec.id
+                                hfree -= s.size
+                                moved += 1
+                                moved_bytes += s.size
+                                delta, dl, peak = totals()
+                    if moved > 0:
+                        p.remote = {host: hrec.id, label: hrec.label, free: info.free, left: hfree + 4096, count: moved, bytes: moved_bytes}
         for s in steps:
             p.steps[len(p.steps) + 1] = s
         p.download = dl
@@ -484,7 +609,7 @@ export class Stew:
         return p
 
     # загрузочные пакеты и все их зависимости (по каталогу и по установленному)
-    def _boot_closure(self, cat, st):
+    def _boot_closure(self, cat, st, extra=nil):
         out = {}
         def walk(id):
             if out[id]:
@@ -501,6 +626,8 @@ export class Stew:
             for d, _ in deps:
                 walk(d)
         for id in BOOT_SET:
+            walk(id)
+        for id in extra ?? []:
             walk(id)
         return out
 
@@ -595,8 +722,8 @@ export class Stew:
         rec = self:installed()[id]
         return rec != nil and (rec.options ?? {}) or nil
 
-    def set_storage(self, id, mode):
-        return txn.set_storage(self, id, mode)
+    def set_storage(self, id, mode, hid=nil):
+        return txn.set_storage(self, id, mode, hid)
 
     def verify(self, id=nil):
         out = []

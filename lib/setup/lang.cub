@@ -43,6 +43,13 @@ const T = [
     ["Keep everything compressed", "Хранить всё сжатым", "Зберігати все стиснутим"],
     ["Choose packages again", "Выбрать пакеты заново", "Обрати пакети знову"],
     ["Second computer for optional packages", "Второй компьютер для необязательных", "Другий комп'ютер для необов'язкових"],
+    ["Second computer", "Второй компьютер", "Другий комп'ютер"], ["Pair", "Связать", "З'єднати"], ["Cancel", "Отмена", "Скасувати"],
+    ["Could not pair", "Не удалось связать", "Не вдалося з'єднати"],
+    ["1. On the other computer run pkghost.lua (wget run <url>/pkghost.lua).\n2. Connect it to this one with a modem, wired or wireless.\n3. Type the 6-digit code it shows.",
+        "1. На другом компьютере запустите pkghost.lua (wget run <адрес>/pkghost.lua).\n2. Соедините его с этим модемом, проводным или беспроводным.\n3. Введите 6 цифр, которые он показывает.",
+        "1. На іншому комп'ютері запустіть pkghost.lua (wget run <адреса>/pkghost.lua).\n2. З'єднайте його з цим модемом, дротовим або бездротовим.\n3. Введіть 6 цифр, які він показує."],
+    ["Sending to the second computer", "Отправка на второй компьютер", "Надсилання на інший комп'ютер"],
+
     ["Enter apply", "Enter применить", "Enter застосувати"],
     # settings pages
     ["Language and region", "Язык и регион", "Мова й регіон"], ["Computer and sign-in", "Компьютер и вход", "Комп'ютер і вхід"],

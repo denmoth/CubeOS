@@ -51,11 +51,21 @@ class FakeStew:
         self.log = []
         self.srcs = [{name: "local", kind: "cobble", url: "OWNER/cobble"}]
         self.fail_once = true
+        self.paired = []
         self.applied = nil
         self.progress = []
 
     def sources(self):
         return self.srcs
+
+    # second computer (stew host ...): paired by the code 123456 only
+    def hosts(self):
+        return self.paired
+    def host_pair(self, code, hid=nil):
+        if code != "123456":
+            return nil, "wrong code"
+        self.paired = [{id: 7, key: "00", label: "store"}]
+        return {id: 7, key: "00", label: "store", free: 900000}
 
     def source_remove(self, name):
         self.log[len(self.log) + 1] = "source_remove " .. name
@@ -106,8 +116,13 @@ class FakeStew:
             delta = packed
         elif req.storage == "auto":
             delta = unpacked <= FREE and unpacked or packed
-        return {ok: true, steps: steps, download: down, installed_delta: delta, peak: delta, free: FREE, reserve: 0,
+        res = {ok: true, steps: steps, download: down, installed_delta: delta, peak: delta, free: FREE, reserve: 0,
             fits: delta <= FREE, missing: [], conflicts: [], warnings: [], new_permissions: {}, runs_setup: []}
+        if req.remote != nil:
+            # the second computer takes the optional packages
+            res.fits = true
+            res.remote = {host: req.remote, label: "store", count: 3, bytes: 417000, free: 900000, left: 483000}
+        return res
 
     def apply(self, p, opts):
         self.log[len(self.log) + 1] = "apply " .. p.storage_note
@@ -326,6 +341,32 @@ add(K(keys.enter))
 add((s) => eq(s.cur, "fit", "does not fit screen"))
 add((s) => find_or_fail(s, "It does not fit", "warning"))
 add((s) => find_or_fail(s, "Second computer", "later option shown"))
+# the second computer: a wrong code, then the right one
+add(["char", "4"])
+add((s) => find_or_fail(s, "6-digit code", "the pairing dialog explains what to do"))
+add(["char", "9"], ["char", "9"], ["char", "9"], ["char", "9"], ["char", "9"], ["char", "9"], K(keys.enter))
+add((s) => find_or_fail(s, "wrong code", "a wrong code is reported"))
+add(K(keys.enter))
+add((s) => find_or_fail(s, "6-digit code", "and the dialog asks again"))
+for ch in ["1", "2", "3", "4", "5", "6"]:
+    add(["char", ch])
+add(K(keys.enter))
+add((s) => eq(s.st.remote, 7, "paired with the second computer"))
+add((s) => find_or_fail(s, "Now it fits", "it fits with the second computer"))
+add((s) => find_or_fail(s, "paired with #7", "the option says where the packages go"))
+add((s) => eq(s.s.last_req.remote, 7, "the plan is asked with the host"))
+def check_summary(s):
+    found = nil
+    s.plan_now = nil
+    for row in finish.summary_rows(s):
+        if row[1] == "Second computer":
+            found = row[2]
+    eq(found, "#7: 3 packages, 407 KB", "the summary shows what goes to the second computer")
+add(check_summary)
+def reset_remote(s):
+    s.st.remote = nil
+    s.plans = {}
+add(reset_remote)
 add(["char", "2"])
 add((s) => eq(s.st.storage, 1, "switched to compact"))
 add((s) => find_or_fail(s, "Now it fits", "fits after the switch"))

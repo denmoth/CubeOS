@@ -9,7 +9,7 @@ export const AVATARS = ["letter", "cube", "cat", "fox", "creeper", "robot", "gho
 const AVATAR_COL = {letter: "a", cube: "9", cat: "1", fox: "1", creeper: "5", robot: "8", ghost: "0", astronaut: "3"}
 
 # progress stages of s:apply: label and the share of the bar they cover
-export const STAGES = {download: ["Downloading", 0, 0.45], verify: ["Checking", 0.45, 0.55], ask: ["Questions", 0.55, 0.6],
+export const STAGES = {download: ["Downloading", 0, 0.45], upload: ["Sending to the second computer", 0, 0.45], verify: ["Checking", 0.45, 0.55], ask: ["Questions", 0.55, 0.6],
     place: ["Placing files", 0.6, 0.88], setup: ["Running package setup", 0.88, 0.94], commit: ["Finishing", 0.94, 0.97],
     rollback: ["Rolling back", 0, 0], account: ["Creating your account", 0.97, 1]}
 const MARK = {download: "9", verify: "3", ask: "3", place: "5", setup: "5", commit: "5", rollback: "e"}
@@ -231,6 +231,8 @@ export def summary_rows(ui):
         rows[len(rows) + 1] = ["Computer", v.label]
     if eff["cubeos.cde"]:
         rows[len(rows) + 1] = ["Desktop", v.theme .. ", " .. v.wallpaper]
+    if p.remote != nil:
+        rows[len(rows) + 1] = [ui:tr("Second computer"), "#" .. p.remote.host .. ": " .. p.remote.count .. " " .. ui:tr("packages") .. ", " .. model.human(p.remote.bytes)]
     return rows
 
 # what the plan says on top of the sizes: missing packages, conflicts, warnings, packages with their own setup code
@@ -242,6 +244,8 @@ export def plan_notes(p):
         notes[len(notes) + 1] = ["e", "Conflict: " .. tostring(type(x) == "table" and (x.text ?? x.id) or x)]
     for x in p.warnings ?? []:
         notes[len(notes) + 1] = ["4", tostring(type(x) == "table" and (x.text ?? x.id) or x)]
+    if p.remote != nil:
+        notes[len(notes) + 1] = ["8", "The second computer #" .. p.remote.host .. " must stay on and connected: those packages are read from it."]
     if p.runs_setup != nil and len(p.runs_setup) > 0:
         notes[len(notes) + 1] = ["8", len(p.runs_setup) .. " packages run their own setup code"]
     if p.ok == false and p.error != nil:

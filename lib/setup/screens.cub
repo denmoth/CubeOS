@@ -650,8 +650,47 @@ def _fit_actions(ui):
         note: ui.st.storage != 1 and ("saves " .. model.human(ui:need_of(cur) - ui:need_of(compact))) or "already compact",
         run: () => _go_compact(ui)}
     acts[3] = {title: "Choose packages again", on: true, note: "back to the profiles", run: () => _choose_again(ui)}
-    acts[4] = {title: "Second computer for optional packages", on: false, note: "comes in a later version", run: nil}
+    can = ui.s.host_pair != nil and ui.hw.modem != nil
+    note = "run pkghost.lua on another computer, join it with a modem and type its code"
+    if ui.s.host_pair == nil:
+        note = "not available here"
+    elif ui.hw.modem == nil:
+        note = "attach a wired or wireless modem first"
+    elif cur.remote != nil:
+        note = "paired with #" .. cur.remote.host .. ": " .. cur.remote.count .. " packages, " .. model.human(cur.remote.bytes) .. " go there"
+    elif ui.st.remote != nil:
+        note = "paired with #" .. ui.st.remote .. " (nothing needs to move)"
+    acts[4] = {title: "Second computer for optional packages", on: can, note: note, run: () => _fit_remote(ui)}
     return acts, cur
+
+# The second computer: explains what to do there, takes its pairing code, pairs through stew (the key goes to hosts.json5 of the
+# new system) and re-plans: stew then moves optional packages to it when they do not fit here.
+const PAIR_TEXT = "1. On the other computer run pkghost.lua (wget run <url>/pkghost.lua).\n2. Connect it to this one with a modem, wired or wireless.\n3. Type the 6-digit code it shows."
+
+def _fit_remote(ui):
+    have = ui.s:hosts()[1]
+    if have != nil and ui.st.remote == nil:
+        ui.st.remote = have.id
+        ui.plans = {}
+        return
+    while true:
+        ans = ui:dialog({title: "Second computer", text: PAIR_TEXT, input: {value: ""}, width: 48,
+            buttons: [{label: "Cancel", value: false}, {label: "Pair", value: true, style: "ok"}], focus: 2})
+        code = type(ans) == "string" and string.match(ans, "^%s*(%d%d%d%d%d%d)%s*$") or nil
+        if code == nil:
+            return
+        ui:say("Looking for the second computer...", "3")
+        ui:redraw()
+        ok, h, err = pcall(ui.s.host_pair, ui.s, code)
+        if ok and h != nil:
+            ui.st.remote = h.id
+            ui.plans = {}
+            return
+        why = ok and err or h
+        again = ui:dialog({title: "Could not pair", text: tostring(why), accent: "e", width: 46,
+            buttons: [{label: "Cancel", value: false}, {label: "Retry", value: true, style: "ok"}], focus: 2})
+        if not again:
+            return
 
 def _drop_optional(ui, keep):
     ui.st.explicit = keep

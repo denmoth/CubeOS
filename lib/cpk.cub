@@ -298,6 +298,10 @@ export def open(data, name=nil):
     src = {size: len(data), read: (off, n) => string.sub(data, off + 1, off + n)}
     return Archive(src, name)
 
+# архив поверх любого src {size, read(offset, length)}: сюда подходит и пакет на втором компьютере (stew.remote)
+export def open_src(src, name=nil):
+    return Archive(src, name)
+
 # читает с диска частями: в памяти только заголовок и распакованные блоки из кэша
 export def open_file(path, fsys=nil):
     f = fsys ?? fs

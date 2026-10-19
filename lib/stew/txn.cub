@@ -11,6 +11,9 @@ import crc32 as crc
 import stew.db as dbm
 import stew.pack as pack
 
+# these never go to the second computer (stew.BOOT_SET and stew itself); plan() also keeps their dependencies at home
+const BOOT_KEEP = {"cubeos.cubic-rt": true, "cubeos.cpk": true, "cubeos.stew": true, "cubeos.boot": true}
+
 def _arr(t=nil):
     return setmetatable(t ?? {}, json5.array_mt)
 
@@ -38,6 +41,7 @@ class Txn:
         self.arch = {}
         self.setups = {}
         self.ntrash = 0
+        self.remote_trash = []
 
     def p(self, path):
         return self.db:path(path)
@@ -84,8 +88,16 @@ class Txn:
             if st.op != "remove":
                 n += 1
         i = 0
+        # packages for the second computer go first: each is uploaded and its staged copy deleted at once (peak space)
+        order = []
         for st in self.plan.steps:
-            if st.op != "remove":
+            if st.op != "remove" and st.storage == "remote":
+                order[len(order) + 1] = st
+        for st in self.plan.steps:
+            if st.op != "remove" and st.storage != "remote":
+                order[len(order) + 1] = st
+        for st in order:
+            if true:
                 i += 1
                 self:progress("download", st.id, i, n)
                 dest = self.staging .. "/" .. st.id .. ".cpk"
@@ -110,7 +122,28 @@ class Txn:
                     error(st.id .. ": expected version " .. st.version .. ", the package is " .. tostring(m.version), 0)
                 st.version = m.version
                 self.arch[st.id] = {a: a, m: m, path: dest}
+                if st.storage == "remote":
+                    self:upload(st, m)
                 self.s.yield()
+
+    # to the second computer: the .cpk is sent in pieces (the host checks the sha256), the journal knows the name for the rollback,
+    # then the archive is read back over the modem (modules, installer, placements) and the staged file is deleted
+    def upload(self, st, m):
+        rec = self.arch[st.id]
+        s = self.s
+        host = s:host(st.host)
+        if host == nil:
+            error(st.id .. ": the second computer #" .. tostring(st.host) .. " is not paired", 0)
+        data = self.db:read(rec.path)
+        name = st.id .. "-" .. m.version .. "." .. string.sub(self.id, -6) .. ".cpk"
+        self:progress("upload", st.id, 0, len(data))
+        self:op("remote", host.id, name)
+        ok, err = s:remote():put(host, name, data, (sent, total) => self:progress("upload", st.id, sent, total))
+        if not ok:
+            error(st.id .. ": cannot store it on the second computer #" .. host.id .. " (" .. tostring(err) .. ")", 0)
+        rec.remote = {host: host.id, name: name, size: len(data)}
+        rec.a = cpk.open_src(s:remote():reader(host, name, len(data), st.id), st.id)
+        self.fs.delete(self:p(rec.path))
 
     # установщик пакета: setup.lua в архиве, ограниченный api (04-installers.md)
     def setup_of(self, id):
@@ -167,10 +200,19 @@ class Txn:
 
     def remove_old(self, rec):
         loc = self.db:pkg_location(rec)
-        self:to_trash(loc.packed ?? loc.dir)
+        if loc.remote != nil:
+            # deleted on the host only after the commit: until then a rollback needs the file
+            self.remote_trash[len(self.remote_trash) + 1] = loc.remote
+        else:
+            self:to_trash(loc.packed ?? loc.dir)
         self:to_trash(dbm.VAR .. "/maps/" .. rec.id .. ".cpk")
         for path in rec.files ?? []:
             self:to_trash(path)
+
+    def drop_remote(self, r):
+        host = self.s:host(r.host)
+        if host != nil:
+            self.s:remote():delete(host, r.name)
 
     def place(self, st):
         rec = self.arch[st.id]
@@ -186,7 +228,7 @@ class Txn:
             # архив переехал: читаем его с нового места
             a = cpk.open_file(self:p(target), self.fs)
             rec.a = a
-        else:
+        elif storage == "unpacked":
             dir = dbm.PKG .. "/" .. st.id
             self:to_trash(dir)
             self:op("created", dir)
@@ -202,7 +244,7 @@ class Txn:
                     self:write_new(pl.to, a:read(e.path))
                     if not pl.cfg:
                         files[len(files) + 1] = pl.to
-            elif storage != "packed":
+            elif storage == "unpacked":
                 full = self:p(dbm.PKG .. "/" .. st.id .. "/" .. e.path)
                 self.fs.makeDir(self.fs.getDir(full))
                 h = self.fs.open(full, "wb")
@@ -238,7 +280,7 @@ class Txn:
                 files, storage = self:place(step)
                 m = self.arch[step.id].m
                 loc = storage == "packed" and (dbm.PKG .. "/" .. step.id .. ".cpk") or (dbm.PKG .. "/" .. step.id)
-                size = size_of(self.fs, self:p(loc))
+                size = storage == "remote" and 0 or size_of(self.fs, self:p(loc))
                 for f in files:
                     size += size_of(self.fs, self:p(f))
                 st_db.packages[step.id] = {
@@ -249,6 +291,12 @@ class Txn:
                     auto: old != nil and old.auto or step.auto, pinned: old != nil and old.pinned or false, size: size,
                     installed_at: os.epoch("utc"),
                 }
+                if storage == "remote":
+                    r = self.arch[step.id].remote
+                    nr = st_db.packages[step.id]
+                    nr.host = r.host
+                    nr.rname = r.name
+                    nr.rsize = r.size
                 installed[len(installed) + 1] = step.id
         self.journal.state = "setup"
         self:save_journal()
@@ -258,6 +306,12 @@ class Txn:
         self.db:write_index(st_db)
         self.journal.state = "done"
         self:save_journal()
+        # old remote files of replaced and removed packages go now (the new state is committed); a failure leaves an orphan on the
+        # host that "stew host clean" removes
+        for r in self.remote_trash:
+            ok, err = pcall(() => self:drop_remote(r))
+            if not ok:
+                self.s.log("could not delete " .. tostring(r.name) .. " on the second computer #" .. tostring(r.host) .. ": " .. tostring(err))
         cleanup(self.s, self.id)
         return {ok: true, installed: installed, removed: removed}
 
@@ -269,7 +323,10 @@ export def undo(s, journal):
     while i > 1:
         i -= 1
         o = ops[i]
-        if o.op == "created":
+        if o.op == "remote":
+            # the upload of this transaction is deleted on the host (best effort: a host that is gone keeps an orphan)
+            pcall(() => undo_remote(s, o.a, o.b))
+        elif o.op == "created":
             p = s.db:path(o.a)
             if f.exists(p):
                 f.delete(p)
@@ -282,6 +339,16 @@ export def undo(s, journal):
                 f.makeDir(f.getDir(back))
                 f.move(src, back)
     cleanup(s, journal.txn)
+
+def undo_remote(s, hid, name):
+    host = s:host(hid)
+    if host == nil:
+        return
+    c = s:remote()
+    old = c.retries
+    c.retries = 1
+    pcall(c.delete, c, host, name)
+    c.retries = old
 
 export def cleanup(s, id):
     f = s.fs
@@ -327,6 +394,14 @@ export def listing_of(a):
     return out
 
 export def verify(s, rec):
+    if rec.storage == "remote":
+        host = s:host(rec.host)
+        if host == nil:
+            return false, "the second computer #" .. tostring(rec.host) .. " is not paired"
+        ok, res, err = pcall(() => cpk.open_src(s:remote():reader(host, rec.rname, rec.rsize, rec.id), rec.id):verify())
+        if not ok:
+            return false, tostring(res)
+        return res, err
     if rec.storage == "packed":
         p = s.db:path(dbm.PKG .. "/" .. rec.id .. ".cpk")
         if not s.fs.exists(p):
@@ -347,11 +422,97 @@ export def verify(s, rec):
                 return false, "changed " .. full
     return true
 
-export def set_storage(s, id, mode):
+# the whole .cpk of an installed package as a string, wherever it lives (an unpacked one is packed again)
+def cpk_bytes(s, rec):
+    f = s.fs
+    dir = dbm.PKG .. "/" .. rec.id
+    if rec.storage == "remote":
+        host = s:host(rec.host)
+        if host == nil:
+            error("stew: the second computer #" .. tostring(rec.host) .. " is not paired", 0)
+        src = s:remote():reader(host, rec.rname, rec.rsize, rec.id)
+        parts = []
+        off = 0
+        while off < rec.rsize:
+            piece = src.read(off, math.min(8192, rec.rsize - off))
+            parts[len(parts) + 1] = piece
+            off += len(piece)
+            s.yield()
+        data = table.concat(parts)
+        ok, why = cpk.open(data):verify()
+        if not ok:
+            error("stew: the copy on the second computer is damaged (" .. tostring(why) .. ")", 0)
+        return data
+    if rec.storage == "packed":
+        return s.db:read(dbm.PKG .. "/" .. rec.id .. ".cpk")
+    text = s.db:read(dir .. "/package.json5")
+    listing = s.db:read_json(dir .. "/listing.json5", {})
+    files = []
+    for path, _ in listing:
+        if dbm.placement(rec.id, path) == nil:
+            flags = string.match(path, "%.lua$") != nil and cpk.F_LUA or cpk.F_RES
+            files[len(files) + 1] = {path: path, data: s.db:read(dir .. "/" .. path), flags: flags}
+            mp = s.db:read(dir .. "/" .. path .. ".map")
+            if mp != nil:
+                files[len(files) + 1] = {path: path .. ".map", data: mp, flags: cpk.F_MAP}
+    table.sort(files, (a, b) => a.path < b.path)
+    return cpk.build(text, files, {})
+
+# a package moves between this computer (packed / unpacked) and the second computer (remote, on host hid). The new copy is made first,
+# the database and boot.idx switch, then the old copy is deleted: a failure on the way leaves the package where it was.
+def set_remote(s, st, rec, hid):
+    f = s.fs
+    host = hid != nil and s:host(hid) or (s:hosts()[1])
+    if host == nil:
+        error("stew: no second computer is paired" .. (hid != nil and (" with id " .. tostring(hid)) or "") .. " (stew host pair CODE)", 0)
+    data = cpk_bytes(s, rec)
+    name = rec.id .. "-" .. rec.version .. "." .. string.sub(tostring(os.epoch("utc")), -6) .. ".cpk"
+    ok, err = s:remote():put(host, name, data)
+    if not ok:
+        error("stew: cannot store " .. rec.id .. " on the second computer #" .. host.id .. " (" .. tostring(err) .. ")", 0)
+    old = {storage: rec.storage, host: rec.host, rname: rec.rname}
+    rec.storage = "remote"
+    rec.host = host.id
+    rec.rname = name
+    rec.rsize = len(data)
+    files = 0
+    for path in rec.files ?? []:
+        files += size_of(f, s.db:path(path))
+    rec.size = files
+    s.db:save(st)
+    s.db:write_index(st)
+    if old.storage == "packed":
+        f.delete(s.db:path(dbm.PKG .. "/" .. rec.id .. ".cpk"))
+    elif old.storage == "unpacked":
+        f.delete(s.db:path(dbm.PKG .. "/" .. rec.id))
+    return {ok: true, host: host.id}
+
+export def set_storage(s, id, mode, hid=nil):
     st = s.db:load()
     rec = st.packages[id]
     if rec == nil:
         error("stew: " .. id .. " is not installed", 0)
+    if mode == "remote":
+        if rec.storage == "remote" and (hid == nil or hid == rec.host):
+            return {ok: true}
+        if BOOT_KEEP[id] == true or rec.priority == "essential":
+            error("stew: " .. id .. " is essential for the system and stays on this computer", 0)
+        return set_remote(s, st, rec, hid)
+    if rec.storage == "remote":
+        # back to this computer: the file is pulled and checked, written as packed, the remote copy is deleted after the switch
+        data = cpk_bytes(s, rec)
+        old = {host: rec.host, name: rec.rname}
+        s.db:write(dbm.PKG .. "/" .. id .. ".cpk", data)
+        rec.storage = "packed"
+        rec.host = nil
+        rec.rname = nil
+        rec.rsize = nil
+        rec.size = size_of(s.fs, s.db:path(dbm.PKG .. "/" .. id .. ".cpk"))
+        for path in rec.files ?? []:
+            rec.size += size_of(s.fs, s.db:path(path))
+        s.db:save(st)
+        s.db:write_index(st)
+        pcall(() => s:remote():delete(s:host(old.host), old.name))
     if rec.storage == mode:
         return {ok: true}
     f = s.fs
@@ -381,7 +542,7 @@ export def set_storage(s, id, mode):
         s.db:write(file, cpk.build(text, files, {}))
         f.delete(s.db:path(dir))
     else:
-        error("stew: storage must be packed or unpacked", 0)
+        error("stew: storage must be packed, unpacked or remote", 0)
     rec.storage = mode
     rec.size = size_of(f, s.db:path(mode == "packed" and file or dir))
     s.db:save(st)

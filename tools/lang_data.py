@@ -727,4 +727,5 @@ T = {
 "Install a package with its dependencies": ("Установить пакет вместе с зависимостями", "Встановити пакет разом із залежностями"),
 "Update everything": ("Обновить всё", "Оновити все"),
 "Build myapp/build/<id>-<version>.cpk": ("Собрать myapp/build/<id>-<version>.cpk", "Зібрати myapp/build/<id>-<version>.cpk"),
+"Use a second computer (running pkghost) as extra storage": ("Второй компьютер (с pkghost) как дополнительное хранилище", "Другий комп'ютер (з pkghost) як додаткове сховище"),
 }

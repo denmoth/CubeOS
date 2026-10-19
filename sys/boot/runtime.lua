@@ -46,7 +46,11 @@ function rt.plan(names)
     if seen[name] then return end
     seen[name] = true
     if rt.installed then
-      if not pcall(loader.resolve, name) then return end
+      local okr, pkg = pcall(loader.resolve, name)
+      if not okr then return end
+      -- пакеты на втором компьютере грузятся только по требованию: загрузка не ждёт сеть
+      local entry = loader.idx.packages[pkg]
+      if entry and entry.remote then return end
       for _, dep in ipairs(loader.deps(name)) do visit(dep) end
     else
       local ok, path = pcall(loader.resolve, name)

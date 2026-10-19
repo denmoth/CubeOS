@@ -97,9 +97,19 @@ export class Db:
 
     # где лежит код пакета
     def pkg_location(self, rec):
+        if rec.storage == "remote":
+            return {remote: {host: rec.host, name: rec.rname, size: rec.rsize ?? 0}}
         if rec.storage == "packed":
             return {packed: PKG .. "/" .. rec.id .. ".cpk"}
         return {dir: PKG .. "/" .. rec.id}
+
+    # second computers (stew host ...): {hosts: [{id, key, label}]}
+    def hosts(self):
+        h = self:read_json(VAR .. "/hosts.json5", nil)
+        return h != nil and (h.hosts ?? []) or []
+
+    def save_hosts(self, list):
+        self:write_json(VAR .. "/hosts.json5", {hosts: setmetatable(list, json5.array_mt)})
 
     def write_index(self, st):
         ids = []
@@ -110,10 +120,26 @@ export class Db:
         lines[len(lines) + 1] = "  share = " .. _lq(SHARE) .. ", rt = " .. _lq(SYS .. "/cubic/rt.lua") .. ", maps = " .. _lq(self:path(VAR .. "/maps")) .. ","
         if st.packages["cubeos.cubic"] != nil:
             lines[len(lines) + 1] = "  cubic = " .. _lq(SYS .. "/cubic") .. ","
+        # keys of the second computers that hold remote packages (this file is as protected as hosts.json5: /cubeos/var is for admins)
+        used = {}
+        for id in ids:
+            r = st.packages[id]
+            if r.storage == "remote":
+                used[r.host] = true
+        hosts = self:read_json(VAR .. "/hosts.json5", nil)
+        hlist = {}
+        for h in (hosts != nil and hosts.hosts or []):
+            if used[h.id]:
+                hlist[len(hlist) + 1] = "[" .. h.id .. "] = { key = " .. _lq(h.key) .. " }"
+        if len(hlist) > 0:
+            lines[len(lines) + 1] = "  hosts = { " .. table.concat(hlist, ", ") .. " },"
         lines[len(lines) + 1] = "  packages = {"
         for id in ids:
             loc = self:pkg_location(st.packages[id])
-            if loc.packed != nil:
+            if loc.remote != nil:
+                r = loc.remote
+                lines[len(lines) + 1] = "    [" .. _lq(id) .. "] = { remote = { host = " .. r.host .. ", name = " .. _lq(r.name) .. ", size = " .. r.size .. " } },"
+            elif loc.packed != nil:
                 lines[len(lines) + 1] = "    [" .. _lq(id) .. "] = { packed = " .. _lq(self:path(loc.packed)) .. " },"
             else:
                 lines[len(lines) + 1] = "    [" .. _lq(id) .. "] = { dir = " .. _lq(self:path(loc.dir)) .. " },"
@@ -164,7 +190,7 @@ export def resource_path(rec, rel, d=nil):
     pl = placement(rec.id, rel)
     if pl != nil:
         return d != nil and d:path(pl.to) or pl.to
-    if rec.storage == "packed":
+    if rec.storage == "packed" or rec.storage == "remote":
         return "cpk:" .. rec.id .. ":" .. rel
     p = PKG .. "/" .. rec.id .. "/" .. rel
     return d != nil and d:path(p) or p
