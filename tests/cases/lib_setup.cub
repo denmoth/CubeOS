@@ -5,6 +5,8 @@ import setup
 import setup.model as model
 import setup.canvas as canvas_mod
 import setup.finish as finish
+import setup.prefs as prefs
+import setup.more as more
 eq = t.eq
 
 # ------------------------------------------------------------ a fake stew (docs/packages/09-stew-api.md) with a tiny system
@@ -234,14 +236,23 @@ def make_account(u, s):
     fsys:mount("/", cfs.memory())
     made.auth = finish.create_account(cfs, auth_mod, "/", u, 2, fsys)
     made.user = u
+    return made.auth
 
 ev = []
 def add(*items):
     for it in items:
         ev[len(ev) + 1] = it
 
+# language
+add((s) => eq(s.cur, "language", "starts with the language"))
+add((s) => find_or_fail(s, "Russkiy", "languages in Latin letters in the text look"))
+add(K(keys.down))
+add((s) => eq(s.st.lang, 2, "language Russian"))
+add(K(keys.enter))
+add((s) => eq(s.st.prefs.lang, "ru", "the system language follows the installer"))
+add((s) => eq(s.st.prefs.date_format, "%d.%m.%Y", "and the date format"))
 # welcome
-add((s) => eq(s.cur, "welcome", "starts at the welcome screen"))
+add((s) => eq(s.cur, "welcome", "then the welcome screen"))
 add((s) => find_or_fail(s, "Welcome to", "welcome title"))
 add((s) => find_or_fail(s, "36x12, colour (right)", "monitor found"))
 add((s) => find_or_fail(s, "wireless (back)", "modem found"))
@@ -252,9 +263,7 @@ add((s) => eq(s.cur, "welcome", "Next needs the license"))
 add((s) => find_or_fail(s, "Please accept the license", "license hint"))
 add(K(keys.space))
 add((s) => eq(s.st.license, true, "Space accepts the license"))
-add(K(keys.up), K(keys.right))
-add((s) => eq(s.st.lang, 2, "language Russian"))
-add((s) => find_or_fail(s, "Russian", "language shown"))
+add((s) => eq(s:tr("Next"), "Next", "the text look stays English"))
 add(K(keys.enter))
 # profile
 add((s) => eq(s.cur, "profile", "profile screen"))
@@ -321,6 +330,42 @@ add(["char", "2"])
 add((s) => eq(s.st.storage, 1, "switched to compact"))
 add((s) => find_or_fail(s, "Now it fits", "fits after the switch"))
 add(K(keys.tab), K(keys.enter))
+# settings: region
+def focus_field(page_id, field_id):
+    def go(s):
+        for pg in prefs.PAGES:
+            if pg.id == page_id:
+                for i, f in more.fields_of(s, pg):
+                    if f.id == field_id:
+                        s.pfocus[page_id] = i
+    return go
+add((s) => eq(s.cur, "prefs:region", "region settings"))
+add((s) => find_or_fail(s, "Time zone", "time zone row"))
+add(focus_field("region", "tz"), K(keys.right))
+add((s) => eq(s.st.prefs.tz, "Europe/Kyiv", "time zone changed"))
+add(focus_field("region", "time_format"), K(keys.space))
+add((s) => eq(s.st.prefs.time_format, "12h", "12-hour clock"))
+add(K(keys.tab), K(keys.enter))
+# computer: name and a PIN that is checked
+add((s) => eq(s.cur, "prefs:computer", "computer settings"))
+add(focus_field("computer", "label"))
+typ(ev, "base-1")
+add(focus_field("computer", "pin"))
+typ(ev, "12")
+add(K(keys.tab), K(keys.enter))
+add((s) => find_or_fail(s, "4 to 8 digits", "a short PIN is refused"))
+typ(ev, "34")
+add(K(keys.tab), K(keys.enter))
+# desktop: the theme
+add((s) => eq(s.cur, "prefs:desktop", "desktop settings (the desktop is selected)"))
+add(focus_field("desktop", "theme"), K(keys.right))
+add((s) => eq(s.st.prefs.theme, "dark", "theme changed"))
+add(K(keys.tab), K(keys.enter))
+# sound, network, packages
+add((s) => eq(s.cur, "prefs:extras", "extras"))
+add(K(keys.left))
+add((s) => eq(s.st.prefs.volume, 90, "volume down"))
+add(K(keys.tab), K(keys.enter))
 # user
 add((s) => eq(s.cur, "user", "user screen"))
 typ(ev, "Den Moth")
@@ -339,7 +384,9 @@ typ(ev, "pw")
 add(K(keys.enter), K(keys.enter))
 # summary
 add((s) => eq(s.cur, "summary", "summary screen"))
-add((s) => find_or_fail(s, "Den Moth (den-moth), administrator", "account in the summary"))
+add((s) => find_or_fail(s, "Den Moth (den-moth)", "account in the summary"))
+add((s) => find_or_fail(s, "Europe/Kyiv, 12h", "time zone in the summary"))
+add((s) => find_or_fail(s, "base-1", "computer name in the summary"))
 add((s) => find_or_fail(s, "Compact", "storage in the summary"))
 add(K(keys.enter))
 # install: first attempt fails, retry, a question from a package, then done
@@ -352,6 +399,7 @@ add((s) => eq(s.cur, "done", "done screen"))
 add((s) => find_or_fail(s, "CubeOS is installed", "done text"))
 add(K(keys.enter))
 
+labels = []
 stew = TaggingStew()
 rebooted = {n: 0}
 cleaned = {n: 0}
@@ -363,11 +411,11 @@ term_api = make_term(51, 19)
 env = {term: term_api, stew: stew, fs: fakefs, root: ROOT, events: ev, strict: true, timer: (x) => nil, sleep: (x) => nil,
     clock: () => 0, peripheral: fake_peripheral(), make_account: make_account, animate: false,
     source: {name: "local", kind: "path", url: "/repo/build/packages"},
-    cleanup: do_cleanup, reboot: do_reboot}
+    cleanup: do_cleanup, reboot: do_reboot, set_label: (name) => rawset(labels, len(labels) + 1, name)}
 s = setup.new(env)
 ok, res = pcall(() => s:run())
 if not ok:
-    print("FAIL run: " .. tostring(res))
+    error("the setup run failed: " .. tostring(res), 0)
 eq(res, "reboot", "the flow ends with a reboot")
 eq(rebooted.n, 1, "reboot called")
 eq(cleaned.n, 1, "temp folder cleaned")
@@ -394,10 +442,23 @@ f = fs.open(ROOT .. "/cubeos/users/den-moth/cfg/cde.conf", "r")
 eq(f != nil and string.find(f.readAll(), "avatar: \"cube\"", 1, true) != nil, true, "avatar saved for the desktop")
 if f != nil:
     f.close()
-f = fs.open(ROOT .. "/cubeos/sys/cfg/locale.conf", "r")
-eq(f != nil and string.find(f.readAll(), "lang: \"ru\"", 1, true) != nil, true, "language written")
-if f != nil:
-    f.close()
+def file_has(path, text):
+    h = fs.open(ROOT .. path, "r")
+    if h == nil:
+        return false
+    body = h.readAll()
+    h.close()
+    return string.find(body, text, 1, true) != nil
+eq(file_has("/cubeos/sys/cfg/locale.conf", "lang: \"ru\""), true, "language written")
+eq(file_has("/cubeos/sys/cfg/time.conf", "tz: \"Europe/Kyiv\""), true, "time zone written")
+eq(file_has("/cubeos/sys/cfg/time.conf", "format: \"12h\""), true, "time format written")
+eq(file_has("/cubeos/sys/cfg/audio.conf", "volume: 90"), true, "volume written")
+eq(file_has("/cubeos/sys/cfg/net.conf", "name: \"base-1\""), true, "network name written")
+eq(file_has("/cubeos/sys/cfg/boot.conf", "de: \"cde\""), true, "boot settings written")
+eq(file_has("/cubeos/users/den-moth/cfg/cde.conf", "theme: \"dark\""), true, "the desktop theme written")
+eq(labels[1], "base-1", "the computer label is set")
+eq(made.auth:verify_pin("den-moth", "1234"), true, "the PIN works")
+eq(s.prefs_problems, [], "no problems writing the settings")
 eq(term_api.palette[colours.black] != nil, true, "advanced computers get the night palette")
 
 # ------------------------------------------------------------ quitting, a small screen

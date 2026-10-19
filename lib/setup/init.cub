@@ -1,5 +1,6 @@
-# setup: the CubeOS installer screens (docs/packages/08-setup-and-store.md). Text mode, so it runs on any computer; on an
-# advanced one it switches to the night palette and animates. Everything is installed through stew's API (09-stew-api.md):
+# setup: the CubeOS installer screens (docs/packages/08-setup-and-store.md). With pixels (CC: Graphics, CraftOS-PC) it draws
+# like the login screen and speaks the chosen language (setup.gui, setup.lang); without them it runs in text mode (English: the
+# CC terminal font has no Cyrillic) on any computer, with the night palette on an advanced one. Everything is installed through stew's API (09-stew-api.md):
 # s:sources/s:source_add/s:refresh, s:catalog, s:plan({install, storage, options}), s:apply(p, {on_progress, ask}).
 #
 #   setup.main(env)      env from game/install.lua:
@@ -7,7 +8,8 @@
 #   Tests and tools pass more:
 #       stew (a ready stew object), events (list of events; a function in the list is called with the Setup object),
 #       strict (error when events run out instead of waiting), timer(secs), sleep(secs), clock(), peripheral,
-#       make_account(user, setup) (instead of the installed system's boot.auth), animate (false: no logo reveal)
+#       make_account(user, setup) (instead of the installed system's boot.auth), animate (false: no logo reveal),
+#       gui (false: always the text look), assets (folder of CubeOS assets for the pixel look), set_label(name)
 #
 # Screens: welcome, profile, manual, options, storage, fit, user, summary, then progress and done (lib/setup/screens.cub,
 # lib/setup/finish.cub). Each screen is {enter, draw, key, char, scroll, next, skip} of functions taking the Setup object.
@@ -17,10 +19,16 @@ import setup.widgets as w
 import setup.model as model
 import setup.screens as screens
 import setup.finish as finish
+import setup.more as more
+import setup.prefs as prefs
+import setup.lang as lang
+import setup.gui as gui_mod
 
-export const FLOW = ["welcome", "profile", "manual", "options", "storage", "fit", "user", "summary"]
-export const STEPS = 7
-export const STEP_NO = {welcome: 1, profile: 2, manual: 3, options: 3, storage: 4, fit: 4, user: 5, summary: 6, progress: 7, done: 7}
+export const FLOW = ["language", "welcome", "profile", "manual", "options", "storage", "fit", "prefs:region", "prefs:computer",
+    "prefs:desktop", "prefs:extras", "user", "summary"]
+export const STEPS = 10
+export const STEP_NO = {language: 1, welcome: 1, profile: 2, manual: 2, options: 2, storage: 3, fit: 3, "prefs:region": 4,
+    "prefs:computer": 5, "prefs:desktop": 6, "prefs:extras": 7, user: 8, summary: 9, progress: 10, done: 10}
 
 def _du(fsys, path):
     if not fsys.isDir(path):
@@ -53,10 +61,14 @@ export class Setup:
             self.screens[name] = scr
         for name, scr in finish.SCREENS:
             self.screens[name] = scr
+        for name, scr in more.screens():
+            self.screens[name] = scr
+        self.gui = nil
         self.plans = {}
         self.reveal = env.animate == false and 1 or 0
         self.st = {lang: 1, license: false, profile: 2, explicit: nil, storage: 3, options: {},
-            user: {display: "", name: "", password: "", repeat: "", avatar: 1, name_edited: false}}
+            user: {display: "", name: "", password: "", repeat: "", avatar: 1, name_edited: false}, prefs: prefs.defaults("en"),
+            prefs_touched: false}
         self.focus = 1
 
     # ------------------------------------------------------------ events
@@ -91,6 +103,11 @@ export class Setup:
         if not self.ticking and self.c.colour:
             self.ticking = true
             self:timer(0.1)
+
+    # text of the installer in its language (the pixel look only: the text look stays English)
+    def tr(self, text, vars=nil):
+        id = self.gui != nil and model.LANGS[self.st.lang].id or "en"
+        return lang.tr(id, text, vars)
 
     def hot(self, x1, y1, x2, y2, fn):
         self.hots[len(self.hots) + 1] = [x1, y1, x2, y2, fn]
@@ -141,6 +158,8 @@ export class Setup:
             return
         if ev == "mouse_click":
             self.ffocus = nil
+            if self.gui != nil:
+                b, c = self.gui:to_pixel(b, c)
             self:click(b, c)
             self:redraw()
             return
@@ -191,6 +210,10 @@ export class Setup:
 
     def redraw(self):
         self.hots = []
+        if self.gui != nil:
+            self.gui:frame()
+            self:tick_later()
+            return
         self.c:clear("f")
         scr = self.screens[self.cur]
         if scr != nil:
@@ -211,6 +234,8 @@ export class Setup:
 
     # palette fade on advanced computers (frames of `secs` total)
     def fade(self, a, b, secs=0.3):
+        if self.gui != nil:
+            return
         if not self.c.colour or self.env.animate == false:
             self.c:palette(b)
             return
@@ -443,6 +468,8 @@ export class Setup:
         hw.temp = 0
         if self.env.tmp != nil and fsys.exists(self.env.tmp):
             hw.temp = _du(fsys, self.env.tmp)
+        if os.getComputerLabel != nil:
+            hw.label = os.getComputerLabel()
         hw.cols = self.c.w
         hw.rows = self.c.h
         self.hw = hw
@@ -463,13 +490,30 @@ export class Setup:
             self:handle(self:pull())
         return self.result
 
+    # the pixel look when the computer can show pixels (a failure falls back to text)
+    def open_gui(self):
+        if self.env.gui == false or not gui_mod.available(self.t):
+            return
+        let me = self
+        ok, g = pcall(() => gui_mod.Gui(me))
+        if ok:
+            self.gui = g
+
+    def close_gui(self):
+        if self.gui != nil:
+            self.gui:close()
+            self.gui = nil
+
     def run(self):
+        self:open_gui()
         self.c:palette(0)
         self.cur = "loading"
         self.loading = "Starting"
         self:redraw()
         self:fade(0, 1)
         self:detect()
+        if (self.st.prefs.label ?? "") == "" and self.hw.label != nil:
+            self.st.prefs.label = self.hw.label
         if not self:load_catalog():
             return "quit"
         i = 1
@@ -513,6 +557,7 @@ export def main(env):
         env.stew = stew_mod.new({fs: env.fs ?? fs, root: env.root ?? "/", http: env.http})
     s = Setup(env)
     ok, res = pcall(() => s:run())
+    s:close_gui()
     s.c:restore()
     t = s.t
     if t.setBackgroundColour != nil:

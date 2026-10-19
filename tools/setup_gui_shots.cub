@@ -1,0 +1,154 @@
+# Screenshots of the pixel installer (setup.gui) on a fake CC: Graphics terminal: the real screens over the real stew catalog
+# (build/packages), apply replaced by a fake that only reports progress. Writes build/ui_setup_<n>_<screen>.ppm;
+# tools/setup_gui_shots.sh turns them into PNG. COLS/ROWS: an advanced computer 51x19 (306x171 pixels).
+import setup
+import stew as stew_mod
+
+COLS = 51
+ROWS = 19
+ROOT = "/gshots_root"
+if fs.exists(ROOT):
+    fs.delete(ROOT)
+fs.makeDir(ROOT)
+
+def make_term(cols, rows):
+    api = {}
+    def get_size(px):
+        if px:
+            return cols * 6, rows * 9
+        return cols, rows
+    api.getSize = get_size
+    api.isColour = () => true
+    for name in ["setBackgroundColor", "setTextColor", "setBackgroundColour", "setTextColour", "clear", "setCursorPos", "blit",
+            "setPaletteColor", "setPaletteColour", "setGraphicsMode", "drawPixels", "setFrozen", "write", "clearLine"]:
+        api[name] = (a, b, c, d) => nil
+    api.getPaletteColour = (c) => 0.5
+    return api
+
+shots = {n: 0}
+
+def dump(s, tag):
+    g = s.gui
+    if g == nil:
+        error("shots: the pixel look did not open", 0)
+    shots.n += 1
+    surf = g.s
+    pal = g.pal
+    f = fs.open("/repo/build/ui_setup_" .. string.format("%02d", shots.n) .. "_" .. string.gsub(tag, ":", "-") .. ".ppm", "wb")
+    f.write("P6\n" .. surf.w .. " " .. surf.h .. "\n255\n")
+    for y in range[0, surf.h - 1]:
+        parts = []
+        for x in range[0, surf.w - 1]:
+            v = surf.px[y * surf.w + x + 1]
+            r, gg, b = pal:get(v < 0 and 0 or v)
+            parts[x + 1] = string.char(r, gg, b)
+        f.write(table.concat(parts))
+    f.close()
+    os.queueEvent("shot")
+    os.pullEvent("shot")
+
+def K(k):
+    return ["key", k]
+
+def typ(list, text):
+    for i in range[1, len(text)]:
+        list[len(list) + 1] = ["char", string.sub(text, i, i)]
+
+seen = {}
+def ytick(s):
+    os.queueEvent("shots_yield")
+    os.pullEvent("shots_yield")
+
+def drive(s):
+    os.queueEvent("shots_yield")
+    os.pullEvent("shots_yield")
+    name = s.cur
+    if s.qpos > 600:
+        error("shots: stuck on " .. s.cur, 0)
+    nxt = []
+    if seen[name] == nil:
+        seen[name] = true
+        s:redraw()
+        dump(s, name)
+        if name == "language":
+            nxt = [K(keys.down), K(keys.enter)]
+        elif name == "welcome":
+            nxt = [K(keys.down), K(keys.space), K(keys.enter)]
+        elif name == "profile":
+            nxt = [K(keys.down), K(keys.down), K(keys.down), K(keys.enter)]
+        elif name == "manual":
+            nxt = [K(keys.right), K(keys.down), K(keys.down), K(keys.tab), K(keys.enter)]
+        elif name == "prefs:region":
+            nxt = [K(keys.down), K(keys.down), K(keys.down)]
+            seen["region2"] = true
+            nxt[len(nxt) + 1] = (s2) => dump(s2, "region-focus")
+            nxt[len(nxt) + 1] = K(keys.tab)
+            nxt[len(nxt) + 1] = K(keys.enter)
+        elif name == "prefs:computer":
+            typ(nxt, "base-1")
+            nxt[len(nxt) + 1] = K(keys.tab)
+            nxt[len(nxt) + 1] = K(keys.enter)
+        elif name == "user":
+            typ(nxt, "Den Moth")
+            nxt[len(nxt) + 1] = K(keys.enter)
+            nxt[len(nxt) + 1] = K(keys.enter)
+            typ(nxt, "secret")
+            nxt[len(nxt) + 1] = K(keys.enter)
+            typ(nxt, "secret")
+            nxt[len(nxt) + 1] = K(keys.enter)
+            nxt[len(nxt) + 1] = K(keys.right)
+            nxt[len(nxt) + 1] = K(keys.right)
+            nxt[len(nxt) + 1] = (s2) => dump(s2, "user-filled")
+            nxt[len(nxt) + 1] = K(keys.tab)
+            nxt[len(nxt) + 1] = K(keys.enter)
+        elif name == "options" or name == "prefs:desktop" or name == "prefs:extras":
+            nxt = [K(keys.tab), K(keys.enter)]
+        else:
+            nxt = [K(keys.enter)]
+    else:
+        nxt = [K(keys.enter)]
+    pos = s.qpos
+    k = 0
+    for e in nxt:
+        table.insert(s.queue, pos + k + 1, e)
+        table.insert(s.queue, pos + k + 2, ytick)
+        k += 2
+    table.insert(s.queue, pos + k + 1, drive)
+
+st = stew_mod.new({fs: fs, root: ROOT})
+done = {mid: false}
+holder = {s: nil}
+def fake_apply(self, p, opts):
+    n = len(p.steps)
+    for stage in ["download", "verify", "place"]:
+        for i in range[1, n]:
+            opts.on_progress(stage, p.steps[i].id, i, n)
+            if stage == "place" and i >= math.floor(n * 0.6) and not done.mid:
+                done.mid = true
+                dump(holder.s, "progress")
+    return {ok: true}
+st.apply = fake_apply
+def yield_now():
+    os.queueEvent("shots_yield")
+    os.pullEvent("shots_yield")
+def wrap(name):
+    orig = st[name]
+    def wrapped(self, *a):
+        yield_now()
+        r = orig(self, *a)
+        yield_now()
+        return r
+    st[name] = wrapped
+wrap("refresh")
+wrap("catalog")
+wrap("plan")
+
+env = {term: make_term(COLS, ROWS), stew: st, fs: fs, root: ROOT, events: [drive], strict: true, timer: (x) => nil, sleep: (x) => nil,
+    clock: () => 0, peripheral: {getNames: () => []}, animate: false, make_account: (u, s) => nil, assets: "/repo/assets",
+    source: {name: "local", kind: "path", url: "/repo/build/packages"}, cleanup: () => nil, reboot: () => nil, set_label: (n) => nil}
+s = setup.new(env)
+holder.s = s
+yield_now()
+ok, res = pcall(() => s:run())
+print("shots " .. shots.n .. " " .. tostring(ok) .. " " .. tostring(res))
+fs.delete(ROOT)

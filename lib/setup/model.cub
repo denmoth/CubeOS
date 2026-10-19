@@ -20,8 +20,9 @@ export const PROFILES = [
 export const CATEGORIES = [["system", "System"], ["desktop", "Desktop"], ["apps", "Apps"], ["media", "Media"], ["network", "Network"],
     ["assets", "Themes, fonts, music"], ["dev", "Development"]]
 
-export const LANGS = [{id: "en", title: "English"}, {id: "ru", title: "Russian", pkg: "cubeos.lang-ru"},
-    {id: "uk", title: "Ukrainian", pkg: "cubeos.lang-uk"}]
+export const LANGS = [{id: "en", title: "English", native: "English", latin: "English"},
+    {id: "ru", title: "Russian", native: "Русский", latin: "Russkiy", pkg: "cubeos.lang-ru"},
+    {id: "uk", title: "Ukrainian", native: "Українська", latin: "Ukrainska", pkg: "cubeos.lang-uk"}]
 
 # storage modes of the installer screens and what stew's plan calls them
 export const STORAGE = [

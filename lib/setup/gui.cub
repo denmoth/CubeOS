@@ -1,0 +1,855 @@
+# setup.gui: the pixel look of the installer (CC: Graphics and CraftOS-PC graphics mode), in the style of the login screen:
+# the aurora wallpaper, «glass» cards, CubeOS fonts, icons, a step rail. It only draws: keys, checks and the state are the same
+# screens as the text look (setup.screens, setup.finish, setup.more); every screen gets a draw(ui, g, r) here instead.
+#
+#   setup.gui.available(term)       the terminal can show pixels
+#   g = setup.gui.Gui(ui)           opens the pixel screen; ui:redraw() then calls g:frame()
+#   g:to_pixel(x, y)                mouse cell -> pixel     g:close()
+
+import cgl
+import cgl.surface as surface_mod
+import cgl.color as color
+import cgl.cimg as cimg
+import font as font_lib
+import cde.theme as theme
+import cde.icons as icons
+import cde.wallpaper as wallpaper_mod
+import setup.model as model
+import setup.prefs as prefs
+import setup.screens as scr_text
+import setup.finish as fin
+import setup.more as more
+
+export def available(t):
+    return t != nil and type(t.setGraphicsMode) == "function" and t.drawPixels != nil
+
+# steps on the rail: screens that belong to each step
+export const RAIL = [
+    ["Language", "text", ["language"]], ["Welcome", "info", ["welcome"]], ["Packages", "desktop", ["profile", "manual", "options"]],
+    ["Storage", "drive", ["storage", "fit"]], ["Region", "clock", ["prefs:region"]], ["Computer", "terminal", ["prefs:computer"]],
+    ["Look", "image", ["prefs:desktop"]], ["Sound", "volume", ["prefs:extras"]], ["Login", "user", ["user"]],
+    ["Summary", "check", ["summary"]], ["Install", "download", ["progress", "done"]],
+]
+
+def _clamp(v, lo, hi):
+    return math.max(lo, math.min(hi, v))
+
+def _inset(r, i):
+    if i >= r:
+        return 0
+    d = r - i - 0.5
+    return r - math.floor(math.sqrt(math.max(0, r * r - d * d)) + 0.5)
+
+def _read(path):
+    if path == nil or not fs.exists(path):
+        return nil
+    h = fs.open(path, "rb")
+    if h == nil:
+        return nil
+    s = h.readAll()
+    h.close()
+    return s
+
+export class Gui:
+    def init(self, ui):
+        self.ui = ui
+        self.t = ui.t
+        self.th = theme.get()
+        self.screen = cgl.open({term: self.t, backend: "graphics", palette: theme.palette(self.th)})
+        self.s = self.screen.surface
+        self.W = self.s.w
+        self.H = self.s.h
+        self.pal = self.screen.palette
+        path = self:asset("fonts/cube-6x9.font")
+        self.font = path != nil and font_lib.from_file(path) or font_lib.default(ui.env.assets ?? "/repo/assets")
+        self.c = {text: self:near(240, 242, 250), soft: self:near(190, 196, 220), dim: self:near(128, 136, 168),
+            faint: self:near(78, 84, 112), accent: theme.ACCENT, accent2: self:near(122, 162, 247), ok: self:near(140, 230, 150),
+            danger: self:near(255, 110, 120), warn: self:near(240, 190, 110), field: self:near(14, 16, 30), edge: self:near(86, 94, 130),
+            shadow: self:near(6, 6, 12), sel: self:near(52, 60, 96), cube_top: self:near(125, 207, 255), cube_left: self:near(122, 162, 247),
+            cube_right: self:near(61, 89, 161)}
+        self.m_glass = self:_map(0.36, 3)
+        self.m_lift = self:_map(1.35, 18)
+        self.m_dark = self:_map(0.45, 0)
+        self.bg = self:_wallpaper()
+        self.faces = {}
+
+    # ------------------------------------------------------------ resources
+
+    # a file of the CubeOS assets: the packages the bootstrap unpacked, the installed system or the repository
+    def asset(self, rel):
+        env = self.ui.env
+        roots = []
+        if env.assets != nil:
+            roots[len(roots) + 1] = env.assets
+        tmp = env.tmp
+        if tmp != nil and fs.exists(tmp .. "/pkg"):
+            for id in fs.list(tmp .. "/pkg"):
+                roots[len(roots) + 1] = tmp .. "/pkg/" .. id .. "/assets"
+        roots[len(roots) + 1] = "/cubeos/share/assets"
+        roots[len(roots) + 1] = "/repo/assets"
+        for r in roots:
+            if fs.exists(r .. "/" .. rel):
+                return r .. "/" .. rel
+        return nil
+
+    def near(self, r, g, b):
+        return self.pal:nearest(_clamp(math.floor(r + 0.5), 0, 255), _clamp(math.floor(g + 0.5), 0, 255), _clamp(math.floor(b + 0.5), 0, 255), 16, 211)
+
+    def _map(self, k, add):
+        m = {}
+        for i in range[0, 255]:
+            r, g, b = self.pal:get(i)
+            m[i] = self:near(r * k + add, g * k + add, b * k + add * 1.3)
+        return m
+
+    def _wallpaper(self):
+        let me = self
+        ctx = {palette: self.pal, theme: () => me.th, read: (name) => _read(me:asset("wallpapers/" .. name .. ".cimg")), now: () => 0,
+            animated: false, alloc: (n) => nil, alloc_wide: (n) => nil, set_colors: (list) => me.screen:set_colors(list), damage: (x, y, w, h) => nil}
+        ok, surf = pcall(() => wallpaper_mod.make("aurora", me.W, me.H, ctx))
+        if ok and surf != nil:
+            return surf
+        surf = surface_mod.new(self.W, self.H, 0)
+        steps = []
+        for k in range[0, 7]:
+            steps[k + 1] = self:near(10 + k * 3, 12 + k * 3, 30 + k * 6)
+        surf:fill_gradient(0, 0, self.W, self.H, steps, "v", {dither: true})
+        return surf
+
+    # an avatar picture size x size (a letter on a gradient for "letter" or a missing picture)
+    def face(self, name, display, size):
+        key = name .. ":" .. (display ?? "") .. ":" .. size
+        if self.faces[key] != nil:
+            return self.faces[key]
+        f = nil
+        if name != "letter":
+            data = _read(self:asset("avatars/" .. name .. ".cimg"))
+            if data != nil:
+                ok, src, spal = pcall(cimg.decode, data)
+                if ok:
+                    f = wallpaper_mod.fit_image(src, spal ?? color.default_palette(), size, size, "fill", self.pal)
+        if f == nil:
+            f = surface_mod.new(size, size, 0)
+            steps = []
+            for k in range[0, 5]:
+                steps[k + 1] = self:near(190 - k * 18, 150 - k * 14, 255 - k * 20)
+            f:fill_gradient(0, 0, size, size, steps, "d", {dither: true})
+            letter = string.upper(string.sub(display ?? "", 1, 1))
+            if letter == "" or string.match(letter, "%w") == nil:
+                letter = "?"
+            sc = size >= 24 and 2 or 1
+            lw = surface_mod.measure(self.font, letter, 0, sc)
+            f:text(self.font, math.floor((size - lw) / 2) + 1, math.floor((size - self.font.height * sc) / 2) + 1, letter, self.c.text, {scale: sc})
+        # round corners
+        r = math.floor(size / 4)
+        for y in range[0, size - 1]:
+            ins = math.max(_inset(r, y), _inset(r, size - 1 - y))
+            for x in range[0, ins - 1]:
+                f:set(x, y, surface_mod.CLEAR)
+                f:set(size - 1 - x, y, surface_mod.CLEAR)
+        self.faces[key] = f
+        return f
+
+    def to_pixel(self, x, y):
+        return self.screen:to_pixel(x, y)
+
+    def close(self):
+        pcall(() => self.screen:close())
+
+    # ------------------------------------------------------------ drawing primitives
+
+    def tr(self, text):
+        return self.ui:tr(text)
+
+    def text(self, x, y, str, c, scale=1):
+        self.s:text(self.font, x, y, str, c, {scale: scale})
+
+    def width(self, str, scale=1):
+        return surface_mod.measure(self.font, str, 0, scale)
+
+    def fit(self, str, width):
+        if self:width(str) <= width:
+            return str
+        return surface_mod.ellipsize(self.font, str, width, "...")
+
+    def wrap(self, str, width):
+        return surface_mod.wrap(self.font, str, width)
+
+    def rtext(self, xr, y, str, c, scale=1):
+        self:text(xr - self:width(str, scale), y, str, c, scale)
+
+    def ctext(self, cx, y, str, c, scale=1):
+        self:text(cx - math.floor(self:width(str, scale) / 2), y, str, c, scale)
+
+    # «glass»: darken what is under a rounded rectangle, lighter rim
+    def glass(self, x, y, w, h, r, map=nil, rim=true):
+        px = self.s.px
+        W = self.W
+        g = map ?? self.m_glass
+        lift = self.m_lift
+        for row in range[0, h - 1]:
+            yy = y + row
+            if yy >= 0 and yy < self.H:
+                ins = math.max(_inset(r, row), _inset(r, h - 1 - row))
+                x0 = math.max(0, x + ins)
+                x1 = math.min(W - 1, x + w - 1 - ins)
+                base = yy * W + 1
+                edge = rim and (row == 0 or row == h - 1)
+                for xx in range[x0, x1]:
+                    v = px[base + xx]
+                    if edge or (rim and (xx == x0 or xx == x1)):
+                        px[base + xx] = lift[v] ?? v
+                    else:
+                        px[base + xx] = g[v] ?? v
+        self.s:mark(x, y, x + w - 1, y + h - 1)
+
+    def hot(self, x, y, w, h, fn):
+        self.ui:hot(x, y, x + w - 1, y + h - 1, fn)
+
+    def button(self, x, y, label, style, fn, focus=false):
+        lw = self:width(label)
+        bw = lw + 14
+        bh = 13
+        if style == "main" or style == "ok":
+            self.s:round_rect(x, y, bw, bh, 4, style == "ok" and self.c.ok or self.c.accent, true)
+            self:text(x + 7, y + 2, label, self.c.field)
+        elif style == "danger":
+            self.s:round_rect(x, y, bw, bh, 4, self.c.danger, true)
+            self:text(x + 7, y + 2, label, self.c.field)
+        elif style == "off":
+            self.s:round_rect(x, y, bw, bh, 4, self.c.faint, false)
+            self:text(x + 7, y + 2, label, self.c.faint)
+        else:
+            self:glass(x, y, bw, bh, 4, self.m_dark)
+            self:text(x + 7, y + 2, label, self.c.soft)
+        if focus:
+            self.s:round_rect(x - 2, y - 2, bw + 4, bh + 4, 6, self.c.text, false)
+        if fn != nil and style != "off":
+            self:hot(x, y, bw, bh, (cx, cy) => fn())
+        return bw
+
+    def bar(self, x, y, w, h, frac, on, off=nil):
+        self.s:round_rect(x, y, w, h, math.floor(h / 2), off ?? self.c.field, true)
+        fw = math.floor(_clamp(frac, 0, 1) * w + 0.5)
+        if fw > 0:
+            self.s:round_rect(x, y, math.max(fw, h), h, math.floor(h / 2), on, true)
+
+    def toggle(self, x, y, on, focus):
+        self.s:round_rect(x, y, 18, 9, 4, on and self.c.accent or self.c.faint, true)
+        kx = on and x + 10 or x + 1
+        self.s:round_rect(kx, y + 1, 7, 7, 3, on and self.c.text or self.c.dim, true)
+
+    def check(self, x, y, state):
+        if state == "on":
+            self.s:round_rect(x, y, 9, 9, 2, self.c.accent, true)
+            icons.draw(self.s, "check", x, y, self.c.field)
+        elif state == "auto":
+            self.s:round_rect(x, y, 9, 9, 2, self.c.edge, true)
+            self.s:round_rect(x + 3, y + 3, 3, 3, 1, self.c.text, true)
+        elif state == "lock":
+            self.s:round_rect(x, y, 9, 9, 2, self.c.sel, true)
+            icons.draw(self.s, "lock", x, y, self.c.dim)
+        else:
+            self.s:round_rect(x, y, 9, 9, 2, self.c.edge, false)
+
+    def badge(self, xr, y, ok):
+        label = self:tr(ok and "fits" or "too big")
+        bw = self:width(label) + 8
+        self.s:round_rect(xr - bw, y, bw, 10, 4, ok and self.c.ok or self.c.danger, true)
+        self:text(xr - bw + 4, y + 1, label, self.c.field)
+        return bw
+
+    # the CubeOS cube: three faces, size = half width
+    def cube(self, cx, cy, r, shine=nil):
+        h = math.floor(r * 0.58)
+        top = [[cx, cy - r], [cx + r, cy - r + h], [cx, cy - r + 2 * h], [cx - r, cy - r + h]]
+        left = [[cx - r, cy - r + h], [cx, cy - r + 2 * h], [cx, cy + r], [cx - r, cy + r - h]]
+        right = [[cx + r, cy - r + h], [cx, cy - r + 2 * h], [cx, cy + r], [cx + r, cy + r - h]]
+        self.s:polygon(top, self.c.cube_top, true)
+        self.s:polygon(left, self.c.cube_left, true)
+        self.s:polygon(right, self.c.cube_right, true)
+        if shine != nil:
+            sx = cx - r + math.floor(shine * 2 * r)
+            self.s:line(sx, cy - r + h, sx + 2, cy + r - h, self.c.text)
+
+    # a selectable glass row: highlighted when chosen, an accent stripe on the left
+    def row(self, x, y, w, h, selected, fn=nil):
+        if selected:
+            self:glass(x, y, w, h, 3, self.m_lift, false)
+            self.s:round_rect(x, y + 2, 2, h - 4, 1, self.c.accent, true)
+        if fn != nil:
+            self:hot(x, y, w, h, (cx, cy) => fn(cx, cy))
+
+    def title(self, r, text, note=nil):
+        nw = note != nil and self:width(note) + 8 or 0
+        big = self:width(text, 2) <= r.w - nw
+        if big:
+            self:text(r.x + 1, r.y + 1, text, self.c.shadow, 2)
+            self:text(r.x, r.y, text, self.c.text, 2)
+        else:
+            if note != nil and self:width(text) > r.w - nw:
+                # the note goes under the line, the title keeps the whole row
+                self:text(r.x, r.y + 4, self:fit(text, r.w), self.c.text)
+                self:rtext(r.x + r.w, r.y + 22, note, self.c.dim)
+                self.s:hline(r.x, r.y + 18, r.w, self.c.edge)
+                return r.y + 33
+            self:text(r.x, r.y + 4, text, self.c.text)
+        if note != nil:
+            self:rtext(r.x + r.w, r.y + 5, note, self.c.dim)
+        self.s:hline(r.x, r.y + 20, r.w, self.c.edge)
+        return r.y + 25
+
+    # ------------------------------------------------------------ the frame
+
+    def rail_index(self, cur):
+        for i in range[1, len(RAIL)]:
+            for name in RAIL[i][3]:
+                if name == cur:
+                    return i
+        return 1
+
+    def frame(self):
+        ui = self.ui
+        s = self.s
+        px = s.px
+        bpx = self.bg.px
+        for i in range[1, self.W * self.H]:
+            px[i] = bpx[i]
+        s:touch()
+        W = self.W
+        H = self.H
+        # top bar
+        self:cube(9, 7, 5)
+        self:text(19, 3, "CubeOS", self.c.text)
+        self:text(19 + self:width("CubeOS "), 3, self:tr("Setup"), self.c.accent2)
+        cur = self:rail_index(ui.cur)
+        if ui.version != nil:
+            self:rtext(W - 6, 3, ui.version, self.c.dim)
+        # rail
+        rail = W >= 280 and ui.cur != "loading"
+        cx = 4
+        if rail:
+            rh = math.max(9, math.min(12, math.floor((H - 40) / len(RAIL))))
+            ry = 18
+            self:glass(4, 16, 84, H - 36, 5)
+            for i in range[1, len(RAIL)]:
+                e = RAIL[i]
+                y = ry + (i - 1) * rh
+                if i == cur:
+                    self:glass(6, y, 80, rh, 3, self.m_lift, false)
+                    self.s:round_rect(6, y + 2, 2, rh - 4, 1, self.c.accent, true)
+                col = i < cur and self.c.soft or (i == cur and self.c.text or self.c.faint)
+                icons.draw(s, i < cur and "check" or e[2], 10, y + math.floor((rh - 9) / 2), i < cur and self.c.ok or (i == cur and self.c.accent2 or self.c.faint), self.c.faint)
+                self:text(22, y + math.floor((rh - 9) / 2), self:fit(self:tr(e[1]), 62), col)
+            cx = 92
+        card = {x: cx, y: 16, w: W - cx - 4, h: H - 36}
+        self:glass(card.x, card.y, card.w, card.h, 6)
+        r = {x: card.x + 7, y: card.y + 6, w: card.w - 14, h: card.h - 12}
+        self.card = card
+        self.footer = nil
+        fn = DRAW[ui.cur]
+        if fn != nil:
+            fn(ui, self, r)
+        # footer: message on the left, buttons on the right
+        if ui.msg != nil:
+            col = ui.msg_col == "e" and self.c.danger or (ui.msg_col == "5" and self.c.ok or self.c.warn)
+            self:text(6, H - 15, self:fit(self:tr(ui.msg), W - 120), col)
+        elif self.footer != nil and self.footer.hint != nil:
+            self:text(6, H - 15, self:fit(self:tr(self.footer.hint), W - 120), self.c.dim)
+        f = self.footer
+        if f != nil:
+            x = W - 6
+            if f.next != false:
+                lab = self:tr(f.next_label ?? "Next")
+                x -= self:width(lab) + 14
+                self:button(x, H - 17, lab, f.next == nil and "off" or (f.next_style ?? "main"), f.next, ui.ffocus == "next")
+                x -= 6
+            if f.back != nil:
+                lab = self:tr(f.back_label ?? "Back")
+                x -= self:width(lab) + 14
+                self:button(x, H - 17, lab, "plain", f.back, ui.ffocus == "back")
+        if ui.modal != nil:
+            self:modal(ui.modal)
+        self.screen:present()
+
+    # footer of the current screen: hint, back (nil = none), next (false = none, nil = disabled)
+    def foot(self, hint, back, next_, label=nil, style=nil):
+        self.footer = {hint: hint, back: back, next: next_, next_label: label, next_style: style}
+
+    # ------------------------------------------------------------ dialogs
+
+    def modal(self, spec):
+        ui = self.ui
+        W = self.W
+        H = self.H
+        self:glass(0, 0, W, H, 0, self.m_dark, false)
+        bw = math.min(W - 20, 220)
+        lines = self:wrap(self:tr(spec.text ?? ""), bw - 16)
+        view = len(lines)
+        maxv = math.floor((H - 70) / 10)
+        if view > maxv:
+            view = maxv
+        spec.view = view
+        spec.max_top = math.max(0, len(lines) - view)
+        bh = 34 + view * 10 + (spec.input != nil and 16 or 0)
+        bx = math.floor((W - bw) / 2)
+        by = math.floor((H - bh) / 2)
+        self:glass(bx, by, bw, bh, 6)
+        accent = spec.accent == "e" and self.c.danger or (spec.accent == "4" and self.c.warn or self.c.accent2)
+        self.s:round_rect(bx + 1, by + 1, bw - 2, 3, 1, accent, true)
+        self:text(bx + 8, by + 7, self:fit(self:tr(spec.title ?? ""), bw - 16), self.c.text)
+        for i in range[1, view]:
+            line = lines[i + (spec.top ?? 0)]
+            if line != nil:
+                self:text(bx + 8, by + 8 + i * 10, line, self.c.soft)
+        y = by + 12 + view * 10 + 8
+        if spec.input != nil:
+            shown = spec.input.hidden and string.rep("*", len(spec.input.value)) or spec.input.value
+            self.s:round_rect(bx + 8, y - 4, bw - 16, 12, 3, self.c.field, true)
+            self:text(bx + 11, y - 2, self:fit(shown .. (ui.phase % 6 < 3 and "_" or ""), bw - 22), self.c.text)
+            y += 16
+        x = bx + bw - 8
+        let me = self
+        for i in range[len(spec.buttons), 1] step -1:
+            b = spec.buttons[i]
+            lab = self:tr(b.label)
+            x -= self:width(lab) + 14
+            let value = b.value
+            style = i == spec.focus and (b.style ?? "main") or "plain"
+            self:button(x, by + bh - 17, lab, style, () => ui:modal_answer(spec, spec.input != nil and spec.input.value or value), false)
+            x -= 5
+
+# ================================================================ screens
+
+def _hw_rows(ui, g):
+    hw = ui.hw
+    dtext = model.human(hw.free) .. " " .. g:tr("free")
+    if hw.capacity != nil:
+        dtext = model.human(hw.free) .. " " .. g:tr("of") .. " " .. model.human(hw.capacity) .. " " .. g:tr("free")
+    return [["Disk", dtext, true], ["Screen", hw.cols .. "x" .. hw.rows .. ", " .. g.W .. "x" .. g.H .. " px", true],
+        ["Monitor", hw.monitor ?? g:tr("none"), hw.monitor != nil], ["Modem", hw.modem ?? g:tr("none"), hw.modem != nil],
+        ["Speaker", hw.speaker ?? g:tr("none"), hw.speaker != nil]]
+
+def d_loading(ui, g, r):
+    cy = r.y + math.floor(r.h / 2) - 14
+    g:cube(r.x + math.floor(r.w / 2), cy, 14, (ui.phase % 20) / 20)
+    text = g:tr(ui.loading ?? "Loading") .. string.rep(".", ui.phase % 4)
+    g:ctext(r.x + math.floor(r.w / 2), cy + 22, text, g.c.soft)
+
+def d_language(ui, g, r):
+    y = g:title(r, "Language", nil)
+    g:text(r.x, y, "Choose your language", g.c.soft)
+    g:text(r.x, y + 10, "Оберіть мову  ·  Выберите язык", g.c.dim)
+    y += 26
+    rh = math.min(26, math.floor((r.y + r.h - y) / len(model.LANGS)))
+    for i in range[1, len(model.LANGS)]:
+        l = model.LANGS[i]
+        sel = ui.st.lang == i
+        let idx = i
+        g:row(r.x, y, r.w, rh - 2, sel, (x, yy) => more.pick_lang(ui, idx))
+        sc = rh >= 24 and 2 or 1
+        g:text(r.x + 10, y + math.floor((rh - 2 - 9 * sc) / 2), l.native ?? l.title, sel and g.c.text or g.c.soft, sc)
+        g:rtext(r.x + r.w - 8, y + math.floor((rh - 11) / 2), l.title, sel and g.c.accent2 or g.c.dim)
+        y += rh
+    g:foot("Up/Down choose  Enter next", nil, () => ui:go_next())
+
+def d_welcome(ui, g, r):
+    y = r.y
+    g:cube(r.x + 16, y + 17, 15, ui.phase % 60 < 12 and ((ui.phase % 60) / 12) or nil)
+    g:text(r.x + 40, y + 3, g:tr("Welcome to"), g.c.soft)
+    g:text(r.x + 40, y + 13, "CubeOS", g.c.text, 2)
+    if ui.version != nil:
+        g:text(r.x + 42 + g:width("CubeOS", 2), y + 20, ui.version, g.c.dim)
+    y += 40
+    for row in _hw_rows(ui, g):
+        g:text(r.x, y, g:tr(row[1]), g.c.dim)
+        g:text(r.x + 50, y, g:fit(row[2], r.w - 50), row[3] and g.c.text or g.c.faint)
+        y += 10
+    y += 6
+    sel = ui.focus == 2
+    g:row(r.x - 2, y - 2, r.w + 4, 13, sel, (x, yy) => scr_text.helpers.toggle_license(ui))
+    g:check(r.x + 2, y, ui.st.license and "on" or "off")
+    g:text(r.x + 15, y, g:fit(g:tr("I accept the MIT license"), r.w - 60), g.c.text)
+    rl = g:tr("read")
+    g:text(r.x + r.w - g:width(rl) - 2, y, rl, g.c.accent2)
+    g:hot(r.x + r.w - g:width(rl) - 2, y - 2, g:width(rl) + 4, 13, (x, yy) => scr_text.helpers.license(ui))
+    g:foot("Space accept  L license", () => ui:confirm_quit(), () => ui:go_next(), nil, nil)
+    g.footer.back_label = "Quit"
+
+def _size_card(ui, g, x, y, w, h, sel, title, size, ok, blurb, frac, fn):
+    g:row(x, y, w, h, sel, (cx, cy) => fn())
+    g:text(x + 8, y + 3, title, sel and g.c.text or g.c.soft)
+    right = x + w - 6
+    if ok != nil:
+        right -= g:badge(right, y + 2, ok) + 5
+    if size != nil:
+        g:rtext(right, y + 3, size, ok == false and g.c.danger or g.c.text)
+    if h >= 22:
+        g:text(x + 8, y + 13, g:fit(blurb, w - 16), g.c.dim)
+    if h >= 26 and frac != nil:
+        g:bar(x + 8, y + h - 5, w - 16, 2, frac, ok == false and g.c.danger or (sel and g.c.accent or g.c.edge), g.c.field)
+
+def d_profile(ui, g, r):
+    free = ui.hw.free
+    y = g:title(r, g:tr("What should it run?"), model.human(free) .. " " .. g:tr("free"))
+    n = len(model.PROFILES)
+    h = math.min(27, math.floor((r.y + r.h - y) / n))
+    for i in range[1, n]:
+        prof = model.PROFILES[i]
+        need, ok, cnt = scr_text.helpers.profile_need(ui, i)
+        if ok == nil:
+            ok = need <= free * (1 - model.RESERVE)
+        let idx = i
+        _size_card(ui, g, r.x, y, r.w, h - 2, ui.st.profile == i, g:tr(prof.title), (prof.meta == nil and "~" or "") .. model.human(need), ok,
+            g:tr(prof.blurb) .. " · " .. cnt .. " " .. g:tr("packages"), free > 0 and need / free or 1, () => scr_text.helpers.pick_profile(ui, idx))
+        y += h
+    g:foot("Up/Down choose  Enter next", () => ui:go_back(), () => ui:go_next())
+
+def d_manual(ui, g, r):
+    h = scr_text.helpers
+    rows = h.rows(ui)
+    n = ui.m:count(ui.eff)
+    y = g:title(r, g:tr("Choose packages"), n .. " " .. g:tr("selected"))
+    rh = 11
+    bottom = r.y + r.h - 24
+    view = math.max(1, math.floor((bottom - y) / rh))
+    ui.mcur = math.max(1, math.min(len(rows), ui.mcur))
+    if ui.mcur <= ui.mtop:
+        ui.mtop = ui.mcur - 1
+    if ui.mcur > ui.mtop + view:
+        ui.mtop = ui.mcur - view
+    ui.mview = view
+    for i in range[1, view]:
+        ri = ui.mtop + i
+        row = rows[ri]
+        if row == nil:
+            break
+        yy = y + (i - 1) * rh
+        sel = ri == ui.mcur and ui.ffocus == nil
+        let rr = row
+        let index = ri
+        g:row(r.x, yy, r.w, rh, sel, (x, cy) => h.manual_click(ui, index, rr, 99))
+        if row.cat != nil:
+            grp = row.cat
+            on = 0
+            size = 0
+            for p in grp.items:
+                if ui.eff[p.id]:
+                    on += 1
+                    size += p.isize
+            icons.draw(g.s, ui.expanded[grp.id] and "minus" or "plus", r.x + 4, yy + 1, g.c.accent2)
+            g:text(r.x + 16, yy + 1, g:fit(g:tr(grp.title), r.w - 90), g.c.text)
+            g:rtext(r.x + r.w - 50, yy + 1, on .. "/" .. len(grp.items), on > 0 and g.c.accent2 or g.c.faint)
+            g:rtext(r.x + r.w - 4, yy + 1, model.human(size), g.c.dim)
+        else:
+            p = row.pkg
+            st = h.state(ui, p)
+            g:check(r.x + 14, yy + 1, st)
+            g:text(r.x + 27, yy + 1, g:fit(p.name, r.w - 90), st == "off" and g.c.dim or g.c.text)
+            pr = string.upper(string.sub(p.priority, 1, 1))
+            g:rtext(r.x + r.w - 50, yy + 1, pr, pr == "E" and g.c.faint or (pr == "R" and g.c.accent2 or g.c.warn))
+            g:rtext(r.x + r.w - 4, yy + 1, model.human(p.isize), g.c.dim)
+    cur = rows[ui.mcur]
+    if cur != nil and cur.pkg != nil:
+        g:text(r.x, bottom + 2, g:fit(cur.pkg.description ?? "", r.w), g.c.dim)
+    free = ui.hw.free
+    need = ui.m:estimate(ui.eff, model.STORAGE[ui.st.storage].id, free)
+    ok = need <= free * (1 - model.RESERVE)
+    label = "~" .. model.human(need) .. " / " .. model.human(free)
+    g:text(r.x, bottom + 13, label, ok and g.c.text or g.c.danger)
+    lw = g:width(label) + 6
+    g:bar(r.x + lw, bottom + 15, r.w - lw, 4, free > 0 and need / free or 1, ok and g.c.ok or g.c.danger)
+    g:foot("Space tick  Enter open", () => ui:go_back(), () => ui:go_next())
+
+def d_options(ui, g, r):
+    h = scr_text.helpers
+    y = g:title(r, g:tr("Package options"), g:tr("defaults are fine"))
+    rows = h.opt_rows(ui)
+    if ui.ocur == nil or rows[ui.ocur] == nil or rows[ui.ocur].opt == nil:
+        ui.ocur = nil
+        for i in range[1, len(rows)]:
+            if ui.ocur == nil and rows[i].opt != nil:
+                ui.ocur = i
+    vx = r.x + math.floor(r.w / 2)
+    for i in range[1, len(rows)]:
+        if y > r.y + r.h - 12:
+            break
+        row = rows[i]
+        if row.opt == nil:
+            g:text(r.x, y + 2, row.pkg.name, g.c.accent2)
+            y += 13
+            continue
+        o = row.opt
+        sel = i == ui.ocur and ui.ffocus == nil
+        let index = i
+        let rr = row
+        g:row(r.x, y, r.w, 12, sel, (x, yy) => h.opt_click(ui, index, rr))
+        g:text(r.x + 8, y + 2, g:fit(o.label ?? o.id, vx - r.x - 12), g.c.text)
+        v = row.vals[o.id]
+        t = o.type ?? "bool"
+        if t == "bool":
+            g:toggle(r.x + r.w - 24, y + 2, v == true, sel)
+        else:
+            g:rtext(r.x + r.w - 6, y + 2, g:fit(type(v) == "table" and table.concat(v, ", ") or tostring(v ?? ""), r.x + r.w - vx), sel and g.c.accent2 or g.c.soft)
+        y += 13
+    g:foot("Left/Right change  Enter next", () => ui:go_back(), () => ui:go_next())
+
+def d_storage(ui, g, r):
+    free = ui.hw.free
+    y = g:title(r, g:tr("How to keep packages"), model.human(free) .. " " .. g:tr("free"))
+    ids = ui:request()
+    n = len(model.STORAGE)
+    hh = math.min(30, math.floor((r.y + r.h - y) / n))
+    for i in range[1, n]:
+        st = model.STORAGE[i]
+        p = ui:plan(ids, st.stew)
+        need = ui:need_of(p)
+        let idx = i
+        _size_card(ui, g, r.x, y, r.w, hh - 3, ui.st.storage == i, g:tr(st.title), model.human(need), ui:fits(p), g:tr(st.blurb),
+            free > 0 and need / free or 1, () => scr_text.helpers.pick_storage(ui, idx))
+        y += hh
+    g:foot("Up/Down choose  Enter next", () => ui:go_back(), () => ui:go_next())
+
+def d_fit(ui, g, r):
+    h = scr_text.helpers
+    acts, p = h.fit_actions(ui)
+    ok = ui:fits(p)
+    free = ui.hw.free
+    need = ui:need_of(p)
+    y = g:title(r, g:tr(ok and "Now it fits" or "It does not fit"), model.human(need) .. " / " .. model.human(free))
+    g:bar(r.x, y - 2, r.w, 4, free > 0 and need / free or 1, ok and g.c.ok or g.c.danger)
+    y += 6
+    for i in range[1, len(acts)]:
+        a = acts[i]
+        sel = i == ui.fcur and ui.ffocus == nil
+        let idx = i
+        g:row(r.x, y, r.w, 21, sel, (x, yy) => h.fit_pick(ui, idx))
+        g:text(r.x + 8, y + 2, g:fit(g:tr(a.title), r.w - 16), a.on and g.c.text or g.c.faint)
+        g:text(r.x + 8, y + 11, g:fit(a.note, r.w - 16), a.on and g.c.dim or g.c.faint)
+        y += 23
+    g:foot("Enter apply", () => ui:go_back(), ok and (() => ui:go_next()) or nil)
+
+# width of the value part of a settings row: toggles are small, choices as wide as their longest label
+def _value_width(g, f, total):
+    if f.type == "toggle":
+        return 30
+    if f.type == "range":
+        return math.floor(total * 0.42)
+    if f.type == "text" or f.type == "secret":
+        return math.floor(total * 0.45)
+    widest = 0
+    for ch in f.choices ?? []:
+        widest = math.max(widest, g:width(g:tr(ch[2])))
+    return math.min(math.floor(total * 0.55), math.max(48, widest + 26))
+
+def _label_width(g, labels, most):
+    widest = 0
+    for l in labels:
+        widest = math.max(widest, g:width(g:tr(l)))
+    return math.min(most, widest + 6)
+
+def d_prefs(page):
+    def draw(ui, g, r):
+        y = g:title(r, g:tr(page.title), nil)
+        fl = more.fields_of(ui, page)
+        cur = more.focus_of(ui, page)
+        rh = 13
+        bottom = r.y + r.h - 20
+        view = math.max(1, math.floor((bottom - y) / rh))
+        first = math.max(0, math.min(len(fl) - view, cur - math.floor(view / 2)))
+        for k in range[1, view]:
+            i = first + k
+            f = fl[i]
+            if f == nil:
+                break
+            yy = y + (k - 1) * rh
+            vx = r.x + r.w - _value_width(g, f, r.w)
+            sel = i == cur and ui.ffocus == nil
+            let index = i
+            g:row(r.x, yy, r.w, rh - 1, sel, (x, cy) => more.click_field(ui, page, index, x < r.x + r.w - 40 and 1 or 1))
+            g:text(r.x + 8, yy + 2, g:fit(g:tr(f.label), vx - r.x - 12), sel and g.c.text or g.c.soft)
+            v = ui.st.prefs[f.id]
+            if f.type == "toggle":
+                g:toggle(r.x + r.w - 24, yy + 2, v == true, sel)
+            elif f.type == "range":
+                bw = r.x + r.w - vx - 30
+                g:bar(vx, yy + 4, bw, 4, ((v ?? 0) - f.min) / (f.max - f.min), sel and g.c.accent or g.c.edge)
+                g:rtext(r.x + r.w - 6, yy + 2, tostring(v) .. "%", sel and g.c.text or g.c.soft)
+            elif f.type == "text" or f.type == "secret":
+                fw = r.x + r.w - vx - 4
+                g.s:round_rect(vx, yy + 1, fw, 10, 3, g.c.field, true)
+                if sel:
+                    g.s:round_rect(vx, yy + 1, fw, 10, 3, g.c.accent, false)
+                shown = f.type == "secret" and string.rep("*", len(v ?? "")) or (v ?? "")
+                if shown == "" and not sel:
+                    g:text(vx + 3, yy + 2, g:tr(f.type == "secret" and "not set" or "empty"), g.c.faint)
+                else:
+                    tail = shown .. ((sel and ui.phase % 6 < 3) and "_" or "")
+                    while g:width(tail) > fw - 6 and len(tail) > 1:
+                        tail = string.sub(tail, 2)
+                    g:text(vx + 3, yy + 2, tail, g.c.text)
+            else:
+                label = g:tr(prefs.label_of(f, v))
+                g:text(vx, yy + 2, "<", sel and g.c.accent2 or g.c.faint)
+                g:rtext(r.x + r.w - 6, yy + 2, ">", sel and g.c.accent2 or g.c.faint)
+                g:ctext(vx + math.floor((r.x + r.w - vx) / 2), yy + 2, g:fit(label, r.x + r.w - vx - 20), sel and g.c.text or g.c.soft)
+                let ff = f
+                g:hot(vx - 2, yy, 10, rh - 1, (x, cy) => more.change(ui, ff, -1))
+                g:hot(r.x + r.w - 12, yy, 12, rh - 1, (x, cy) => more.change(ui, ff, 1))
+        if first > 0:
+            g:rtext(r.x + r.w, y - 4, "^", g.c.dim)
+        f = fl[cur]
+        if f != nil and f.help != nil and ui.msg == nil:
+            lines = g:wrap(g:tr(f.help), r.w)
+            for j in range[1, math.min(2, len(lines))]:
+                g:text(r.x, bottom + (j - 1) * 9, lines[j], g.c.dim)
+        g:foot("Left/Right change  Enter next", () => ui:go_back(), () => ui:go_next())
+    return draw
+
+def d_user(ui, g, r):
+    u = ui.st.user
+    y = g:title(r, g:tr("Your account"), g:tr("administrator"))
+    av_list = fin.helpers.avatars(ui)
+    av = av_list[u.avatar] ?? "letter"
+    side = r.w >= 170
+    labels = ["Your name", "Login", "Password", "Repeat", "Avatar"]
+    lw = _label_width(g, labels, 80)
+    fx = r.x + lw
+    fw = r.w - lw - (side and 46 or 0)
+    keys_ = ["display", "name", "password", "repeat", nil]
+    for i in range[1, 5]:
+        yy = y + (i - 1) * 15
+        sel = ui.ufocus == i and ui.ffocus == nil
+        let index = i
+        g:text(r.x, yy + 2, g:fit(g:tr(labels[i]), lw - 4), sel and g.c.text or g.c.dim)
+        g:hot(r.x, yy, r.w, 13, (x, cy) => fin.helpers.field_click(ui, index))
+        k = keys_[i]
+        if k != nil:
+            g.s:round_rect(fx, yy, fw, 12, 3, g.c.field, true)
+            if sel:
+                g.s:round_rect(fx, yy, fw, 12, 3, g.c.accent, false)
+            v = u[k]
+            shown = (k == "password" or k == "repeat") and string.rep("*", len(v)) or v
+            tail = shown .. ((sel and ui.phase % 6 < 3) and "_" or "")
+            while g:width(tail) > fw - 8 and len(tail) > 1:
+                tail = string.sub(tail, 2)
+            g:text(fx + 4, yy + 2, tail, g.c.text)
+            if k == "name" and not u.name_edited and u.name != "":
+                g:rtext(fx + fw - 4, yy + 2, g:tr("auto"), g.c.faint)
+        else:
+            n = len(av_list)
+            x = fx
+            sz = 12
+            for j in range[1, n]:
+                f = g:face(av_list[j], u.display, sz)
+                g.s:blit(f, x, yy)
+                if j == u.avatar:
+                    g.s:round_rect(x - 1, yy - 1, sz + 2, sz + 2, 3, g.c.accent, false)
+                let jj = j
+                g:hot(x, yy, sz, sz, (cx, cy) => fin.helpers.set_avatar(ui, jj))
+                x += sz + 4
+                if x + sz > fx + fw:
+                    break
+    if side:
+        f = g:face(av, u.display, 36)
+        ax = r.x + r.w - 38
+        g.s:blit(f, ax, y + 2)
+        g:ctext(ax + 18, y + 42, g:fit(u.display != "" and u.display or "?", 44), g.c.text)
+        g:ctext(ax + 18, y + 52, g:fit(u.name, 44), g.c.dim)
+    g:foot("Enter next field", () => ui:go_back(), () => ui:go_next())
+
+def d_summary(ui, g, r):
+    p = ui:plan(ui:request(), ui:storage_id())
+    ui.plan_now = p
+    y = g:title(r, g:tr("Ready to install"), ui.version != nil and ("CubeOS " .. ui.version) or nil)
+    rows = fin.summary_rows(ui)
+    names = []
+    for row in rows:
+        names[len(names) + 1] = row[1]
+    lw = _label_width(g, names, 100)
+    for row in rows:
+        if y > r.y + r.h - 22:
+            break
+        g:text(r.x, y, g:fit(g:tr(row[1]), lw - 4), g.c.dim)
+        g:text(r.x + lw, y, g:fit(row[2], r.w - lw), g.c.text)
+        y += 10
+    free = ui.hw.free
+    need = ui:need_of(p)
+    ok = ui:fits(p)
+    notes = fin.plan_notes(p)
+    if len(notes) > 0:
+        g:text(r.x, r.y + r.h - 20, g:fit(notes[1][2], r.w), notes[1][1] == "e" and g.c.danger or g.c.warn)
+    g:bar(r.x, r.y + r.h - 8, r.w, 5, free > 0 and need / free or 1, ok and g.c.ok or g.c.danger)
+    can = p.ok != false and len(p.missing ?? []) == 0 and ok
+    g:foot("Enter install", () => ui:go_back(), can and (() => ui:go_next()) or nil, "Install", "ok")
+
+def d_progress(ui, g, r):
+    pr = ui.prog
+    pct = math.floor(pr.frac * 100)
+    y = g:title(r, g:tr(pr.rollback and "Rolling back" or "Installing CubeOS"), pct .. "%")
+    col = pr.rollback and g.c.danger or g.c.accent
+    g:bar(r.x, y, r.w, 8, pr.frac, col)
+    # a light runs along the filled part
+    fw = math.floor(pr.frac * r.w)
+    if fw > 8 and not pr.rollback:
+        gx = r.x + (ui.phase * 6) % fw
+        g.s:fill_rect(gx, y + 2, 3, 4, g.c.text)
+    y += 14
+    g:text(r.x, y, g:tr(pr.stage), g.c.accent2)
+    if pr.id != nil:
+        name = ui.m:get(pr.id)?.name ?? pr.id
+        g:text(r.x + g:width(g:tr(pr.stage)) + 6, y, g:fit(name, r.w - g:width(g:tr(pr.stage)) - 6), g.c.text)
+    y += 14
+    steps = pr.steps
+    cols = r.w >= 180 and 2 or 1
+    colw = math.floor(r.w / cols)
+    rows_n = math.max(1, math.floor((r.y + r.h - y) / 10))
+    cur = 1
+    for i in range[1, len(steps)]:
+        if steps[i].id == pr.id:
+            cur = i
+    per = rows_n * cols
+    first = math.max(0, math.min(len(steps) - per, cur - math.floor(per / 2)))
+    for k in range[0, per - 1]:
+        st = steps[first + k + 1]
+        if st == nil:
+            break
+        x = r.x + math.floor(k / rows_n) * colw
+        yy = y + (k % rows_n) * 10
+        mark = pr.marks[st.id]
+        if st.id == pr.id:
+            g.s:round_rect(x, yy + 2, 5, 5, 2, g.c.accent2, true)
+        elif mark != nil:
+            icons.draw(g.s, "check", x - 2, yy, g.c.ok)
+        else:
+            g.s:round_rect(x + 1, yy + 3, 3, 3, 1, g.c.faint, true)
+        label = ui.m:get(st.id)?.name ?? st.id
+        g:text(x + 9, yy, g:fit(label, colw - 12), st.id == pr.id and g.c.text or (mark != nil and g.c.soft or g.c.faint))
+    g:foot("Please wait. Do not turn the computer off.", nil, false)
+
+def d_done(ui, g, r):
+    u = ui.st.user
+    cx = r.x + math.floor(r.w / 2)
+    g.s:circle(cx, r.y + 18, 14, g.c.ok, true)
+    icons.draw(g.s, "check", cx - 4, r.y + 14, g.c.field)
+    g:ctext(cx, r.y + 38, g:tr("CubeOS is installed"), g.c.text, g:width(g:tr("CubeOS is installed"), 2) <= r.w and 2 or 1)
+    g:ctext(cx, r.y + 58, g:fit(g:tr("Welcome aboard") .. ", " .. u.display .. "!", r.w), g.c.soft)
+    y = r.y + 72
+    if ui.account_error != nil:
+        for line in g:wrap(g:tr("The account will be made at the first start") .. ": " .. ui.account_error, r.w):
+            if y < r.y + r.h - 22:
+                g:text(r.x, y, line, g.c.warn)
+                y += 9
+    for line in fin.helpers.problems_of(ui):
+        if y < r.y + r.h - 22:
+            g:text(r.x, y, g:fit(line, r.w), g.c.warn)
+            y += 9
+    left = math.max(0, math.ceil(fin.COUNTDOWN - (ui:clock() - (ui.done_at ?? 0))))
+    g:ctext(cx, r.y + r.h - 18, g:tr("Restarting in") .. " " .. left .. " s", g.c.dim)
+    g:bar(r.x + 20, r.y + r.h - 7, r.w - 40, 3, 1 - left / fin.COUNTDOWN, g.c.accent)
+    g:foot("Enter restart", nil, () => ui:go_next(), "Restart now", "ok")
+
+DRAW = {loading: d_loading, language: d_language, welcome: d_welcome, profile: d_profile, manual: d_manual, options: d_options,
+    storage: d_storage, fit: d_fit, user: d_user, summary: d_summary, progress: d_progress, done: d_done}
+for page in prefs.PAGES:
+    DRAW["prefs:" .. page.id] = d_prefs(page)

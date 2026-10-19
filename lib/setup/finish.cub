@@ -3,6 +3,7 @@
 
 import setup.widgets as w
 import setup.model as model
+import setup.prefs as prefs
 
 export const AVATARS = ["letter", "cube", "cat", "fox", "creeper", "robot", "ghost", "astronaut"]
 const AVATAR_COL = {letter: "a", cube: "9", cat: "1", fox: "1", creeper: "5", robot: "8", ghost: "0", astronaut: "3"}
@@ -179,31 +180,13 @@ def summary_draw(ui):
     w.title(c, 3, "Ready to install", ui.version != nil and ("CubeOS " .. ui.version) or nil)
     free = _free(ui)
     need = ui:need_of(p)
-    rows = [["Profile", prof.title .. ", " .. ui.m:count(eff) .. " packages"],
-        ["Download", model.human(p.download ?? ui.m:download(eff))],
-        ["On disk", model.human(need) .. " of " .. model.human(free) .. " free"],
-        ["Storage", model.STORAGE[ui.st.storage].title],
-        ["Language", model.LANGS[ui.st.lang].title],
-        ["Account", u.display .. " (" .. u.name .. "), administrator"],
-        ["Password", u.password != "" and "set" or "none"],
-        ["Avatar", _avatars(ui)[u.avatar] ?? "letter"]]
     y = 5
-    for r in rows:
-        c:text(3, y, r[1], "8")
-        c:text(13, y, w.fit(r[2], c.w - 14), "0")
-        y += 1
-    # what the plan says on top: missing packages, conflicts, warnings, packages with their own setup code
-    notes = []
-    for id in p.missing ?? []:
-        notes[len(notes) + 1] = ["e", "Missing in the catalog: " .. tostring(id)]
-    for x in p.conflicts ?? []:
-        notes[len(notes) + 1] = ["e", "Conflict: " .. tostring(type(x) == "table" and (x.text ?? x.id) or x)]
-    for x in p.warnings ?? []:
-        notes[len(notes) + 1] = ["4", tostring(type(x) == "table" and (x.text ?? x.id) or x)]
-    if p.runs_setup != nil and len(p.runs_setup) > 0:
-        notes[len(notes) + 1] = ["8", len(p.runs_setup) .. " packages run their own setup code"]
-    if p.ok == false and p.error != nil:
-        notes[len(notes) + 1] = ["e", "Cannot plan: " .. p.error]
+    for r in summary_rows(ui):
+        if y < c.h - 3:
+            c:text(3, y, r[1], "8")
+            c:text(13, y, w.fit(r[2], c.w - 14), "0")
+            y += 1
+    notes = plan_notes(p)
     y += 1
     for n in notes:
         if y < c.h - 1:
@@ -227,6 +210,43 @@ def summary_next(ui):
     if p.ok != false and len(p.missing ?? []) == 0 and ui:fits(p):
         ui.plan_now = p
         ui.result = "next"
+
+# the summary in rows [label, value]: packages, place, account and the settings that matter most
+export def summary_rows(ui):
+    p = ui.plan_now ?? ui:plan(ui:request(), ui:storage_id())
+    u = ui.st.user
+    v = ui.st.prefs
+    eff = ui:effective()
+    prof = model.PROFILES[ui.st.profile]
+    free = _free(ui)
+    rows = [["Profile", ui:tr(prof.title) .. ", " .. ui.m:count(eff) .. " " .. ui:tr("packages")],
+        ["Download", model.human(p.download ?? ui.m:download(eff))],
+        ["On disk", model.human(ui:need_of(p)) .. " / " .. model.human(free)],
+        ["Storage", ui:tr(model.STORAGE[ui.st.storage].title)],
+        ["Login", u.display .. " (" .. u.name .. ")"],
+        ["Password", ui:tr(u.password != "" and "set" or "none") .. ((v.pin ?? "") != "" and (", PIN") or "")],
+        ["Language", ui:tr(prefs.label_of(prefs.PAGES[1].fields[1], v.lang))],
+        ["Time zone", v.tz .. ", " .. v.time_format]]
+    if (v.label ?? "") != "":
+        rows[len(rows) + 1] = ["Computer", v.label]
+    if eff["cubeos.cde"]:
+        rows[len(rows) + 1] = ["Desktop", v.theme .. ", " .. v.wallpaper]
+    return rows
+
+# what the plan says on top of the sizes: missing packages, conflicts, warnings, packages with their own setup code
+export def plan_notes(p):
+    notes = []
+    for id in p.missing ?? []:
+        notes[len(notes) + 1] = ["e", "Missing in the catalog: " .. tostring(id)]
+    for x in p.conflicts ?? []:
+        notes[len(notes) + 1] = ["e", "Conflict: " .. tostring(type(x) == "table" and (x.text ?? x.id) or x)]
+    for x in p.warnings ?? []:
+        notes[len(notes) + 1] = ["4", tostring(type(x) == "table" and (x.text ?? x.id) or x)]
+    if p.runs_setup != nil and len(p.runs_setup) > 0:
+        notes[len(notes) + 1] = ["8", len(p.runs_setup) .. " packages run their own setup code"]
+    if p.ok == false and p.error != nil:
+        notes[len(notes) + 1] = ["e", "Cannot plan: " .. p.error]
+    return notes
 
 # ================================================================ progress
 
@@ -321,23 +341,21 @@ def system_account(ui, u):
     L = dofile(fsys.combine(root, "cubeos/sys/boot/pkgload.lua")).new(idx)
     conf = _read(fsys, fsys.combine(root, "cubeos/sys/cfg/boot.conf")) ?? ""
     rounds = tonumber(string.match(conf, "rounds[\"']?%s*:%s*(%d+)") ?? "") ?? 1000
-    create_account(L.import("cfs"), L.import("boot.auth"), root, u, rounds)
+    return create_account(L.import("cfs"), L.import("boot.auth"), root, u, rounds)
 
-def _settings(ui):
+# every setting of setup.prefs into the installed system; problems are shown on the last screen
+def _settings(ui, auth):
     fsys = ui.fs
-    root = ui.root
     u = ui.st.user
-    av = _avatars(ui)[u.avatar] ?? "letter"
-    _write(fsys, fsys.combine(root, "cubeos/users/" .. u.name .. "/cfg/cde.conf"), "{\n  avatar: \"" .. av .. "\",\n}\n")
-    lang = model.LANGS[ui.st.lang]
-    if lang.id != "en":
-        path = fsys.combine(root, "cubeos/sys/cfg/locale.conf")
-        text = _read(fsys, path)
-        if text != nil and string.find(text, "lang%s*:") != nil:
-            text = string.gsub(text, "(lang%s*:%s*)[\"'][%w_%-]*[\"']", "%1\"" .. lang.id .. "\"", 1)
-        else:
-            text = "{\n  lang: \"" .. lang.id .. "\",\n}\n"
-        _write(fsys, path, text)
+    user = {name: u.name, avatar: _avatars(ui)[u.avatar] ?? "letter"}
+    let me = ui
+    def sources(v):
+        s = me.s
+        for src in s:sources():
+            if src.kind == "pinestore":
+                s:source_remove(src.name)
+    set_label = ui.env.set_label ?? ((name) => os.setComputerLabel(name))
+    ui.prefs_problems = prefs.apply(fsys, ui.root, ui.st.prefs, user, {auth: auth, set_label: set_label, sources: sources})
 
 # runs the installation; returns "reboot", "back" (to the summary) or "quit"
 export def install(ui):
@@ -373,12 +391,19 @@ export def install(ui):
     u = ui.st.user
     ok = true
     err = nil
+    auth = nil
     if ui.env.make_account != nil:
-        ok, err = pcall(ui.env.make_account, u, ui)
+        ok, auth = pcall(ui.env.make_account, u, ui)
+        if not ok:
+            err = auth
+            auth = nil
     else:
-        ok, err = pcall(system_account, ui, u)
+        ok, auth = pcall(system_account, ui, u)
+        if not ok:
+            err = auth
+            auth = nil
     ui.account_error = not ok and tostring(err) or nil
-    ok2, err2 = pcall(_settings, ui)
+    ok2, err2 = pcall(_settings, ui, auth)
     if not ok2 and ui.account_error == nil:
         ui.account_error = tostring(err2)
     progress(ui, "account", nil, 1, 1)
@@ -394,7 +419,7 @@ export def install(ui):
 
 # ================================================================ done
 
-const COUNTDOWN = 10
+export const COUNTDOWN = 10
 
 def done_enter(ui):
     ui.done_at = ui:clock()
@@ -445,3 +470,11 @@ export const SCREENS = {
     progress: {draw: progress_draw, no_footer: true},
     done: {enter: done_enter, draw: done_draw, key: done_key, tick: done_tick, next: done_next, no_back: true},
 }
+
+# for the pixel look (setup.gui)
+def _set_avatar(ui, i):
+    ui.st.user.avatar = i
+    ui.ufocus = 5
+
+export const helpers = {avatars: _avatars, field_click: _field_click, set_avatar: _set_avatar,
+    problems_of: (ui) => ui.prefs_problems ?? []}

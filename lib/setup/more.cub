@@ -1,0 +1,189 @@
+# setup.more: the installer screens added after the first version: the installer language (first screen) and the settings
+# pages of setup.prefs (region, computer, desktop, extras). Keys and checks are shared by both looks; this module draws the
+# text look, setup.gui draws the pixel look of the same state.
+#
+# State: ui.st.lang (index in model.LANGS), ui.st.prefs (values of setup.prefs), ui.st.prefs_touched (the user changed the system
+# language by hand), ui.pfocus[page id] (focused field).
+
+import setup.widgets as w
+import setup.model as model
+import setup.prefs as prefs
+
+def _is_enter(k):
+    return k == keys.enter or k == keys.numPadEnter
+
+# ================================================================ language
+
+def lang_key(ui, k):
+    n = len(model.LANGS)
+    if k == keys.up or k == keys.left:
+        ui.st.lang = math.max(1, ui.st.lang - 1)
+    elif k == keys.down or k == keys.right:
+        ui.st.lang = math.min(n, ui.st.lang + 1)
+    elif _is_enter(k) or k == keys.space:
+        ui:go_next()
+
+export def pick_lang(ui, i):
+    if ui.st.lang == i:
+        ui:go_next()
+    ui.st.lang = i
+
+def lang_next(ui):
+    # the system speaks the installer's language unless it was changed on the region page
+    if not ui.st.prefs_touched:
+        id = model.LANGS[ui.st.lang].id
+        d = prefs.defaults(id, ui.hw)
+        for k in ["lang", "keyboard", "date_format"]:
+            ui.st.prefs[k] = d[k]
+    ui.plans = {}
+    ui.result = "next"
+
+def lang_draw(ui):
+    c = ui.c
+    ui:step_header(ui:tr("Language"))
+    # the CC terminal font has no Cyrillic: the text look names the languages in Latin letters and stays English
+    c:text(3, 4, "Choose the language", "0")
+    c:text(3, 5, "of the system and the desktop", "8")
+    y = 7
+    for i in range[1, len(model.LANGS)]:
+        l = model.LANGS[i]
+        sel = ui.st.lang == i
+        bg = sel and "c" or "f"
+        c:fill(1, y, c.w, 2, bg)
+        if sel:
+            c:fill(1, y, 1, 2, "3")
+        c:text(4, y, l.title, sel and "3" or "0", bg)
+        c:text(4, y + 1, l.latin ?? l.title, "8", bg)
+        let idx = i
+        ui:hot(1, y, c.w, y + 1, (x, yy) => pick_lang(ui, idx))
+        y += 3
+    w.footer(ui, ui:tr("Up/Down choose  Enter next"), nil, (x, yy) => ui:go_next(), ui:tr("Next"))
+
+# ================================================================ settings pages
+
+export def page_ctx(ui):
+    eff = ui:effective()
+    return {desktop: eff["cubeos.cde"] == true or eff["cubeos.cde-session"] == true}
+
+export def fields_of(ui, page):
+    ctx = page_ctx(ui)
+    out = []
+    for f in page.fields:
+        if prefs.field_visible(f, ctx):
+            out[len(out) + 1] = f
+    return out
+
+export def focus_of(ui, page):
+    ui.pfocus = ui.pfocus ?? {}
+    n = len(fields_of(ui, page))
+    cur = math.max(1, math.min(n, ui.pfocus[page.id] ?? 1))
+    ui.pfocus[page.id] = cur
+    return cur
+
+export def change(ui, f, d):
+    v = ui.st.prefs
+    v[f.id] = prefs.step(f, v[f.id], d)
+    if f.id == "lang":
+        ui.st.prefs_touched = true
+    ui.msg = nil
+
+export def click_field(ui, page, i, d=1):
+    fs_ = fields_of(ui, page)
+    f = fs_[i]
+    if f == nil:
+        return
+    if ui.pfocus[page.id] == i and f.type != "text" and f.type != "secret":
+        change(ui, f, d)
+    ui.pfocus[page.id] = i
+
+def make_page(page):
+    def skip(ui):
+        return not prefs.visible(page, page_ctx(ui))
+    def enter(ui):
+        focus_of(ui, page)
+    def key(ui, k):
+        fl = fields_of(ui, page)
+        i = focus_of(ui, page)
+        f = fl[i]
+        typing = f != nil and (f.type == "text" or f.type == "secret")
+        if k == keys.up:
+            ui.pfocus[page.id] = math.max(1, i - 1)
+        elif k == keys.down:
+            ui.pfocus[page.id] = math.min(len(fl), i + 1)
+        elif (k == keys.left or k == keys.right) and f != nil and not typing:
+            change(ui, f, k == keys.left and -1 or 1)
+        elif k == keys.space and f != nil and not typing:
+            change(ui, f, 1)
+        elif k == keys.backspace:
+            if typing:
+                ui.st.prefs[f.id] = string.sub(ui.st.prefs[f.id] ?? "", 1, -2)
+            else:
+                ui:go_back()
+        elif _is_enter(k):
+            if i < len(fl):
+                ui.pfocus[page.id] = i + 1
+            else:
+                ui:go_next()
+    def char(ui, ch):
+        f = fields_of(ui, page)[focus_of(ui, page)]
+        if f == nil or (f.type != "text" and f.type != "secret"):
+            return
+        if f.digits and string.match(ch, "%d") == nil:
+            return
+        cur = ui.st.prefs[f.id] ?? ""
+        if len(cur) < (f.max_len ?? 32):
+            ui.st.prefs[f.id] = cur .. ch
+    def next_(ui):
+        if page.id == "computer":
+            problem = prefs.pin_problem(ui.st.prefs.pin)
+            if problem != nil:
+                ui:say(ui:tr(problem), "e")
+                return
+        ui.result = "next"
+    def draw(ui):
+        c = ui.c
+        ui:step_header(ui:tr(page.title))
+        w.title(c, 3, ui:tr(page.title), ui:tr("defaults are fine"))
+        fl = fields_of(ui, page)
+        cur = focus_of(ui, page)
+        top = 5
+        view = c.h - 3 - top
+        first = math.max(0, math.min(len(fl) - view, cur - math.floor(view / 2)))
+        vx = math.max(22, math.floor(c.w / 2))
+        for k in range[1, view]:
+            i = first + k
+            f = fl[i]
+            if f == nil:
+                break
+            y = top + k - 1
+            sel = i == cur and ui.ffocus == nil
+            bg = sel and "c" or "f"
+            c:fill(1, y, c.w, 1, bg)
+            if sel:
+                c:fill(1, y, 1, 1, "3")
+            c:text(3, y, w.fit(ui:tr(f.label), vx - 4), "0", bg)
+            value = ui.st.prefs[f.id]
+            if f.type == "toggle":
+                w.check(c, vx, y, value and "on" or "off", bg)
+            elif f.type == "text" or f.type == "secret":
+                shown = f.type == "secret" and string.rep("*", len(value ?? "")) or (value ?? "")
+                fw = c.w - vx - 1
+                c:fill(vx, y, fw, 1, sel and "6" or "7")
+                c:text(vx, y, w.fit(shown .. ((sel and ui.phase % 6 < 3) and "_" or ""), fw), "0", sel and "6" or "7")
+            else:
+                c:text(vx, y, w.LEFT .. " " .. w.fit(ui:tr(prefs.label_of(f, value)), c.w - vx - 5) .. " " .. w.RIGHT, sel and "3" or "0", bg)
+            let index = i
+            ui:hot(1, y, c.w, y, (x, yy) => click_field(ui, page, index))
+        f = fl[cur]
+        if ui.msg != nil:
+            ui:status()
+        elif f != nil and f.help != nil:
+            c:text(3, c.h - 1, w.fit(ui:tr(f.help), c.w - 4), "8")
+        w.footer(ui, ui:tr("Left/Right change  Enter next"), (x, yy) => ui:go_back(), (x, yy) => ui:go_next(), ui:tr("Next"))
+    return {skip: skip, enter: enter, key: key, char: char, next: next_, draw: draw, page: page}
+
+export def screens():
+    out = {language: {draw: lang_draw, key: lang_key, next: lang_next, no_back: true, back: (ui) => ui:confirm_quit()}}
+    for page in prefs.PAGES:
+        out["prefs:" .. page.id] = make_page(page)
+    return out

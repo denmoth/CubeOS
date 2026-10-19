@@ -1,0 +1,190 @@
+# setup.prefs: everything the installer lets you set up besides packages and the account, and how it is written into the
+# installed system. One description serves both installer screens (pixel and text) and the summary.
+#
+#   prefs.PAGES                         [{id, title, icon, when, fields: [field]}]
+#   field = {id, label, help, type: "choice" | "toggle" | "text" | "secret" | "range", choices: [[value, label]], min, max, step, max_len}
+#   prefs.defaults(lang_id, hw)         {field id: value}
+#   prefs.visible(page, ctx)            ctx = {desktop: bool}: does the page apply to the chosen packages
+#   prefs.label_of(field, value)        the text shown for a value
+#   prefs.apply(fsys, root, v, user, opts)   writes the configs; opts = {auth, set_label, sources: fn(list)}; returns [problems]
+
+import json5
+
+export const TIME_ZONES = [
+    ["UTC", "UTC"], ["Europe/Kyiv", "Kyiv"], ["Europe/Warsaw", "Warsaw"], ["Europe/Berlin", "Berlin"], ["Europe/Paris", "Paris"],
+    ["Europe/London", "London"], ["Europe/Madrid", "Madrid"], ["Europe/Rome", "Rome"], ["Europe/Prague", "Prague"],
+    ["Europe/Helsinki", "Helsinki"], ["Europe/Istanbul", "Istanbul"], ["Europe/Minsk", "Minsk"], ["Europe/Moscow", "Moscow"],
+    ["Europe/Samara", "Samara"], ["Asia/Yekaterinburg", "Yekaterinburg"], ["Asia/Novosibirsk", "Novosibirsk"],
+    ["Asia/Vladivostok", "Vladivostok"], ["Asia/Tbilisi", "Tbilisi"], ["Asia/Yerevan", "Yerevan"], ["Asia/Baku", "Baku"],
+    ["Asia/Almaty", "Almaty"], ["Asia/Tashkent", "Tashkent"], ["Asia/Dubai", "Dubai"], ["Asia/Kolkata", "India"],
+    ["Asia/Shanghai", "China"], ["Asia/Tokyo", "Tokyo"], ["Asia/Seoul", "Seoul"], ["Australia/Sydney", "Sydney"],
+    ["Pacific/Auckland", "Auckland"], ["America/New_York", "New York"], ["America/Chicago", "Chicago"],
+    ["America/Denver", "Denver"], ["America/Los_Angeles", "Los Angeles"], ["America/Sao_Paulo", "Sao Paulo"],
+]
+
+export const LANG_CHOICES = [["en", "English"], ["ru", "Russian"], ["uk", "Ukrainian"]]
+
+export const PAGES = [
+    {id: "region", title: "Language and region", icon: "clock", fields: [
+        {id: "lang", label: "System language", help: "Menus, help and messages of the installed system.", type: "choice",
+            choices: LANG_CHOICES},
+        {id: "keyboard", label: "Second keyboard layout", help: "English is always there; this is the other one.", type: "choice",
+            choices: [["ru", "Russian"], ["uk", "Ukrainian"]]},
+        {id: "keyboard_mode", label: "Switching layouts", type: "choice",
+            choices: [["auto", "Follow Windows"], ["manual", "Inside CubeOS"]]},
+        {id: "tz", label: "Time zone", type: "choice", choices: TIME_ZONES},
+        {id: "time_source", label: "Clock", help: "Real time, or the time of day in the Minecraft world.", type: "choice",
+            choices: [["utc", "Real time"], ["ingame", "Minecraft time"]]},
+        {id: "time_format", label: "Time format", type: "choice", choices: [["24h", "24-hour  14:30"], ["12h", "12-hour  2:30 PM"]]},
+        {id: "seconds", label: "Show seconds", type: "toggle"},
+        {id: "date_format", label: "Date format", type: "choice",
+            choices: [["%Y-%m-%d", "2026-10-19"], ["%d.%m.%Y", "19.10.2026"], ["%d/%m/%Y", "19/10/2026"], ["%m/%d/%Y", "10/19/2026"]]},
+        {id: "week_start", label: "Week starts on", type: "choice", choices: [["monday", "Monday"], ["sunday", "Sunday"], ["saturday", "Saturday"]]},
+    ]},
+    {id: "computer", title: "Computer and sign-in", icon: "terminal", fields: [
+        {id: "label", label: "Computer name", help: "Shown on the network and in the game (the computer label).", type: "text", max_len: 24},
+        {id: "session", label: "After sign-in", type: "choice", choices: [["cde", "Desktop"], ["tui", "Full-screen terminal"]], desktop: true},
+        {id: "autologin", label: "Sign in automatically", help: "Skips the login screen. Anyone at the computer gets your account.", type: "toggle"},
+        {id: "pin", label: "PIN (optional)", help: "4 to 8 digits for a quick sign-in; the password still works.", type: "secret", max_len: 8, digits: true},
+        {id: "remember", label: "Ask the password again after", type: "choice",
+            choices: [[0, "Always ask"], [5, "5 minutes"], [30, "30 minutes"], [120, "2 hours"]]},
+        {id: "log_level", label: "System log", type: "choice", choices: [["warn", "Problems only"], ["info", "Normal"], ["debug", "Everything"]]},
+    ]},
+    {id: "desktop", title: "Desktop", icon: "image", desktop: true, fields: [
+        {id: "theme", label: "Theme", type: "choice", choices: [["tokyo-night", "Tokyo Night"], ["dark", "Dark"], ["nord", "Nord"], ["light", "Light"]]},
+        {id: "wallpaper", label: "Wallpaper", type: "choice",
+            choices: [["aurora", "Aurora"], ["night-city", "Night city"], ["sunset", "Sunset"], ["creeper", "Creeper"], ["sus", "Sus"], ["cube-live", "Living cube"]]},
+        {id: "scale", label: "Size of everything", type: "choice", choices: [["auto", "Automatic"], [1, "Small"], [2, "Large"], [3, "Huge"]]},
+        {id: "panel", label: "Taskbar", type: "choice", choices: [["bottom", "At the bottom"], ["top", "At the top"]]},
+        {id: "animations", label: "Animations", help: "Windows fly in, widgets glow. Turn off on slow servers.", type: "toggle"},
+    ]},
+    {id: "extras", title: "Sound, network, packages", icon: "volume", fields: [
+        {id: "volume", label: "Volume", type: "range", min: 0, max: 100, step: 10},
+        {id: "muted", label: "Start muted", type: "toggle"},
+        {id: "autoplay", label: "Play inserted discs", type: "toggle"},
+        {id: "wireless", label: "Share over wireless modems", help: "Shared folders and pairing also over a wireless modem.", type: "toggle"},
+        {id: "encrypt", label: "Network encryption", type: "choice", choices: [["on", "On"], ["require", "Required"], ["off", "Off"]]},
+        {id: "pinestore", label: "PineStore in the store", help: "Thousands of CraftOS programs as a second package source.", type: "toggle"},
+    ]},
+]
+
+export def defaults(lang_id="en", hw=nil):
+    label = hw != nil and hw.label or nil
+    return {
+        lang: lang_id, keyboard: lang_id == "uk" and "uk" or "ru", keyboard_mode: "auto", tz: "UTC", time_source: "utc",
+        time_format: "24h", seconds: false, date_format: lang_id == "en" and "%Y-%m-%d" or "%d.%m.%Y", week_start: "monday",
+        label: label ?? "", session: "cde", autologin: false, pin: "", remember: 5, log_level: "info",
+        theme: "tokyo-night", wallpaper: "aurora", scale: "auto", panel: "bottom", animations: true,
+        volume: 100, muted: false, autoplay: true, wireless: false, encrypt: "on", pinestore: true,
+    }
+
+export def visible(page, ctx):
+    return not page.desktop or ctx.desktop == true
+
+export def field_visible(f, ctx):
+    return not f.desktop or ctx.desktop == true
+
+export def label_of(f, value):
+    if f.type == "toggle":
+        return value and "On" or "Off"
+    if f.type == "secret":
+        return (value ?? "") == "" and "None" or string.rep("*", len(value))
+    if f.type == "range":
+        return tostring(value) .. "%"
+    if f.type == "text":
+        return (value ?? "") == "" and "(none)" or value
+    for ch in f.choices ?? []:
+        if ch[1] == value:
+            return ch[2]
+    return tostring(value)
+
+# next or previous value of a choice / range / toggle
+export def step(f, value, d):
+    if f.type == "toggle":
+        return not value
+    if f.type == "range":
+        return math.max(f.min, math.min(f.max, (value ?? f.min) + d * (f.step ?? 1)))
+    if f.type == "choice":
+        n = len(f.choices)
+        cur = 1
+        for i in range[1, n]:
+            if f.choices[i][1] == value:
+                cur = i
+        return f.choices[(cur - 1 + d) % n + 1][1]
+    return value
+
+export def pin_problem(pin):
+    if pin == nil or pin == "":
+        return nil
+    if string.match(pin, "^%d+$") == nil:
+        return "The PIN is digits only"
+    if len(pin) < 4 or len(pin) > 8:
+        return "The PIN is 4 to 8 digits"
+    return nil
+
+def _read(fsys, path):
+    h = fsys.open(path, "r")
+    if h == nil:
+        return nil
+    s = h.readAll()
+    h.close()
+    return s
+
+def _write(fsys, path, data):
+    fsys.makeDir(fsys.getDir(path))
+    h = fsys.open(path, "w")
+    if h == nil:
+        error("cannot write " .. path, 0)
+    h.write(data)
+    h.close()
+
+# поменять значения в файле настроек, сохранив комментарии; нет файла: новый
+def _patch(fsys, path, values):
+    text = _read(fsys, path)
+    if text == nil:
+        fresh = {}
+        for item in values:
+            fresh[item[1][1]] = item[2]
+        _write(fsys, path, json5.stringify(fresh, {json5: true, indent: 2}) .. "\n")
+        return
+    for item in values:
+        ok, res = pcall(json5.patch, text, item[1], item[2])
+        if ok:
+            text = res
+    _write(fsys, path, text)
+
+export def apply(fsys, root, v, user, opts=nil):
+    o = opts ?? {}
+    problems = []
+    def p(rel):
+        return fsys.combine(root, rel)
+    def attempt(what, fn):
+        ok, err = pcall(fn)
+        if not ok:
+            problems[len(problems) + 1] = what .. ": " .. tostring(err)
+    cfg = "cubeos/sys/cfg/"
+    attempt("language", () => _patch(fsys, p(cfg .. "locale.conf"), [[["lang"], v.lang], [["keyboard"], v.keyboard], [["keyboard_mode"], v.keyboard_mode]]))
+    attempt("time", () => _patch(fsys, p(cfg .. "time.conf"), [[["tz"], v.tz], [["source"], v.time_source], [["format"], v.time_format],
+        [["seconds"], v.seconds == true], [["date_format"], v.date_format], [["week_start"], v.week_start], [["locale"], v.lang]]))
+    attempt("sound", () => _patch(fsys, p(cfg .. "audio.conf"), [[["volume"], v.volume], [["muted"], v.muted == true], [["autoplay"], v.autoplay == true]]))
+    attempt("network", () => _patch(fsys, p(cfg .. "net.conf"), [[["name"], v.label ?? ""], [["wireless"], v.wireless == true], [["encrypt"], v.encrypt]]))
+    attempt("log", () => _patch(fsys, p(cfg .. "log.conf"), [[["level"], v.log_level]]))
+    boot = [[["lang"], v.lang], [["de"], v.session ?? "cde"]]
+    if v.autologin and user != nil:
+        boot[len(boot) + 1] = [["autologin"], user.name]
+    attempt("boot", () => _patch(fsys, p(cfg .. "boot.conf"), boot))
+    if user != nil:
+        desk = {theme: v.theme, wallpaper: v.wallpaper, scale: v.scale, panel: {position: v.panel}, animations: {enabled: v.animations == true}}
+        if user.avatar != nil:
+            desk.avatar = user.avatar
+        attempt("desktop", () => _write(fsys, p("cubeos/users/" .. user.name .. "/cfg/cde.conf"), json5.stringify(desk, {json5: true, indent: 2}) .. "\n"))
+        a = o.auth
+        if a != nil:
+            if (v.pin ?? "") != "":
+                attempt("PIN", () => a:set_pin(user.name, v.pin))
+            attempt("sign-in", () => a:set_field(user.name, "remember_minutes", v.remember ?? 0))
+    if o.set_label != nil and (v.label ?? "") != "":
+        attempt("computer name", () => o.set_label(v.label))
+    if o.sources != nil and v.pinestore == false:
+        attempt("package sources", () => o.sources(v))
+    return problems

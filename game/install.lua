@@ -1,13 +1,13 @@
 -- CubeOS installer bootstrap (docs/packages/08-setup-and-store.md), plain Lua for a bare CraftOS computer:
 --   wget run https://raw.githubusercontent.com/OWNER/cobble/main/install.lua
---   install.lua [catalog url] [--from <folder with index.json5 and .cpk>] [--root <dir>] [--keep] [--events <file>]
+--   install.lua [catalog url] [--from <folder with index.json5 and .cpk>] [--root <dir>] [--keep] [--events <file>] [--text]
 -- Downloads cubeos.setup and its dependencies, checks sha256, unpacks them with its own inflate into a temp folder and runs
 -- the installer screens (lib/setup), which install the system through stew.
 local BASE = "https://raw.githubusercontent.com/OWNER/cobble/main/"
 local START = "cubeos.setup"
 local MIN_CC = 1.100
 
-local args, from, root, keep, events = { ... }, nil, "/", false, nil
+local args, from, root, keep, events, text = { ... }, nil, "/", false, nil, false
 local i = 1
 while args[i] do
   local a = args[i]
@@ -15,6 +15,7 @@ while args[i] do
   elseif a == "--root" then root = args[i + 1]; i = i + 1
   elseif a == "--events" then events = args[i + 1]; i = i + 1
   elseif a == "--keep" then keep = true
+  elseif a == "--text" then text = true
   elseif a:match("^https?://") then BASE = a:sub(-1) == "/" and a or a .. "/"
   else error("unknown argument " .. a, 0) end
   i = i + 1
@@ -391,7 +392,7 @@ local function main()
   return import("setup").main({
     fs = fs, term = term, root = root, tmp = TMP, import = import, colour = color,
     source = from and { name = "local", kind = "path", url = from } or { name = "cobble", kind = "http", url = BASE .. "index.json5" },
-    events = events and dofile(events) or nil,
+    events = events and dofile(events) or nil, gui = not text,
     cleanup = function() if not keep and fs.exists(TMP) then fs.delete(TMP) end end,
     reboot = os.reboot,
   })

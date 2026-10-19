@@ -742,3 +742,8 @@ export const SCREENS = {
     storage: {draw: storage_draw, key: storage_key, next: storage_next},
     fit: {skip: fit_skip, enter: fit_enter, draw: fit_draw, key: fit_key, char: fit_char, next: fit_next},
 }
+
+# for the pixel look (setup.gui): the same actions, so both looks behave alike
+export const helpers = {toggle_license: _toggle_license, license: _license, profile_need: _profile_need, pick_profile: _pick_profile,
+    rows: _rows, state: _state, manual_click: _manual_click, opt_rows: _opt_rows, opt_click: _opt_click, pick_storage: _pick_storage,
+    fit_actions: _fit_actions, fit_pick: _fit_pick}

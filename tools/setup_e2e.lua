@@ -18,11 +18,15 @@ local K = function(k) return { "key", k } end
 local events = {}
 local function add(e) events[#events + 1] = e end
 local function typ(text) for i = 1, #text do add({ "char", text:sub(i, i) }) end end
-local function seen(s) say("screen " .. tostring(s.cur)) end
--- welcome: accept the license; profile: minimal; storage: auto; account: test / pw; summary: install; done: restart
+local T0 = os.epoch("utc")
+local function seen(s) say("screen " .. tostring(s.cur) .. " at " .. (os.epoch("utc") - T0) .. " ms") end
+-- language: English; welcome: accept the license; profile: minimal; storage: auto; settings pages (region, computer, extras;
+-- the desktop page is skipped for the minimal profile): defaults; account: test / pw; summary: install; done: restart
+add(seen) add(function(s) say("pixel look: " .. tostring(s.gui ~= nil)) end) add(K(keys.enter))
 add(seen) add(K(keys.down)) add(K(keys.space)) add(K(keys.enter))
 add(seen) add(K(keys.up)) add(K(keys.enter))
 add(seen) add(K(keys.enter))
+for _ = 1, 3 do add(seen) add(K(keys.tab)) add(K(keys.enter)) end
 add(seen) typ("Tester") add(K(keys.enter)) add(K(keys.enter)) typ("pw") add(K(keys.enter)) typ("pw") add(K(keys.enter)) add(K(keys.enter))
 add(seen) add(function(s) say("plan: " .. #(s.plan_now.steps or {}) .. " steps, " .. tostring(s.plan_now.installed_delta) .. " bytes") end)
 add(K(keys.enter))
@@ -37,7 +41,7 @@ ev.write("return _G.SETUP_E2E_EVENTS")
 ev.close()
 local oldprint = print
 print = function(...) local t = {} for i = 1, select("#", ...) do t[i] = tostring((select(i, ...))) end if #t > 0 and t[1] ~= "" then say("print: " .. table.concat(t, " ")) end end
-local ok, err = pcall(loadfile("/repo/game/install.lua", nil, _ENV), "--from", "/repo/build/packages", "--events", "/setup_events.lua")
+local ok, err = pcall(loadfile("/repo/game/install.lua", nil, _ENV), "--from", "/repo/build/packages", "--events", "/setup_events.lua", "--text")
 say("installer finished: ok=" .. tostring(ok) .. " " .. tostring(err or "") .. " rebooted=" .. tostring(rebooted) ..
   " in " .. (os.epoch("utc") - t0) .. " ms")
 say("temp folder left: " .. tostring(fs.exists("/.cubeos-setup")))
@@ -48,6 +52,9 @@ if u then u.close() end
 local sd = fs.open("/cubeos/sys/sec/sudoers.lock", "r")
 say("sudoers: " .. (sd and sd.readAll():gsub("%s+", " ") or "missing"))
 if sd then sd.close() end
+local tc = fs.open("/cubeos/sys/cfg/time.conf", "r")
+say("time.conf written: " .. tostring(tc ~= nil and tc.readAll():find("tz", 1, true) ~= nil))
+if tc then tc.close() end
 local ok2, rt = pcall(dofile, "/cubeos/sys/boot/runtime.lua")
 if ok2 then
   local ok3, a = pcall(function()
