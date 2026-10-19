@@ -10,9 +10,8 @@
   kind: "lib",
   lang: "cubic",
   category: "system",
-  priority: "essential",
+  priority: "recommended",
   depends: {
-    "cubeos.audiod": "^0.5",
     "cubeos.collections": "^0.5",
     "cubeos.crypto": "^0.5",
     "cubeos.cush": "^0.5",
@@ -22,11 +21,12 @@
     "cubeos.hal": "^0.5",
     "cubeos.json": "^0.5",
     "cubeos.std": "^0.5",
-    "cubeos.stew": "^0.5",
     "cubeos.term": "^0.5",
     "cubeos.text": "^0.5",
     "cubeos.version": "^0.5",
   },
-  files: ["lib/cush/tools.cub", "lib/cush/tools2.cub",
-    "lib/cush/stewcmd.cub"],
+  want: {
+    "cubeos.audiod": "^0.5",
+  },
+  files: ["lib/cush/tools.cub", "lib/cush/tools2.cub"],
 }

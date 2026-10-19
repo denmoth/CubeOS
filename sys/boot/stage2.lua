@@ -102,6 +102,26 @@ local function reset_screen()
   term.setCursorPos(1, 1)
 end
 
+-- экран загрузки без графики: заголовок и строка этапа (когда пакет cubeos.splash не установлен)
+function plain_splash(title)
+  local s = {}
+  local function line(y, text, colour)
+    local w = term.getSize()
+    term.setCursorPos(1, y)
+    term.clearLine()
+    term.setTextColor(colour or colors.white)
+    term.write(text:sub(1, w))
+  end
+  function s:open() term.clear(); line(1, title, colors.lightBlue) end
+  function s:progress(frac, label) line(3, string.format("%3d%%  %s", math.floor((frac or 0) * 100), tr and tr(label or "") or (label or ""))) end
+  function s:message(text) line(4, text or "", colors.lightGray) end
+  function s:tick() return false end
+  function s:done() end
+  function s:error(text) line(6, text or "", colors.red) end
+  function s:close() term.setTextColor(colors.white) end
+  return s
+end
+
 local function main()
   -- до экрана загрузки только чёрный экран (первый кадр системы это уже экран загрузки)
   reset_screen()
@@ -114,7 +134,10 @@ local function main()
   -- минимум для экрана, потом он показывается и дальше полоса ведёт загрузку
   rt.preload({ "version", "json5", "boot.splash" })
   local version = import("version")
-  splash = ctx.splash or import("boot.splash").new({ caps = ctx.caps, term = term, assets = rt.source .. "/assets", title = version.full(), tr = tr })
+  -- экран загрузки из пакета cubeos.splash; без него (минимальная система) простая строка состояния
+  local okspl, splash_mod = pcall(import, "boot.splash")
+  splash = ctx.splash or (okspl and splash_mod.new({ caps = ctx.caps, term = term, assets = rt.source .. "/assets", title = version.full(), tr = tr }))
+    or plain_splash(version.full())
   splash:open()
   local json5 = import("json5")
   -- установленная система: недоделанная транзакция stew (пропало питание посреди установки) откатывается до запуска служб

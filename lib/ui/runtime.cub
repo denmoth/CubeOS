@@ -9,12 +9,16 @@
 #
 # Среда не знает, обычный это терминал или пиксели: ей нужен вывод (out) с методами size, present, to_cell, open, close, set_theme.
 
-import cgl.anim as anim
 import unicode
 import ui.cells as cells_mod
 import ui.theme as th
 import ui.keymap as keymap_mod
 import ui.widget as widget
+
+# анимации (пакет cubeos.cgl-anim) грузятся при первой анимации: текстовой системе без них они не нужны
+def _anim():
+    import cgl.anim as m
+    return m
 
 export class Ui:
     # opts: theme, keys ("arrows", "wasd", "vim") или keymap, animations (true), speed (множитель времени анимаций, 1)
@@ -29,7 +33,7 @@ export class Ui:
         self.overlays = []
         self.toasts = []
         self.focus = nil
-        self.animator = anim.Animator()
+        self.animator = nil
         self.timers = []
         self.time = 0
         self.layout_dirty = true
@@ -451,18 +455,23 @@ export class Ui:
                 on_done()
             return nil
         let me = self
-        tw = anim.tween({from: target[field] ?? 0, to: to, time: seconds / self.speed, ease: ease_name,
+        tw = _anim().tween({from: target[field] ?? 0, to: to, time: seconds / self.speed, ease: ease_name,
             on_update: (v) => me:_set_field(target, field, v), on_done: on_done})
-        self.animator:add(tw)
+        self:anims():add(tw)
         return tw
 
     def _set_field(self, target, field, v):
         target[field] = v
         self:invalidate()
 
+    def anims(self):
+        if self.animator == nil:
+            self.animator = _anim().Animator()
+        return self.animator
+
     # добавляет готовую анимацию из cgl.anim (твин, последовательность...)
     def play(self, a):
-        self.animator:add(a)
+        self:anims():add(a)
         return a
 
     # вызвать fn через seconds секунд; возвращает таймер (timer:cancel())
@@ -487,7 +496,7 @@ export class Ui:
 
     # нужен ли дальше тик (есть анимации, таймеры, мигающий курсор, эффекты темы)
     def needs_ticks(self):
-        if self.animator:busy() or len(self.timers) > 0:
+        if (self.animator != nil and self.animator:busy()) or len(self.timers) > 0:
             return true
         if self.focus != nil and self.focus.captures_text:
             return true
@@ -510,7 +519,8 @@ export class Ui:
             if tm.active:
                 keep[len(keep) + 1] = tm
         self.timers = keep
-        self.animator:update(dt * self.speed)
+        if self.animator != nil:
+            self.animator:update(dt * self.speed)
         if self.focus != nil and self.focus.captures_text:
             self.blink_time += dt
             if self.blink_time >= 0.5:

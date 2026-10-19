@@ -18,12 +18,8 @@ import cush.lex as lex
 import cush.hist as hist_mod
 import cush.editor as editor_mod
 import cush.builtins as builtins
-import cush.fetch as fetch
 import cush.help as help_mod
-import cush.tools as tools_mod
-import cush.tools2 as tools2_mod
-import cush.stewcmd as stewcmd_mod
-import cush.nettools as nettools_mod
+import cush.commands as commands_mod
 import i18n
 import clock
 import json5
@@ -40,6 +36,39 @@ const ROM_DIRS = ["rom/programs", "rom/programs/advanced", "rom/programs/rednet"
 
 const DEFAULT_ALIASES = {dir: "ls", ll: "ls -l", la: "ls -a", cls: "clear", clr: "clear", copy: "cp", move: "mv", delete: "rm",
     rename: "mv", ff: "fetch", neofetch: "fetch", fastfetch: "fetch", man: "help", rs: "redstone", pr: "print"}
+
+
+# Наборы команд из необязательных пакетов (cubeos.cush-tools, cush-net): модуль регистрирует свои команды при загрузке.
+# Нет пакета: команд нет, а help подсказывает, какой пакет поставить (минимальная система без них меньше).
+def _imp_tools():
+    import cush.tools as m
+    return m
+def _imp_tools2():
+    import cush.tools2 as m
+    return m
+def _imp_stew():
+    import cush.stewcmd as m
+    return m
+def _imp_net():
+    import cush.nettools as m
+    return m
+def _imp_fetch():
+    import cush.fetch as m
+    return m
+optional_loaded = {done: false}
+export def load_optional_commands():
+    if optional_loaded.done:
+        return
+    optional_loaded.done = true
+    for f in [_imp_tools, _imp_tools2, _imp_stew, _imp_net]:
+        pcall(f)
+
+def _fetch_run(sh):
+    ok, m = pcall(_imp_fetch)
+    if not ok:
+        sh:eprint("fetch: comes with the package cubeos.cush-net (stew install cubeos.cush-net)")
+        return 1
+    return m.run(sh)
 
 def letter_color(letter):
     return 2 ** (string.find("0123456789abcdef", letter, 1, true) - 1)
@@ -88,6 +117,7 @@ def make_api(sh, program):
 
 export class Shell:
     def init(self, env, opts=nil):
+        load_optional_commands()
         o = opts ?? {}
         self.env = env
         self.opts = o
@@ -134,7 +164,7 @@ export class Shell:
         self.mods = {ctrl: false, shift: false, alt: false}
         self.console = env.term.current()
         self.extra = {}
-        self.extra.fetch = (sh, args) => fetch.run(sh)
+        self.extra.fetch = (sh, args) => _fetch_run(sh)
         self.programs_cache = nil
         self.config = {}
         if o.config_path != nil:
@@ -668,6 +698,10 @@ export class Shell:
             return tonumber(res) ?? 0
         path = self:resolve_program(name)
         if path == nil:
+            if commands_mod.COMMANDS[name] != nil:
+                # встроенная команда из пакета, которого нет (минимальная система)
+                self:eprint("cush: " .. name .. ": " .. self:t("this command comes with a package that is not installed") .. " (stew search " .. name .. ")")
+                return 127
             self:eprint("cush: " .. name .. ": " .. self:t("command not found"))
             return 127
         return self:run_program(path, args)

@@ -10,11 +10,11 @@
   kind: "lib",
   lang: "cubic",
   category: "system",
-  priority: "essential",
+  priority: "recommended",
   depends: {
     "cubeos.term": "^0.5",
     "cubeos.term-chars": "^0.5",
     "cubeos.text": "^0.5",
   },
-  files: ["lib/cush/editor.cub", "lib/cush/textedit.cub"],
+  files: ["lib/cush/textedit.cub"],
 }

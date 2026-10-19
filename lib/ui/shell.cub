@@ -13,7 +13,6 @@
 # Клавиши оболочки: Alt+вправо / Alt+влево листают программы, Alt+1..9 переход по номеру, Alt+W закрыть программу,
 # F9 или Alt+Space список программ.
 
-import cgl.anim as anim
 import ui.runtime as runtime
 import ui.theme as th
 import ui.text as txt

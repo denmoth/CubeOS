@@ -12,11 +12,13 @@
   category: "system",
   priority: "essential",
   depends: {
-    "cubeos.cgl": "^0.5",
-    "cubeos.cgl-anim": "^0.5",
     "cubeos.font": "^0.5",
     "cubeos.term-chars": "^0.5",
     "cubeos.text": "^0.5",
+  },
+  want: {
+    "cubeos.cgl": "^0.5",
+    "cubeos.cgl-anim": "^0.5",
   },
   files: [
     "lib/ui/border.cub",

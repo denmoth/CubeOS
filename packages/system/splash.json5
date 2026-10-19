@@ -10,7 +10,7 @@
   kind: "lib",
   lang: "cubic",
   category: "system",
-  priority: "essential",
+  priority: "recommended",
   depends: {
     "cubeos.cgl": "^0.5",
     "cubeos.font": "^0.5",

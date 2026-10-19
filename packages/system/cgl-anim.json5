@@ -10,7 +10,7 @@
   kind: "lib",
   lang: "cubic",
   category: "system",
-  priority: "essential",
+  priority: "recommended",
   depends: {
     "cubeos.text": "^0.5",
   },

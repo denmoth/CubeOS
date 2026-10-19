@@ -25,7 +25,6 @@ import ui.runtime as runtime_mod
 import ui.shell as shell_mod
 import ui.out_text as out_text_mod
 import ui.out_pixel as out_pixel_mod
-import cgl as cgl_lib
 import font as font_lib
 
 export const theme = theme_mod
@@ -71,6 +70,7 @@ export def open_out(opts=nil):
         backend = (t.setGraphicsMode != nil and t.drawPixels != nil) and "pixel" or "text"
     if backend == "pixel":
         font = o.font ?? font_lib.default(o.assets ?? "/repo/assets")
+        import cgl as cgl_lib
         screen = cgl_lib.open({term: t, backend: "graphics", mirror: o.mirror})
         return out_pixel_mod.new(screen, font, th)
     return out_text_mod.new(t, th)

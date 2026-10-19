@@ -7,6 +7,7 @@
 
 Что делает:
   1. читает lib/**/*.cub (и .lua) и строки `import a.b` / `import a.b as c`; модуль a.b это lib/a/b.cub или lib/a/b/init.cub;
+     import внутри функции (с отступом) грузится только при вызове: мягкая связь, для неё хватает want;
   2. добавляет динамическую загрузку: sys/services/*.conf (module: "svc.x") и import("...") / rt.import("...") в sys/boot/*.lua;
   3. считает сильно связные компоненты (циклы) на уровне модулей;
   4. читает packages/system/*.json5, проверяет, что каждый файл в ровно одном пакете, строит граф пакетов,
@@ -56,13 +57,20 @@ def read(path):
         return f.read()
 
 
+LAZY = []  # [(файл, модуль, "import")]: import внутри функции грузится только при вызове, это мягкая связь (хватает want)
+
+
 def static_imports(mods):
     deps = {}
     for m, p in mods.items():
         found = []
         for line in read(p).split("\n"):
             r = IMPORT_RE.match(line)
-            if r and r.group(1) not in found:
+            if not r:
+                continue
+            if line[:1] in (" ", "\t"):
+                LAZY.append((norm(p), r.group(1), "import"))
+            elif r.group(1) not in found:
                 found.append(r.group(1))
         deps[m] = found
     return deps
@@ -283,7 +291,7 @@ def main():
     want_table = "--table" in sys.argv
     mods = find_modules()
     imports = static_imports(mods)
-    dyn = dynamic_refs(mods)
+    dyn = dynamic_refs(mods) + LAZY
     files = universe()
     pkgs = load_packages()
     lines, errors, warnings = [], [], []

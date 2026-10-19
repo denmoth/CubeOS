@@ -6,6 +6,7 @@ import cush.shell as cush
 import cush.builtins as builtins
 import cush.commands as reg
 import i18n
+cush.load_optional_commands()
 eq = t.eq
 
 # Справка из реестра команд (D228): у каждой встроенной команды есть описание и у каждого флага пояснение; переводы полные;

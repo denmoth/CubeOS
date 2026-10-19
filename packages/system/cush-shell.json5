@@ -14,16 +14,19 @@
   depends: {
     "cubeos.compat": "^0.5",
     "cubeos.cush": "^0.5",
-    "cubeos.cush-edit": "^0.5",
-    "cubeos.cush-net": "^0.5",
-    "cubeos.cush-tools": "^0.5",
     "cubeos.i18n": "^0.5",
     "cubeos.json": "^0.5",
+    "cubeos.stew": "^0.5",
     "cubeos.term": "^0.5",
     "cubeos.term-chars": "^0.5",
     "cubeos.text": "^0.5",
     "cubeos.time": "^0.5",
     "cubeos.version": "^0.5",
   },
-  files: ["lib/cush/shell.cub"],
+  want: {
+    "cubeos.cush-edit": "^0.5",
+    "cubeos.cush-net": "^0.5",
+    "cubeos.cush-tools": "^0.5",
+  },
+  files: ["lib/cush/shell.cub", "lib/cush/editor.cub", "lib/cush/stewcmd.cub"],
 }

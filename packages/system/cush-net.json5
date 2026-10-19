@@ -10,7 +10,7 @@
   kind: "lib",
   lang: "cubic",
   category: "network",
-  priority: "essential",
+  priority: "recommended",
   depends: {
     "cubeos.cush": "^0.5",
     "cubeos.hal": "^0.5",

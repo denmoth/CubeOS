@@ -10,7 +10,7 @@
   kind: "service",
   lang: "cubic",
   category: "media",
-  priority: "essential",
+  priority: "recommended",
   depends: {
     "cubeos.json": "^0.5",
     "cubeos.rpc": "^0.5",

@@ -10,6 +10,6 @@
   kind: "lib",
   lang: "cubic",
   category: "system",
-  priority: "essential",
+  priority: "recommended",
   files: ["lib/logo.cub"],
 }

@@ -6,7 +6,6 @@ import sha256
 import base64
 import json5
 import box
-import svc.audiod as audiod_mod
 
 flags_of = builtins.flags_of
 read_lines = builtins.read_lines
@@ -437,6 +436,10 @@ def sounds_starting(sh, word, limit):
     return out
 
 const PLAY_SUBS = ["burn", "disc", "note", "sound", "sounds", "status", "stop"]
+def _imp_audiod():
+    import svc.audiod as m
+    return m
+
 def complete_play(sh, cargs, word):
     if len(cargs) == 0:
         out = []
@@ -448,7 +451,8 @@ def complete_play(sh, cargs, word):
         return sounds_starting(sh, word, 100)
     if len(cargs) == 1 and cargs[1] == "note":
         out = []
-        for s in audiod_mod.INSTRUMENTS:
+        ok, audiod_mod = pcall(_imp_audiod)
+        for s in ok and audiod_mod.INSTRUMENTS or []:
             if string.sub(s, 1, len(word)) == word:
                 out[len(out) + 1] = s
         return out
