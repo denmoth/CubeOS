@@ -1,0 +1,22 @@
+// System package cubeos.setup: the CubeOS installer screens (docs/packages/08-setup-and-store.md). game/install.lua downloads it
+// with its dependencies onto a bare CraftOS computer and runs setup.main. Keep its dependencies small: everything here is
+// downloaded before the first screen.
+{
+  format: 1,
+  id: "cubeos.setup",
+  name: "CubeOS setup",
+  version: "0.5.0",
+  description: "Installs CubeOS on a clean CraftOS computer: profiles, packages, storage, the first account.",
+  author: "CubeOS",
+  license: "MIT",
+  kind: "tool",
+  lang: "cubic",
+  category: "system",
+  priority: "optional",
+  depends: {
+    "cubeos.cubic-rt": "^0.5",
+    "cubeos.logo": "^0.5",
+    "cubeos.stew": "^0.5",
+  },
+  files: ["lib/setup/**"],
+}

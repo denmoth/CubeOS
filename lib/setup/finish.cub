@@ -1,0 +1,447 @@
+# setup.finish: the last screens of the installer (user, summary, progress, done), the installation itself through
+# s:apply and the first account, created by the installed system's own boot.auth (as the text greeter's first run does).
+
+import setup.widgets as w
+import setup.model as model
+
+export const AVATARS = ["letter", "cube", "cat", "fox", "creeper", "robot", "ghost", "astronaut"]
+const AVATAR_COL = {letter: "a", cube: "9", cat: "1", fox: "1", creeper: "5", robot: "8", ghost: "0", astronaut: "3"}
+
+# progress stages of s:apply: label and the share of the bar they cover
+export const STAGES = {download: ["Downloading", 0, 0.45], verify: ["Checking", 0.45, 0.55], ask: ["Questions", 0.55, 0.6],
+    place: ["Placing files", 0.6, 0.88], setup: ["Running package setup", 0.88, 0.94], commit: ["Finishing", 0.94, 0.97],
+    rollback: ["Rolling back", 0, 0], account: ["Creating your account", 0.97, 1]}
+const MARK = {download: "9", verify: "3", ask: "3", place: "5", setup: "5", commit: "5", rollback: "e"}
+
+def _is_enter(k):
+    return k == keys.enter or k == keys.numPadEnter
+
+def _free(ui):
+    return ui.hw.free
+
+# ================================================================ user
+
+def _avatars(ui):
+    eff = ui:effective()
+    if eff["cubeos.avatars"]:
+        return AVATARS
+    return ["letter"]
+
+def user_enter(ui):
+    ui.ufocus = ui.ufocus ?? 1
+    av = _avatars(ui)
+    if ui.st.user.avatar > len(av):
+        ui.st.user.avatar = 1
+
+const FIELDS = [["Your name", "display", false, "shown on the screen, any letters"],
+    ["Account", "name", false, "for sign-in, folders and sudo"], ["Password", "password", true, "empty: no password"],
+    ["Repeat", "repeat", true, nil], ["Avatar", nil, false, nil]]
+
+def _field_click(ui, i):
+    ui.ufocus = i
+
+def user_draw(ui):
+    c = ui.c
+    u = ui.st.user
+    ui:step_header("Account")
+    w.title(c, 3, "Create your account", "administrator")
+    roomy = c.h >= 19
+    preview = c.w >= 51
+    fx = 16
+    fw = math.min(22, c.w - fx - (preview and 13 or 1))
+    y = 5
+    for i in range[1, len(FIELDS)]:
+        f = FIELDS[i]
+        sel = ui.ufocus == i and ui.ffocus == nil
+        c:text(3, y, f[1], sel and "3" or "8")
+        if f[2] != nil:
+            v = u[f[2]]
+            shown = f[3] and string.rep("*", len(v)) or v
+            if sel and ui.phase % 6 < 3:
+                shown = shown .. "_"
+            if len(shown) > fw:
+                shown = string.sub(shown, len(shown) - fw + 1)
+            c:fill(fx, y, fw, 1, sel and "6" or "c")
+            c:text(fx, y, shown, "0")
+            if f[2] == "name" and not u.name_edited and u.name != "":
+                c:text(fx + fw - 4, y, "auto", "8")
+        else:
+            av = _avatars(ui)
+            name = av[u.avatar] ?? "letter"
+            c:fill(fx, y, fw, 1, sel and "6" or "c")
+            c:text(fx, y, w.LEFT, sel and "3" or "8")
+            c:text(fx + math.floor((fw - len(name)) / 2), y, name, "0")
+            c:text(fx + fw - 1, y, w.RIGHT, sel and "3" or "8")
+            ui:hot(fx, y, fx + math.floor(fw / 2) - 1, y, (x, yy) => _avatar_step(ui, -1))
+            ui:hot(fx + math.floor(fw / 2), y, fx + fw - 1, y, (x, yy) => _avatar_step(ui, 1))
+        let index = i
+        ui:hot(1, y, fx - 1, y, (x, yy) => _field_click(ui, index))
+        if f[2] != nil:
+            ui:hot(fx, y, fx + fw - 1, y, (x, yy) => _field_click(ui, index))
+        if roomy and f[4] != nil:
+            c:text(fx, y + 1, w.fit(f[4], c.w - fx - (preview and 13 or 1)), "6")
+        y += roomy and 2 or 1
+    if preview:
+        _avatar_tile(c, c.w - 10, 5, _avatars(ui)[u.avatar] ?? "letter", u.display)
+    ui:status()
+    w.footer(ui, "Enter next field", (x, yy) => ui:go_back(), (x, yy) => ui:go_next())
+
+# a 9x5 picture of the avatar: a letter on its colour, the creeper gets its face
+def _avatar_tile(c, x, y, name, display):
+    col = AVATAR_COL[name] ?? "a"
+    c:fill(x, y, 9, 5, col)
+    if name == "creeper":
+        c:fill(x + 1, y + 1, 2, 1, "f")
+        c:fill(x + 6, y + 1, 2, 1, "f")
+        c:fill(x + 3, y + 2, 3, 2, "f")
+        c:fill(x + 2, y + 3, 1, 2, "f")
+        c:fill(x + 6, y + 3, 1, 2, "f")
+    else:
+        letter = string.upper(string.sub(display ?? "", 1, 1))
+        if letter == "" or string.match(letter, "%w") == nil:
+            letter = "?"
+        # a big letter from teletext would be too wide; a letter in a lighter frame reads well
+        c:fill(x + 3, y + 1, 3, 3, "f")
+        c:text(x + 4, y + 2, letter, col, "f")
+    label = w.fit(name, 9)
+    c:text(x + math.floor((9 - len(label)) / 2), y + 5, label, "8")
+
+def _avatar_step(ui, d):
+    n = len(_avatars(ui))
+    ui.st.user.avatar = (ui.st.user.avatar - 1 + d) % n + 1
+
+def _type(ui, ch):
+    u = ui.st.user
+    f = FIELDS[ui.ufocus]
+    if f == nil or f[2] == nil:
+        return
+    key = f[2]
+    if len(u[key]) >= 32:
+        return
+    u[key] = u[key] .. ch
+    if key == "name":
+        u.name_edited = true
+    elif key == "display" and not u.name_edited:
+        u.name = model.suggest_account(u.display)
+    ui.msg = nil
+
+def user_key(ui, k):
+    u = ui.st.user
+    f = FIELDS[ui.ufocus]
+    if k == keys.up:
+        ui.ufocus = math.max(1, ui.ufocus - 1)
+    elif k == keys.down:
+        ui.ufocus = math.min(len(FIELDS), ui.ufocus + 1)
+    elif _is_enter(k):
+        if ui.ufocus < len(FIELDS):
+            ui.ufocus += 1
+        else:
+            ui:go_next()
+    elif f[2] == nil and (k == keys.left or k == keys.right or k == keys.space):
+        _avatar_step(ui, k == keys.left and -1 or 1)
+    elif k == keys.backspace and f[2] != nil:
+        u[f[2]] = string.sub(u[f[2]], 1, -2)
+        if f[2] == "name":
+            u.name_edited = u.name != ""
+        elif f[2] == "display" and not u.name_edited:
+            u.name = u.display == "" and "" or model.suggest_account(u.display)
+
+def user_char(ui, ch):
+    _type(ui, ch)
+
+def user_next(ui):
+    u = ui.st.user
+    if string.match(u.display, "%S") == nil:
+        ui.ufocus = 1
+        ui:say("Type your name.", "e")
+        return
+    problem = model.account_problem(u.name)
+    if problem != nil:
+        ui.ufocus = 2
+        ui:say("Account: " .. problem, "e")
+        return
+    if u.password != u.repeat:
+        ui.ufocus = 4
+        ui:say("The passwords do not match.", "e")
+        return
+    ui.result = "next"
+
+# ================================================================ summary
+
+def summary_draw(ui):
+    c = ui.c
+    ui:step_header("Summary")
+    p = ui:plan(ui:request(), ui:storage_id())
+    ui.plan_now = p
+    u = ui.st.user
+    eff = ui:effective()
+    prof = model.PROFILES[ui.st.profile]
+    w.title(c, 3, "Ready to install", ui.version != nil and ("CubeOS " .. ui.version) or nil)
+    free = _free(ui)
+    need = ui:need_of(p)
+    rows = [["Profile", prof.title .. ", " .. ui.m:count(eff) .. " packages"],
+        ["Download", model.human(p.download ?? ui.m:download(eff))],
+        ["On disk", model.human(need) .. " of " .. model.human(free) .. " free"],
+        ["Storage", model.STORAGE[ui.st.storage].title],
+        ["Language", model.LANGS[ui.st.lang].title],
+        ["Account", u.display .. " (" .. u.name .. "), administrator"],
+        ["Password", u.password != "" and "set" or "none"],
+        ["Avatar", _avatars(ui)[u.avatar] ?? "letter"]]
+    y = 5
+    for r in rows:
+        c:text(3, y, r[1], "8")
+        c:text(13, y, w.fit(r[2], c.w - 14), "0")
+        y += 1
+    # what the plan says on top: missing packages, conflicts, warnings, packages with their own setup code
+    notes = []
+    for id in p.missing ?? []:
+        notes[len(notes) + 1] = ["e", "Missing in the catalog: " .. tostring(id)]
+    for x in p.conflicts ?? []:
+        notes[len(notes) + 1] = ["e", "Conflict: " .. tostring(type(x) == "table" and (x.text ?? x.id) or x)]
+    for x in p.warnings ?? []:
+        notes[len(notes) + 1] = ["4", tostring(type(x) == "table" and (x.text ?? x.id) or x)]
+    if p.runs_setup != nil and len(p.runs_setup) > 0:
+        notes[len(notes) + 1] = ["8", len(p.runs_setup) .. " packages run their own setup code"]
+    if p.ok == false and p.error != nil:
+        notes[len(notes) + 1] = ["e", "Cannot plan: " .. p.error]
+    y += 1
+    for n in notes:
+        if y < c.h - 1:
+            c:text(3, y, w.fit(n[2], c.w - 4), n[1])
+            y += 1
+    if len(notes) == 0 and y < c.h - 1:
+        bw = c.w - 6
+        w.thin_bar(c, 3, y, bw, free > 0 and need / free or 1, ui:fits(p) and "5" or "e", "6")
+    ui:status()
+    can = p.ok != false and len(p.missing ?? []) == 0 and ui:fits(p)
+    w.footer(ui, "Enter install", (x, yy) => ui:go_back(), can and ((x, yy) => ui:go_next()) or false, "Install", "ok")
+
+def summary_key(ui, k):
+    if _is_enter(k):
+        ui:go_next()
+    elif k == keys.backspace:
+        ui:go_back()
+
+def summary_next(ui):
+    p = ui:plan(ui:request(), ui:storage_id())
+    if p.ok != false and len(p.missing ?? []) == 0 and ui:fits(p):
+        ui.plan_now = p
+        ui.result = "next"
+
+# ================================================================ progress
+
+def progress_draw(ui):
+    c = ui.c
+    pr = ui.prog
+    w.header(ui, "Installing", 7, 7)
+    pct = math.floor(pr.frac * 100)
+    w.title(c, 4, pr.rollback and "Rolling back" or "Installing CubeOS", pct .. "%")
+    w.thick_bar(c, 3, 6, c.w - 4, pr.frac, ui.phase, pr.rollback and "e" or "9", "c", "3")
+    w.thick_bar(c, 3, 7, c.w - 4, pr.frac, ui.phase + 1, pr.rollback and "e" or "9", "c", "3")
+    c:text(3, 9, pr.stage, "3")
+    if pr.id != nil:
+        name = ui.m:get(pr.id)?.name ?? pr.id
+        c:text(4 + len(pr.stage), 9, w.fit(name, c.w - 5 - len(pr.stage)), "0")
+    if pr.n != nil and pr.n > 0:
+        c:text(3, 10, (pr.i ?? 0) .. " of " .. pr.n, "8")
+    # packages of the plan in columns: done green, current arrow, waiting dots
+    steps = pr.steps
+    cols = math.max(1, math.floor((c.w - 2) / 24))
+    colw = math.floor((c.w - 2) / cols)
+    top = 12
+    rows_n = c.h - 2 - top + 1
+    if rows_n > 0 and len(steps) > 0:
+        cur = 1
+        for i in range[1, len(steps)]:
+            if steps[i].id == pr.id:
+                cur = i
+        per = rows_n * cols
+        first = math.max(0, math.min(len(steps) - per, cur - math.floor(per / 2)))
+        for k in range[0, per - 1]:
+            st = steps[first + k + 1]
+            if st == nil:
+                break
+            x = 2 + math.floor(k / rows_n) * colw
+            y = top + k % rows_n
+            mark = pr.marks[st.id]
+            if st.id == pr.id:
+                c:text(x, y, w.RIGHT, "3")
+            else:
+                c:text(x, y, mark != nil and w.BULLET or w.DOT, mark != nil and (MARK[mark] ?? "5") or "6")
+            label = ui.m:get(st.id)?.name ?? st.id
+            c:text(x + 2, y, w.fit(label, colw - 3), st.id == pr.id and "0" or (mark != nil and "8" or "6"))
+    w.footer(ui, "Please wait. Do not turn the computer off.")
+
+export def progress(ui, stage, id, i, n):
+    pr = ui.prog
+    info = STAGES[stage] ?? [tostring(stage), pr.frac, pr.frac]
+    if stage == "rollback":
+        pr.rollback = true
+    else:
+        frac = info[2] + (info[3] - info[2]) * ((i ?? 0) / math.max(1, n ?? 1))
+        pr.frac = math.max(pr.frac, math.min(1, frac))
+    pr.stage = info[1]
+    pr.id = id
+    pr.i = i
+    pr.n = n
+    if id != nil:
+        pr.marks[id] = stage
+    ui.phase += 1
+    ui:redraw()
+
+# the first account through the installed system (boot.idx + pkgload.lua), like the text greeter's first run
+export def create_account(cfs_mod, auth_mod, root, u, rounds=1000, fsys=nil):
+    if fsys == nil:
+        fsys = cfs_mod.new({})
+        fsys:mount("/", cfs_mod.host(root))
+    a = auth_mod.new(fsys, {rounds: rounds})
+    a:load()
+    if a:user(u.name) == nil:
+        a:create_user({name: u.name, display: u.display}, u.password != "" and u.password or nil, true)
+    return a
+
+def _read(fsys, path):
+    h = fsys.open(path, "r")
+    if h == nil:
+        return nil
+    s = h.readAll()
+    h.close()
+    return s
+
+def _write(fsys, path, data):
+    fsys.makeDir(fsys.getDir(path))
+    h = fsys.open(path, "w")
+    h.write(data)
+    h.close()
+
+def system_account(ui, u):
+    fsys = ui.fs
+    root = ui.root
+    idx = dofile(fsys.combine(root, "cubeos/var/stew/boot.idx"))
+    L = dofile(fsys.combine(root, "cubeos/sys/boot/pkgload.lua")).new(idx)
+    conf = _read(fsys, fsys.combine(root, "cubeos/sys/cfg/boot.conf")) ?? ""
+    rounds = tonumber(string.match(conf, "rounds[\"']?%s*:%s*(%d+)") ?? "") ?? 1000
+    create_account(L.import("cfs"), L.import("boot.auth"), root, u, rounds)
+
+def _settings(ui):
+    fsys = ui.fs
+    root = ui.root
+    u = ui.st.user
+    av = _avatars(ui)[u.avatar] ?? "letter"
+    _write(fsys, fsys.combine(root, "cubeos/users/" .. u.name .. "/cfg/cde.conf"), "{\n  avatar: \"" .. av .. "\",\n}\n")
+    lang = model.LANGS[ui.st.lang]
+    if lang.id != "en":
+        path = fsys.combine(root, "cubeos/sys/cfg/locale.conf")
+        text = _read(fsys, path)
+        if text != nil and string.find(text, "lang%s*:") != nil:
+            text = string.gsub(text, "(lang%s*:%s*)[\"'][%w_%-]*[\"']", "%1\"" .. lang.id .. "\"", 1)
+        else:
+            text = "{\n  lang: \"" .. lang.id .. "\",\n}\n"
+        _write(fsys, path, text)
+
+# runs the installation; returns "reboot", "back" (to the summary) or "quit"
+export def install(ui):
+    while true:
+        ui.plans = {}
+        p = ui:plan(ui:request(), ui:storage_id())
+        ui.cur = "progress"
+        steps = []
+        for st in p.steps ?? []:
+            if st.op != "remove" and ui.m:get(st.id)?.kind != "meta":
+                steps[len(steps) + 1] = st
+        ui.prog = {frac: 0, stage: "Starting", id: nil, marks: {}, steps: steps}
+        ui:redraw()
+        let me = ui
+        opts = {on_progress: (stage, id, i, n) => progress(me, stage, id, i, n), ask: (q) => me:ask(q)}
+        ok, r = pcall(() => me.s:apply(p, opts))
+        if not ok:
+            r = {ok: false, error: tostring(r)}
+        if r == nil:
+            r = {ok: false, error: "stew returned nothing"}
+        if r.ok:
+            if ui.s.clean != nil:
+                pcall(() => ui.s:clean())
+            break
+        ui.prog.rollback = true
+        ans = ui:dialog({title: "The installation failed", accent: "e", width: 46,
+            text: "Nothing was changed: stew rolled everything back.\n\n" .. tostring(r.error),
+            buttons: [{label: "Quit", value: "quit"}, {label: "Back", value: "back"}, {label: "Retry", value: "retry", style: "ok"}],
+            focus: 3})
+        if ans != "retry":
+            return ans
+    progress(ui, "account", nil, 0, 1)
+    u = ui.st.user
+    ok = true
+    err = nil
+    if ui.env.make_account != nil:
+        ok, err = pcall(ui.env.make_account, u, ui)
+    else:
+        ok, err = pcall(system_account, ui, u)
+    ui.account_error = not ok and tostring(err) or nil
+    ok2, err2 = pcall(_settings, ui)
+    if not ok2 and ui.account_error == nil:
+        ui.account_error = tostring(err2)
+    progress(ui, "account", nil, 1, 1)
+    if ui.env.cleanup != nil:
+        pcall(ui.env.cleanup)
+    r2 = ui:run_screen("done")
+    if r2 == "reboot":
+        ui:fade(1, 0, 0.5)
+        ui.c:restore()
+        if ui.env.reboot != nil:
+            ui.env.reboot()
+    return r2
+
+# ================================================================ done
+
+const COUNTDOWN = 10
+
+def done_enter(ui):
+    ui.done_at = ui:clock()
+
+def done_draw(ui):
+    c = ui.c
+    ui:step_header("Done")
+    x0 = 3
+    if c.w >= 46 and c.h >= 16:
+        w.draw_logo(c, 3, 4, 1, (ui.phase % 30) - 6)
+        x0 = 22
+    u = ui.st.user
+    c:text(x0, 4, "CubeOS is installed", "5")
+    c:text(x0, 5, w.fit("Welcome aboard, " .. u.display .. "!", c.w - x0), "0")
+    eff = ui:effective()
+    y = 7
+    rows = [["Account", u.name .. " (admin)"], ["Packages", ui.m:count(eff) .. ", " .. model.human(ui:need_of(ui.plan_now ?? {}))],
+        ["Profile", model.PROFILES[ui.st.profile].title]]
+    for r in rows:
+        c:text(x0, y, r[1], "8")
+        c:text(x0 + 9, y, w.fit(r[2], c.w - x0 - 9), "0")
+        y += 1
+    if ui.account_error != nil:
+        y += 1
+        for line in w.wrap("The account will be made at the first start: " .. ui.account_error, c.w - x0 - 1):
+            if y < c.h - 2:
+                c:text(x0, y, line, "4")
+                y += 1
+    left = math.max(0, math.ceil(COUNTDOWN - (ui:clock() - (ui.done_at ?? 0))))
+    c:text(x0, c.h - 2, "Restarting in " .. left .. " s", "8")
+    w.thin_bar(c, x0, c.h - 1, math.min(24, c.w - x0 - 1), 1 - left / COUNTDOWN, "3", "6")
+    w.footer(ui, "Enter restart", nil, (x, yy) => ui:go_next(), "Restart now", "ok")
+
+def done_tick(ui):
+    if ui:clock() - (ui.done_at ?? 0) >= COUNTDOWN:
+        ui.result = "reboot"
+
+def done_key(ui, k):
+    if _is_enter(k) or k == keys.space:
+        ui:go_next()
+
+def done_next(ui):
+    ui.result = "reboot"
+
+export const SCREENS = {
+    user: {enter: user_enter, draw: user_draw, key: user_key, char: user_char, next: user_next},
+    summary: {draw: summary_draw, key: summary_key, next: summary_next},
+    progress: {draw: progress_draw, no_footer: true},
+    done: {enter: done_enter, draw: done_draw, key: done_key, tick: done_tick, next: done_next, no_back: true},
+}

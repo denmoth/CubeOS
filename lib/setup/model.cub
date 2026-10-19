@@ -1,0 +1,208 @@
+# setup.model: what the installer knows about the catalog (docs/packages/08-setup-and-store.md). Pure logic, no screen.
+#
+#   m = model.Model(s:catalog())          records of stew's catalog; sizes and depends come from versions[latest]
+#   m:get(id)                             {id, name, description, kind, category, priority, size, isize, depends, options, version}
+#   m:closure(ids) -> set, missing        everything the ids pull in through depends (metas included)
+#   m:estimate(set, storage, free)        bytes on disk for "compact" | "fast" | "auto" (live counter; the plan gives the real number)
+#   m:download(set)  m:count(set)         bytes to download, real packages (no metas)
+#   m:categories()                        [{id, title, items}] for the manual tree, metas left out
+#   m:needed_by(id, set)                  ids in set that depend on id
+#   model.human(bytes)                    "612 KB", "1.4 MB"
+#   model.account_problem(name)  model.suggest_account(display)   the same rules as boot.auth (D236)
+
+export const PROFILES = [
+    {id: "minimal", meta: "cubeos.minimal", title: "Minimal", blurb: "Text mode: Cush shell, services, stew"},
+    {id: "desktop", meta: "cubeos.desktop", title: "Desktop", blurb: "The CDE desktop with its recommended apps"},
+    {id: "full", meta: "cubeos.full", title: "Everything", blurb: "Desktop plus every app, theme, font and track"},
+    {id: "manual", meta: nil, title: "Manual", blurb: "Pick every package yourself"},
+]
+
+export const CATEGORIES = [["system", "System"], ["desktop", "Desktop"], ["apps", "Apps"], ["media", "Media"], ["network", "Network"],
+    ["assets", "Themes, fonts, music"], ["dev", "Development"]]
+
+export const LANGS = [{id: "en", title: "English"}, {id: "ru", title: "Russian", pkg: "cubeos.lang-ru"},
+    {id: "uk", title: "Ukrainian", pkg: "cubeos.lang-uk"}]
+
+# storage modes of the installer screens and what stew's plan calls them
+export const STORAGE = [
+    {id: "compact", stew: "packed", title: "Compact", blurb: "Everything stays compressed. Smallest, a bit slower to start."},
+    {id: "fast", stew: "unpacked", title: "Fast", blurb: "Everything unpacked into files. Biggest, fastest."},
+    {id: "auto", stew: "auto", title: "Auto", blurb: "Often used packages unpacked while space allows. Recommended."},
+]
+
+# packages that are always unpacked (the system must start without the unpacker) and kinds whose files are always plain files
+const ALWAYS = ["cubeos.boot", "cubeos.rescue", "cubeos.cubic-rt", "cubeos.cpk"]
+const FILE_KINDS = {data: true, font: true, theme: true, lang: true}
+const PRIO_ORDER = {essential: 1, recommended: 2, optional: 3}
+# reserve the plan keeps free (docs/spec/package-manager.md); the counter uses the same share
+export const RESERVE = 0.05
+
+export def human(n):
+    n = n ?? 0
+    if n < 1024:
+        return n .. " B"
+    if n < 1024 * 1024:
+        return math.floor(n / 1024 + 0.5) .. " KB"
+    return string.format("%.1f MB", n / 1048576)
+
+def _keys(t):
+    out = []
+    if type(t) != "table":
+        return out
+    if t[1] != nil:
+        for v in t:
+            out[len(out) + 1] = v
+    else:
+        for k, v in t:
+            out[len(out) + 1] = k
+    table.sort(out)
+    return out
+
+export class Model:
+    def init(self, catalog):
+        self.pk = {}
+        self.ids = []
+        for c in catalog ?? []:
+            v = c
+            if type(c.versions) == "table" and c.latest != nil and type(c.versions[c.latest]) == "table":
+                v = c.versions[c.latest]
+            p = {id: c.id, name: c.name ?? c.id, description: c.description ?? "", kind: c.kind ?? "lib",
+                category: c.category ?? "apps", priority: c.priority ?? "optional", version: c.latest ?? c.version ?? "",
+                size: v.size ?? c.size ?? 0, isize: v.installed_size ?? c.installed_size ?? v.size ?? c.size ?? 0,
+                depends: _keys(v.depends ?? c.depends), options: v.options ?? c.options, installed: c.installed}
+            self.pk[c.id] = p
+            self.ids[len(self.ids) + 1] = c.id
+        table.sort(self.ids)
+        always = self:closure(ALWAYS)
+        self.always = always
+
+    def get(self, id):
+        return self.pk[id]
+
+    def closure(self, roots):
+        set = {}
+        missing = []
+        todo = []
+        for r in roots:
+            todo[len(todo) + 1] = r
+        while len(todo) > 0:
+            id = table.remove(todo)
+            if not set[id]:
+                p = self.pk[id]
+                if p == nil:
+                    missing[len(missing) + 1] = id
+                    set[id] = true
+                else:
+                    set[id] = true
+                    for d in p.depends:
+                        if not set[d]:
+                            todo[len(todo) + 1] = d
+        for id in missing:
+            set[id] = nil
+        return set, missing
+
+    def count(self, set):
+        n = 0
+        for id, on in set:
+            p = self.pk[id]
+            if on and p != nil and p.kind != "meta":
+                n += 1
+        return n
+
+    def download(self, set):
+        n = 0
+        for id, on in set:
+            p = self.pk[id]
+            if on and p != nil:
+                n += p.size
+        return n
+
+    def _forced(self, p):
+        return self.always[p.id] == true or FILE_KINDS[p.kind] == true
+
+    # bytes on disk: compact keeps .cpk files, fast unpacks all, auto unpacks while it stays under the free space (minus reserve)
+    def estimate(self, set, storage="auto", free=nil):
+        packed = 0
+        unpacked = 0
+        for id, on in set:
+            p = self.pk[id]
+            if on and p != nil:
+                unpacked += p.isize
+                packed += self:_forced(p) and p.isize or p.size
+        if storage == "fast":
+            return unpacked
+        if storage == "compact" or free == nil:
+            return storage == "compact" and packed or unpacked
+        budget = math.max(0, math.floor(free * (1 - RESERVE)) - packed)
+        return packed + math.min(unpacked - packed, budget)
+
+    def needed_by(self, id, set):
+        out = []
+        for other, on in set:
+            p = self.pk[other]
+            if on and p != nil and p.kind != "meta":
+                for d in p.depends:
+                    if d == id:
+                        out[len(out) + 1] = other
+        table.sort(out)
+        return out
+
+    def categories(self):
+        groups = {}
+        order = []
+        for pair in CATEGORIES:
+            groups[pair[1]] = {id: pair[1], title: pair[2], items: []}
+            order[len(order) + 1] = groups[pair[1]]
+        for id in self.ids:
+            p = self.pk[id]
+            if p.kind != "meta":
+                g = groups[p.category]
+                if g == nil:
+                    g = {id: p.category, title: string.upper(string.sub(p.category, 1, 1)) .. string.sub(p.category, 2), items: []}
+                    groups[p.category] = g
+                    order[len(order) + 1] = g
+                g.items[len(g.items) + 1] = p
+        out = []
+        for g in order:
+            if len(g.items) > 0:
+                table.sort(g.items, (a, b) => (PRIO_ORDER[a.priority] ?? 4) < (PRIO_ORDER[b.priority] ?? 4) or
+                    ((PRIO_ORDER[a.priority] ?? 4) == (PRIO_ORDER[b.priority] ?? 4) and a.name < b.name))
+                out[len(out) + 1] = g
+        return out
+
+    # direct members of a meta set (metas inside expanded), for the manual start selection
+    def members(self, meta_id):
+        out = {}
+        def walk(id):
+            p = self.pk[id]
+            if p == nil:
+                return
+            for d in p.depends:
+                q = self.pk[d]
+                if q != nil and q.kind == "meta":
+                    walk(d)
+                elif q != nil:
+                    out[d] = true
+        walk(meta_id)
+        return out
+
+# account name rules of boot.auth (D236): Latin letters, digits, - and _, starting with a letter, up to 32 characters
+export def account_problem(name):
+    if name == nil or name == "":
+        return "the account name is empty"
+    if len(name) > 32:
+        return "the account name is longer than 32 characters"
+    if string.match(name, "^[A-Za-z][A-Za-z0-9_%-]*$") == nil:
+        return "use Latin letters, digits, - and _, starting with a letter"
+    return nil
+
+export def suggest_account(display):
+    base = string.lower(display ?? "")
+    base = string.gsub(base, "%s+", "-")
+    base = string.gsub(base, "[^a-z0-9_%-]", "")
+    base = string.gsub(base, "%-+", "-")
+    base = string.gsub(base, "^[^a-z]+", "")
+    base = string.gsub(base, "%-$", "")
+    if base == "":
+        base = "user"
+    return string.sub(base, 1, 24)

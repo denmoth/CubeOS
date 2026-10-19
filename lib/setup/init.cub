@@ -1,0 +1,527 @@
+# setup: the CubeOS installer screens (docs/packages/08-setup-and-store.md). Text mode, so it runs on any computer; on an
+# advanced one it switches to the night palette and animates. Everything is installed through stew's API (09-stew-api.md):
+# s:sources/s:source_add/s:refresh, s:catalog, s:plan({install, storage, options}), s:apply(p, {on_progress, ask}).
+#
+#   setup.main(env)      env from game/install.lua:
+#       {fs, term, root, tmp, import, colour, source: {name, kind, url}, http, cleanup(), reboot()}
+#   Tests and tools pass more:
+#       stew (a ready stew object), events (list of events; a function in the list is called with the Setup object),
+#       strict (error when events run out instead of waiting), timer(secs), sleep(secs), clock(), peripheral,
+#       make_account(user, setup) (instead of the installed system's boot.auth), animate (false: no logo reveal)
+#
+# Screens: welcome, profile, manual, options, storage, fit, user, summary, then progress and done (lib/setup/screens.cub,
+# lib/setup/finish.cub). Each screen is {enter, draw, key, char, scroll, next, skip} of functions taking the Setup object.
+
+import setup.canvas as canvas_mod
+import setup.widgets as w
+import setup.model as model
+import setup.screens as screens
+import setup.finish as finish
+
+export const FLOW = ["welcome", "profile", "manual", "options", "storage", "fit", "user", "summary"]
+export const STEPS = 7
+export const STEP_NO = {welcome: 1, profile: 2, manual: 3, options: 3, storage: 4, fit: 4, user: 5, summary: 6, progress: 7, done: 7}
+
+def _du(fsys, path):
+    if not fsys.isDir(path):
+        return fsys.getSize(path)
+    n = 0
+    for name in fsys.list(path):
+        n += _du(fsys, fsys.combine(path, name))
+    return n
+
+export class Setup:
+    def init(self, env):
+        self.env = env
+        self.t = env.term ?? term
+        self.c = canvas_mod.Canvas(self.t, {colour: env.colour})
+        self.fs = env.fs ?? fs
+        self.root = env.root ?? "/"
+        self.s = env.stew
+        self.queue = env.events
+        self.qpos = 0
+        self.hots = []
+        self.phase = 0
+        self.ticking = false
+        self.modal = nil
+        self.ffocus = nil
+        self.msg = nil
+        self.msg_col = "e"
+        self.cur = "loading"
+        self.screens = {}
+        for name, scr in screens.SCREENS:
+            self.screens[name] = scr
+        for name, scr in finish.SCREENS:
+            self.screens[name] = scr
+        self.plans = {}
+        self.reveal = env.animate == false and 1 or 0
+        self.st = {lang: 1, license: false, profile: 2, explicit: nil, storage: 3, options: {},
+            user: {display: "", name: "", password: "", repeat: "", avatar: 1, name_edited: false}}
+        self.focus = 1
+
+    # ------------------------------------------------------------ events
+
+    def pull(self):
+        while self.queue != nil and self.qpos < len(self.queue):
+            self.qpos += 1
+            item = self.queue[self.qpos]
+            if type(item) == "function":
+                item(self)
+            else:
+                return table.unpack(item)
+        if self.env.strict:
+            error("setup: the test ran out of events (screen " .. tostring(self.cur) .. ")", 0)
+        if self.env.pull != nil:
+            return self.env.pull()
+        return os.pullEventRaw()
+
+    def timer(self, secs):
+        f = self.env.timer ?? os.startTimer
+        return f(secs)
+
+    def sleep(self, secs):
+        f = self.env.sleep ?? os.sleep
+        f(secs)
+
+    def clock(self):
+        f = self.env.clock ?? os.clock
+        return f()
+
+    def tick_later(self):
+        if not self.ticking and self.c.colour:
+            self.ticking = true
+            self:timer(0.1)
+
+    def hot(self, x1, y1, x2, y2, fn):
+        self.hots[len(self.hots) + 1] = [x1, y1, x2, y2, fn]
+
+    def click(self, x, y):
+        for i in range[len(self.hots), 1] step -1:
+            h = self.hots[i]
+            if x >= h[1] and x <= h[3] and y >= h[2] and y <= h[4]:
+                h[5](x, y)
+                return true
+        return false
+
+    def say(self, text, col="e"):
+        self.msg = text
+        self.msg_col = col
+
+    def go_next(self):
+        scr = self.screens[self.cur]
+        if scr != nil and scr.next != nil:
+            scr.next(self)
+        else:
+            self.result = "next"
+
+    def go_back(self):
+        self.result = "back"
+
+    def handle(self, ev, a=nil, b=nil, c=nil):
+        if ev == nil:
+            return
+        if ev == "timer":
+            self.ticking = false
+            self.phase += 1
+            if self.reveal < 1:
+                self.reveal = math.min(1, self.reveal + 0.08)
+            scr = self.screens[self.cur]
+            if scr != nil and scr.tick != nil:
+                scr.tick(self)
+            self:redraw()
+            return
+        if ev == "terminate":
+            if self.modal == nil and self.cur != "progress":
+                self:confirm_quit()
+            self:redraw()
+            return
+        if ev == "term_resize":
+            self.c:resize()
+            self:redraw()
+            return
+        if ev == "mouse_click":
+            self.ffocus = nil
+            self:click(b, c)
+            self:redraw()
+            return
+        if self.modal != nil:
+            self:modal_event(ev, a)
+            self:redraw()
+            return
+        scr = self.screens[self.cur]
+        if scr == nil:
+            return
+        if ev == "mouse_scroll" and scr.scroll != nil:
+            scr.scroll(self, a)
+        elif ev == "key":
+            self:key(scr, a)
+        elif ev == "char" and scr.char != nil:
+            scr.char(self, a)
+        elif ev == "paste" and scr.char != nil:
+            for i in range[1, len(a)]:
+                scr.char(self, string.sub(a, i, i))
+        self:redraw()
+
+    def key(self, scr, k):
+        if k == keys.tab and scr.no_footer != true:
+            if self.ffocus == nil:
+                self.ffocus = "next"
+            elif self.ffocus == "next" and scr.no_back != true:
+                self.ffocus = "back"
+            else:
+                self.ffocus = nil
+            return
+        if self.ffocus != nil:
+            if k == keys.enter or k == keys.numPadEnter or k == keys.space:
+                act = self.ffocus
+                self.ffocus = nil
+                if act == "next":
+                    self:go_next()
+                else:
+                    if scr.back != nil:
+                        scr.back(self)
+                    else:
+                        self:go_back()
+                return
+            self.ffocus = nil
+        if scr.key != nil:
+            scr.key(self, k)
+
+    # ------------------------------------------------------------ drawing
+
+    def redraw(self):
+        self.hots = []
+        self.c:clear("f")
+        scr = self.screens[self.cur]
+        if scr != nil:
+            scr.draw(self)
+        if self.modal != nil:
+            self:modal_draw()
+        self.c:flush()
+        self:tick_later()
+
+    def status(self, y=nil):
+        if self.msg != nil:
+            c = self.c
+            row = y ?? (c.h - 1)
+            c:text(3, row, w.fit(self.msg, c.w - 4), self.msg_col)
+
+    def step_header(self, title):
+        w.header(self, title, STEP_NO[self.cur] ?? 1, STEPS)
+
+    # palette fade on advanced computers (frames of `secs` total)
+    def fade(self, a, b, secs=0.3):
+        if not self.c.colour or self.env.animate == false:
+            self.c:palette(b)
+            return
+        for i in range[1, 8]:
+            self.c:palette(a + (b - a) * i / 8)
+            self:sleep(secs / 8)
+
+    # ------------------------------------------------------------ dialogs
+
+    # spec: {title, text, buttons: [{label, value, style}], input: {value, hidden}, scroll: true, focus, accent}
+    def dialog(self, spec):
+        prev = self.modal
+        spec.focus = spec.focus ?? 1
+        spec.top = 0
+        spec.done = false
+        self.modal = spec
+        self:redraw()
+        while not spec.done:
+            self:handle(self:pull())
+        self.modal = prev
+        self:redraw()
+        return spec.answer
+
+    def modal_answer(self, spec, value):
+        spec.answer = value
+        spec.done = true
+
+    def modal_draw(self):
+        spec = self.modal
+        c = self.c
+        bw = math.min(c.w - 4, spec.width ?? 42)
+        lines = w.wrap(spec.text ?? "", bw - 4)
+        body = len(lines)
+        if spec.scroll:
+            body = math.min(body, c.h - 9)
+        bh = body + 4 + (spec.input != nil and 2 or 0)
+        bx = math.floor((c.w - bw) / 2) + 1
+        by = math.max(2, math.floor((c.h - bh) / 2) + 1)
+        w.box(c, bx, by, bw, bh, spec.title, spec.accent ?? "9")
+        spec.view = body
+        for i in range[1, body]:
+            line = lines[i + spec.top]
+            if line != nil:
+                c:text(bx + 2, by + 1 + i, line, "0")
+        if spec.scroll and len(lines) > body:
+            c:text(bx + bw - 2, by + 2, w.UP, spec.top > 0 and "3" or "6")
+            c:text(bx + bw - 2, by + 1 + body, w.DOWN, spec.top + body < len(lines) and "3" or "6")
+            spec.max_top = len(lines) - body
+        y = by + body + 2
+        if spec.input != nil:
+            shown = spec.input.hidden and string.rep("*", len(spec.input.value)) or spec.input.value
+            c:fill(bx + 2, y, bw - 4, 1, "c")
+            c:text(bx + 2, y, w.fit(shown .. (self.phase % 6 < 3 and "_" or " "), bw - 4), "0", "c")
+            y += 2
+        x = bx + bw - 1
+        let me = self
+        for i in range[len(spec.buttons), 1] step -1:
+            b = spec.buttons[i]
+            x -= len(b.label) + 3
+            style = i == spec.focus and (b.style ?? "main") or "plain"
+            let value = b.value
+            w.button(self, x, y - 1, b.label, style, (cx, cy) => me:modal_answer(spec, spec.input != nil and spec.input.value or value))
+
+    def modal_event(self, ev, a):
+        spec = self.modal
+        n = len(spec.buttons)
+        if ev == "key":
+            if a == keys.left:
+                spec.focus = (spec.focus - 2) % n + 1
+            elif a == keys.right or a == keys.tab:
+                spec.focus = spec.focus % n + 1
+            elif a == keys.up and spec.scroll:
+                spec.top = math.max(0, spec.top - 1)
+            elif a == keys.down and spec.scroll:
+                spec.top = math.min(spec.max_top ?? 0, spec.top + 1)
+            elif a == keys.pageDown and spec.scroll:
+                spec.top = math.min(spec.max_top ?? 0, spec.top + (spec.view ?? 5))
+            elif a == keys.pageUp and spec.scroll:
+                spec.top = math.max(0, spec.top - (spec.view ?? 5))
+            elif a == keys.backspace and spec.input != nil:
+                spec.input.value = string.sub(spec.input.value, 1, -2)
+            elif a == keys.enter or a == keys.numPadEnter:
+                b = spec.buttons[spec.focus]
+                self:modal_answer(spec, spec.input != nil and b.value != false and spec.input.value or b.value)
+        elif ev == "char" and spec.input != nil:
+            spec.input.value = spec.input.value .. a
+        elif ev == "mouse_scroll" and spec.scroll:
+            spec.top = math.max(0, math.min(spec.max_top ?? 0, spec.top + a))
+
+    def confirm_quit(self):
+        ans = self:dialog({title: "Quit setup?", text: "Nothing has been installed yet. You can run the installer again any time.",
+            buttons: [{label: "Stay", value: false}, {label: "Quit", value: true, style: "danger"}], accent: "4"})
+        if ans:
+            self.result = "quit"
+            self.quitting = true
+
+    # a question from stew or a package installer during apply (09-stew-api.md: ask(question) -> answer)
+    # question: a string (yes/no) or {id, title, text, kind: "confirm"|"choice"|"text", choices, default, hidden}
+    def ask(self, q):
+        if type(q) == "string":
+            q = {text: q}
+        title = q.title ?? (q.id != nil and (q.id .. " asks") or "Question")
+        spec = {title: title, text: q.text ?? q.question ?? "", accent: "2"}
+        if q.choices != nil:
+            spec.buttons = []
+            for ch in q.choices:
+                spec.buttons[len(spec.buttons) + 1] = {label: tostring(ch), value: ch}
+                if ch == q.default:
+                    spec.focus = len(spec.buttons)
+        elif q.kind == "text":
+            spec.input = {value: q.default ?? "", hidden: q.hidden == true}
+            spec.buttons = [{label: "OK", value: true}]
+        else:
+            spec.buttons = [{label: "Yes", value: true}, {label: "No", value: false}]
+            spec.focus = q.default == false and 2 or 1
+        return self:dialog(spec)
+
+    # ------------------------------------------------------------ stew
+
+    def request(self, profile_index=nil):
+        prof = model.PROFILES[profile_index ?? self.st.profile]
+        ids = []
+        if prof.meta != nil:
+            ids[1] = prof.meta
+        else:
+            ids[1] = "cubeos.minimal"
+            extra = []
+            for id, on in self.st.explicit ?? {}:
+                if on:
+                    extra[len(extra) + 1] = id
+            table.sort(extra)
+            for id in extra:
+                ids[len(ids) + 1] = id
+        lang = model.LANGS[self.st.lang]
+        if lang.pkg != nil and self.m:get(lang.pkg) != nil:
+            ids[len(ids) + 1] = lang.pkg
+        return ids
+
+    def effective(self, profile_index=nil):
+        set = self.m:closure(self:request(profile_index))
+        return set
+
+    def plan(self, ids, storage):
+        key = table.concat(ids, ",") .. "|" .. storage
+        p = self.plans[key]
+        if p == nil:
+            let me = self
+            ok, res = pcall(() => me.s:plan({install: ids, remove: [], update: [], storage: storage, options: me.st.options}))
+            if ok and type(res) == "table":
+                p = res
+            else:
+                p = {ok: false, error: tostring(res), fits: false, installed_delta: 0, download: 0, steps: []}
+            self.plans[key] = p
+        return p
+
+    def storage_id(self, i=nil):
+        return model.STORAGE[i ?? self.st.storage].stew
+
+    def need_of(self, p):
+        return p.installed_delta ?? 0
+
+    # the plan's verdict (stew refuses to apply a plan that does not fit)
+    def fits(self, p):
+        if p == nil or p.ok == false:
+            return false
+        return p.fits != false
+
+    def free(self):
+        return self.hw.free
+
+    def load_catalog(self):
+        while true:
+            self.cur = "loading"
+            self.loading = "Reading the catalog"
+            self:redraw()
+            let me = self
+            ok, err = pcall(() => me:_refresh())
+            if ok:
+                return true
+            ans = self:dialog({title: "Cannot read the catalog", text: tostring(err), accent: "e",
+                buttons: [{label: "Quit", value: false}, {label: "Retry", value: true}], focus: 2})
+            if not ans:
+                return false
+
+    def _refresh(self):
+        s = self.s
+        src = self.env.source
+        name = nil
+        if src != nil:
+            # the source the installer came from; an old entry with the same name but another address is replaced
+            have = false
+            for x in s:sources() ?? []:
+                if x.name == src.name:
+                    have = x.kind == src.kind and x.url == src.url
+                    if not have:
+                        s:source_remove(src.name)
+            if not have:
+                s:source_add({name: src.name, kind: src.kind, url: src.url, trust: src.trust ?? "official"})
+            name = src.name
+        r = s:refresh(name) ?? {}
+        if r.failed != nil and len(r.failed) > 0 and (r.ok == nil or len(r.ok) == 0):
+            f = r.failed[1]
+            error((f.name ?? "source") .. ": " .. tostring(f.error), 0)
+        self.m = model.Model(s:catalog())
+        if self.m:get("cubeos.minimal") == nil:
+            error("the catalog has no CubeOS system (cubeos.minimal)", 0)
+        self.version = self.m:get("cubeos.minimal").version
+
+    def detect(self):
+        p = self.env.peripheral ?? peripheral
+        hw = {}
+        if p != nil:
+            for name in p.getNames():
+                kind = p.getType(name)
+                if kind == "monitor" and hw.monitor == nil:
+                    m = p.wrap(name)
+                    mw, mh = m.getSize()
+                    hw.monitor = mw .. "x" .. mh .. ((m.isColour != nil and m.isColour()) and ", colour" or "") .. " (" .. name .. ")"
+                elif kind == "modem" and hw.modem == nil:
+                    m = p.wrap(name)
+                    hw.modem = ((m.isWireless != nil and m.isWireless()) and "wireless" or "wired") .. " (" .. name .. ")"
+                elif kind == "speaker" and hw.speaker == nil:
+                    hw.speaker = "yes (" .. name .. ")"
+        fsys = self.fs
+        hw.free = fsys.getFreeSpace(self.root)
+        if fsys.getCapacity != nil:
+            okc, cap = pcall(fsys.getCapacity, self.root)
+            hw.capacity = okc and cap or nil
+        # the installer's own temp folder is deleted before the system starts
+        hw.temp = 0
+        if self.env.tmp != nil and fsys.exists(self.env.tmp):
+            hw.temp = _du(fsys, self.env.tmp)
+        hw.cols = self.c.w
+        hw.rows = self.c.h
+        self.hw = hw
+        return hw
+
+    # ------------------------------------------------------------ flow
+
+    def run_screen(self, name):
+        self.cur = name
+        self.result = nil
+        self.ffocus = nil
+        self.msg = nil
+        scr = self.screens[name]
+        if scr.enter != nil:
+            scr.enter(self)
+        self:redraw()
+        while self.result == nil:
+            self:handle(self:pull())
+        return self.result
+
+    def run(self):
+        self.c:palette(0)
+        self.cur = "loading"
+        self.loading = "Starting"
+        self:redraw()
+        self:fade(0, 1)
+        self:detect()
+        if not self:load_catalog():
+            return "quit"
+        i = 1
+        dir = 1
+        while true:
+            if i > len(FLOW):
+                r = finish.install(self)
+                if r == "back":
+                    i = len(FLOW)
+                    dir = -1
+                    continue
+                return r
+            name = FLOW[i]
+            scr = self.screens[name]
+            if scr.skip != nil and scr.skip(self):
+                i = math.max(1, i + dir)
+                continue
+            r = self:run_screen(name)
+            if r == "quit":
+                return "quit"
+            if r == "back":
+                dir = -1
+                i = math.max(1, i - 1)
+            elif string.sub(r, 1, 5) == "goto:":
+                target = string.sub(r, 6)
+                for k in range[1, len(FLOW)]:
+                    if FLOW[k] == target:
+                        i = k
+                dir = 1
+            else:
+                dir = 1
+                i += 1
+
+export def new(env):
+    return Setup(env)
+
+# entry point of game/install.lua
+export def main(env):
+    if env.stew == nil:
+        stew_mod = env.import("stew")
+        env.stew = stew_mod.new({fs: env.fs ?? fs, root: env.root ?? "/", http: env.http})
+    s = Setup(env)
+    ok, res = pcall(() => s:run())
+    s.c:restore()
+    t = s.t
+    if t.setBackgroundColour != nil:
+        t.setBackgroundColour(colours.black)
+        t.setTextColour(colours.white)
+    t.clear()
+    t.setCursorPos(1, 1)
+    if not ok:
+        error(res, 0)
+    if res == "quit":
+        print("CubeOS setup cancelled. Nothing was installed.")
+    return res

@@ -1,0 +1,413 @@
+import t
+import cfs
+import boot.auth as auth_mod
+import setup
+import setup.model as model
+import setup.canvas as canvas_mod
+import setup.finish as finish
+eq = t.eq
+
+# ------------------------------------------------------------ a fake stew (docs/packages/09-stew-api.md) with a tiny system
+
+def v(size, isize, deps=nil, extra=nil):
+    e = extra ?? {}
+    e.size = size
+    e.installed_size = isize
+    e.depends = deps ?? {}
+    return e
+
+def pkg(id, name, kind, cat, prio, ver):
+    return {id: id, name: name, description: name .. " for the test", kind: kind, category: cat, priority: prio, source: "local",
+        trust: "official", latest: "0.5.0", versions: {"0.5.0": ver}}
+
+SNAKE_OPTS = [{id: "speed", type: "choice", label: "Speed", choices: ["slow", "fast"], default: "slow"},
+    {id: "sound", type: "bool", label: "Sound", default: true},
+    {id: "player", type: "text", label: "Player", default: "steve"}]
+
+CATALOG = [
+    pkg("cubeos.minimal", "CubeOS minimal", "meta", "system", nil, v(0, 0, {"cubeos.boot": "^0.5", "cubeos.cush": "^0.5", "cubeos.stew": "^0.5"})),
+    pkg("cubeos.desktop", "CubeOS desktop", "meta", "system", nil, v(0, 0, {"cubeos.minimal": "^0.5", "cubeos.cde": "^0.5",
+        "cubeos.axo": "^0.5", "cubeos.avatars": "^0.5"})),
+    pkg("cubeos.full", "CubeOS full", "meta", "system", nil, v(0, 0, {"cubeos.desktop": "^0.5", "cubeos.calc": "^0.5",
+        "cubeos.snake": "^0.5", "cubeos.music": "^0.5"})),
+    pkg("cubeos.boot", "Boot", "lib", "system", "essential", v(20000, 50000)),
+    pkg("cubeos.cush", "Cush shell", "lib", "system", "essential", v(30000, 90000, {"cubeos.boot": "^0.5"})),
+    pkg("cubeos.stew", "Stew", "tool", "system", "essential", v(10000, 30000, {"cubeos.boot": "^0.5"})),
+    pkg("cubeos.cdk", "CDK widgets", "lib", "desktop", "recommended", v(40000, 110000)),
+    pkg("cubeos.cde", "CDE desktop", "de", "desktop", "recommended", v(50000, 140000, {"cubeos.cdk": "^0.5"})),
+    pkg("cubeos.axo", "Axo", "app", "apps", "recommended", v(30000, 100000, {"cubeos.cdk": "^0.5"})),
+    pkg("cubeos.avatars", "Avatars", "data", "assets", "recommended", v(2000, 2000)),
+    pkg("cubeos.calc", "Calc", "app", "apps", "optional", v(8000, 15000, {"cubeos.cdk": "^0.5"})),
+    pkg("cubeos.snake", "Snake", "app", "apps", "optional", v(9000, 20000, {"cubeos.cdk": "^0.5"}, {options: SNAKE_OPTS})),
+    pkg("cubeos.music", "Music", "data", "assets", "optional", v(400000, 400000)),
+    pkg("cubeos.lang-ru", "Language Russian", "lang", "assets", "optional", v(30000, 85000)),
+]
+FREE = 600000
+
+class FakeStew:
+    def init(self):
+        self.log = []
+        self.srcs = [{name: "local", kind: "cobble", url: "OWNER/cobble"}]
+        self.fail_once = true
+        self.applied = nil
+        self.progress = []
+
+    def sources(self):
+        return self.srcs
+
+    def source_remove(self, name):
+        self.log[len(self.log) + 1] = "source_remove " .. name
+
+    def source_add(self, src):
+        self.log[len(self.log) + 1] = "source_add " .. src.kind .. " " .. src.url
+        self.srcs[len(self.srcs) + 1] = src
+
+    def refresh(self, name=nil, on_progress=nil):
+        self.log[len(self.log) + 1] = "refresh " .. tostring(name)
+        return {ok: ["local"], failed: []}
+
+    def catalog(self):
+        return CATALOG
+
+    def _rec(self, id):
+        for c in CATALOG:
+            if c.id == id:
+                return c
+        return nil
+
+    def plan(self, req):
+        self.last_req = req
+        set = {}
+        order = []
+        def visit(id):
+            if set[id]:
+                return
+            set[id] = true
+            c = self:_rec(id)
+            for d, r in c.versions["0.5.0"].depends:
+                visit(d)
+            order[len(order) + 1] = id
+        for id in req.install:
+            visit(id)
+        steps = []
+        packed = 0
+        unpacked = 0
+        down = 0
+        for id in order:
+            e = self:_rec(id).versions["0.5.0"]
+            steps[len(steps) + 1] = {op: "install", id: id, version: "0.5.0", size: e.size, installed_size: e.installed_size}
+            packed += e.size
+            unpacked += e.installed_size
+            down += e.size
+        delta = unpacked
+        if req.storage == "packed":
+            delta = packed
+        elif req.storage == "auto":
+            delta = unpacked <= FREE and unpacked or packed
+        return {ok: true, steps: steps, download: down, installed_delta: delta, peak: delta, free: FREE, reserve: 0,
+            fits: delta <= FREE, missing: [], conflicts: [], warnings: [], new_permissions: {}, runs_setup: []}
+
+    def apply(self, p, opts):
+        self.log[len(self.log) + 1] = "apply " .. p.storage_note
+        n = len(p.steps)
+        for i, st in p.steps:
+            opts.on_progress("download", st.id, i, n)
+        if self.fail_once:
+            self.fail_once = false
+            opts.on_progress("rollback", nil, 0, n)
+            return {ok: false, error: "disk full"}
+        self.answer = opts.ask({id: "cubeos.snake", text: "Keep old saves?", choices: ["keep", "drop"], default: "keep"})
+        for stage in ["verify", "place", "commit"]:
+            for i, st in p.steps:
+                opts.on_progress(stage, st.id, i, n)
+        self.applied = p
+        return {ok: true}
+
+# plan objects carry the request's storage for the apply log
+class TaggingStew(FakeStew):
+    def plan(self, req):
+        p = FakeStew.plan(self, req)
+        p.storage_note = req.storage
+        return p
+
+# ------------------------------------------------------------ a fake terminal and computer
+
+def make_term(w, h, colour=true):
+    api = {w: w, h: h, blits: 0, palette: {}}
+    def get_size():
+        return api.w, api.h
+    api.getSize = get_size
+    api.isColour = () => colour
+    def blit(text, fg, bg):
+        api.blits += 1
+        api.last_fg = fg
+    api.blit = blit
+    api.setCursorPos = (x, y) => nil
+    api.clear = () => nil
+    api.setBackgroundColour = (c) => nil
+    api.setTextColour = (c) => nil
+    def set_pal(c, r, g, b):
+        api.palette[c] = [r, g, b]
+    api.setPaletteColour = set_pal
+    def get_pal(c):
+        return 0.5, 0.5, 0.5
+    api.getPaletteColour = get_pal
+    return api
+
+def fake_peripheral():
+    def msize():
+        return 36, 12
+    mon = {getSize: msize, isColour: () => true}
+    modem = {isWireless: () => true}
+    return {getNames: () => ["right", "back", "top"],
+        getType: (n) => n == "right" and "monitor" or (n == "back" and "modem" or "speaker"),
+        wrap: (n) => n == "right" and mon or modem}
+
+ROOT = "/tmp_setup_test"
+if fs.exists(ROOT):
+    fs.delete(ROOT)
+fs.makeDir(ROOT)
+fakefs = setmetatable({getFreeSpace: (p) => FREE, getCapacity: (p) => 1048576}, {__index: fs})
+
+# ------------------------------------------------------------ model
+
+m = model.Model(CATALOG)
+set, missing = m:closure(["cubeos.desktop"])
+eq(m:count(set), 7, "desktop closure: 7 real packages (metas not counted)")
+eq(len(missing), 0, "nothing missing")
+eq(set["cubeos.cdk"], true, "dependencies are pulled in")
+eq(m:download(set), 182000, "download sum")
+eq(m:estimate(set, "fast"), 522000, "fast keeps everything unpacked")
+eq(m:estimate(set, "compact"), 182000 + 50000 - 20000, "compact packs all but the boot package")
+eq(m:estimate(set, "auto", 1000000), 522000, "auto unpacks everything when there is room")
+eq(m:estimate(set, "auto", 300000) < 522000, true, "auto packs some when space is short")
+cats = m:categories()
+eq(cats[1].id, "system", "categories in their order")
+eq(cats[1].items[1].priority, "essential", "essential first inside a category")
+eq(m:members("cubeos.desktop")["cubeos.boot"], true, "members expand inner metas")
+eq(m:needed_by("cubeos.cdk", set), ["cubeos.axo", "cubeos.cde"], "who needs a package")
+eq(model.human(512), "512 B", "human bytes")
+eq(model.human(600000), "586 KB", "human KB")
+eq(model.human(1572864), "1.5 MB", "human MB")
+eq(model.account_problem("den-moth"), nil, "good account name")
+eq(model.account_problem("1abc") != nil, true, "bad account name")
+eq(model.suggest_account("Den Moth!"), "den-moth", "account from a display name")
+
+# ------------------------------------------------------------ canvas
+
+tt = make_term(10, 3, false)
+cv = canvas_mod.Canvas(tt)
+cv:text(1, 1, "hi", "3", "c")
+cv:flush()
+eq(tt.blits, 3, "first flush sends every row")
+cv:flush()
+eq(tt.blits, 3, "unchanged rows are not sent again")
+eq(string.sub(tt.last_fg, 1, 2) != "33", true, "basic computers get greys only")
+eq(cv:row(1), "hi        ", "row text")
+
+# ------------------------------------------------------------ the whole flow
+
+def K(k):
+    return ["key", k]
+
+def typ(list, text):
+    for i in range[1, len(text)]:
+        list[len(list) + 1] = ["char", string.sub(text, i, i)]
+
+def find_or_fail(s, text, label):
+    x, y = s.c:find(text)
+    if x == nil:
+        print("FAIL " .. label .. ": no '" .. text .. "' on the screen " .. s.cur)
+        for r in range[1, s.c.h]:
+            print("  |" .. s.c:row(r))
+    return x, y
+
+def click_text(s, text):
+    x, y = find_or_fail(s, text, "click")
+    if x != nil:
+        s:handle("mouse_click", 1, x, y)
+
+made = {}
+def make_account(u, s):
+    # the same code path as the installed system, here over a memory file system
+    fsys = cfs.new({})
+    fsys:mount("/", cfs.memory())
+    made.auth = finish.create_account(cfs, auth_mod, "/", u, 2, fsys)
+    made.user = u
+
+ev = []
+def add(*items):
+    for it in items:
+        ev[len(ev) + 1] = it
+
+# welcome
+add((s) => eq(s.cur, "welcome", "starts at the welcome screen"))
+add((s) => find_or_fail(s, "Welcome to", "welcome title"))
+add((s) => find_or_fail(s, "36x12, colour (right)", "monitor found"))
+add((s) => find_or_fail(s, "wireless (back)", "modem found"))
+add((s) => find_or_fail(s, "yes (top)", "speaker found"))
+add((s) => find_or_fail(s, "586 KB of 1.0 MB free", "disk size"))
+add(K(keys.enter))
+add((s) => eq(s.cur, "welcome", "Next needs the license"))
+add((s) => find_or_fail(s, "Please accept the license", "license hint"))
+add(K(keys.space))
+add((s) => eq(s.st.license, true, "Space accepts the license"))
+add(K(keys.up), K(keys.right))
+add((s) => eq(s.st.lang, 2, "language Russian"))
+add((s) => find_or_fail(s, "Russian", "language shown"))
+add(K(keys.enter))
+# profile
+add((s) => eq(s.cur, "profile", "profile screen"))
+add((s) => find_or_fail(s, "Everything", "full profile listed"))
+add((s) => find_or_fail(s, "too big", "full profile does not fit"))
+add((s) => find_or_fail(s, " fits ", "others fit"))
+add(K(keys.down), K(keys.down))
+add((s) => eq(s.st.profile, 4, "manual chosen"))
+add(K(keys.enter))
+# manual
+add((s) => eq(s.cur, "manual", "manual screen"))
+add((s) => find_or_fail(s, "System", "category rows"))
+add(K(keys.enter))
+add((s) => find_or_fail(s, "Cush shell", "System opened"))
+add(K(keys.down), K(keys.space))
+add((s) => find_or_fail(s, "is essential", "essential cannot be unticked"))
+def open_apps(s):
+    click_text(s, "Apps")
+    click_text(s, "Apps")
+    find_or_fail(s, "Snake", "apps opened")
+add(open_apps)
+def tick_snake(s):
+    x, y = find_or_fail(s, "Snake", "snake row")
+    s:handle("mouse_click", 1, 6, y)
+    eq(s.st.explicit["cubeos.snake"], true, "Snake ticked")
+    eq(string.sub(s.c:row(y), 5, 7), "[x]", "ticked box")
+add(tick_snake)
+def untick_cdk(s):
+    click_text(s, "Desktop")
+    click_text(s, "Desktop")
+    x, y = find_or_fail(s, "CDK widgets", "cdk row")
+    eq(string.sub(s.c:row(y), 5, 7), "[+]", "a dependency is ticked automatically")
+    s:handle("mouse_click", 1, 6, y)
+    eq(s.st.explicit["cubeos.cdk"], true, "ticking an automatic package makes it explicit")
+    s:handle("mouse_click", 1, 6, y)
+    find_or_fail(s, "needed by", "unticking a needed package explains why it stays")
+add(untick_cdk)
+add((s) => find_or_fail(s, "Used ~", "live counter"))
+add(K(keys.tab), K(keys.enter))
+# options
+add((s) => eq(s.cur, "options", "options screen for Snake"))
+add((s) => find_or_fail(s, "Speed", "choice option"))
+add(K(keys.right))
+add((s) => eq(s.st.options["cubeos.snake"].speed, "fast", "choice changed"))
+add(K(keys.down), K(keys.space))
+add((s) => eq(s.st.options["cubeos.snake"].sound, false, "bool toggled"))
+add(K(keys.down))
+for i in range[1, 5]:
+    add(K(keys.backspace))
+typ(ev, "alex")
+add((s) => eq(s.st.options["cubeos.snake"].player, "alex", "text typed"))
+add(K(keys.enter))
+# storage: fast does not fit
+add((s) => eq(s.cur, "storage", "storage screen"))
+add((s) => find_or_fail(s, "Compact", "compact listed"))
+add(K(keys.up))
+add((s) => eq(s.st.storage, 2, "fast chosen"))
+add(K(keys.enter))
+# does not fit
+add((s) => eq(s.cur, "fit", "does not fit screen"))
+add((s) => find_or_fail(s, "It does not fit", "warning"))
+add((s) => find_or_fail(s, "Second computer", "later option shown"))
+add(["char", "2"])
+add((s) => eq(s.st.storage, 1, "switched to compact"))
+add((s) => find_or_fail(s, "Now it fits", "fits after the switch"))
+add(K(keys.tab), K(keys.enter))
+# user
+add((s) => eq(s.cur, "user", "user screen"))
+typ(ev, "Den Moth")
+add((s) => eq(s.st.user.name, "den-moth", "account name follows the display name"))
+add(K(keys.enter), K(keys.enter))
+typ(ev, "pw")
+add(K(keys.enter))
+typ(ev, "px")
+add(K(keys.enter), K(keys.right))
+add((s) => eq(s.st.user.avatar, 2, "avatar cube"))
+add((s) => find_or_fail(s, "cube", "avatar name"))
+add(K(keys.enter))
+add((s) => find_or_fail(s, "do not match", "passwords checked"))
+add(K(keys.backspace), K(keys.backspace))
+typ(ev, "pw")
+add(K(keys.enter), K(keys.enter))
+# summary
+add((s) => eq(s.cur, "summary", "summary screen"))
+add((s) => find_or_fail(s, "Den Moth (den-moth), administrator", "account in the summary"))
+add((s) => find_or_fail(s, "Compact", "storage in the summary"))
+add(K(keys.enter))
+# install: first attempt fails, retry, a question from a package, then done
+add((s) => find_or_fail(s, "The installation failed", "failure dialog"))
+add((s) => find_or_fail(s, "disk full", "error text"))
+add(K(keys.enter))
+add((s) => find_or_fail(s, "Keep old saves?", "package question"))
+add(K(keys.right), K(keys.enter))
+add((s) => eq(s.cur, "done", "done screen"))
+add((s) => find_or_fail(s, "CubeOS is installed", "done text"))
+add(K(keys.enter))
+
+stew = TaggingStew()
+rebooted = {n: 0}
+cleaned = {n: 0}
+def do_reboot():
+    rebooted.n += 1
+def do_cleanup():
+    cleaned.n += 1
+term_api = make_term(51, 19)
+env = {term: term_api, stew: stew, fs: fakefs, root: ROOT, events: ev, strict: true, timer: (x) => nil, sleep: (x) => nil,
+    clock: () => 0, peripheral: fake_peripheral(), make_account: make_account, animate: false,
+    source: {name: "local", kind: "path", url: "/repo/build/packages"},
+    cleanup: do_cleanup, reboot: do_reboot}
+s = setup.new(env)
+ok, res = pcall(() => s:run())
+if not ok:
+    print("FAIL run: " .. tostring(res))
+eq(res, "reboot", "the flow ends with a reboot")
+eq(rebooted.n, 1, "reboot called")
+eq(cleaned.n, 1, "temp folder cleaned")
+eq(s.qpos, len(ev), "every scripted event was used")
+eq(stew.log[1], "source_remove local", "an old source with the same name is replaced")
+eq(stew.log[2], "source_add path /repo/build/packages", "the source is added")
+eq(stew.log[3], "refresh local", "only the installer's source is refreshed")
+eq(stew.log[len(stew.log)], "apply packed", "applied with compact storage")
+eq(stew.last_req.storage, "packed", "plan storage")
+eq(stew.answer, "drop", "the package question got the chosen answer")
+eq(stew.last_req.options["cubeos.snake"], {speed: "fast", sound: false, player: "alex"}, "options passed to the plan")
+req = stew.last_req.install
+eq(req[1], "cubeos.minimal", "manual install starts from the minimal set")
+eq(req[len(req)], "cubeos.lang-ru", "the language package is added")
+has_snake = false
+for id in req:
+    if id == "cubeos.snake":
+        has_snake = true
+eq(has_snake, true, "Snake requested")
+eq(made.user.name, "den-moth", "account created")
+eq(made.auth:is_admin("den-moth"), true, "the account is an administrator")
+eq(made.auth:verify("den-moth", "pw"), true, "the password works")
+f = fs.open(ROOT .. "/cubeos/users/den-moth/cfg/cde.conf", "r")
+eq(f != nil and string.find(f.readAll(), "avatar: \"cube\"", 1, true) != nil, true, "avatar saved for the desktop")
+if f != nil:
+    f.close()
+f = fs.open(ROOT .. "/cubeos/sys/cfg/locale.conf", "r")
+eq(f != nil and string.find(f.readAll(), "lang: \"ru\"", 1, true) != nil, true, "language written")
+if f != nil:
+    f.close()
+eq(term_api.palette[colours.black] != nil, true, "advanced computers get the night palette")
+
+# ------------------------------------------------------------ quitting, a small screen
+
+ev2 = [["terminate"], (s) => find_or_fail(s, "Quit setup?", "quit dialog"), K(keys.right), K(keys.enter)]
+s2 = setup.new({term: make_term(39, 13), stew: TaggingStew(), fs: fakefs, root: ROOT, events: ev2, strict: true, timer: (x) => nil,
+    sleep: (x) => nil, peripheral: {getNames: () => []}, animate: false})
+ok2, res2 = pcall(() => s2:run())
+eq(ok2, true, "a turtle-sized screen works: " .. tostring(res2))
+eq(res2, "quit", "Ctrl+T and Quit leave the setup")
+
+fs.delete(ROOT)
+print("done")

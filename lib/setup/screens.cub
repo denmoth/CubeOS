@@ -1,0 +1,744 @@
+# setup.screens: the choosing screens of the installer (welcome, profile, manual, options, storage, fit) and the loading
+# screen. Each screen is a table of functions taking the Setup object (lib/setup/init.cub).
+
+import setup.widgets as w
+import setup.model as model
+
+export const LICENSE = """MIT License
+
+Copyright (c) 2026 Denmoth
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE."""
+
+def _is_enter(k):
+    return k == keys.enter or k == keys.numPadEnter
+
+# a selectable card (profile and storage screens): title and size with a fits badge, a description, a bar of the free space
+def card(ui, y, h, selected, title, size, ok, blurb, frac, on_click):
+    c = ui.c
+    bg = selected and "c" or "f"
+    c:fill(1, y, c.w, h, bg)
+    if selected:
+        c:fill(1, y, 1, h, "3")
+    c:text(3, y, selected and w.BULLET or w.DOT, selected and "3" or "6", bg)
+    c:text(5, y, title, selected and "0" or "0", bg)
+    right = c.w - 1
+    if ok != nil:
+        bl = len(ok and " fits " or " too big ")
+        right -= bl
+        w.badge(c, right + 1, y, ok)
+        right -= 1
+    if size != nil:
+        c:text(right - len(size) + 1, y, size, ok == false and "e" or "0", bg)
+    if h >= 2:
+        c:text(5, y + 1, w.fit(blurb, c.w - 6), "8", bg)
+    if h >= 3 and frac != nil:
+        bw = c.w - 22
+        w.thin_bar(c, 5, y + 2, bw, frac, ok == false and "e" or (selected and "3" or "9"), selected and "6" or "c")
+        pct = math.floor(frac * 100 + 0.5)
+        c:text(6 + bw, y + 2, (pct > 999 and ">999" or tostring(pct)) .. "% of free space", "8", bg)
+    ui:hot(1, y, c.w, y + h - 1, on_click)
+
+def list_move(ui, k, n, cur):
+    if k == keys.up:
+        return math.max(1, cur - 1)
+    if k == keys.down:
+        return math.min(n, cur + 1)
+    if k == keys.home:
+        return 1
+    if k == keys["end"]:
+        return n
+    return cur
+
+def free_total(ui):
+    return ui.hw.free
+
+# ================================================================ loading
+
+def loading_draw(ui):
+    c = ui.c
+    w.header(ui, "Setup")
+    lw = 16
+    y = math.max(4, math.floor((c.h - 14) / 2) + 2)
+    if c.h >= 16:
+        w.draw_logo(c, math.floor((c.w - lw) / 2) + 1, y, 1, ui.phase % 40)
+        y += 12
+    text = (ui.loading ?? "Loading") .. string.rep(".", ui.phase % 4)
+    c:text(math.floor((c.w - len(ui.loading ?? "Loading")) / 2) + 1, math.min(c.h - 1, y), text, "8")
+
+# ================================================================ welcome
+
+def welcome_enter(ui):
+    ui.focus = ui.focus ?? 1
+
+def _lang_step(ui, d):
+    n = len(model.LANGS)
+    ui.st.lang = (ui.st.lang - 1 + d) % n + 1
+    ui.plans = {}
+
+def _license(ui):
+    ans = ui:dialog({title: "License", text: LICENSE, scroll: true, width: 46,
+        buttons: [{label: "Close", value: false}, {label: "I accept", value: true}], focus: 2})
+    if ans:
+        ui.st.license = true
+        ui.msg = nil
+
+def welcome_draw(ui):
+    c = ui.c
+    ui:step_header("Setup")
+    hw = ui.hw
+    x0 = 3
+    if c.w >= 46 and c.h >= 16:
+        w.draw_logo(c, 3, 4, ui.reveal, ui.reveal >= 1 and (ui.phase % 50) - 8 or nil)
+        x0 = 22
+    vw = c.w - x0 - 8
+    y = 4
+    c:text(x0, y, "Welcome to ", "8")
+    c:text(x0 + 11, y, "CubeOS", "3")
+    c:text(x0 + 18, y, ui.version ?? "", "6")
+    c:text(x0, y + 1, w.fit("For ComputerCraft computers", c.w - x0), "8")
+    y = 7
+    dtext = model.human(free_total(ui)) .. " free"
+    if hw.capacity != nil:
+        dtext = model.human(free_total(ui)) .. " of " .. model.human(hw.capacity) .. " free"
+    rows = [["Disk", dtext, "0"], ["Screen", hw.cols .. "x" .. hw.rows .. (c.colour and ", colour" or ", no colour"), "0"],
+        ["Monitor", hw.monitor ?? "none", hw.monitor != nil and "0" or "6"], ["Modem", hw.modem ?? "none", hw.modem != nil and "0" or "6"],
+        ["Speaker", hw.speaker ?? "none", hw.speaker != nil and "0" or "6"]]
+    for r in rows:
+        c:text(x0, y, r[1], "8")
+        c:text(x0 + 8, y, w.fit(r[2], vw), r[3])
+        y += 1
+    y += 1
+    sel = ui.focus == 1
+    c:text(x0, y, "Language", sel and "3" or "8")
+    lang = model.LANGS[ui.st.lang]
+    box_w = math.min(vw, 14)
+    c:fill(x0 + 9, y, box_w, 1, sel and "6" or "c")
+    c:text(x0 + 9, y, w.LEFT, sel and "3" or "8")
+    c:text(x0 + 9 + math.floor((box_w - len(lang.title)) / 2), y, lang.title, "0")
+    c:text(x0 + 8 + box_w, y, w.RIGHT, sel and "3" or "8")
+    ui:hot(x0 + 9, y, x0 + 9 + math.floor(box_w / 2) - 1, y, (x, yy) => _lang_step(ui, -1))
+    ui:hot(x0 + 9 + math.floor(box_w / 2), y, x0 + 8 + box_w, y, (x, yy) => _lang_step(ui, 1))
+    ui:hot(x0, y, x0 + 8, y, (x, yy) => _lang_step(ui, 1))
+    y += 1
+    sel = ui.focus == 2
+    w.check(c, x0, y, ui.st.license and "on" or "off")
+    c:text(x0 + 4, y, w.fit("I accept the MIT license", c.w - x0 - 4), sel and "3" or "0")
+    ui:hot(x0, y, x0 + 27, y, (x, yy) => _toggle_license(ui))
+    if x0 + 30 + 6 <= c.w:
+        c:text(x0 + 29, y, "read", "9")
+        ui:hot(x0 + 29, y, x0 + 32, y, (x, yy) => _license(ui))
+    if ui.msg == nil and lang.id != "en":
+        c:text(3, c.h - 1, w.fit("The desktop speaks " .. lang.title .. "; text mode stays English.", c.w - 4), "8")
+    ui:status()
+    w.footer(ui, "Space accept  L license", (x, yy) => ui:confirm_quit(), (x, yy) => ui:go_next(), "Next", "main", "Quit")
+
+def _toggle_license(ui):
+    ui.st.license = not ui.st.license
+    ui.msg = nil
+
+def welcome_key(ui, k):
+    if k == keys.up or k == keys.down:
+        ui.focus = ui.focus == 1 and 2 or 1
+    elif (k == keys.left or k == keys.right) and ui.focus == 1:
+        _lang_step(ui, k == keys.left and -1 or 1)
+    elif k == keys.space:
+        if ui.focus == 1:
+            _lang_step(ui, 1)
+        else:
+            _toggle_license(ui)
+    elif _is_enter(k):
+        ui:go_next()
+
+def welcome_char(ui, ch):
+    if ch == "l" or ch == "L":
+        _license(ui)
+
+def welcome_next(ui):
+    if not ui.st.license:
+        ui.focus = 2
+        ui:say("Please accept the license to continue (Space).", "4")
+        return
+    ui.result = "next"
+
+# ================================================================ profile
+
+def _profile_need(ui, i):
+    prof = model.PROFILES[i]
+    if prof.meta == nil:
+        set = ui:effective(i)
+        return ui.m:estimate(set, "auto", free_total(ui)), nil, ui.m:count(set)
+    p = ui:plan(ui:request(i), "auto")
+    return ui:need_of(p), ui:fits(p), ui.m:count(ui:effective(i))
+
+def profile_enter(ui):
+    if ui.st.explicit == nil:
+        ui.st.explicit = ui.m:members("cubeos.desktop")
+
+def _pick_profile(ui, i):
+    if ui.st.profile == i:
+        ui:go_next()
+    ui.st.profile = i
+
+def profile_draw(ui):
+    c = ui.c
+    ui:step_header("Profile")
+    free = free_total(ui)
+    w.title(c, 4, "What should this computer run?", model.human(free) .. " free")
+    h = c.h >= 19 and 3 or 2
+    y = c.h >= 19 and 6 or 5
+    for i in range[1, len(model.PROFILES)]:
+        prof = model.PROFILES[i]
+        need, ok, n = _profile_need(ui, i)
+        if ok == nil:
+            ok = need <= free * (1 - model.RESERVE)
+        blurb = prof.blurb .. "  " .. w.DOT .. "  " .. n .. " packages"
+        let idx = i
+        card(ui, y, h, ui.st.profile == i, prof.title, (prof.meta == nil and "~" or "") .. model.human(need), ok, blurb,
+            free > 0 and need / free or 1, (x, yy) => _pick_profile(ui, idx))
+        y += h
+    ui:status()
+    w.footer(ui, "Up/Down choose  Enter next", (x, yy) => ui:go_back(), (x, yy) => ui:go_next())
+
+def profile_key(ui, k):
+    ui.st.profile = list_move(ui, k, len(model.PROFILES), ui.st.profile)
+    if _is_enter(k):
+        ui:go_next()
+    elif k == keys.backspace:
+        ui:go_back()
+
+# ================================================================ manual
+
+def manual_skip(ui):
+    return model.PROFILES[ui.st.profile].meta != nil
+
+def manual_enter(ui):
+    if ui.cats == nil:
+        ui.cats = ui.m:categories()
+        ui.expanded = {}
+        ui.mcur = 1
+        ui.mtop = 0
+    _recalc(ui)
+
+def _recalc(ui):
+    ui.eff = ui:effective()
+    ui.plans = {}
+
+def _rows(ui):
+    rows = []
+    for g in ui.cats:
+        rows[len(rows) + 1] = {cat: g}
+        if ui.expanded[g.id]:
+            for p in g.items:
+                rows[len(rows) + 1] = {pkg: p, group: g}
+    return rows
+
+def _state(ui, p):
+    if p.priority == "essential":
+        return "lock"
+    if ui.st.explicit[p.id]:
+        return "on"
+    if ui.eff[p.id]:
+        return "auto"
+    return "off"
+
+def _toggle_pkg(ui, p):
+    st = _state(ui, p)
+    if st == "lock":
+        ui:say(p.name .. " is essential: CubeOS does not start without it.", "4")
+        return
+    if st == "on":
+        ui.st.explicit[p.id] = nil
+        _recalc(ui)
+        if ui.eff[p.id]:
+            by = ui.m:needed_by(p.id, ui.eff)
+            names = []
+            for id in by:
+                if len(names) < 3:
+                    names[len(names) + 1] = ui.m:get(id).name
+            ui:say("Still installed: needed by " .. table.concat(names, ", ") .. (len(by) > 3 and "..." or ""), "4")
+        else:
+            ui.msg = nil
+    else:
+        ui.st.explicit[p.id] = true
+        _recalc(ui)
+        ui.msg = nil
+
+def _activate(ui, row):
+    if row.cat != nil:
+        ui.expanded[row.cat.id] = not ui.expanded[row.cat.id]
+    else:
+        _toggle_pkg(ui, row.pkg)
+
+def manual_draw(ui):
+    c = ui.c
+    ui:step_header("Packages")
+    rows = _rows(ui)
+    n = ui.m:count(ui.eff)
+    w.title(c, 3, "Choose packages", n .. " of " .. (len(ui.m.ids) - 4) .. " selected")
+    top = 4
+    bottom = c.h - 3
+    view = bottom - top + 1
+    ui.mcur = math.max(1, math.min(len(rows), ui.mcur))
+    if ui.mcur <= ui.mtop:
+        ui.mtop = ui.mcur - 1
+    if ui.mcur > ui.mtop + view:
+        ui.mtop = ui.mcur - view
+    ui.mview = view
+    for i in range[1, view]:
+        ri = ui.mtop + i
+        row = rows[ri]
+        if row == nil:
+            break
+        y = top + i - 1
+        sel = ri == ui.mcur and ui.ffocus == nil
+        bg = sel and "c" or "f"
+        c:fill(1, y, c.w, 1, bg)
+        if sel:
+            c:fill(1, y, 1, 1, "3")
+        let r = row
+        let index = ri
+        if row.cat != nil:
+            g = row.cat
+            on = 0
+            size = 0
+            for p in g.items:
+                if ui.eff[p.id]:
+                    on += 1
+                    size += p.isize
+            c:text(3, y, ui.expanded[g.id] and w.DOWN or w.RIGHT, "3", bg)
+            c:text(5, y, w.fit(g.title, c.w - 24), "0", bg)
+            info = on .. "/" .. len(g.items)
+            c:text(c.w - 19, y, w.rpad(info, 7), on > 0 and "9" or "6", bg)
+            c:text(c.w - 10, y, w.rpad(model.human(size), 8), "8", bg)
+        else:
+            p = row.pkg
+            st = _state(ui, p)
+            w.check(c, 5, y, st, bg)
+            name_col = st == "off" and "8" or "0"
+            c:text(9, y, w.fit(p.name, c.w - 22), name_col, bg)
+            c:text(c.w - 11, y, w.rpad(model.human(p.isize), 8), "8", bg)
+            pr = string.upper(string.sub(p.priority, 1, 1))
+            c:text(c.w - 2, y, pr, pr == "E" and "6" or (pr == "R" and "9" or "2"), bg)
+        ui:hot(1, y, c.w, y, (x, yy) => _manual_click(ui, index, r, x))
+    # scroll marks
+    if ui.mtop > 0:
+        c:text(c.w, top, w.UP, "8")
+    if ui.mtop + view < len(rows):
+        c:text(c.w, bottom, w.DOWN, "8")
+    # description or message, then the live counter
+    cur = rows[ui.mcur]
+    if ui.msg != nil:
+        ui:status(c.h - 2)
+    elif cur != nil and cur.pkg != nil:
+        c:text(3, c.h - 2, w.fit(cur.pkg.description, c.w - 4), "8")
+    elif cur != nil:
+        c:text(3, c.h - 2, w.fit("Enter opens the group, Space ticks a package", c.w - 4), "6")
+    free = free_total(ui)
+    need = ui.m:estimate(ui.eff, model.STORAGE[ui.st.storage].id, free)
+    ok = need <= free * (1 - model.RESERVE)
+    label = "Used ~" .. model.human(need) .. " of " .. model.human(free)
+    c:text(3, c.h - 1, label, ok and "0" or "e")
+    bx = len(label) + 5
+    if c.w - bx - 2 >= 6:
+        w.thin_bar(c, bx, c.h - 1, c.w - bx - 1, free > 0 and need / free or 1, ok and "5" or "e", "6")
+    w.footer(ui, "Space tick  Tab next", (x, yy) => ui:go_back(), (x, yy) => ui:go_next())
+
+def _manual_click(ui, index, row, x):
+    if ui.mcur == index or (row.pkg != nil and x >= 5 and x <= 7):
+        _activate(ui, row)
+    ui.mcur = index
+
+def manual_key(ui, k):
+    rows = _rows(ui)
+    n = len(rows)
+    row = rows[ui.mcur]
+    if k == keys.pageDown:
+        ui.mcur = math.min(n, ui.mcur + (ui.mview ?? 10))
+    elif k == keys.pageUp:
+        ui.mcur = math.max(1, ui.mcur - (ui.mview ?? 10))
+    elif k == keys.space or _is_enter(k):
+        if row != nil:
+            _activate(ui, row)
+    elif k == keys.right and row != nil and row.cat != nil:
+        ui.expanded[row.cat.id] = true
+    elif k == keys.left and row != nil:
+        g = row.cat ?? row.group
+        ui.expanded[g.id] = false
+        for i in range[1, n]:
+            if rows[i].cat == g:
+                ui.mcur = i
+    elif k == keys.backspace:
+        ui:go_back()
+    else:
+        ui.mcur = list_move(ui, k, n, ui.mcur)
+
+def manual_scroll(ui, d):
+    ui.mcur = math.max(1, ui.mcur + d * 3)
+
+# ================================================================ options
+
+def _opt_values(ui, id):
+    vals = ui.st.options[id]
+    if vals == nil:
+        vals = {}
+        ui.st.options[id] = vals
+    return vals
+
+def _visible(o, vals):
+    if type(o.when) != "table":
+        return true
+    for k, v in o.when:
+        if vals[k] != v:
+            return false
+    return true
+
+def _opt_rows(ui):
+    rows = []
+    ids = []
+    for id, on in ui:effective():
+        p = ui.m:get(id)
+        if on and p != nil and type(p.options) == "table" and len(p.options) > 0:
+            ids[len(ids) + 1] = id
+    table.sort(ids)
+    for id in ids:
+        p = ui.m:get(id)
+        vals = _opt_values(ui, id)
+        rows[len(rows) + 1] = {pkg: p}
+        for o in p.options:
+            if vals[o.id] == nil and o.default != nil:
+                if type(o.default) == "table":
+                    copy = []
+                    for v in o.default:
+                        copy[len(copy) + 1] = v
+                    vals[o.id] = copy
+                else:
+                    vals[o.id] = o.default
+            if _visible(o, vals):
+                rows[len(rows) + 1] = {pkg: p, opt: o, vals: vals}
+    return rows
+
+def options_skip(ui):
+    return len(_opt_rows(ui)) == 0
+
+def options_enter(ui):
+    ui.ocur = nil
+    ui.ochip = 1
+
+def _has(list, v):
+    for x in list ?? []:
+        if x == v:
+            return true
+    return false
+
+def _opt_change(ui, row, d):
+    o = row.opt
+    vals = row.vals
+    t = o.type ?? "bool"
+    if t == "bool":
+        vals[o.id] = not vals[o.id]
+    elif t == "choice":
+        ch = o.choices ?? []
+        idx = 1
+        for i in range[1, len(ch)]:
+            if ch[i] == vals[o.id]:
+                idx = i
+        vals[o.id] = ch[(idx - 1 + d) % math.max(1, len(ch)) + 1]
+    elif t == "multi":
+        ch = (o.choices ?? [])[ui.ochip]
+        if ch != nil:
+            cur = vals[o.id] ?? []
+            out = []
+            for v in cur:
+                if v != ch:
+                    out[len(out) + 1] = v
+            if not _has(cur, ch):
+                out[len(out) + 1] = ch
+            vals[o.id] = out
+    ui.plans = {}
+
+def options_draw(ui):
+    c = ui.c
+    ui:step_header("Options")
+    w.title(c, 3, "Package options", "defaults are fine")
+    rows = _opt_rows(ui)
+    if ui.ocur == nil or rows[ui.ocur] == nil or rows[ui.ocur].opt == nil:
+        ui.ocur = nil
+        for i in range[1, len(rows)]:
+            if ui.ocur == nil and rows[i].opt != nil:
+                ui.ocur = i
+    y = 5
+    vx = math.max(20, math.floor(c.w / 2))
+    for i in range[1, len(rows)]:
+        if y > c.h - 2:
+            break
+        row = rows[i]
+        if row.opt == nil:
+            if i > 1:
+                y += 1
+            c:text(3, y, w.fit(row.pkg.name, c.w - 4), "2")
+            y += 1
+            continue
+        o = row.opt
+        sel = i == ui.ocur and ui.ffocus == nil
+        bg = sel and "c" or "f"
+        c:fill(1, y, c.w, 1, bg)
+        if sel:
+            c:fill(1, y, 1, 1, "3")
+        c:text(5, y, w.fit(o.label ?? o.id, vx - 7), "0", bg)
+        v = row.vals[o.id]
+        t = o.type ?? "bool"
+        if t == "bool":
+            w.check(c, vx, y, v and "on" or "off", bg)
+        elif t == "choice":
+            c:text(vx, y, w.LEFT .. " " .. tostring(v ?? "") .. " " .. w.RIGHT, sel and "3" or "0", bg)
+        elif t == "multi":
+            x = vx
+            for j in range[1, len(o.choices ?? [])]:
+                ch = o.choices[j]
+                on = _has(v, ch)
+                chip = (on and "[x] " or "[ ] ") .. tostring(ch)
+                c:text(x, y, chip, (sel and j == ui.ochip) and "3" or (on and "0" or "8"), bg)
+                x += len(chip) + 2
+        else:
+            fw = c.w - vx - 1
+            c:fill(vx, y, fw, 1, sel and "6" or "c")
+            c:text(vx, y, w.fit(tostring(v ?? "") .. ((sel and ui.phase % 6 < 3) and "_" or ""), fw), "0")
+        let index = i
+        let r = row
+        ui:hot(1, y, c.w, y, (x, yy) => _opt_click(ui, index, r))
+        if sel and o.help != nil:
+            c:text(5, c.h - 1, w.fit(o.help, c.w - 6), "8")
+        y += 1
+    ui:status()
+    w.footer(ui, "Space change  Tab next", (x, yy) => ui:go_back(), (x, yy) => ui:go_next())
+
+def _opt_click(ui, index, row):
+    if ui.ocur == index:
+        _opt_change(ui, row, 1)
+    ui.ocur = index
+
+def options_key(ui, k):
+    rows = _opt_rows(ui)
+    row = rows[ui.ocur ?? 0]
+    t = row != nil and (row.opt.type ?? "bool") or nil
+    if k == keys.up or k == keys.down:
+        d = k == keys.up and -1 or 1
+        i = (ui.ocur ?? 0) + d
+        while rows[i] != nil and rows[i].opt == nil:
+            i += d
+        if rows[i] != nil:
+            ui.ocur = i
+            ui.ochip = 1
+    elif row == nil:
+        if _is_enter(k):
+            ui:go_next()
+    elif (k == keys.left or k == keys.right) and t == "multi":
+        n = len(row.opt.choices ?? [])
+        ui.ochip = math.max(1, math.min(n, ui.ochip + (k == keys.left and -1 or 1)))
+    elif (k == keys.left or k == keys.right) and t == "choice":
+        _opt_change(ui, row, k == keys.left and -1 or 1)
+    elif k == keys.space and (t == "bool" or t == "multi" or t == "choice"):
+        _opt_change(ui, row, 1)
+    elif k == keys.backspace:
+        if t == "text" or t == "number" or t == "path":
+            row.vals[row.opt.id] = string.sub(tostring(row.vals[row.opt.id] ?? ""), 1, -2)
+            ui.plans = {}
+        else:
+            ui:go_back()
+    elif _is_enter(k):
+        ui:go_next()
+
+def options_char(ui, ch):
+    rows = _opt_rows(ui)
+    row = rows[ui.ocur ?? 0]
+    if row == nil:
+        return
+    t = row.opt.type ?? "bool"
+    if t == "text" or t == "path" or (t == "number" and string.match(ch, "[%d%.%-]") != nil):
+        row.vals[row.opt.id] = tostring(row.vals[row.opt.id] ?? "") .. ch
+        ui.plans = {}
+
+def options_next(ui):
+    for row in _opt_rows(ui):
+        if row.opt != nil and row.opt.type == "number":
+            v = row.vals[row.opt.id]
+            if type(v) == "string":
+                n = tonumber(v)
+                if n == nil:
+                    ui:say((row.opt.label ?? row.opt.id) .. ": enter a number", "e")
+                    return
+                row.vals[row.opt.id] = n
+    ui.result = "next"
+
+# ================================================================ storage
+
+def storage_draw(ui):
+    c = ui.c
+    ui:step_header("Storage")
+    free = free_total(ui)
+    w.title(c, 4, "How to keep the packages", model.human(free) .. " free")
+    h = c.h >= 19 and 3 or 2
+    y = c.h >= 19 and 6 or 5
+    ids = ui:request()
+    for i in range[1, len(model.STORAGE)]:
+        s = model.STORAGE[i]
+        p = ui:plan(ids, s.stew)
+        need = ui:need_of(p)
+        let idx = i
+        card(ui, y, h, ui.st.storage == i, s.title, model.human(need), ui:fits(p), s.blurb, free > 0 and need / free or 1,
+            (x, yy) => _pick_storage(ui, idx))
+        y += h + (c.h >= 19 and 1 or 0)
+    ui:status()
+    w.footer(ui, "Up/Down choose  Enter next", (x, yy) => ui:go_back(), (x, yy) => ui:go_next())
+
+def _pick_storage(ui, i):
+    if ui.st.storage == i:
+        ui:go_next()
+    ui.st.storage = i
+
+def storage_key(ui, k):
+    ui.st.storage = list_move(ui, k, len(model.STORAGE), ui.st.storage)
+    if _is_enter(k):
+        ui:go_next()
+    elif k == keys.backspace:
+        ui:go_back()
+
+def storage_next(ui):
+    ui.plan_now = ui:plan(ui:request(), ui:storage_id())
+    ui.result = "next"
+
+# ================================================================ does not fit
+
+def fit_skip(ui):
+    p = ui:plan(ui:request(), ui:storage_id())
+    ui.plan_now = p
+    return ui:fits(p)
+
+def _fit_actions(ui):
+    cur = ui:plan(ui:request(), ui:storage_id())
+    acts = []
+    # leave out optional packages: switch to the manual profile without them
+    eff = ui:effective()
+    keep = {}
+    dropped = 0
+    for id, on in eff:
+        p = ui.m:get(id)
+        if on and p != nil and p.kind != "meta":
+            if p.priority == "optional":
+                dropped += 1
+            else:
+                keep[id] = true
+    lean = nil
+    if dropped > 0:
+        saved = ui.st.explicit
+        prof = ui.st.profile
+        ui.st.explicit = keep
+        ui.st.profile = len(model.PROFILES)
+        lean = ui:plan(ui:request(), ui:storage_id())
+        ui.st.explicit = saved
+        ui.st.profile = prof
+    acts[1] = {title: "Leave out optional packages", on: dropped > 0,
+        note: dropped > 0 and (dropped .. " packages, saves " .. model.human(ui:need_of(cur) - ui:need_of(lean))) or "nothing optional is selected",
+        run: () => _drop_optional(ui, keep)}
+    compact = ui:plan(ui:request(), "packed")
+    acts[2] = {title: "Keep everything compressed", on: ui.st.storage != 1,
+        note: ui.st.storage != 1 and ("saves " .. model.human(ui:need_of(cur) - ui:need_of(compact))) or "already compact",
+        run: () => _go_compact(ui)}
+    acts[3] = {title: "Choose packages again", on: true, note: "back to the profiles", run: () => _choose_again(ui)}
+    acts[4] = {title: "Second computer for optional packages", on: false, note: "comes in a later version", run: nil}
+    return acts, cur
+
+def _drop_optional(ui, keep):
+    ui.st.explicit = keep
+    ui.st.profile = len(model.PROFILES)
+    ui.eff = nil
+
+def _go_compact(ui):
+    ui.st.storage = 1
+
+def _choose_again(ui):
+    ui.result = "goto:profile"
+
+def fit_enter(ui):
+    ui.fcur = 1
+
+def fit_draw(ui):
+    c = ui.c
+    ui:step_header("Space")
+    acts, p = _fit_actions(ui)
+    ok = ui:fits(p)
+    free = free_total(ui)
+    need = ui:need_of(p)
+    if ok:
+        c:text(3, 4, "Now it fits", "5")
+        c:text(3, 5, w.fit("Needs " .. model.human(need) .. " of " .. model.human(free) .. " free.", c.w - 4), "0")
+    else:
+        c:fill(1, 4, c.w, 2, "c")
+        c:fill(1, 4, 1, 2, "e")
+        c:text(3, 4, "It does not fit", "e", "c")
+        short = math.max(0, need - math.floor(free * (1 - model.RESERVE)))
+        c:text(3, 5, w.fit("Needs " .. model.human(need) .. ", " .. model.human(free) .. " free: " .. model.human(short) .. " short.", c.w - 4), "0", "c")
+    y = 7
+    for i in range[1, len(acts)]:
+        a = acts[i]
+        sel = i == ui.fcur and ui.ffocus == nil
+        bg = sel and "c" or "f"
+        c:fill(1, y, c.w, 2, bg)
+        if sel:
+            c:fill(1, y, 1, 2, "3")
+        c:text(3, y, tostring(i), a.on and "3" or "6", bg)
+        c:text(5, y, w.fit(a.title, c.w - 6), a.on and "0" or "6", bg)
+        c:text(5, y + 1, w.fit(a.note, c.w - 6), a.on and "8" or "6", bg)
+        let idx = i
+        ui:hot(1, y, c.w, y + 1, (x, yy) => _fit_pick(ui, idx))
+        y += 2
+    ui:status()
+    w.footer(ui, "Enter apply", (x, yy) => ui:go_back(), ok and ((x, yy) => ui:go_next()) or false)
+
+def _fit_pick(ui, i):
+    ui.fcur = i
+    acts = _fit_actions(ui)
+    a = acts[i]
+    if a.on and a.run != nil:
+        a.run()
+        if ui.result == nil:
+            p = ui:plan(ui:request(), ui:storage_id())
+            if ui:fits(p):
+                ui:say("Now it fits. Press Next.", "5")
+            else:
+                ui:say("Still too big: try another option too.", "4")
+
+def fit_key(ui, k):
+    if k == keys.up or k == keys.down or k == keys.home or k == keys["end"]:
+        ui.fcur = list_move(ui, k, 4, ui.fcur)
+    elif _is_enter(k) or k == keys.space:
+        _fit_pick(ui, ui.fcur)
+    elif k == keys.backspace:
+        ui:go_back()
+
+def fit_char(ui, ch):
+    n = tonumber(ch)
+    if n != nil and n >= 1 and n <= 4:
+        _fit_pick(ui, n)
+
+def fit_next(ui):
+    p = ui:plan(ui:request(), ui:storage_id())
+    if ui:fits(p):
+        ui.plan_now = p
+        ui.result = "next"
+
+export const SCREENS = {
+    loading: {draw: loading_draw},
+    welcome: {enter: welcome_enter, draw: welcome_draw, key: welcome_key, char: welcome_char, next: welcome_next,
+        back: (ui) => ui:confirm_quit()},
+    profile: {enter: profile_enter, draw: profile_draw, key: profile_key},
+    manual: {skip: manual_skip, enter: manual_enter, draw: manual_draw, key: manual_key, scroll: manual_scroll},
+    options: {skip: options_skip, enter: options_enter, draw: options_draw, key: options_key, char: options_char, next: options_next},
+    storage: {draw: storage_draw, key: storage_key, next: storage_next},
+    fit: {skip: fit_skip, enter: fit_enter, draw: fit_draw, key: fit_key, char: fit_char, next: fit_next},
+}

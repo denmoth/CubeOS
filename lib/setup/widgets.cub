@@ -1,0 +1,216 @@
+# setup.widgets: pieces of the installer screens drawn on a setup.canvas. `ui` is the Setup object: ui.c is the canvas,
+# ui:hot(x1, y1, x2, y2, fn) registers a mouse target, ui.phase is the animation counter.
+#
+# Characters are CC's own: 128..159 are teletext blocks (2x3 subpixels), 7 is a bullet, 16/17 are arrows, 140 a bar.
+
+import logo
+
+export const GRAD = "bb99333dd3399bbaa22aa"
+export const BULLET = string.char(7)
+export const RIGHT = string.char(16)
+export const LEFT = string.char(17)
+export const UP = string.char(30)
+export const DOWN = string.char(31)
+export const DOT = string.char(183)
+export const BAR = string.char(140)
+export const HALF = string.char(132)
+export const TIMES = string.char(215)
+
+export def wrap(text, width):
+    lines = []
+    for para in string.gmatch((text ?? "") .. "\n", "([^\n]*)\n"):
+        line = ""
+        for word in string.gmatch(para, "%S+"):
+            while len(word) > width:
+                if line != "":
+                    lines[len(lines) + 1] = line
+                    line = ""
+                lines[len(lines) + 1] = string.sub(word, 1, width)
+                word = string.sub(word, width + 1)
+            if line == "":
+                line = word
+            elif len(line) + 1 + len(word) <= width:
+                line = line .. " " .. word
+            else:
+                lines[len(lines) + 1] = line
+                line = word
+        lines[len(lines) + 1] = line
+    if len(lines) > 1 and lines[len(lines)] == "":
+        table.remove(lines)
+    return lines
+
+export def fit(s, width):
+    s = s ?? ""
+    if width <= 0:
+        return ""
+    if len(s) <= width:
+        return s
+    if width <= 2:
+        return string.sub(s, 1, width)
+    return string.sub(s, 1, width - 2) .. ".."
+
+export def pad(s, width):
+    s = fit(s, width)
+    return s .. string.rep(" ", width - len(s))
+
+export def rpad(s, width):
+    s = fit(s, width)
+    return string.rep(" ", width - len(s)) .. s
+
+# little cube: two cells, top face over the left and right faces
+export def cube_icon(c, x, y):
+    c:cells(x, y, string.char(131, 131), "33", "9b")
+
+# title bar with the step dots, then the shimmering accent line
+export def header(ui, title, step=nil, steps=nil):
+    c = ui.c
+    c:fill(1, 1, c.w, 1, "7")
+    cube_icon(c, 2, 1)
+    c:text(5, 1, "CubeOS", "0")
+    c:text(12, 1, title ?? "Setup", "8")
+    if step != nil and c.w >= 40:
+        x = c.w - steps * 2
+        label = step .. "/" .. steps
+        c:text(x - len(label) - 1, 1, label, "8")
+        for i in range[1, steps]:
+            col = i < step and "3" or (i == step and "0" or "6")
+            c:text(x + (i - 1) * 2, 1, BAR, col)
+    strip(ui, 2)
+
+export def strip(ui, y):
+    c = ui.c
+    n = len(GRAD)
+    for x in range[1, c.w]:
+        k = math.floor((x - 1) * n / c.w + (ui.phase ?? 0) / 2) % n + 1
+        c:text(x, y, string.char(131), string.sub(GRAD, k, k), "f")
+
+# screen title (accent) with an optional muted note on the right
+export def title(c, y, text, note=nil):
+    c:text(3, y, text, "3")
+    if note != nil:
+        c:text(c.w - len(note) - 1, y, note, "8")
+
+# a button: [ label ]; style "main" (accent), "ok" (green), "plain", "off" (disabled)
+export def button(ui, x, y, label, style, fn):
+    fg = "0"
+    bg = "6"
+    if style == "main":
+        fg = "f"
+        bg = "3"
+    elif style == "ok":
+        fg = "f"
+        bg = "5"
+    elif style == "danger":
+        fg = "f"
+        bg = "e"
+    elif style == "focus":
+        fg = "f"
+        bg = "0"
+    elif style == "off":
+        fg = "8"
+        bg = "c"
+    text = " " .. label .. " "
+    ui.c:text(x, y, text, fg, bg)
+    if fn != nil and style != "off":
+        ui:hot(x, y, x + len(text) - 1, y, fn)
+    return len(text)
+
+# bottom bar: back button left, next button right, key hints between
+# ui.ffocus ("next" or "back") marks the button Tab moved to; Enter presses it
+export def footer(ui, hints, back=nil, go=nil, next_label="Next", next_style="main", back_label=nil):
+    c = ui.c
+    y = c.h
+    c:fill(1, y, c.w, 1, "7")
+    left = 2
+    if back != nil:
+        left += button(ui, 2, y, back_label ?? (LEFT .. " Back"), ui.ffocus == "back" and "focus" or "plain", back) + 1
+    right = c.w
+    if go != nil:
+        label = next_label .. " " .. RIGHT
+        right = c.w - len(label) - 2
+        style = go == false and "off" or (ui.ffocus == "next" and "focus" or next_style)
+        button(ui, right, y, label, style, go != false and go or nil)
+    if hints != nil:
+        room = right - left - 1
+        if room >= 6:
+            c:text(left + 1, y, fit(hints, room), "8")
+
+# thin bar (middle line of the cell) with half-cell steps
+export def thin_bar(c, x, y, w, frac, on="3", off="6"):
+    halves = math.floor(math.max(0, math.min(1, frac)) * w * 2 + 0.5)
+    full = math.floor(halves / 2)
+    for i in range[0, w - 1]:
+        if i < full:
+            c:text(x + i, y, BAR, on)
+        elif i == full and halves % 2 == 1:
+            c:text(x + i, y, HALF, on)
+        else:
+            c:text(x + i, y, BAR, off)
+
+# thick bar: whole cells, a half cell at the front, a light glint running along the filled part
+export def thick_bar(c, x, y, w, frac, phase=0, on="9", off="c", glint="3"):
+    halves = math.floor(math.max(0, math.min(1, frac)) * w * 2 + 0.5)
+    full = math.floor(halves / 2)
+    g = full > 0 and (phase % (full + 8)) or -10
+    for i in range[0, w - 1]:
+        if i < full:
+            col = (i >= g - 2 and i <= g) and glint or on
+            c:text(x + i, y, " ", "0", col)
+        elif i == full and halves % 2 == 1:
+            c:text(x + i, y, string.char(149), on, off)
+        else:
+            c:text(x + i, y, " ", "0", off)
+
+export def badge(c, x, y, ok, yes="fits", no="too big"):
+    text = " " .. (ok and yes or no) .. " "
+    c:text(x, y, text, "f", ok and "5" or "e")
+    return len(text)
+
+# the CubeOS logo (16x11 cells) revealed column by column: front column white, not yet reached dim; `shine` is a column
+# of light that runs over the finished logo
+export def draw_logo(c, x, y, reveal=1, shine=nil):
+    rows = logo.logo_rows()
+    lw = len(rows[1].text)
+    n = math.floor(reveal * (lw + 1))
+    LIGHT = {"3": "0", "9": "3", "b": "9", "f": "f"}
+    for i in range[1, len(rows)]:
+        r = rows[i]
+        fg = []
+        bg = []
+        for cx in range[1, lw]:
+            f = string.sub(r.fg, cx, cx)
+            b = string.sub(r.bg, cx, cx)
+            if cx > n + 1:
+                f = f != "f" and "c" or "f"
+                b = b != "f" and "c" or "f"
+            elif cx == n + 1:
+                f = f != "f" and "0" or "f"
+                b = b != "f" and "0" or "f"
+            elif shine != nil and (cx + i) >= shine and (cx + i) <= shine + 1:
+                f = LIGHT[f] ?? f
+                b = LIGHT[b] ?? b
+            fg[cx] = f
+            bg[cx] = b
+        c:cells(x, y + i - 1, r.text, table.concat(fg), table.concat(bg))
+    return lw, len(rows)
+
+# a framed box: title bar in accent, body in panel colour
+export def box(c, x, y, w, h, title=nil, accent="9"):
+    c:fill(x, y, w, h, "7")
+    c:fill(x, y, w, 1, accent)
+    if title != nil:
+        c:text(x + 2, y, fit(title, w - 4), "f", accent)
+    # shadow on the right and below (darker than the page)
+    c:fill(x + w, y + 1, 1, h, "c")
+    c:fill(x + 1, y + h, w, 1, "c")
+
+# checkbox: "on" (green x), "auto" (teal +, pulled in by a dependency), "lock" (grey x, cannot change), "off"
+export def check(c, x, y, state, bg=nil):
+    if state == "on":
+        c:cells(x, y, "[x]", "858", bg != nil and string.rep(bg, 3) or nil)
+    elif state == "auto":
+        c:cells(x, y, "[+]", "8d8", bg != nil and string.rep(bg, 3) or nil)
+    elif state == "lock":
+        c:cells(x, y, "[x]", "666", bg != nil and string.rep(bg, 3) or nil)
+    else:
+        c:cells(x, y, "[ ]", "8f8", bg != nil and string.rep(bg, 3) or nil)

@@ -28,6 +28,10 @@ DYN_RE = re.compile(r'\b(?:rt\.)?import\(\s*"([\w.]+)"\s*\)')
 CONF_MODULE_RE = re.compile(r'\bmodule\s*:\s*"([\w.]+)"')
 
 
+# пакеты только для установщика: не входят ни в один набор
+INSTALLER_ONLY = {"cubeos.setup"}
+
+
 def norm(p):
     return p.replace(chr(92), "/")
 
@@ -472,7 +476,7 @@ def main():
         if mid in pkgs:
             have = declared[mid]
             for pid, m in pkgs.items():
-                if m.get("priority") == prio and m.get("kind") != "meta" and pid not in have:
+                if m.get("priority") == prio and m.get("kind") != "meta" and pid not in INSTALLER_ONLY and pid not in have:
                     errors.append("набор %s не включает %s" % (mid, pid))
             if base and base not in have:
                 errors.append("набор %s не включает %s" % (mid, base))

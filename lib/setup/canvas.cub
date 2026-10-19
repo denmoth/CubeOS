@@ -1,0 +1,167 @@
+# setup.canvas: a buffered text screen for the installer. Every cell is drawn into the buffer, flush() sends only changed rows
+# with term.blit, so screens redraw without flicker. Colours are CC blit letters; on an advanced computer the palette becomes the
+# CubeOS night palette (the colours of the boot splash), on a basic one every colour maps to the four greys it has.
+#
+#   c = canvas.Canvas(term, {colour: true})
+#   c:clear("f")  c:text(x, y, "Hi", "0", "7")  c:fill(x, y, w, h, "c")  c:cells(x, y, text, fgs, bgs)  c:flush()
+#   c:palette(level)        0..1: fade the night palette in from black (1 = full); c:restore() puts the computer's palette back
+#   c:row(y) -> text of a row (tests), c:find(text) -> x, y
+
+# the night palette (Tokyo Night colours, like the boot splash and the CDE dark theme)
+export const NIGHT = {
+    "0": 0xc0caf5, "1": 0xff9e64, "2": 0xbb9af7, "3": 0x7dcfff, "4": 0xe0af68, "5": 0x9ece6a, "6": 0x414868, "7": 0x1f2335,
+    "8": 0x737aa2, "9": 0x7aa2f7, "a": 0x9d7cd8, "b": 0x3d59a1, "c": 0x292e42, "d": 0x73daca, "e": 0xf7768e, "f": 0x111219,
+}
+# basic computers: only white, light grey, grey and black
+const GREY = {"0": "0", "1": "0", "2": "0", "3": "0", "4": "0", "5": "0", "9": "0", "a": "0", "d": "0", "e": "0", "8": "8",
+    "6": "8", "7": "7", "b": "7", "c": "7", "f": "f"}
+const HEX = "0123456789abcdef"
+
+export def letter_colour(l):
+    return 2 ** (tonumber(l, 16))
+
+export class Canvas:
+    def init(self, t, opts=nil):
+        o = opts ?? {}
+        self.t = t
+        self.colour = o.colour
+        if self.colour == nil:
+            self.colour = t.isColour == nil or t.isColour()
+        self.saved = nil
+        self:resize()
+
+    def resize(self):
+        w, h = self.t.getSize()
+        self.w = w
+        self.h = h
+        self.ch = []
+        self.fg = []
+        self.bg = []
+        self.shown = []
+        for y in range[1, h]:
+            self.ch[y] = []
+            self.fg[y] = []
+            self.bg[y] = []
+            self.shown[y] = nil
+        self:clear("f")
+
+    def clear(self, bg="f"):
+        for y in range[1, self.h]:
+            cy = self.ch[y]
+            fy = self.fg[y]
+            by = self.bg[y]
+            for x in range[1, self.w]:
+                cy[x] = " "
+                fy[x] = "0"
+                by[x] = bg
+
+    # text at x, y; bg nil keeps the background under it
+    def text(self, x, y, s, fg="0", bg=nil):
+        if y < 1 or y > self.h or s == nil:
+            return
+        s = tostring(s)
+        cy = self.ch[y]
+        fy = self.fg[y]
+        by = self.bg[y]
+        for i in range[1, len(s)]:
+            cx = x + i - 1
+            if cx > self.w:
+                break
+            if cx >= 1:
+                cy[cx] = string.sub(s, i, i)
+                fy[cx] = fg
+                if bg != nil:
+                    by[cx] = bg
+
+    # like term.blit: one colour letter per character ("" or nil keeps that layer)
+    def cells(self, x, y, s, fgs=nil, bgs=nil):
+        if y < 1 or y > self.h:
+            return
+        for i in range[1, len(s)]:
+            cx = x + i - 1
+            if cx >= 1 and cx <= self.w:
+                self.ch[y][cx] = string.sub(s, i, i)
+                if fgs != nil and fgs != "":
+                    self.fg[y][cx] = string.sub(fgs, i, i)
+                if bgs != nil and bgs != "":
+                    self.bg[y][cx] = string.sub(bgs, i, i)
+
+    def fill(self, x, y, w, h, bg, ch=" ", fg="0"):
+        for yy in range[math.max(1, y), math.min(self.h, y + h - 1)]:
+            for xx in range[math.max(1, x), math.min(self.w, x + w - 1)]:
+                self.ch[yy][xx] = ch
+                self.fg[yy][xx] = fg
+                self.bg[yy][xx] = bg
+
+    def set_fg(self, x, y, w, fg):
+        if y >= 1 and y <= self.h:
+            for xx in range[math.max(1, x), math.min(self.w, x + w - 1)]:
+                self.fg[y][xx] = fg
+
+    def set_bg(self, x, y, w, bg):
+        if y >= 1 and y <= self.h:
+            for xx in range[math.max(1, x), math.min(self.w, x + w - 1)]:
+                self.bg[y][xx] = bg
+
+    def bg_at(self, x, y):
+        if y < 1 or y > self.h or x < 1 or x > self.w:
+            return "f"
+        return self.bg[y][x]
+
+    def row(self, y):
+        return table.concat(self.ch[y])
+
+    def find(self, s):
+        for y in range[1, self.h]:
+            x = string.find(self:row(y), s, 1, true)
+            if x != nil:
+                return x, y
+        return nil
+
+    def flush(self):
+        t = self.t
+        for y in range[1, self.h]:
+            text = table.concat(self.ch[y])
+            fg = table.concat(self.fg[y])
+            bg = table.concat(self.bg[y])
+            if not self.colour:
+                fg = string.gsub(fg, ".", GREY)
+                bg = string.gsub(bg, ".", GREY)
+            key = text .. fg .. bg
+            if self.shown[y] != key:
+                self.shown[y] = key
+                t.setCursorPos(1, y)
+                t.blit(text, fg, bg)
+
+    # force the next flush to send every row (after something else drew on the terminal)
+    def invalidate(self):
+        for y in range[1, self.h]:
+            self.shown[y] = nil
+
+    def palette(self, level=1):
+        t = self.t
+        if not self.colour or t.setPaletteColour == nil:
+            return
+        if self.saved == nil and t.getPaletteColour != nil:
+            self.saved = {}
+            for i in range[0, 15]:
+                r, g, b = t.getPaletteColour(2 ** i)
+                self.saved[i] = [r, g, b]
+        for i in range[0, 15]:
+            rgb = NIGHT[string.sub(HEX, i + 1, i + 1)]
+            r = math.floor(rgb / 65536) / 255
+            g = (math.floor(rgb / 256) % 256) / 255
+            b = (rgb % 256) / 255
+            t.setPaletteColour(2 ** i, r * level, g * level, b * level)
+
+    def restore(self):
+        t = self.t
+        if self.saved == nil or t.setPaletteColour == nil:
+            return
+        for i in range[0, 15]:
+            s = self.saved[i]
+            t.setPaletteColour(2 ** i, s[1], s[2], s[3])
+        self.saved = nil
+
+export def new(t, opts=nil):
+    return Canvas(t, opts)
