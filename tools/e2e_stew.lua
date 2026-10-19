@@ -29,6 +29,7 @@ local res = s:apply(p, {})
 say("apply: ok=" .. tostring(res.ok) .. " " .. tostring(res.error or "") .. " in " .. (os.epoch("utc") - t0) .. " ms")
 if not res.ok then os.shutdown() return end
 
+s:clean()
 local used = 0
 local function du(path)
   if fs.isDir(path) then
@@ -61,6 +62,11 @@ end
 say("imports: " .. (#order - fails) .. " ok, " .. fails .. " failed")
 -- ошибка в готовом коде показывает строку исходника через карту
 local ok, err = pcall(function() rt.import("json5").parse("{ bad") end)
-say("error text: " .. tostring(err))
+say("error text without maps: " .. tostring(err))
+local mres = s:fetch_maps({ "cubeos.json" })
+say("maps fetched: " .. #mres.ok .. ", failed " .. #mres.failed .. (mres.failed[1] and (" " .. mres.failed[1].error) or ""))
+local rt2 = dofile("/cubeos/sys/boot/runtime.lua")
+local ok2, err2 = pcall(function() rt2.import("json5").parse("{ bad") end)
+say("error text with maps: " .. tostring(err2))
 say(fails == 0 and "E2E OK" or "E2E FAILED")
 os.shutdown()

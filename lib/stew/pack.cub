@@ -2,6 +2,9 @@
 # как есть, .cub компилируется, только если передан компилятор (opts.cubic, пакет cubeos.cubic), иначе понятная ошибка.
 #
 #   r = pack.build(fsys, base, {manifest_text: nil, cubic: nil, maps: true, block: 32768, list: nil, on_step: fn, source: nil})
+#       maps: true (line maps inside the package), false (none), "separate" (r.maps_data: a small .cpk of its own, downloaded only
+#       when an error needs it; the entry gets maps: {size, sha256})
+#   pack.modules_of(archive, manifest)   module name -> file: files under lib/ plus the manifest's own modules (not stored twice)
 #       fsys: CraftOS-подобный fs; base: папка исходников (там же package.json5, если manifest_text не передан)
 #       r = {data, manifest (итоговая таблица), entry (запись для каталога), name ("<id>-<version>")}
 #   errs = pack.check_manifest(m)          список ошибок манифеста (пустой: всё верно)
@@ -243,8 +246,9 @@ export def build(fsys, base, opts=nil):
         installed += len(data)
         if o.on_step != nil:
             o.on_step(rel)
-    for mp in maps:
-        files[len(files) + 1] = mp
+    if o.maps != "separate":
+        for mp in maps:
+            files[len(files) + 1] = mp
     # модули: явные из манифеста (пути .cub переводятся в .lua) плюс файлы под lib/
     modules = {}
     for name, path in m.modules ?? {}:
@@ -259,13 +263,17 @@ export def build(fsys, base, opts=nil):
             error("modules: " .. name .. " points to " .. path .. ", which is not in the package", 0)
     if m.lang == nil:
         m.lang = has_cub and "cubic" or "lua"
-    m.modules = modules
+    # only the modules that cannot be derived from the file list are stored (the list of all modules is half of a manifest)
+    explicit = {}
+    for name, path in m.modules ?? {}:
+        explicit[name] = string.gsub(path, "%.cub$", ".lua")
+    m.modules = next(explicit) != nil and explicit or nil
     m.installed_size = installed
     m.built_by = "stew " .. VERSION .. (o.cubic != nil and ("; cubic " .. tostring(o.cubic.VERSION)) or "")
     if o.source != nil:
         m.source = o.source
     m.files = nil
-    mtext = json5.stringify(m, {json5: true, indent: 1})
+    mtext = json5.stringify(m, {json5: true, indent: 0})
     data = cpk.build(mtext, files, {method: cpk.STRONG, block: o.block ?? 32768, on_block: o.on_block})
     a = cpk.open(data)
     entry = {
@@ -277,7 +285,26 @@ export def build(fsys, base, opts=nil):
         permissions: m.permissions ?? {need: _arr(), want: _arr()},
         cubeos: m.cubeos ?? {min: "0.5.0"},
     }
-    return {data: data, manifest: m, entry: entry, name: m.id .. "-" .. m.version}
+    r = {data: data, manifest: m, entry: entry, name: m.id .. "-" .. m.version}
+    if o.maps == "separate" and len(maps) > 0:
+        if o.on_step != nil:
+            o.on_step("maps")
+        r.maps_data = cpk.build(json5.stringify({id: m.id, version: m.version, kind: "maps"}, {json5: true, indent: 0}), maps, {method: cpk.STORE, on_block: o.on_block})
+        if o.on_step != nil:
+            o.on_step("maps")
+        entry.maps = {size: len(r.maps_data), sha256: cpk.open(r.maps_data):sha256_hex()}
+    return r
+
+export def modules_of(a, m=nil):
+    out = {}
+    for e in a:list():
+        if cpk.has_flag(e.flags, cpk.F_LUA):
+            name = module_of(e.path)
+            if name != nil:
+                out[name] = e.path
+    for name, path in (m ?? a:manifest()).modules ?? {}:
+        out[name] = path
+    return out
 
 export def write(fsys, r, out_dir):
     fsys.makeDir(out_dir)
@@ -285,6 +312,10 @@ export def write(fsys, r, out_dir):
     h = fsys.open(path, "wb")
     h.write(r.data)
     h.close()
+    if r.maps_data != nil:
+        h = fsys.open(fsys.combine(out_dir, r.name .. ".maps.cpk"), "wb")
+        h.write(r.maps_data)
+        h.close()
     h = fsys.open(fsys.combine(out_dir, r.name .. ".entry.json5"), "w")
     h.write(json5.stringify(r.entry, {json5: true, indent: 2}) .. "\n")
     h.close()

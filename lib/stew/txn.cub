@@ -9,6 +9,7 @@ import json5
 import cpk
 import crc32 as crc
 import stew.db as dbm
+import stew.pack as pack
 
 def _arr(t=nil):
     return setmetatable(t ?? {}, json5.array_mt)
@@ -167,6 +168,7 @@ class Txn:
     def remove_old(self, rec):
         loc = self.db:pkg_location(rec)
         self:to_trash(loc.packed ?? loc.dir)
+        self:to_trash(dbm.VAR .. "/maps/" .. rec.id .. ".cpk")
         for path in rec.files ?? []:
             self:to_trash(path)
 
@@ -242,7 +244,7 @@ class Txn:
                 st_db.packages[step.id] = {
                     id: step.id, version: m.version, name: m.name, description: m.description, source: step.source, trust: step.trust,
                     storage: storage, priority: m.priority ?? "optional", kind: m.kind, category: m.category, depends: m.depends ?? {},
-                    want: m.want ?? {}, modules: m.modules ?? {}, contributes: m.contributes ?? {}, permissions: m.permissions ?? {},
+                    want: m.want ?? {}, modules: pack.modules_of(self.arch[step.id].a, m), contributes: m.contributes ?? {}, permissions: m.permissions ?? {},
                     options: self.plan.options[step.id] ?? (old != nil and old.options or {}), files: files,
                     auto: old != nil and old.auto or step.auto, pinned: old != nil and old.pinned or false, size: size,
                     installed_at: os.epoch("utc"),

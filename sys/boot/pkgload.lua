@@ -1,6 +1,6 @@
 -- CubeOS: загрузчик модулей установленной системы (docs/packages, шаг 3). Компилятора нет: в пакетах готовый Lua.
 -- Индекс пишет stew при каждой установке (/cubeos/var/stew/boot.idx, обычная таблица Lua, читается без json5):
---   { rt = "<путь к rt.lua>", share = "/cubeos/share", cubic = "<папка компилятора или nil>",
+--   { rt = "<путь к rt.lua>", share = "/cubeos/share", cubic = "<папка компилятора или nil>", maps = "<папка карт строк>",
 --     packages = { [id] = { dir = "/cubeos/pkg/<id>" } или { packed = "/cubeos/pkg/<id>.cpk" } },
 --     modules = { ["cfs.core"] = { "cubeos.cfs", "lib/cfs/core.lua" }, ... } }
 -- Модуль Cubic вызывается как chunk(rt, import); модуль на Lua получает import в своём окружении поверх _G.
@@ -108,6 +108,15 @@ function P.new(idx)
       local m = maps[chunk]
       if m == nil then
         local text = L.read(e[1], e[2] .. ".map")
+        -- system packages keep their maps apart (stew maps downloads them): /cubeos/var/stew/maps/<id>.cpk
+        if not text and idx.maps then
+          local mp = idx.maps .. "/" .. e[1] .. ".cpk"
+          if fs.exists(mp) then
+            if not cpk then cpk = L.import("cpk") end
+            local okm, a = pcall(cpk.open_file, mp)
+            if okm then text = a:read(e[2] .. ".map") end
+          end
+        end
         local starts, file = nil, nil
         if text then starts, file = parse_map(text) end
         m = starts and { starts = starts, file = file } or false

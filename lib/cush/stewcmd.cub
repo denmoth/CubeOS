@@ -107,7 +107,7 @@ export def b_stew(sh, args):
     if cmd == nil or cmd == "help" or cmd == "--help":
         sh:println("usage: stew list | search TEXT | info ID | install ID... | remove ID... | update [ID...] | plan ID... | refresh")
         sh:println("       stew source list|add NAME KIND URL|remove NAME | pin ID | unpin ID | storage ID packed|unpacked")
-        sh:println("       stew verify [ID] | clean | recover | pack FOLDER | login | logout | publish FOLDER | publish --status")
+        sh:println("       stew verify [ID] | clean | recover | maps [ID...] | pack FOLDER | login | logout | publish FOLDER | publish --status")
         return cmd == nil and 2 or 0
     rest = []
     for i in range[2, len(args)]:
@@ -227,6 +227,12 @@ def _run(sh, s, cmd, o):
     if cmd == "clean":
         sh:println("Freed " .. kb(s:clean().freed))
         return 0
+    if cmd == "maps":
+        res = s:fetch_maps(len(r) > 0 and r or nil, (id, i, n) => breathe(sh))
+        for f in res.failed:
+            sh:eprint("  " .. f.id .. ": " .. f.error)
+        sh:println("Line maps downloaded for " .. len(res.ok) .. " packages; errors now show the lines of the sources.")
+        return len(res.failed) == 0 and 0 or 1
     if cmd == "recover":
         sh:println("Recover: " .. s:recover().action)
         return 0

@@ -17,11 +17,18 @@ local function read(p) local f = fs.open(p, "rb"); if not f then return nil end 
 local function write(p, d) fs.makeDir(fs.getDir(p)); local f = fs.open(p, "wb"); f.write(d); f.close() end
 
 local log = {}
-local function say(s) log[#log + 1] = s; print(s); write(ROOT .. "/build/build-packages.txt", table.concat(log, "\n") .. "\n") end
+-- лог дописывается: порции сборки идут разными запусками
+local function say(s) log[#log + 1] = s; print(s); local f = fs.open(ROOT .. "/build/build-packages.txt", "a"); f.write(s .. "\n"); f.close() end
 local failed = 0
 
 local function build_one(base, opts)
+  -- упавший по сторожевому таймеру пакет (редкие долгие паузы эмулятора) пробуем ещё раз
+  breathe()
   local ok, r = pcall(pack.build, fs, base, opts)
+  if not ok and tostring(r):find("Too long without yielding", 1, true) then
+    breathe()
+    ok, r = pcall(pack.build, fs, base, opts)
+  end
   if not ok then
     failed = failed + 1
     say("FAIL " .. (opts.label or base) .. ": " .. tostring(r))
@@ -31,7 +38,7 @@ local function build_one(base, opts)
 end
 
 local out_dir
-if args[1] then
+if args[1] and args[1] ~= "--part" and args[1] ~= "--index" then
   -- режим Cobble: подпапки с package.json5
   local src = args[1]
   out_dir = args[2] or "/work/out"
@@ -48,48 +55,62 @@ if args[1] then
       breathe()
     end
   end
-else
-  -- вся система из репозитория
+elseif args[1] == "--index" then
+  -- индекс из всех .entry.json5 в build/packages (после сборки порциями)
   out_dir = ROOT .. "/build/packages"
-  if fs.exists(out_dir) then fs.delete(out_dir) end
+  local index = { format = 1, packages = {} }
+  local total, total_raw = 0, 0
+  local names = fs.list(out_dir)
+  table.sort(names)
+  for _, name in ipairs(names) do
+    if name:match("%.entry%.json5$") then
+      local e = json5.parse(read(out_dir .. "/" .. name))
+      local p = index.packages[e.id] or {
+        name = e.name, description = e.description, author = e.author, kind = e.kind, category = e.category,
+        priority = e.priority, homepage = e.homepage, versions = {},
+      }
+      local v = {}
+      for k, val in pairs(e) do
+        if k ~= "id" and k ~= "name" and k ~= "description" and k ~= "author" and k ~= "kind" and k ~= "category"
+          and k ~= "priority" and k ~= "homepage" and k ~= "version" then v[k] = val end
+      end
+      v.url = e.id .. "-" .. e.version .. ".cpk"
+      p.versions[e.version] = v
+      index.packages[e.id] = p
+      total, total_raw = total + (e.size or 0), total_raw + (e.installed_size or 0)
+    end
+  end
+  write(out_dir .. "/index.json5", json5.stringify(index, { json5 = true, indent = 2 }) .. "\n")
+  say(string.format("index: total %d bytes packed, %d installed", total, total_raw))
+else
+  -- системные пакеты из репозитория; "--part k n": только каждый n-й, начиная с k (порции в свежих запусках эмулятора:
+  -- один долгий запуск со временем тормозит и ловит сторожевой таймер, как и тесты)
+  out_dir = ROOT .. "/build/packages"
+  local part, parts = 1, 1
+  if args[1] == "--part" then part, parts = tonumber(args[2]), tonumber(args[3]) end
   local list = {}
   for _, top in ipairs({ "assets", "lib", "src", "sys" }) do
     for _, rel in ipairs(pack.list_files(fs, ROOT .. "/" .. top)) do list[#list + 1] = top .. "/" .. rel end
   end
-  local index = { format = 1, packages = {} }
   local names = fs.list(ROOT .. "/packages/system")
   table.sort(names)
-  local total, total_raw = 0, 0
+  local k = 0
   for _, name in ipairs(names) do
     if name:match("%.json5$") then
-      local text = read(ROOT .. "/packages/system/" .. name)
-      local t0 = os.epoch("utc")
-      local r = build_one(ROOT, { cubic = cubic, manifest_text = text, list = list, label = name,
-        on_block = breathe, on_step = breathe, source = "CubeOS repo" })
-      if r then
-        local cpk_path = pack.write(fs, r, out_dir)
-        local e = r.entry
-        local p = index.packages[e.id] or {
-          name = e.name, description = e.description, author = e.author, kind = e.kind, category = e.category,
-          priority = e.priority, homepage = e.homepage, versions = {},
-        }
-        local v = {}
-        for k, val in pairs(e) do
-          if k ~= "id" and k ~= "name" and k ~= "description" and k ~= "author" and k ~= "kind" and k ~= "category"
-            and k ~= "priority" and k ~= "homepage" and k ~= "version" then v[k] = val end
+      k = k + 1
+      if (k - part) % parts == 0 then
+        local text = read(ROOT .. "/packages/system/" .. name)
+        local t0 = os.epoch("utc")
+        local r = build_one(ROOT, { cubic = cubic, manifest_text = text, list = list, label = name, maps = "separate",
+          on_block = breathe, on_step = breathe, source = "CubeOS repo" })
+        if r then
+          pack.write(fs, r, out_dir)
+          say(string.format("ok   %-28s %7d bytes (%d installed) %d ms", r.name, #r.data, r.manifest.installed_size, os.epoch("utc") - t0))
         end
-        v.url = fs.getName(cpk_path)
-        p.versions[e.version] = v
-        index.packages[e.id] = p
-        total, total_raw = total + #r.data, total_raw + r.manifest.installed_size
-        say(string.format("ok   %-28s %7d bytes (%d installed) %d ms", r.name, #r.data, r.manifest.installed_size, os.epoch("utc") - t0))
+        breathe()
       end
-      breathe()
     end
   end
-  write(out_dir .. "/index.json5", json5.stringify(index, { json5 = true, indent = 2 }) .. "\n")
-  say(string.format("total %d bytes packed, %d installed", total, total_raw))
 end
 say(failed == 0 and "build ok" or ("build FAILED: " .. failed))
-write(ROOT .. "/build/build-packages.txt", table.concat(log, "\n") .. "\n")
-if not args[1] then os.shutdown() end
+if not args[1] or args[1] == "--part" or args[1] == "--index" then os.shutdown() end

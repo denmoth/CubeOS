@@ -551,6 +551,34 @@ export class Stew:
         r.plan = p
         return r
 
+    # line maps of installed packages that keep them apart (system packages): downloaded only when wanted, errors then show
+    # .cub lines instead of lines of the prebuilt Lua. ids nil: every installed package that has them
+    def fetch_maps(self, ids=nil, on_progress=nil):
+        res = {ok: [], failed: [], none: []}
+        inst = self:installed()
+        list = ids ?? _keys(inst)
+        for i in range[1, len(list)]:
+            id = list[i]
+            rec = inst[id]
+            meta = rec != nil and rec.source != nil and self:cached(rec.source)[id] or nil
+            vr = meta != nil and (meta.versions ?? {})[rec.version] or nil
+            if vr == nil or vr.maps == nil or vr.url == nil:
+                res.none[len(res.none) + 1] = id
+            else:
+                if on_progress != nil:
+                    on_progress(id, i, len(list))
+                one = {versions: {}}
+                one.versions[rec.version] = {url: string.gsub(vr.url, "%.cpk$", ".maps.cpk"), sha256: vr.maps.sha256, size: vr.maps.size}
+                dest = self.db:path(dbm.VAR .. "/maps/" .. id .. ".cpk")
+                self.fs.makeDir(self.fs.getDir(dest))
+                ok, err = pcall(() => self:adapter(self:source(rec.source).kind).fetch(self:source(rec.source), id, rec.version, one, dest, self:ctx()))
+                if ok:
+                    res.ok[len(res.ok) + 1] = id
+                else:
+                    res.failed[len(res.failed) + 1] = {id: id, error: tostring(err)}
+                self.yield()
+        return res
+
     def recover(self):
         return txn.recover(self)
 
