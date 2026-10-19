@@ -1,0 +1,1417 @@
+# apps.store: the package Store of CDE (docs/packages/08-setup-and-store.md, step 7) on top of stew (docs/packages/09-stew-api.md).
+#
+#   wm:launch(store.main, {name: "store"}, [package_id_or_nil, {stew, open_app, launch, run_legacy, publish, publish_ctx, ready}])
+#
+# Tabs: Home (featured carousel, updates, categories, recommended, PineStore), Search (all sources, filter by Cobble / PineStore /
+# custom and by category), My packages (installed, packed or unpacked storage, used space), Queue (installs with progress by stew
+# stages, "Update all"), Publish (only when the module stew.publish exists). A package page shows the icon, description, size,
+# permissions in plain words, source and trust, dependencies and versions, with Install (asks the manifest options), Update, Remove,
+# Open and Try.
+#
+# The stew object: args[2].stew, else ctx.stew, else stew.new({fs, yield}) when the module stew is installed. Every stew call runs in
+# a short background process (self:run), so the window never waits: results come back on a timer (self:_tick). Installs go through
+# the queue one at a time: plan, then apply with on_progress (stages download, verify, ask, place, setup, commit, rollback) and ask
+# (a question from a package installer, answered in a dialog).
+#
+# Keys: 1..5 tabs, Backspace back from a package, F5 refresh the catalog, Ctrl+F search.
+
+import cdk
+import cde.theme as theme
+import cgl.surface as surface_mod
+import apps.kit as kit
+import ./info as info
+import ./parts as parts
+
+# the visible name (not chosen yet, docs/packages/08-setup-and-store.md): rename here
+export const NAME = "Store"
+export const ID = "cubeos.store"
+
+# packages stew always keeps unpacked (they read the packed ones)
+const ALWAYS_UNPACKED = ["cubeos.boot", "cubeos.cubic-rt", "cubeos.cpk"]
+const STAGES = {download: [0, 0.55, "Downloading"], verify: [0.55, 0.62, "Checking"], ask: [0.62, 0.65, "Asking"], place: [0.65, 0.88, "Installing"],
+    setup: [0.88, 0.95, "Setting up"], commit: [0.95, 1, "Finishing"]}
+const DONE_TEXT = {install: "Installed", update: "Updated", remove: "Removed"}
+const SOURCES = [["all", "All"], ["cobble", "Cobble"], ["pinestore", "PineStore"], ["custom", "Custom"]]
+const NUM_KEYS = ["one", "two", "three", "four", "five"]
+const MAX_RESULTS = 60
+
+# a module that may be missing (stew, stew.publish): nil and the error instead of failing to load the Store
+def _optional(name):
+    ok, mod = pcall(lua("__import"), name)
+    if ok and type(mod) == "table":
+        return mod, nil
+    return nil, mod
+
+def _head(text, right=nil):
+    kids = [cdk.label(text, {variant: "accent"}), cdk.spacer()]
+    if right != nil:
+        kids[len(kids) + 1] = right
+    return cdk.row({gap: 4, align: "center"}, kids)
+
+def _err_text(ok, r):
+    if not ok:
+        return string.gsub(tostring(r), "^.-:%d+: ", "", 1)
+    if type(r) == "table":
+        return tostring(r.error ?? r.message ?? "unknown error")
+    return tostring(r ?? "unknown error")
+
+def _name(rec):
+    return tostring(rec.name ?? rec.id)
+
+def _contains(list, x):
+    for v in list ?? []:
+        if v == x:
+            return true
+    return false
+
+def _http_get(url, headers):
+    if http == nil:
+        return nil, "HTTP is off in this world"
+    h, err = http.get(url, headers)
+    if h == nil:
+        return nil, tostring(err)
+    body = h.readAll()
+    h.close()
+    return body
+
+def _http_post(url, body, headers):
+    if http == nil:
+        return nil, "HTTP is off in this world"
+    h, err = http.post(url, body, headers)
+    if h == nil:
+        return nil, tostring(err)
+    out = h.readAll()
+    h.close()
+    return out
+
+export class Store:
+    def init(self, sys, ctx):
+        o = (ctx.args != nil and ctx.args[2]) or {}
+        self.sys = sys
+        self.ctx = ctx
+        self.o = o
+        self.s = nil
+        self.stew_error = nil
+        self:_connect(ctx, o)
+        self.pub = nil
+        if o.publish != false:
+            self.pub = type(o.publish) == "table" and o.publish or _optional("stew.publish")
+        self.pub_ctx = o.publish_ctx
+        self.publications = []
+        self.cat = []
+        self.by_id = {}
+        self.inst = {}
+        self.srcs = []
+        self.src_kind = {}
+        self.details = {}
+        self.loaded = false
+        self.loading = false
+        self.queue = []
+        self.seen_queue = 0
+        self.jobs = []
+        self.ticker = nil
+        self.phase = 0
+        self.tab = 1
+        self.in_detail = false
+        self.detail = nil
+        self.filter_src = "all"
+        self.filter_cat = nil
+        self.query = ""
+        self.search_timer = nil
+        self.search_seq = 0
+        self.results_list = []
+        self.show_system = false
+        self.tiles = {}
+        self.skeletons = []
+        self.q_cards = []
+        self.main_btn = nil
+        self.tabs = [{key: "home", title: "Home", icon: "home"}, {key: "search", title: "Search", icon: "search"},
+            {key: "mine", title: "My packages", icon: "box"}, {key: "queue", title: "Queue", icon: "download"}]
+        if self.pub != nil:
+            self.tabs[len(self.tabs) + 1] = {key: "publish", title: "Publish", icon: "up"}
+        self.ui = cdk.open(sys, ctx, {title: NAME, w: 296, h: 160, min_w: 230, min_h: 120, icon: "store"})
+        self:_build()
+        self:reload(true)
+        first = ctx.args != nil and ctx.args[1] or nil
+        if type(first) == "string" and first != "":
+            self.pending_open = first
+        if o.ready != nil:
+            o.ready(self)
+
+    def _connect(self, ctx, o):
+        let me = self
+        s = o.stew ?? ctx.stew
+        err = nil
+        if s == nil:
+            mod, e = _optional("stew")
+            err = e
+            if mod != nil and mod.new != nil:
+                ok, res = pcall(() => mod.new({fs: fs, yield: () => me.sys.yield()}))
+                if ok:
+                    s = res
+                else:
+                    err = res
+        self.s = s
+        if s == nil:
+            self.stew_error = "The package manager (stew) is not available: " .. _err_text(false, err ?? "not installed")
+
+    # ------------------------------------------------------------ background work
+
+    # fn() runs in its own process (stew may take long and yields); done(ok, result) runs in the window process
+    def run(self, fn, done):
+        box = {done: false}
+        def work(sys2, args):
+            ok, res = pcall(fn)
+            box.ok = ok
+            box.res = res
+            box.done = true
+        self.jobs[len(self.jobs) + 1] = {box: box, done: done}
+        ok = pcall(() => self.sys.spawn(work, [], {name: "store-job"}))
+        if not ok:
+            work(nil, nil)
+        self:_wake()
+
+    def _wake(self):
+        if self.ticker == nil:
+            let me = self
+            self.ticker = self.ui:every(0.08, () => me:_tick())
+
+    def _active(self):
+        for t in self.queue:
+            if t.state == "running" or t.state == "waiting":
+                return true
+        return false
+
+    def _tick(self):
+        self.phase += 0.06
+        st = self.ui.style
+        if len(self.jobs) > 0:
+            keep = []
+            finished = []
+            for j in self.jobs:
+                if j.box.done:
+                    finished[len(finished) + 1] = j
+                else:
+                    keep[len(keep) + 1] = j
+            self.jobs = keep
+            for j in finished:
+                ok, err = pcall(j.done, j.box.ok, j.box.res)
+                if not ok:
+                    self.nav:say("Error: " .. _err_text(false, err), "warn", st.danger)
+        active = false
+        for t in self.queue:
+            if t.state == "running" or t.state == "waiting":
+                active = true
+                t.shown = (t.shown ?? 0) + ((t.frac ?? 0) - (t.shown ?? 0)) * 0.35
+            if t.question != nil and not t.asking:
+                self:_ask_dialog(t)
+        if active:
+            for c in self.q_cards:
+                if c.task.state == "running" or c.task.state == "waiting":
+                    c.shown = c.task.shown
+                    c.phase = self.phase
+                    c:invalidate()
+            if self.main_btn != nil:
+                self.main_btn.phase = self.phase * 0.7
+                self.main_btn:invalidate()
+            for key, list in self.tiles:
+                for w in list:
+                    if self:_task_for(w.rec.id) != nil:
+                        w:invalidate()
+            self.nav:invalidate()
+        if self.loading:
+            for sk in self.skeletons:
+                sk.phase = self.phase * 0.7
+                sk:invalidate()
+        if self.nav.busy:
+            self.nav.spin = self.phase
+            self.nav:invalidate()
+        if len(self.jobs) == 0 and not active and not self.loading and not self.nav.busy:
+            self.ui:cancel(self.ticker)
+            self.ticker = nil
+
+    # ------------------------------------------------------------ window
+
+    def _build(self):
+        let me = self
+        self.nav = parts.NavBar(NAME, self.tabs, {on_change: (i) => me:show_tab(i), badge: (i) => me:_badge(i)})
+        self.host = parts.PageHost({grow: 1})
+        self.pages = {}
+        self.pages.home = self.host:add_page(self:_home_page())
+        self.pages.search = self.host:add_page(self:_search_page())
+        self.pages.mine = self.host:add_page(self:_mine_page())
+        self.pages.queue = self.host:add_page(self:_queue_page())
+        if self.pub != nil:
+            self.pages.publish = self.host:add_page(self:_publish_page())
+        self.pages.detail = self.host:add_page(cdk.column({grow: 1}, []))
+        self.ui:set_root(cdk.column({padding: 2, gap: 3}, [self.nav, self.host]))
+        self.ui.on_key = (ev) => me:key(ev)
+        self.host:show(self.pages.home, 0)
+        if self.s == nil:
+            self:_no_stew()
+
+    def _badge(self, i):
+        key = self.tabs[i].key
+        st = self.ui.style
+        if key == "queue":
+            failed = false
+            done = false
+            for n, t in self.queue:
+                if t.state == "running" or t.state == "waiting":
+                    return math.floor(self.phase * 4) % 2 == 0 and st.accent or st.accent_hi
+                if n > self.seen_queue and t.state == "failed":
+                    failed = true
+                if n > self.seen_queue and t.state == "done":
+                    done = true
+            if failed:
+                return st.danger
+            if done:
+                return st.ok
+        if key == "mine" and len(self:_updates()) > 0:
+            return parts.col(4, 2, 3)
+        return nil
+
+    def show_tab(self, i):
+        if i < 1 or i > len(self.tabs):
+            return
+        old = self.tab
+        was_detail = self.in_detail
+        if i == old and not was_detail:
+            return
+        self.tab = i
+        self.in_detail = false
+        self.main_btn = nil
+        self.nav:set_index(i)
+        key = self.tabs[i].key
+        dir = 0
+        if was_detail:
+            dir = -1
+        elif i > old:
+            dir = 1
+        elif i < old:
+            dir = -1
+        self.ui:set_focus(nil)
+        self.host:show(self.pages[key], dir)
+        if key == "search":
+            self.ui:set_focus(self.search_input)
+            if len(self.results.children) == 0:
+                self:_search_now()
+        elif key == "queue":
+            self.seen_queue = len(self.queue)
+            self:_fill_queue()
+        elif key == "mine":
+            self:_fill_mine()
+
+    def tab_key(self):
+        return self.in_detail and "detail" or self.tabs[self.tab].key
+
+    def back(self):
+        if self.in_detail:
+            self:show_tab(self.tab)
+
+    def key(self, ev):
+        k = ev.key
+        f = self.ui.focus
+        typing = f != nil and f.kind == "input"
+        if ev.ctrl and k == keys.f:
+            self:show_tab(2)
+            self.ui:set_focus(self.search_input)
+            return true
+        if k == keys.f5:
+            self:reload(true)
+            return true
+        if typing:
+            return false
+        for i, name in NUM_KEYS:
+            if k == keys[name] and i <= len(self.tabs):
+                self:show_tab(i)
+                return true
+        if k == keys.backspace and self.in_detail:
+            self:back()
+            return true
+        return false
+
+    def run_loop(self):
+        self.ui:run()
+
+    # ------------------------------------------------------------ data
+
+    def reload(self, refresh=false):
+        if self.s == nil:
+            return
+        let me = self
+        s = self.s
+        if not self.loaded:
+            self.loading = true
+        def work():
+            return {inst: s:installed(), cat: s:catalog(), src: s:sources()}
+        def done(ok, res):
+            me.loading = false
+            if not ok or type(res) != "table":
+                me.nav:say("Cannot read the catalog: " .. _err_text(ok, res), "warn", me.ui.style.danger)
+                if not me.loaded:
+                    me:_no_stew(_err_text(ok, res))
+                return
+            me:_set_data(res)
+            if refresh and s.refresh != nil:
+                me:_refresh()
+        self:run(work, done)
+
+    # fresh catalogs from the network, then read again (the cached catalog is already on screen)
+    def _refresh(self):
+        let me = self
+        s = self.s
+        self.nav.busy = true
+        def done(ok, res):
+            me.nav.busy = false
+            me.nav:invalidate()
+            if not ok:
+                me.nav:say("Refresh failed: " .. _err_text(ok, res), "warn", me.ui.style.warn)
+                return
+            failed = type(res) == "table" and res.failed or nil
+            if failed != nil and len(failed) > 0:
+                names = []
+                for f in failed:
+                    names[len(names) + 1] = tostring(f.name ?? f)
+                me.nav:say("Offline: " .. table.concat(names, ", "), "wifi", me.ui.style.warn)
+            me:reload(false)
+        self:run(() => s:refresh(nil), done)
+
+    def _set_data(self, res):
+        self.inst = res.inst ?? {}
+        self.cat = res.cat ?? []
+        self.srcs = res.src ?? []
+        self.by_id = {}
+        for r in self.cat:
+            self.by_id[r.id] = r
+        self.src_kind = {}
+        for src in self.srcs:
+            self.src_kind[src.name] = src.kind
+        self.loaded = true
+        self:_fill_home()
+        self:_fill_mine()
+        self:_fill_queue()
+        if len(self.results.children) > 0 or self:tab_key() == "search":
+            self:_search_now()
+        if self.in_detail and self.detail != nil:
+            self:_fill_detail(self.by_id[self.detail.id] ?? self.detail)
+        if self.pending_open != nil:
+            r = self.by_id[self.pending_open]
+            self.pending_open = nil
+            if r != nil:
+                self:open_pkg(r)
+
+    def _updates(self):
+        out = []
+        for r in self.cat:
+            if info.update_version(r, self.inst) != nil:
+                out[len(out) + 1] = r
+        return out
+
+    def _group(self, rec):
+        return info.source_group(self.src_kind[rec.source] ?? (info.is_legacy(rec) and "pinestore" or rec.source))
+
+    def _source_label(self, rec):
+        return info.source_label(rec.source, self.src_kind[rec.source] ?? (info.is_legacy(rec) and "pinestore" or nil))
+
+    def _can_launch(self, rec):
+        ir = self.inst[rec.id]
+        if ir == nil:
+            return false
+        if info.is_legacy(rec):
+            return true
+        apps = ir.contributes != nil and ir.contributes.apps or nil
+        return apps != nil and len(apps) > 0
+
+    # what the pill on a tile says
+    def _state(self, rec):
+        t = self:_task_for(rec.id)
+        if t != nil:
+            return "Queued"
+        if info.update_version(rec, self.inst) != nil:
+            return "Update"
+        if info.installed_version(rec, self.inst) != nil:
+            return self:_can_launch(rec) and "Open" or "installed"
+        return "Get"
+
+    # the pill's action
+    def primary(self, rec):
+        state = self:_state(rec)
+        if state == "Get":
+            self:install(rec)
+        elif state == "Update":
+            self:update(rec)
+        elif state == "Open":
+            self:launch(rec)
+        elif state == "Queued":
+            self:show_tab(4)
+        else:
+            self:open_pkg(rec)
+
+    def _row_badges(self, rec):
+        out = []
+        g = self:_group(rec)
+        if info.is_legacy(rec):
+            out[len(out) + 1] = parts.badge_spec("CraftOS", 3)
+        elif g == "custom":
+            t = info.trust(rec.trust)
+            out[len(out) + 1] = parts.badge_spec(self:_source_label(rec), t.hue)
+        return out
+
+    def _tile(self, set, rec, row=false, sub=nil):
+        let me = self
+        opts = {state: self:_state(rec), on_open: (r) => me:open_pkg(r), on_action: (r) => me:primary(r), progress: (r) => me:_frac_of(r.id), sub: sub}
+        w = nil
+        if row:
+            opts.extra = self:_row_badges(rec)
+            w = parts.pkg_row(rec, opts)
+        else:
+            w = parts.pkg_tile(rec, opts)
+        list = self.tiles[set]
+        list[len(list) + 1] = w
+        return w
+
+    # ------------------------------------------------------------ Home
+
+    def _home_page(self):
+        let me = self
+        self.hero = parts.Hero({on_open: (r) => me:open_pkg(r), on_action: (r) => me:primary(r), label: (r) => me:_hero_label(r)})
+        self.updates_box = cdk.column({gap: 0}, [])
+        self.cats = cdk.grid(3, {gap: 3}, [])
+        self.recommend = cdk.grid(2, {gap: 3}, [])
+        self.pine = cdk.grid(2, {gap: 3}, [])
+        self.pine_head = _head("From PineStore", cdk.label("CraftOS programs", {variant: "dim"}))
+        self.home_body = cdk.column({gap: 4, padding: 1}, [self.hero, self.updates_box, _head("Categories"), self.cats, _head("Recommended"), self.recommend,
+            self.pine_head, self.pine])
+        self.tiles.home = []
+        # placeholders while the catalog loads
+        for i in range[1, 4]:
+            sk = parts.Skeleton({})
+            self.skeletons[i] = sk
+            self.recommend:add(sk)
+        return cdk.column({grow: 1}, [cdk.scroll(self.home_body, {grow: 1})])
+
+    def _hero_label(self, rec):
+        s = self:_state(rec)
+        if s == "installed":
+            return "Installed"
+        return s
+
+    def _featured(self):
+        list = []
+        for r in self.cat:
+            if r.category != "system" and string.sub(r.id, 1, 7) != "cubeos." and (r.kind == "app" or r.kind == nil or r.kind == "legacy"):
+                list[len(list) + 1] = r
+        table.sort(list, (a, b) => (a.downloads ?? 0) * 1000 + info.hash(a.id) % 997 > (b.downloads ?? 0) * 1000 + info.hash(b.id) % 997)
+        out = []
+        for r in list:
+            if len(out) < 5:
+                out[len(out) + 1] = r
+        return out
+
+    def _fill_home(self):
+        let me = self
+        st = self.ui.style
+        self.skeletons = []
+        self.hero:set_items(self:_featured())
+        ups = self:_updates()
+        self.updates_box:clear_children()
+        if len(ups) > 0:
+            names = []
+            for r in ups:
+                if len(names) < 3:
+                    names[len(names) + 1] = _name(r)
+            text = len(ups) .. (len(ups) == 1 and " update: " or " updates: ") .. table.concat(names, ", ")
+            self.updates_box:add(cdk.card({dir: "row", gap: 5, align: "center", padding: 4}, [cdk.icon("refresh", {color: parts.col(4, 1, 4)}),
+                cdk.label(text, {grow: 1}), cdk.button("Update all", {variant: "primary", on_click: (b) => me:update_all()})]))
+        # categories with counts
+        counts = {}
+        legacy = 0
+        for r in self.cat:
+            if info.is_legacy(r):
+                legacy += 1
+            else:
+                counts[r.category ?? "other"] = (counts[r.category ?? "other"] ?? 0) + 1
+        self.cats:clear_children()
+        for c in info.CATEGORIES:
+            if (counts[c.id] ?? 0) > 0:
+                self.cats:add(parts.Chip(c, counts[c.id], {on_click: (cat) => me:browse(cat.id)}))
+        if legacy > 0:
+            self.cats:add(parts.Chip(info.category("legacy"), legacy, {on_click: (cat) => me:browse("legacy")}))
+        # recommended: not installed, not system, apps first
+        self.tiles.home = []
+        rec_list = []
+        pine_list = []
+        for r in self.cat:
+            if info.installed_version(r, self.inst) == nil and r.category != "system" and string.sub(r.id, 1, 7) != "cubeos.":
+                if info.is_legacy(r):
+                    pine_list[len(pine_list) + 1] = r
+                elif r.kind != "lib":
+                    rec_list[len(rec_list) + 1] = r
+        table.sort(rec_list, (a, b) => info.hash(a.id) < info.hash(b.id))
+        self.recommend:clear_children()
+        for i, r in rec_list:
+            if i <= 6:
+                self.recommend:add(self:_tile("home", r))
+        if len(rec_list) == 0:
+            self.recommend:add(parts.Empty("check", "You have everything", "New packages show up here"))
+        self.pine:clear_children()
+        for i, r in pine_list:
+            if i <= 4:
+                self.pine:add(self:_tile("home", r))
+        self.pine_head:set_visible(len(pine_list) > 0)
+        self.pine:set_visible(len(pine_list) > 0)
+
+    def _no_stew(self, why=nil):
+        self.home_body:clear_children()
+        self.skeletons = []
+        self.loading = false
+        self.home_body:add(parts.Empty("warn", "Packages are not available", why ?? self.stew_error ?? "stew is missing"))
+
+    def browse(self, cat_id):
+        self.filter_cat = cat_id
+        if cat_id != nil:
+            self.cat_chip.text = info.category(cat_id).name
+            self.cat_chip:set_visible(true)
+        else:
+            self.cat_chip:set_visible(false)
+        self.cat_chip:relayout()
+        if self:tab_key() != "search":
+            self:show_tab(2)
+        self:_search_now()
+
+    # ------------------------------------------------------------ Search
+
+    def _search_page(self):
+        let me = self
+        st_accent = theme.ACCENT
+        self.search_input = cdk.text_input({placeholder: "Search all sources", grow: 1, on_change: (t) => me:_typed(t), on_submit: (t) => me:_search_now()})
+        self.src_chips = {}
+        kids = []
+        for src in SOURCES:
+            let key = src[1]
+            c = parts.FilterChip(src[2], {on: key == "all", on_click: (w) => me:set_source(key)})
+            self.src_chips[key] = c
+            kids[len(kids) + 1] = c
+        self.cat_chip = parts.FilterChip("", {on: true, icon: "close", visible: false, on_click: (w) => me:browse(nil)})
+        kids[len(kids) + 1] = self.cat_chip
+        kids[len(kids) + 1] = cdk.spacer()
+        self.result_note = cdk.label("", {variant: "dim"})
+        kids[len(kids) + 1] = self.result_note
+        self.results = cdk.column({gap: 1}, [])
+        self.tiles.search = []
+        top = cdk.row({gap: 4, align: "center"}, [cdk.icon("search", {color: st_accent}), self.search_input])
+        return cdk.column({grow: 1, gap: 3}, [top, cdk.row({gap: 3, align: "center"}, kids), cdk.scroll(self.results, {grow: 1})])
+
+    def set_source(self, key):
+        self.filter_src = key
+        for k, c in self.src_chips:
+            c:set_on(k == key)
+        self:_search_now()
+
+    def _typed(self, text):
+        self.query = text
+        if self.search_timer != nil:
+            self.ui:cancel(self.search_timer)
+        let me = self
+        self.search_timer = self.ui:after(0.25, () => me:_search_now())
+
+    def _search_now(self):
+        if self.s == nil:
+            return
+        if self.search_timer != nil:
+            self.ui:cancel(self.search_timer)
+            self.search_timer = nil
+        let me = self
+        self.search_seq += 1
+        let seq = self.search_seq
+        s = self.s
+        q = self.query ?? ""
+        cat = self.filter_cat
+        filter = nil
+        if cat != nil and cat != "legacy":
+            filter = {category: cat}
+        def work():
+            if q == "" and filter == nil:
+                return s:catalog()
+            return s:search(q, filter)
+        def done(ok, res):
+            if seq != me.search_seq:
+                return
+            if not ok:
+                me.result_note:set_text("search failed")
+                return
+            me:_fill_results(res ?? [])
+        self:run(work, done)
+
+    def _fill_results(self, list):
+        shown = []
+        for r in list:
+            g = self:_group(r)
+            if (self.filter_src == "all" or self.filter_src == g) and (self.filter_cat != "legacy" or info.is_legacy(r)):
+                shown[len(shown) + 1] = r
+        table.sort(shown, (a, b) => string.lower(_name(a)) < string.lower(_name(b)))
+        self.results_list = shown
+        self.results:clear_children()
+        self.tiles.search = []
+        for i, r in shown:
+            if i <= MAX_RESULTS:
+                self.results:add(self:_tile("search", r, true))
+        if len(shown) == 0:
+            self.results:add(parts.Empty("search", "Nothing found", "Try another word, source or category"))
+        self.result_note:set_text(len(shown) == 1 and "1 found" or (len(shown) .. " found"))
+
+    # ------------------------------------------------------------ My packages
+
+    def _mine_page(self):
+        self.storage = parts.StorageBar({})
+        self.mine_list = cdk.column({gap: 1}, [])
+        self.tiles.mine = []
+        return cdk.column({grow: 1, gap: 3}, [cdk.card({padding: 4}, [self.storage]), cdk.scroll(self.mine_list, {grow: 1})])
+
+    def _space(self):
+        s = self.s
+        if s != nil and s.space != nil:
+            ok, sp = pcall(() => s:space())
+            if ok and type(sp) == "table":
+                return sp.free, sp.capacity
+        free = nil
+        cap = nil
+        if fs != nil:
+            ok1, f = pcall(() => fs.getFreeSpace("/"))
+            if ok1 and type(f) == "number":
+                free = f
+            if fs.getCapacity != nil:
+                ok2, c = pcall(() => fs.getCapacity("/"))
+                if ok2 and type(c) == "number":
+                    cap = c
+        return free, cap
+
+    def _storage_bar(self):
+        st = self.ui.style
+        packed = 0
+        unpacked = 0
+        for id, r in self.inst:
+            if r.storage == "packed":
+                packed += r.size ?? 0
+            else:
+                unpacked += r.size ?? 0
+        free, cap = self:_space()
+        used = packed + unpacked
+        total = cap ?? (used + (free ?? 0))
+        other = 0
+        if cap != nil and free != nil:
+            other = math.max(0, cap - free - used)
+        title = "Packages use " .. kit.size_text(used)
+        if free != nil:
+            title = title .. ", " .. kit.size_text(free) .. " free"
+        segs = [{label: "Packed", text: kit.size_text(packed), size: packed, color: st.accent, hi: st.accent_hi},
+            {label: "Unpacked", text: kit.size_text(unpacked), size: unpacked, color: parts.col(6, 2, 3), hi: parts.col(6, 1, 4)}]
+        if other > 0:
+            segs[3] = {label: "Other", text: kit.size_text(other), size: other, color: st.hi}
+        self.storage:set(title, segs, math.max(1, total))
+
+    def _fill_mine(self):
+        let me = self
+        self:_storage_bar()
+        self.mine_list:clear_children()
+        self.tiles.mine = []
+        user = []
+        system = []
+        for id, r in self.inst:
+            if string.sub(id, 1, 7) == "cubeos.":
+                system[len(system) + 1] = id
+            else:
+                user[len(user) + 1] = id
+        table.sort(user)
+        table.sort(system)
+        self.mine_list:add(_head("Installed (" .. len(user) .. ")"))
+        for id in user:
+            self.mine_list:add(self:_mine_row(id))
+        if len(user) == 0:
+            self.mine_list:add(parts.Empty("box", "No packages yet", "What you install appears here"))
+        label = (self.show_system and "Hide" or "Show") .. " system (" .. len(system) .. ")"
+        self.mine_list:add(_head("System", cdk.button(label, {variant: "flat", icon: self.show_system and "up" or "menu", on_click: (b) => me:_toggle_system()})))
+        if self.show_system:
+            for id in system:
+                self.mine_list:add(self:_mine_row(id))
+
+    def _toggle_system(self):
+        self.show_system = not self.show_system
+        self:_fill_mine()
+
+    def _mine_row(self, id):
+        let me = self
+        r = self.inst[id]
+        rec = self.by_id[id]
+        if rec == nil:
+            rec = {id: id, name: id, category: string.sub(id, 1, 7) == "cubeos." and "system" or (r.kind == "theme" and "assets" or "apps"),
+                kind: r.kind, source: r.source}
+        sub = "v" .. tostring(r.version ?? "?") .. "  " .. kit.size_text(r.size)
+        if r.auto:
+            sub = sub .. "  needed by others"
+        row = self:_tile("mine", rec, true, sub)
+        row.grow = 1
+        row.extra = nil
+        row.state = info.update_version(rec, self.inst) != nil and "Update" or nil
+        let pid = id
+        tog = parts.SegToggle("Packed", "Unpacked", {value: r.storage == "packed" and 1 or 2, locked: _contains(ALWAYS_UNPACKED, id)})
+        tog.on_change = (v) => me:set_storage(pid, v == 1 and "packed" or "unpacked", tog)
+        return cdk.row({gap: 3, align: "center"}, [row, tog])
+
+    def set_storage(self, id, mode, tog=nil):
+        if self.s == nil:
+            return
+        let me = self
+        s = self.s
+        if tog != nil:
+            tog.busy = true
+            tog:invalidate()
+        def done(ok, res):
+            if tog != nil:
+                tog.busy = false
+            if not ok or (type(res) == "table" and res.ok == false):
+                if tog != nil:
+                    tog:set_value(mode == "packed" and 2 or 1)
+                me.nav:say("Cannot change storage: " .. _err_text(ok, res), "warn", me.ui.style.danger)
+                return
+            if me.inst[id] != nil:
+                me.inst[id].storage = mode
+            me:_storage_bar()
+            me.nav:say(_name(me.by_id[id] ?? {id: id}) .. (mode == "packed" and " is packed now" or " is unpacked now"), "check")
+        self:run(() => s:set_storage(id, mode), done)
+
+    # ------------------------------------------------------------ Queue
+
+    def _queue_page(self):
+        let me = self
+        self.q_note = cdk.label("", {variant: "dim", grow: 1})
+        self.btn_clear = cdk.button("Clear", {variant: "flat", icon: "close", on_click: (b) => me:clear_done()})
+        self.btn_update_all = cdk.button("Update all", {variant: "primary", icon: "refresh", on_click: (b) => me:update_all()})
+        self.q_list = cdk.column({gap: 2}, [])
+        return cdk.column({grow: 1, gap: 3}, [cdk.row({gap: 3, align: "center"}, [self.q_note, self.btn_clear, self.btn_update_all]),
+            cdk.scroll(self.q_list, {grow: 1})])
+
+    def _fill_queue(self):
+        self.q_list:clear_children()
+        self.q_cards = []
+        running = 0
+        waiting = 0
+        for i in range[len(self.queue), 1] step -1:
+            t = self.queue[i]
+            c = parts.QueueCard(t)
+            c.shown = t.shown ?? t.frac ?? 0
+            self.q_cards[len(self.q_cards) + 1] = c
+            self.q_list:add(c)
+            if t.state == "running":
+                running += 1
+            elif t.state == "waiting":
+                waiting += 1
+        if len(self.queue) == 0:
+            self.q_list:add(parts.Empty("download", "Nothing in the queue", "Installs and updates show up here"))
+        ups = len(self:_updates())
+        self.btn_update_all.enabled = ups > 0
+        self.btn_update_all.text = ups > 0 and ("Update all (" .. ups .. ")") or "Up to date"
+        self.btn_update_all:relayout()
+        if running + waiting > 0:
+            self.q_note:set_text(running .. " running, " .. waiting .. " waiting")
+        else:
+            self.q_note:set_text(len(self.queue) > 0 and "All done" or "")
+
+    def clear_done(self):
+        keep = []
+        for t in self.queue:
+            if t.state == "running" or t.state == "waiting":
+                keep[len(keep) + 1] = t
+        self.queue = keep
+        self.seen_queue = len(keep)
+        self:_fill_queue()
+
+    def _task_for(self, id):
+        for t in self.queue:
+            if (t.state == "running" or t.state == "waiting") and (t.id == id or _contains(t.ids, id)):
+                return t
+        return nil
+
+    def _frac_of(self, id):
+        t = self:_task_for(id)
+        if t == nil:
+            return nil
+        return t.shown ?? t.frac ?? 0
+
+    def _task_progress(self, id):
+        t = self:_task_for(id)
+        if t == nil:
+            return nil
+        if t.state == "waiting":
+            return {value: 0, text: "Waiting..."}
+        v = t.shown ?? t.frac ?? 0
+        word = t.stage_word ?? "Working"
+        return {value: v, text: word .. " " .. math.floor(v * 100 + 0.5) .. "%"}
+
+    def _enqueue(self, rec, op, plan, op_text):
+        ids = []
+        for stp in plan.steps ?? []:
+            ids[len(ids) + 1] = stp.id
+        task = {id: rec.id, ids: ids, rec: rec, name: _name(rec), op: op, op_text: op_text, plan: plan, state: "waiting", frac: 0, shown: 0}
+        self.queue[len(self.queue) + 1] = task
+        self:_pump()
+        self:_fill_queue()
+        self:_states_changed()
+        self:_wake()
+        return task
+
+    def _pump(self):
+        for t in self.queue:
+            if t.state == "running":
+                return
+        for t in self.queue:
+            if t.state == "waiting":
+                self:_start(t)
+                return
+
+    def _start(self, task):
+        let me = self
+        s = self.s
+        task.state = "running"
+        task.stage_text = "Starting"
+        def progress(stage, id, i, n):
+            me:_progress(task, stage, id, i, n)
+        def ask(q):
+            return me:_ask(task, q)
+        def work():
+            return s:apply(task.plan, {on_progress: progress, ask: ask})
+        def done(ok, r):
+            st = me.ui.style
+            if ok and type(r) == "table" and r.ok != false:
+                task.state = "done"
+                task.frac = 1
+                task.shown = 1
+                task.stage_text = (DONE_TEXT[task.op] ?? "Done") .. (task.rec.latest != nil and task.op != "remove" and (" " .. task.rec.latest) or "")
+                me.nav:say(task.name .. " " .. string.lower(DONE_TEXT[task.op] ?? "done"), "check", st.ok)
+            else:
+                task.state = "failed"
+                task.stage_text = "Failed: " .. _err_text(ok, r)
+                me.nav:say("Failed: " .. task.name, "warn", st.danger)
+            if me:tab_key() == "queue":
+                me.seen_queue = len(me.queue)
+            me:_pump()
+            me:_fill_queue()
+            me:reload(false)
+        self:run(work, done)
+
+    # runs in the background process: only writes into the task, the window reads it on its timer
+    def _progress(self, task, stage, id, i, n):
+        if stage == "rollback":
+            task.stage_text = "Undoing the changes"
+            task.stage_word = "Undoing"
+            return
+        sg = STAGES[stage]
+        if sg == nil:
+            task.stage_text = tostring(stage)
+            return
+        n = math.max(1, n ?? 1)
+        i = math.max(1, math.min(n, i ?? 1))
+        f = sg[1] + (sg[2] - sg[1]) * (i - 0.5) / n
+        task.frac = math.max(task.frac ?? 0, f)
+        who = id != nil and _name(self.by_id[id] ?? {id: id}) or task.name
+        task.stage_word = sg[3]
+        task.stage_text = sg[3] .. " " .. who .. (n > 1 and ("  " .. i .. "/" .. n) or "")
+
+    # an installer question (runs in the background process): the window shows it, the answer comes back through the task
+    def _ask(self, task, q):
+        task.answer = nil
+        task.question = q
+        while task.answer == nil:
+            self.sys.sleep(0.1)
+        a = task.answer
+        task.answer = nil
+        task.question = nil
+        task.asking = false
+        return a.value
+
+    def _ask_dialog(self, task):
+        task.asking = true
+        q = task.question
+        text = type(q) == "table" and (q.text ?? q.question ?? q.label ?? q.title) or tostring(q)
+        title = type(q) == "table" and q.title or (task.name .. " asks")
+        choices = type(q) == "table" and (q.choices ?? q.options) or nil
+        buttons = []
+        if choices != nil and len(choices) > 0:
+            for i, c in choices:
+                buttons[i] = {text: tostring(type(c) == "table" and (c.label ?? c.text ?? c.id) or c), value: type(c) == "table" and (c.id ?? c.value) or c,
+                    variant: i == len(choices) and "primary" or nil}
+        else:
+            buttons = [{text: "No", value: false}, {text: "Yes", variant: "primary", value: true}]
+        default = type(q) == "table" and q.default or nil
+        cdk.dialog(self.ui, {title: title, text: tostring(text ?? ""), icon: "info", buttons: buttons,
+            on_result: (v) => rawset(task, "answer", {value: v ?? default})})
+
+    def _states_changed(self):
+        for key, list in self.tiles:
+            if key != "mine":
+                for w in list:
+                    w.state = self:_state(w.rec)
+                    w:invalidate()
+        self.hero.cache = {}
+        self.hero:invalidate()
+        if self.in_detail and self.detail != nil:
+            self:_fill_detail(self.detail)
+
+    # ------------------------------------------------------------ actions
+
+    def install(self, rec):
+        let me = self
+        id = rec.id
+        def go(values):
+            req = {install: [id], storage: "auto"}
+            if values != nil:
+                req.options = {}
+                req.options[id] = values
+            me:_plan_then_queue(rec, "install", req, "Install " .. tostring(rec.latest ?? ""))
+        opts = info.options(rec, self.details[id])
+        if len(opts) > 0:
+            self:_options_dialog(rec, opts, go)
+        else:
+            go(nil)
+
+    def update(self, rec):
+        v = info.update_version(rec, self.inst) ?? rec.latest
+        self:_plan_then_queue(rec, "update", {update: [rec.id]}, "Update to " .. tostring(v))
+
+    def remove(self, rec):
+        self:_plan_then_queue(rec, "remove", {remove: [rec.id]}, "Remove")
+
+    def update_all(self):
+        ups = self:_updates()
+        if len(ups) == 0:
+            self.nav:say("Everything is up to date", "check")
+            return
+        ids = []
+        for r in ups:
+            if self:_task_for(r.id) == nil:
+                ids[len(ids) + 1] = r.id
+        if len(ids) == 0:
+            self:show_tab(4)
+            return
+        rec = len(ids) == 1 and self.by_id[ids[1]] or {id: "*updates", name: "Updates", category: "system", description: ""}
+        self:_plan_then_queue(rec, "update", {update: ids}, len(ids) == 1 and "Update" or (len(ids) .. " packages"))
+
+    def launch(self, rec):
+        ir = self.inst[rec.id]
+        apps = ir != nil and ir.contributes != nil and ir.contributes.apps or []
+        app = apps[1]
+        o = self.o
+        if o.launch != nil:
+            o.launch(rec.id, app, ir)
+        elif info.is_legacy(rec) and o.run_legacy != nil:
+            o.run_legacy(rec.id, ir)
+        elif app != nil and o.open_app != nil:
+            o.open_app(app.id, nil)
+        else:
+            self.nav:say("Cannot start " .. _name(rec) .. " from here yet", "warn", self.ui.style.warn)
+            return
+        self.nav:say("Opening " .. _name(rec), "play")
+
+    def try_it(self, rec):
+        let me = self
+        s = self.s
+        def done(ok, res):
+            if not ok or (type(res) == "table" and res.ok == false):
+                me.nav:say("Cannot try it: " .. _err_text(ok, res), "warn", me.ui.style.danger)
+                return
+            if me.o.launch != nil and type(res) == "table":
+                me.o.launch(rec.id, res.app, res)
+            me.nav:say("Trying " .. _name(rec), "eye")
+        self.nav:say("Getting " .. _name(rec) .. " to try", "download", self.ui.style.accent)
+        self:run(() => s:try(rec.id), done)
+
+    def _plan_then_queue(self, rec, op, req, op_text):
+        if self.s == nil:
+            return
+        if self:_task_for(rec.id) != nil:
+            self:show_tab(4)
+            return
+        let me = self
+        s = self.s
+        def done(ok, p):
+            if not ok or type(p) != "table":
+                cdk.message(me.ui, "Cannot plan it", _err_text(ok, p))
+                return
+            if p.ok == false or p.fits == false:
+                me:_plan_problem(rec, p)
+                return
+            if me:_needs_confirm(rec, p, op):
+                me:_confirm(rec, p, op, op_text)
+            else:
+                me:_enqueue(rec, op, p, op_text)
+        self:run(() => s:plan(req), done)
+
+    def _needs_confirm(self, rec, p, op):
+        if op == "remove":
+            return true
+        if len(p.steps ?? []) > 1 or len(p.warnings ?? []) > 0:
+            return true
+        if (rec.trust ?? "official") != "official":
+            return true
+        return len(p.runs_setup ?? []) > 0 and (rec.trust ?? "official") != "official"
+
+    def _confirm(self, rec, p, op, op_text):
+        let me = self
+        lines = []
+        extra = []
+        removing = []
+        for stp in p.steps ?? []:
+            if stp.id != rec.id:
+                if stp.op == "remove":
+                    removing[len(removing) + 1] = _name(self.by_id[stp.id] ?? {id: stp.id})
+                else:
+                    extra[len(extra) + 1] = _name(self.by_id[stp.id] ?? {id: stp.id})
+        if op == "remove":
+            lines[1] = "Frees " .. kit.size_text(math.abs(math.min(0, p.installed_delta ?? 0))) .. "."
+        else:
+            lines[1] = "Downloads " .. kit.size_text(p.download ?? 0) .. ", takes " .. kit.size_text(math.max(0, p.installed_delta ?? 0)) .. "."
+        if len(extra) > 0:
+            lines[len(lines) + 1] = "Also installs: " .. table.concat(extra, ", ") .. "."
+        if len(removing) > 0:
+            lines[len(lines) + 1] = "Also removes: " .. table.concat(removing, ", ") .. "."
+        perms = p.new_permissions != nil and p.new_permissions[rec.id] or nil
+        if perms != nil and len(perms) > 0:
+            words = []
+            for name in perms:
+                ic, txt = info.permission(name)
+                words[len(words) + 1] = string.lower(string.sub(txt, 1, 1)) .. string.sub(txt, 2)
+            lines[len(lines) + 1] = "It " .. table.concat(words, ", ") .. "."
+        t = info.trust(rec.trust)
+        if (rec.trust ?? "official") != "official":
+            lines[len(lines) + 1] = t.text .. "."
+        if len(p.runs_setup ?? []) > 0:
+            lines[len(lines) + 1] = "Runs its own setup code."
+        for w in p.warnings ?? []:
+            lines[len(lines) + 1] = tostring(w)
+        verb = op == "remove" and "Remove" or (op == "update" and "Update" or "Install")
+        cdk.dialog(self.ui, {title: verb .. " " .. _name(rec) .. "?", text: table.concat(lines, " "), icon: op == "remove" and "warn" or "info",
+            buttons: [{text: "Cancel", value: false}, {text: verb, variant: op == "remove" and "danger" or "primary", value: true}],
+            on_result: (v) => v == true and me:_enqueue(rec, op, p, op_text) or nil})
+
+    def _plan_problem(self, rec, p):
+        lines = []
+        if p.fits == false:
+            lines[1] = "Not enough space: it needs " .. kit.size_text(p.peak ?? p.installed_delta ?? 0) .. ", " .. kit.size_text(p.free ?? 0) .. " is free."
+        for m in p.missing ?? []:
+            lines[len(lines) + 1] = "Missing: " .. tostring(type(m) == "table" and (m.id ?? m.name) or m) .. "."
+        for c in p.conflicts ?? []:
+            lines[len(lines) + 1] = "Conflicts with " .. tostring(type(c) == "table" and (c.id ?? c.name) or c) .. "."
+        if p.error != nil:
+            lines[len(lines) + 1] = tostring(p.error)
+        if len(lines) == 0:
+            lines[1] = "stew cannot do this."
+        cdk.dialog(self.ui, {title: "Cannot install " .. _name(rec), text: table.concat(lines, " "), icon: "warn", buttons: [{text: "OK", variant: "primary", value: true}]})
+
+    # install options from the manifest (bool, choice, multi, text, number, path): one modal card, defaults filled in
+    def _options_dialog(self, rec, opts, go):
+        let me = self
+        ui = self.ui
+        st = ui.style
+        getters = []
+        rows = []
+        for op in opts:
+            let o = op
+            kind = o.type ?? "bool"
+            label = tostring(o.label ?? o.id)
+            if kind == "bool":
+                let sw = cdk.switch(label, {on: o.default == true})
+                rows[len(rows) + 1] = sw
+                getters[len(getters) + 1] = [o.id, () => sw.on]
+            elif kind == "choice":
+                items = []
+                idx = 1
+                for i, c in o.choices ?? []:
+                    items[i] = tostring(c)
+                    if c == o.default:
+                        idx = i
+                let dd = cdk.dropdown({items: items, index: idx})
+                rows[len(rows) + 1] = cdk.row({gap: 6, align: "center"}, [cdk.label(label, {grow: 1}), dd])
+                getters[len(getters) + 1] = [o.id, () => dd:value()]
+            elif kind == "multi":
+                rows[len(rows) + 1] = cdk.label(label, {variant: "dim"})
+                boxes = []
+                for c in o.choices ?? []:
+                    cb = cdk.checkbox(tostring(c), {checked: _contains(o.default, c)})
+                    boxes[len(boxes) + 1] = [c, cb]
+                    rows[len(rows) + 1] = cb
+                let bs = boxes
+                def picked():
+                    out = []
+                    for b in bs:
+                        if b[2].checked:
+                            out[len(out) + 1] = b[1]
+                    return out
+                getters[len(getters) + 1] = [o.id, picked]
+            else:
+                let field = cdk.text_input({text: o.default != nil and tostring(o.default) or "", grow: 1})
+                rows[len(rows) + 1] = cdk.row({gap: 6, align: "center"}, [cdk.label(label, {width: 70}), field])
+                let numeric = kind == "number"
+                getters[len(getters) + 1] = [o.id, () => numeric and (tonumber(field.text) ?? field.text) or field.text]
+        width = math.min(220, ui.win.canvas.w - 20)
+        root = cdk.card({gap: 5, border: st.border, padding: 7, width: width, bg: st.bg}, [])
+        root:add(cdk.row({gap: 5, align: "center"}, [cdk.icon("sliders", {color: st.accent}), cdk.label("Install " .. _name(rec), {color: st.text})]))
+        for r in rows:
+            root:add(r)
+        def finish(ok):
+            ui:close_layer(root)
+            if ok:
+                values = {}
+                for g in getters:
+                    values[g[1]] = g[2]()
+                go(values)
+        bar = cdk.row({gap: 4}, [cdk.spacer(), cdk.button("Cancel", {on_click: (b) => finish(false)})])
+        ok_btn = cdk.button("Install", {variant: "primary", icon: "download", on_click: (b) => finish(true)})
+        bar:add(ok_btn)
+        root:add(bar)
+        root.on_escape = (r) => finish(false)
+        ui:open_layer(root, {center: true, modal: true, dismiss: false})
+        ui:set_focus(ok_btn)
+
+    # ------------------------------------------------------------ package page
+
+    def open_pkg(self, rec):
+        if self.s == nil:
+            return
+        let me = self
+        s = self.s
+        was = self.in_detail
+        self.detail = rec
+        self.in_detail = true
+        self:_fill_detail(rec)
+        self.ui:set_focus(nil)
+        self.host:show(self.pages.detail, was and 0 or 1)
+        id = rec.id
+        def done(ok, d):
+            if ok and type(d) == "table":
+                me.details[id] = d
+                if me.in_detail and me.detail != nil and me.detail.id == id:
+                    me:_fill_detail(me.detail)
+        if s.info != nil:
+            self:run(() => s:info(id), done)
+
+    def _main_action(self, rec):
+        let me = self
+        upd = info.update_version(rec, self.inst)
+        have = info.installed_version(rec, self.inst)
+        size, isize = info.sizes(rec)
+        if upd != nil:
+            return "Update to " .. upd, "refresh", () => me:update(rec)
+        if have != nil:
+            if self:_can_launch(rec):
+                return "Open", "play", () => me:launch(rec)
+            return "Installed", "check", nil
+        return "Install" .. (size != nil and ("  " .. kit.size_text(size)) or ""), "download", () => me:install(rec)
+
+    def _fill_detail(self, rec):
+        let me = self
+        st = self.ui.style
+        d = self.details[rec.id]
+        page = self.pages.detail
+        page:clear_children()
+        hu = info.hue(rec)
+        have = info.installed_version(rec, self.inst)
+        upd = info.update_version(rec, self.inst)
+        size, isize = info.sizes(rec)
+        legacy = info.is_legacy(rec)
+        author = rec.author ?? (d != nil and d.manifest != nil and d.manifest.author or nil)
+        cat = legacy and "CraftOS program" or info.category(rec.category).name
+        meta = tostring(author ?? "Unknown author") .. "  v" .. tostring(rec.latest ?? have ?? "?") .. "  " .. cat
+        badges = [parts.trust_badge_spec(rec.trust)]
+        badges[len(badges) + 1] = parts.badge_spec(self:_source_label(rec), info.trust(rec.trust).hue)
+        if legacy:
+            badges[len(badges) + 1] = parts.badge_spec("CraftOS program", 3, "terminal")
+        if have != nil:
+            badges[len(badges) + 1] = parts.badge_spec("Installed " .. tostring(have), 4, "check")
+        back = cdk.button("", {variant: "flat", icon: "back", on_click: (b) => me:back()})
+        header = parts.PageHeader(rec, {grow: 1, meta: meta, badges: badges})
+        # actions
+        text, icon, fn = self:_main_action(rec)
+        self.main_btn = parts.ProgressButton(text, {icon: icon, progress: () => me:_task_progress(rec.id), on_click: (b) => fn != nil and fn() or nil})
+        if fn == nil and self:_task_for(rec.id) == nil:
+            self.main_btn.variant = "normal"
+        acts = [self.main_btn]
+        if have != nil and upd != nil and self:_can_launch(rec):
+            acts[len(acts) + 1] = cdk.button("Open", {icon: "play", on_click: (b) => me:launch(rec)})
+        if have == nil and self.s != nil and self.s.try != nil:
+            acts[len(acts) + 1] = cdk.button("Try", {icon: "eye", on_click: (b) => me:try_it(rec)})
+        if have != nil:
+            acts[len(acts) + 1] = cdk.button("Remove", {icon: "trash", on_click: (b) => me:remove(rec)})
+        body = cdk.column({gap: 4, padding: 2}, [cdk.row({gap: 2, align: "start"}, [back, header]), cdk.row({gap: 3}, acts)])
+        # description
+        width = math.max(120, (self.host.w > 0 and self.host.w or 290) - 16)
+        desc = tostring(rec.description ?? "")
+        if d != nil and type(d.long_description) == "string":
+            desc = d.long_description
+        for line in surface_mod.wrap(st.font, desc, width):
+            body:add(cdk.label(line))
+        if legacy:
+            body:add(cdk.card({dir: "row", gap: 5, align: "center", padding: 4}, [cdk.icon("terminal", {color: parts.col(3, 1, 4)}),
+                cdk.label("A program from PineStore: runs in a terminal window", {variant: "dim", grow: 1})]))
+        # facts
+        facts = cdk.grid(2, {gap: 2}, [])
+        def fact(label, value):
+            facts:add(cdk.row({gap: 4}, [cdk.label(label, {variant: "dim", width: 54}), cdk.label(tostring(value), {grow: 1})]))
+        fact("Download", size != nil and kit.size_text(size) or "while installing")
+        fact("Installed", isize != nil and kit.size_text(isize) or "unknown")
+        fact("Version", rec.latest ?? have ?? "?")
+        fact("Source", self:_source_label(rec))
+        body:add(_head("About"))
+        body:add(facts)
+        # permissions
+        perms = info.permissions(rec, d)
+        body:add(_head("Permissions"))
+        n = 0
+        for group in [["need", "required"], ["want", "optional"]]:
+            for name in perms[group[1]] ?? []:
+                ic, txt = info.permission(name)
+                body:add(cdk.row({gap: 5, align: "center"}, [cdk.icon(ic, {color: group[1] == "need" and st.accent or st.dim}), cdk.label(txt, {grow: 1}),
+                    cdk.label(group[2], {variant: "dim"})]))
+                n += 1
+        if n == 0:
+            body:add(cdk.label(legacy and "Runs with the rights of a CraftOS program: its own folder, no system access" or "Needs no special rights",
+                {variant: "dim"}))
+        tr = info.trust(rec.trust)
+        body:add(cdk.row({gap: 5, align: "center"}, [cdk.icon(tr.icon, {color: parts.col(tr.hue, 1, 4)}), cdk.label(tr.text, {variant: "dim", grow: 1})]))
+        # dependencies
+        deps = info.depends(rec, d)
+        if len(deps) > 0:
+            body:add(_head("Needs"))
+            self.tiles.detail = []
+            for dep in deps:
+                drec = self.by_id[dep[1]]
+                mark = self.inst[dep[1]] != nil and "installed" or "will be installed"
+                if drec != nil:
+                    body:add(self:_tile("detail", drec, true, dep[2] .. "  " .. mark))
+                else:
+                    body:add(cdk.row({gap: 5, align: "center"}, [cdk.icon(self.inst[dep[1]] != nil and "check" or "box", {color: st.dim}),
+                        cdk.label(dep[1], {grow: 1}), cdk.label(dep[2] .. "  " .. mark, {variant: "dim"})]))
+        # versions
+        vs = info.versions(rec)
+        if len(vs) > 0:
+            body:add(_head("Versions"))
+            for i, ver in vs:
+                if i <= 6:
+                    tags = []
+                    if i == 1:
+                        tags[1] = "latest"
+                    if have != nil and tostring(have) == ver:
+                        tags[len(tags) + 1] = "installed"
+                    e = info.version_entry(rec, ver)
+                    sz = e.size != nil and kit.size_text(e.size) or ""
+                    body:add(cdk.row({gap: 5, align: "center"}, [cdk.icon(i == 1 and "star" or "archive", {color: i == 1 and st.accent or st.dim}),
+                        cdk.label(ver, {grow: 1}), cdk.label(table.concat(tags, ", "), {variant: "accent"}), cdk.label(sz, {variant: "dim", width: 48, align: "right"})]))
+        page:add(cdk.scroll(body, {grow: 1}))
+
+    # ------------------------------------------------------------ Publish
+
+    def _publish_page(self):
+        let me = self
+        st_accent = theme.ACCENT
+        self.pub_path = cdk.text_input({placeholder: "Folder with package.json5", grow: 1, on_submit: (t) => me:publish_folder()})
+        self.pub_note = cdk.label("", {variant: "dim"})
+        self.pub_list = cdk.column({gap: 2}, [])
+        intro = cdk.card({gap: 2, padding: 5}, [cdk.row({gap: 4, align: "center"}, [cdk.icon("up", {color: st_accent}), cdk.label("Publish to Cobble", {grow: 1}),
+            cdk.button("Sign in", {variant: "flat", icon: "user", on_click: (b) => me:sign_in()})]),
+            cdk.label("Sends a package folder as a pull request", {variant: "dim"})])
+        row = cdk.row({gap: 3, align: "center"}, [self.pub_path, cdk.button("Publish folder", {variant: "primary", icon: "up", on_click: (b) => me:publish_folder()})])
+        self:_fill_publications()
+        return cdk.column({grow: 1, gap: 4}, [intro, row, self.pub_note, _head("My publications"), cdk.scroll(self.pub_list, {grow: 1})])
+
+    def _pctx(self):
+        if self.pub_ctx == nil:
+            let me = self
+            mem = {key: nil}
+            o = self.o
+            self.pub_ctx = {fs: fs, gate: o.gate ?? "", http_get: _http_get, http_post: _http_post, sleep: (sec) => me.sys.sleep(sec),
+                key_store: o.key_store ?? {get: () => mem.key, set: (k) => rawset(mem, "key", k), clear: () => rawset(mem, "key", nil)}}
+        return self.pub_ctx
+
+    def publish_folder(self):
+        path = self.pub_path.text ?? ""
+        st = self.ui.style
+        if path == "":
+            self.pub_note:set_text("Type the folder of the package first")
+            return
+        let me = self
+        pub = self.pub
+        pctx = self:_pctx()
+        self.pub_note:set_text("Sending " .. path .. "...")
+        def done(ok, res):
+            if not ok or type(res) != "table" or res.error != nil:
+                me.pub_note:set_text("Not published: " .. _err_text(ok, res))
+                return
+            me.publications[len(me.publications) + 1] = {id: res.id ?? path, version: res.version, number: res.number, pr: res.pr, state: res.updated and "updated" or "open"}
+            me.pub_note:set_text("Pull request #" .. tostring(res.number ?? "?") .. " is open")
+            me:_fill_publications()
+            me.nav:say("Published " .. tostring(res.id ?? path), "up")
+        self:run(() => pub.send(pctx, path), done)
+
+    def check_publication(self, item):
+        let me = self
+        pub = self.pub
+        pctx = self:_pctx()
+        def done(ok, res):
+            if ok and type(res) == "table" and res.error == nil:
+                item.state = res.merged and "merged" or tostring(res.state ?? "open")
+                me:_fill_publications()
+            else:
+                me.pub_note:set_text("Cannot check: " .. _err_text(ok, res))
+        if pub.status != nil:
+            self:run(() => pub.status(pctx, item.number), done)
+
+    def sign_in(self):
+        let me = self
+        pub = self.pub
+        pctx = self:_pctx()
+        if pub.login_start == nil:
+            return
+        sys = self.sys
+        def work():
+            start = pub.login_start(pctx)
+            if start == nil or start.error != nil:
+                return start
+            me.pub_code = start
+            waited = 0
+            limit = start.expires_in ?? 600
+            while waited < limit:
+                sys.sleep(start.interval ?? 5)
+                waited += start.interval ?? 5
+                r = pub.login_poll(pctx, start.session)
+                if r == nil or r.error != nil or r.key != nil:
+                    return r
+            return {error: "the code expired"}
+        def done(ok, res):
+            me.pub_code = nil
+            if not ok or type(res) != "table" or res.error != nil:
+                me.pub_note:set_text("Not signed in: " .. _err_text(ok, res))
+            else:
+                me.pub_note:set_text("Signed in as " .. tostring(res.login ?? "you"))
+        self.pub_note:set_text("Asking Cobble for a code...")
+        self:run(work, done)
+        self.ui:after(1.5, () => me:_show_code())
+
+    def _show_code(self):
+        c = self.pub_code
+        if c != nil and c.user_code != nil:
+            self.pub_note:set_text("Open " .. tostring(c.verification_uri ?? "github.com/login/device") .. ", code " .. tostring(c.user_code))
+
+    def _fill_publications(self):
+        let me = self
+        self.pub_list:clear_children()
+        for i in range[len(self.publications), 1] step -1:
+            let it = self.publications[i]
+            self.pub_list:add(cdk.card({dir: "row", gap: 5, align: "center", padding: 3}, [cdk.icon("up", {color: theme.ACCENT}),
+                cdk.label(tostring(it.id) .. " " .. tostring(it.version ?? ""), {grow: 1}), cdk.label("#" .. tostring(it.number ?? "?") .. " " .. tostring(it.state ?? ""), {variant: "dim"}),
+                cdk.button("Check", {variant: "flat", on_click: (b) => me:check_publication(it)})]))
+        if len(self.publications) == 0:
+            self.pub_list:add(cdk.label("Nothing published from this computer yet", {variant: "dim"}))
+
+export def main(sys, ctx):
+    app = Store(sys, ctx)
+    app:run_loop()

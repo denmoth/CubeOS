@@ -14,8 +14,11 @@
   priority: "recommended",
   depends: {
     "cubeos.app-kit": "^0.5",
+    "cubeos.cde-icons": "^0.5",
+    "cubeos.cde-theme": "^0.5",
     "cubeos.cdk": "^0.5",
+    "cubeos.cgl": "^0.5",
     "cubeos.stew": "^0.5",
   },
-  files: [],
+  files: ["lib/apps/store/*"],
 }

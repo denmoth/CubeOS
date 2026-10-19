@@ -15,6 +15,7 @@
     "cubeos.auth": "^0.5",
     "cubeos.cfs": "^0.5",
     "cubeos.console": "^0.5",
+    "cubeos.stew": "^0.5",
     "cubeos.cpk": "^0.5",
     "cubeos.init": "^0.5",
     "cubeos.json": "^0.5",

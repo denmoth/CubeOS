@@ -1,0 +1,242 @@
+# apps.store.info: what the Store knows about packages without drawing anything: categories (name, icon, hue), trust levels,
+# permissions in plain words, sizes and versions from catalog records, source kinds (Cobble, PineStore, custom).
+#
+#   info.category("games")        {id, name, icon, hue}
+#   info.trust("official")        {name, hue, icon, text}
+#   info.permission("net.http")   plain explanation of one permission
+#   info.latest_entry(rec)        the record of the latest version (size, installed_size, depends, permissions, options) or {}
+#   info.versions(rec)            ["1.2.0", "1.1.0", ...] newest first
+#   info.hue(rec)                 colour family 0..11 of a package (by category, legacy programs are lime)
+#
+# Catalog records come from stew (docs/packages/09-stew-api.md): {id, name, description, kind, category, priority, source, trust,
+# latest, versions, installed, update}. Fields the record lacks are looked up in s:info(id) (installed record and manifest).
+
+export const CATEGORIES = [
+    {id: "games", name: "Games", icon: "gamepad", hue: 0},
+    {id: "apps", name: "Apps", icon: "cube", hue: 7},
+    {id: "desktop", name: "Desktop", icon: "desktop", hue: 8},
+    {id: "media", name: "Media", icon: "music", hue: 10},
+    {id: "dev", name: "Developer", icon: "terminal", hue: 9},
+    {id: "network", name: "Network", icon: "wifi", hue: 5},
+    {id: "automation", name: "Automation", icon: "gear", hue: 2},
+    {id: "assets", name: "Themes & art", icon: "image", hue: 11},
+    {id: "system", name: "System", icon: "box", hue: 6},
+]
+
+const OTHER = {id: "other", name: "Other", icon: "box", hue: 4}
+const LEGACY = {id: "legacy", name: "CraftOS programs", icon: "terminal", hue: 3}
+
+export const TRUST = {
+    official: {name: "Official", hue: 4, icon: "shield", text: "From the official Cobble catalog, built and checked by CubeOS"},
+    community: {name: "Community", hue: 7, icon: "check", text: "From a community catalog: checked by its maintainers, not by CubeOS"},
+    user: {name: "Your source", hue: 2, icon: "user", text: "From a source you added yourself: nobody checked it"},
+    adhoc: {name: "One-off", hue: 0, icon: "warn", text: "Installed from a link or a file: nobody checked it"},
+}
+
+# permission -> what it lets the package do, in plain words (names from docs/12-permissions-capabilities.md)
+const PERMS = {
+    gfx: ["image", "Draws in its own window"],
+    "fs.appdata": ["folder", "Keeps its own files and settings"],
+    "fs.read": ["file", "Reads your files"],
+    "fs.write": ["pencil", "Changes and deletes your files"],
+    "storage.read": ["file", "Reads your files"],
+    "storage.write": ["pencil", "Changes and deletes your files"],
+    "net.http": ["download", "Uses the internet"],
+    "network.http": ["download", "Uses the internet"],
+    "net.rednet": ["wifi", "Talks to other computers over the modem"],
+    "network.rednet": ["wifi", "Talks to other computers over the modem"],
+    audio: ["volume", "Plays sounds and music"],
+    sound: ["volume", "Plays sounds and music"],
+    "chat.send": ["bell", "Sends messages to the game chat"],
+    "inv.read": ["box", "Looks into chests and other inventories"],
+    "inv.move": ["box", "Moves items between inventories"],
+    "redstone": ["power", "Turns redstone signals on and off"],
+    "turtle": ["gear", "Moves and digs with the turtle"],
+    "system": ["lock", "Changes system settings (asks an administrator)"],
+    "service": ["gear", "Runs a background service"],
+    "autostart": ["play", "Starts by itself after you log in"],
+}
+
+export def category(id):
+    if id == "legacy":
+        return LEGACY
+    for c in CATEGORIES:
+        if c.id == id:
+            return c
+    return OTHER
+
+export def trust(level):
+    return TRUST[level ?? "user"] ?? TRUST.user
+
+export def is_legacy(rec):
+    return rec != nil and (rec.kind == "legacy" or string.sub(tostring(rec.id ?? ""), 1, 10) == "pinestore.")
+
+export def hue(rec):
+    if is_legacy(rec):
+        return LEGACY.hue
+    return category(rec != nil and rec.category or nil).hue
+
+# icon of a package: its own (a known icon name), else its category's
+export def icon(rec, has_icon):
+    own = rec != nil and rec.icon or nil
+    if type(own) == "string" and has_icon(own):
+        return own
+    if is_legacy(rec):
+        return LEGACY.icon
+    return category(rec != nil and rec.category or nil).icon
+
+# "fs.read:$docs" -> icon, text
+export def permission(name):
+    base = name
+    scope = nil
+    colon = string.find(name, ":", 1, true)
+    if colon != nil:
+        base = string.sub(name, 1, colon - 1)
+        scope = string.sub(name, colon + 1)
+    p = PERMS[base]
+    if p == nil:
+        top = string.match(base, "^([^%.]+)")
+        if top == "periph" or top == "mod":
+            return "gear", "Uses a connected device (" .. (scope ?? string.sub(base, len(top) + 2)) .. ")"
+        if top == "net" or top == "network":
+            return "wifi", "Uses the network (" .. base .. ")"
+        return "info", "Uses " .. name
+    text = p[2]
+    if scope != nil:
+        text = text .. " in " .. scope
+    return p[1], text
+
+# ------------------------------------------------------------ versions and sizes
+
+# semver-ish compare: true when a is newer than b
+export def newer(a, b):
+    pa = []
+    for n in string.gmatch(tostring(a ?? "0"), "%d+"):
+        pa[len(pa) + 1] = tonumber(n)
+    pb = []
+    for n in string.gmatch(tostring(b ?? "0"), "%d+"):
+        pb[len(pb) + 1] = tonumber(n)
+    for i in range[1, math.max(len(pa), len(pb))]:
+        x = pa[i] ?? 0
+        y = pb[i] ?? 0
+        if x != y:
+            return x > y
+    return false
+
+# versions newest first; rec.versions may be {ver: entry} (index.json5) or a list of strings or entries
+export def versions(rec):
+    out = []
+    vs = rec != nil and rec.versions or nil
+    if type(vs) == "table":
+        if vs[1] != nil:
+            for v in vs:
+                out[len(out) + 1] = type(v) == "table" and tostring(v.version) or tostring(v)
+        else:
+            for k, v in vs:
+                out[len(out) + 1] = tostring(k)
+    if len(out) == 0 and rec != nil and rec.latest != nil:
+        out[1] = tostring(rec.latest)
+    table.sort(out, (a, b) => newer(a, b))
+    return out
+
+export def version_entry(rec, ver):
+    vs = rec != nil and rec.versions or nil
+    if type(vs) != "table":
+        return {}
+    if vs[1] != nil:
+        for v in vs:
+            if type(v) == "table" and tostring(v.version) == tostring(ver):
+                return v
+        return {}
+    return vs[ver] ?? {}
+
+export def latest_entry(rec):
+    if rec == nil:
+        return {}
+    ver = rec.latest ?? versions(rec)[1]
+    return version_entry(rec, ver)
+
+# installed version string or nil (catalog `installed` may be a version, true, or a record)
+export def installed_version(rec, inst):
+    if inst != nil and inst[rec.id] != nil:
+        return inst[rec.id].version ?? "?"
+    v = rec.installed
+    if type(v) == "table":
+        return v.version ?? "?"
+    if type(v) == "string":
+        return v
+    if v == true:
+        return "?"
+    return nil
+
+# newer version available (string) or nil
+export def update_version(rec, inst):
+    u = rec.update
+    if type(u) == "string":
+        return u
+    if u == true:
+        return rec.latest ?? "?"
+    have = installed_version(rec, inst)
+    if have != nil and have != "?" and rec.latest != nil and newer(rec.latest, have):
+        return tostring(rec.latest)
+    return nil
+
+# download size and installed size of the latest version (nil: unknown, PineStore learns it while downloading)
+export def sizes(rec):
+    e = latest_entry(rec)
+    return e.size ?? rec.size, e.installed_size ?? rec.installed_size
+
+# permissions {need, want} from the version entry, the record or the manifest
+export def permissions(rec, details=nil):
+    e = latest_entry(rec)
+    p = e.permissions ?? rec.permissions
+    if p == nil and details != nil and details.manifest != nil:
+        p = details.manifest.permissions
+    return p ?? {}
+
+# dependencies as a sorted list of [id, range]
+export def depends(rec, details=nil):
+    e = latest_entry(rec)
+    d = e.depends ?? rec.depends
+    if d == nil and details != nil and details.manifest != nil:
+        d = details.manifest.depends
+    out = []
+    if type(d) == "table":
+        if d[1] != nil:
+            for x in d:
+                out[len(out) + 1] = [tostring(x), ""]
+        else:
+            for k, v in d:
+                out[len(out) + 1] = [tostring(k), tostring(v)]
+    table.sort(out, (a, b) => a[1] < b[1])
+    return out
+
+# install options (02-manifest.md): from the version entry, the record, the manifest
+export def options(rec, details=nil):
+    e = latest_entry(rec)
+    o = e.options ?? rec.options
+    if o == nil and details != nil:
+        o = details.options ?? (details.manifest != nil and details.manifest.options or nil)
+    return o ?? []
+
+# ------------------------------------------------------------ sources
+
+# group of a source for the filter: "cobble", "pinestore" or "custom"
+export def source_group(src_kind):
+    if src_kind == "cobble" or src_kind == "pinestore":
+        return src_kind
+    return "custom"
+
+export def source_label(name, kind):
+    if kind == "cobble":
+        return "Cobble"
+    if kind == "pinestore":
+        return "PineStore"
+    return tostring(name ?? "custom")
+
+# a short stable number from an id (decorations that differ between packages)
+export def hash(text):
+    h = 7
+    for i in range[1, string.len(text)]:
+        h = (h * 31 + string.byte(text, i)) % 65521
+    return h

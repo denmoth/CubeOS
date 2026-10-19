@@ -1,0 +1,1076 @@
+# apps.store.parts: the Store's own widgets (cdk elements drawn in pixels): navigation bar with a sliding pill and messages,
+# the featured carousel, package tiles and rows, category chips, the package header, a button that turns into a progress bar,
+# queue cards, the storage bar, a packed/unpacked toggle, loading placeholders, empty states and a page host with slide transitions.
+#
+# Colours: the theme roles of cdk.style (window, text, accent...) and the shared palette colours 32..211 (12 hues x 3 saturations
+# x 5 values, the same in every theme): col(hue, sat 0..2, value 0..4). Every package gets a hue from its category (info.hue).
+# Rows and cards skip drawing when they are outside the visible part of a scroll area, so long lists stay cheap.
+
+import cdk.widget as widget
+import cdk.controls as controls
+import cde.icons as icons
+import cde.theme as theme
+import cgl.surface as surface_mod
+import ./info as info
+
+const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5]
+export const WHITE = theme.GRAY0 + 15
+
+# extra 9x9 icons ("#" main colour, "+" second colour)
+const EXTRA = {
+    store: ["...###...", "..#...#..", ".#######.", ".#+++++#.", ".#+#+#+#.", ".#+++++#.", ".#+++++#.", ".#######.", "........."],
+    box: [".........", ".#######.", "#+++#+++#", "#########", "#+++#+++#", "#+++#+++#", "#+++#+++#", "#########", "........."],
+    gamepad: [".........", ".#######.", "##+######", "#+++##+##", "##+####+#", "#########", "###...###", ".#.....#.", "........."],
+    shield: [".#######.", "#+++#+++#", "#+++#+++#", "#########", "#+++#+++#", ".#++#++#.", "..#+#+#..", "...###...", "....#...."],
+    refresh: ["...####..", "..#....#.", ".#.......", ".#....###", ".#.....#.", ".#.......", "..#....#.", "...####..", "........."],
+}
+for name, rows in EXTRA:
+    if not icons.has(name):
+        icons.register(name, rows)
+
+export def col(h, s, v):
+    return theme.GENERAL0 + (h % 12) * 15 + s * 5 + v
+
+def _lerp(a, b, k):
+    return a + (b - a) * k
+
+# outside the visible (clipped) part of the surface: nothing to draw
+def _hidden(w, s):
+    top = w.y + s.oy
+    return top > s.cy1 or top + w.h - 1 < s.cy0
+
+# ------------------------------------------------------------ drawing helpers
+
+const glyphs = {}
+
+# icon scaled by an integer (pixel art stays sharp)
+export def big_icon(s, name, x, y, scale, c1, c2=nil):
+    if scale <= 1:
+        icons.draw(s, name, x, y, c1, c2)
+        return
+    key = name .. ":" .. c1 .. ":" .. tostring(c2)
+    g = glyphs[key]
+    if g == nil:
+        g = surface_mod.new(9, 9, -1)
+        icons.draw(g, name, 0, 0, c1, c2)
+        glyphs[key] = g
+    s:blit(g, x, y, {scale: scale})
+
+# rounded rectangle filled with a vertical gradient (colours top to bottom), dithered between steps
+export def round_grad(s, x, y, w, h, colors, r=3):
+    n = len(colors)
+    r = math.min(r, 4, math.floor(math.min(w, h) / 2))
+    for j in range[0, h - 1]:
+        inset = 0
+        if j < r:
+            inset = theme.corner_inset(r, j)
+        elif j >= h - r:
+            inset = theme.corner_inset(r, h - 1 - j)
+        if n == 1:
+            s:hline(x + inset, y + j, w - inset * 2, colors[1])
+        else:
+            p = j * (n - 1) / math.max(1, h - 1)
+            k = math.floor(p)
+            f = p - k
+            a = colors[k + 1]
+            b = colors[math.min(n, k + 2)]
+            if f <= 0.02 or a == b:
+                s:hline(x + inset, y + j, w - inset * 2, a)
+            else:
+                lvl = f * 16
+                for i in range[inset, w - 1 - inset]:
+                    s:set(x + i, y + j, BAYER[(j % 4) * 4 + (i % 4) + 1] < lvl and b or a)
+
+# app-icon style tile: a coloured rounded square with the glyph in white
+export def tile(s, x, y, size, hue, name):
+    scale = size >= 30 and 3 or (size >= 18 and 2 or 1)
+    round_grad(s, x, y, size, size, [col(hue, 1, 4), col(hue, 2, 3), col(hue, 2, 2)], size >= 18 and 4 or 3)
+    s:hline(x + 3, y + size - 1, size - 6, col(hue, 2, 1))
+    gs = 9 * scale
+    off = math.floor((size - gs) / 2)
+    big_icon(s, name, x + off, y + off, scale, WHITE, col(hue, 0, 4))
+
+# small rounded label; returns its width
+export def badge(s, st, x, y, text, bg, fg, icon=nil):
+    w = st:text_w(text) + 6 + (icon != nil and 10 or 0)
+    st:round_fill(s, x, y, w, st.fh + 2, bg, 3)
+    tx = x + 3
+    if icon != nil:
+        icons.draw(s, icon, x + 2, y + math.floor((st.fh + 2 - 9) / 2), fg)
+        tx += 10
+    s:text(st.font, tx, y + 1, text, fg)
+    return w
+
+export def badge_w(st, text, icon=nil):
+    return st:text_w(text) + 6 + (icon != nil and 10 or 0)
+
+def trust_badge(s, st, x, y, level):
+    t = info.trust(level)
+    return badge(s, st, x, y, t.name, col(t.hue, 2, 1), col(t.hue, 0, 4), t.icon)
+
+# state pill on tiles and rows: "Get", "Open", "Update", "Queued", or a check for installed
+export def state_w(st, state):
+    if state == nil or state == "":
+        return 0
+    if state == "installed":
+        return 11
+    return st:text_w(state) + 10
+
+export def state_pill(s, st, x, y, state, pressed=false):
+    if state == nil or state == "":
+        return
+    if state == "installed":
+        icons.draw(s, "check", x + 1, y + 1, st.ok)
+        return
+    w = state_w(st, state)
+    bg = st.ctrl
+    fg = st.accent
+    if state == "Get" or state == "Install":
+        bg = pressed and st.accent_lo or st.accent
+        fg = st.on_accent
+    elif state == "Update":
+        bg = col(4, 2, pressed and 1 or 2)
+        fg = WHITE
+    elif state == "Queued" or state == "Working":
+        bg = st.track
+        fg = st.text
+    else:
+        bg = pressed and st.ctrl_lo or st.hi
+        fg = st.text
+    st:round_fill(s, x, y, w, st.fh + 2, bg, 5)
+    s:text(st.font, x + 5, y + 1, state, fg)
+
+def ellip(st, text, width):
+    return surface_mod.ellipsize(st.font, tostring(text ?? ""), math.max(0, width), "..")
+
+# ------------------------------------------------------------ navigation bar
+
+# logo and name on the left (a message slides over the name), tabs on the right: the active one is an accent pill with its title,
+# the others only icons; the pill slides between tabs. tabs: [{key, title, icon}], badge(i) -> colour or nil (a dot on the icon)
+export class NavBar(widget.Widget):
+    def init(self, name, tabs, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "navbar"
+        self.name = name
+        self.tabs = tabs
+        self.index = 1
+        self.old = 1
+        self.k = 1
+        self.prev_rects = nil
+        self.to = nil
+        self.on_change = o.on_change
+        self.badge = o.badge
+        self.toast = nil
+        self.toast_k = 0
+        self.toast_timer = nil
+        self.busy = false
+        self.spin = 0
+
+    def measure(self, st):
+        return 160, 16
+
+    def _rects(self, st, index):
+        widths = []
+        total = 0
+        for i, t in self.tabs:
+            w = 17
+            if i == index:
+                w += st:text_w(t.title) + 3
+            widths[i] = w
+            total += w + 1
+        x = self.x + self.w - total - 1
+        out = []
+        for i, w in widths:
+            out[i] = [x, w]
+            x += w + 1
+        return out
+
+    def layout_children(self):
+        st = self.ui != nil and self.ui.style or nil
+        if st == nil:
+            return
+        self.to = self:_rects(st, self.index)
+        if self.k >= 1 or self.prev_rects == nil:
+            self.prev_rects = self.to
+
+    def set_tabs(self, tabs):
+        self.tabs = tabs
+        self.index = math.min(self.index, len(tabs))
+        self.prev_rects = nil
+        self:relayout()
+
+    def set_index(self, i):
+        if i == self.index or self.ui == nil:
+            self.index = i
+            return
+        st = self.ui.style
+        cur = []
+        if self.to != nil and self.prev_rects != nil:
+            for j, r in self.to:
+                f = self.prev_rects[j] ?? r
+                cur[j] = [_lerp(f[1], r[1], self.k), _lerp(f[2], r[2], self.k)]
+        self.old = self.index
+        self.index = i
+        self.prev_rects = len(cur) == len(self.tabs) and cur or self:_rects(st, self.old)
+        self.to = self:_rects(st, i)
+        self.k = 0
+        self.ui:tween(self, "k", 1, 0.26, "out_cubic")
+
+    # message over the name for a few seconds (installed, failed...)
+    def say(self, text, icon=nil, color=nil):
+        if self.ui == nil:
+            return
+        self.toast = {text: text, icon: icon ?? "check", color: color}
+        self.toast_k = 0
+        self.ui:tween(self, "toast_k", 1, 0.3, "out_back")
+        if self.toast_timer != nil:
+            self.ui:cancel(self.toast_timer)
+        let me = self
+        self.toast_timer = self.ui:after(3, () => me:_unsay())
+
+    def _unsay(self):
+        self.toast_timer = nil
+        self.ui:tween(self, "toast_k", 0, 0.3, "in_cubic")
+
+    def draw(self, s, st):
+        x = self.x
+        y = self.y
+        s:hline(x + 1, y + self.h - 1, self.w - 2, st.ctrl)
+        # logo
+        round_grad(s, x + 2, y + 2, 12, 12, [st.accent_hi, st.accent, st.accent_lo], 3)
+        icons.draw(s, "store", x + 4, y + 3, st.on_accent, st.accent)
+        rects = self.to ?? self:_rects(st, self.index)
+        tabs_x = rects[1] != nil and math.min(rects[1][1], (self.prev_rects ?? rects)[1][1]) or self.x + self.w
+        # name and message slide vertically inside the bar
+        s:push_clip(x + 17, y, math.max(0, tabs_x - x - 19), self.h - 1)
+        k = math.max(0, math.min(1.2, self.toast_k))
+        ny = y + 4 - math.floor(k * 13)
+        s:text(st.font, x + 18, ny, self.name, st.text)
+        if self.busy:
+            # a small spinner after the name while the catalog refreshes
+            sx = x + 20 + st:text_w(self.name)
+            for d in range[0, 2]:
+                on = (math.floor(self.spin * 6) % 3) == d
+                s:fill_rect(sx + d * 3, ny + 6, 2, 2, on and st.accent or st.hi)
+        if self.toast != nil and k > 0:
+            ty = y + 4 + math.floor((1 - k) * 13)
+            c = self.toast.color ?? st.ok
+            icons.draw(s, self.toast.icon, x + 18, ty, c)
+            s:text(st.font, x + 29, ty, ellip(st, self.toast.text, tabs_x - x - 32), st.text)
+        s:pop_clip()
+        # tabs: the pill moves from the old active tab to the new one
+        frm = self.prev_rects ?? rects
+        pr_old = frm[self.old] ?? rects[self.index]
+        pr_new = rects[self.index]
+        if pr_new != nil:
+            px = _lerp(pr_old[1], pr_new[1], self.k)
+            pw = _lerp(pr_old[2], pr_new[2], self.k)
+            if self.k >= 1:
+                px = pr_new[1]
+                pw = pr_new[2]
+            pxi = math.floor(px + 0.5)
+            pwi = math.floor(pw + 0.5)
+            round_grad(s, pxi, y + 1, pwi, 13, [st.accent_hi, st.accent, st.accent], 4)
+        for i, t in self.tabs:
+            r = rects[i]
+            f = frm[i] ?? r
+            rx = math.floor(_lerp(f[1], r[1], self.k) + 0.5)
+            rw = math.floor(_lerp(f[2], r[2], self.k) + 0.5)
+            inside = pr_new != nil and rx + 4 >= math.floor(px) - 1 and rx + 13 <= math.floor(px + pw) + 1
+            fg = inside and st.on_accent or (i == self.index and st.text or st.dim)
+            icons.draw(s, t.icon, rx + 4, y + 3, fg, inside and st.accent_lo or st:darker(fg))
+            if rw > 18:
+                s:push_clip(rx + 15, y, rw - 16, self.h)
+                s:text(st.font, rx + 15, y + 3, t.title, fg)
+                s:pop_clip()
+            dot = self.badge != nil and self.badge(i) or nil
+            if dot != nil:
+                s:fill_rect(rx + 12, y + 1, 3, 3, dot)
+                s:set(rx + 13, y, dot)
+                s:set(rx + 13, y + 4, dot)
+                s:set(rx + 11, y + 2, dot)
+                s:set(rx + 15, y + 2, dot)
+
+    def handle(self, ev):
+        if ev.name == "click" and self.to != nil:
+            for i, r in self.to:
+                if ev.x >= r[1] and ev.x < r[1] + r[2]:
+                    if self.on_change != nil:
+                        self.on_change(i)
+                    return true
+        return ev.name == "down" or ev.name == "up"
+
+# ------------------------------------------------------------ featured carousel
+
+# big banner with a gradient in the package's colours, a glass copy of its icon, sparkles, name, description and an action pill.
+# Slides every few seconds (and with the mouse wheel); click opens the package, the pill installs or opens it.
+export class Hero(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "hero"
+        self.items = []
+        self.index = 1
+        self.prev = nil
+        self.dir = 1
+        self.slide = 1
+        self.cache = {}
+        self.on_open = o.on_open
+        self.on_action = o.on_action
+        self.label = o.label
+        self.timer = nil
+        self.pill = nil
+
+    def measure(self, st):
+        return 160, 50
+
+    def set_items(self, items):
+        self.items = items
+        self.index = math.max(1, math.min(self.index, len(items)))
+        self.prev = nil
+        self.slide = 1
+        self:invalidate()
+
+    def current(self):
+        return self.items[self.index]
+
+    def _attach(self, ui):
+        super._attach(self, ui)
+        if self.timer == nil:
+            let me = self
+            self.timer = ui:every(6, () => me:_auto())
+
+    def _auto(self):
+        if len(self.items) > 1 and self.ui:_shown(self) and self.slide >= 1:
+            self:go(self.index + 1, 1)
+
+    def go(self, i, dir):
+        n = len(self.items)
+        if n < 2:
+            return
+        self.prev = self.index
+        self.index = ((i - 1) % n) + 1
+        self.dir = dir
+        self.slide = 0
+        self.ui:tween(self, "slide", 1, 0.5, "in_out_cubic")
+
+    def _slide(self, st, rec):
+        label = self.label != nil and self.label(rec) or "Get"
+        key = rec.id .. ":" .. self.w .. "x" .. self.h .. ":" .. label
+        got = self.cache[key]
+        if got == nil:
+            got = self:_render(st, rec, label)
+            self.cache[key] = got
+        return got
+
+    def _render(self, st, rec, label):
+        w = self.w
+        h = self.h
+        surf = surface_mod.new(w, h, -1)
+        hu = info.hue(rec)
+        h2 = (hu + 1) % 12
+        stops = [col(hu, 2, 1), col(hu, 2, 2), col(h2, 2, 2), col(h2, 1, 3)]
+        n = len(stops)
+        px = surf.px
+        for j in range[0, h - 1]:
+            for i in range[0, w - 1]:
+                t = (i / math.max(1, w - 1)) * 0.78 + (j / math.max(1, h - 1)) * 0.22
+                p = t * (n - 1)
+                k = math.floor(p)
+                idx = k + 1
+                if k < n - 1 and (p - k) * 16 > BAYER[(j % 4) * 4 + (i % 4) + 1]:
+                    idx = k + 2
+                px[j * w + i + 1] = stops[math.min(n, idx)]
+        name = info.icon(rec, icons.has)
+        # glass copy of the icon: big, half the pixels (checkerboard) in a light tint, cut by the right edge
+        big = 6
+        g = surface_mod.new(9, 9, -1)
+        icons.draw(g, name, 0, 0, 1, 2)
+        gx = w - 9 * big + 8
+        gy = math.floor((h - 9 * big) / 2) + 6
+        light = col(hu, 1, 4)
+        soft = col(h2, 1, 3)
+        for j in range[0, 8 * big + big - 1]:
+            for i in range[0, 9 * big - 1]:
+                v = g.px[math.floor(j / big) * 9 + math.floor(i / big) + 1]
+                xx = gx + i
+                yy = gy + j
+                if v != nil and v >= 1 and xx >= 0 and xx < w and yy >= 0 and yy < h and (xx + yy) % 2 == 0:
+                    px[yy * w + xx + 1] = v == 1 and light or soft
+        # sparkles
+        for q in range[1, 6]:
+            hs = info.hash(rec.id .. "*" .. q)
+            sx = math.floor(w * 0.42) + hs % math.max(1, math.floor(w * 0.36))
+            sy = 3 + math.floor(hs / 13) % math.max(1, h - 6)
+            surf:set(sx, sy, WHITE)
+            if q % 2 == 0:
+                for d in [[1, 0], [-1, 0], [0, 1], [0, -1]]:
+                    surf:set(sx + d[1], sy + d[2], light)
+        # icon tile with a shadow
+        ts = 30
+        tx = 7
+        ty = math.floor((h - ts) / 2)
+        round_grad(surf, tx + 1, ty + 2, ts, ts, [col(hu, 2, 0)], 4)
+        round_grad(surf, tx, ty, ts, ts, [WHITE, theme.GRAY0 + 14, theme.GRAY0 + 12], 4)
+        big_icon(surf, name, tx + 2, ty + 2, 3, col(hu, 2, 2), col(hu, 1, 3))
+        # texts
+        x0 = tx + ts + 8
+        avail = w - x0 - 10
+        cat = info.is_legacy(rec) and "CRAFTOS PROGRAM" or string.upper(info.category(rec.category).name)
+        surf:text(st.font, x0, 4, ellip(st, "FEATURED  " .. cat, avail), col(hu, 0, 4))
+        title = tostring(rec.name ?? rec.id)
+        if st:text_w(title) * 2 <= avail:
+            surf:text(st.font, x0, 14, title, WHITE, {scale: 2, shadow: {color: col(hu, 2, 0), dx: 1, dy: 1}})
+        else:
+            surf:text(st.font, x0, 18, ellip(st, title, avail), WHITE, {shadow: {color: col(hu, 2, 0), dx: 1, dy: 1}})
+        pw = st:text_w(label) + 12
+        py = h - st.fh - 6
+        st:round_fill(surf, x0 + 1, py + 1, pw, st.fh + 2, col(hu, 2, 0), 5)
+        st:round_fill(surf, x0, py, pw, st.fh + 2, WHITE, 5)
+        surf:text(st.font, x0 + 6, py + 1, label, col(hu, 2, 1))
+        dx = x0 + pw + 6
+        surf:text(st.font, dx, py + 1, ellip(st, rec.description ?? "", w - dx - 26), col(hu, 0, 4))
+        # rounded corners
+        for j in range[0, 3]:
+            inset = theme.corner_inset(4, j)
+            for i in range[0, inset - 1]:
+                px[j * w + i + 1] = -1
+                px[j * w + (w - 1 - i) + 1] = -1
+                px[(h - 1 - j) * w + i + 1] = -1
+                px[(h - 1 - j) * w + (w - 1 - i) + 1] = -1
+        return {surf: surf, pill: [x0, py, pw, st.fh + 2]}
+
+    def draw(self, s, st):
+        n = len(self.items)
+        if n == 0 or self.w < 40:
+            st:round_fill(s, self.x, self.y, self.w, self.h, st.ctrl, 4)
+            return
+        cur = self:_slide(st, self.items[self.index])
+        self.pill = cur.pill
+        s:push_clip(self.x, self.y, self.w, self.h)
+        if self.slide < 1 and self.prev != nil and self.items[self.prev] != nil:
+            old = self:_slide(st, self.items[self.prev])
+            off = math.floor(self.slide * self.w + 0.5)
+            if self.dir > 0:
+                s:blit(old.surf, self.x - off, self.y)
+                s:blit(cur.surf, self.x + self.w - off, self.y)
+            else:
+                s:blit(old.surf, self.x + off, self.y)
+                s:blit(cur.surf, self.x - self.w + off, self.y)
+        else:
+            s:blit(cur.surf, self.x, self.y)
+        s:pop_clip()
+        # dots
+        if n > 1:
+            total = 8 + (n - 1) * 4
+            dx = self.x + self.w - total - 6
+            dy = self.y + self.h - 5
+            hu = info.hue(self.items[self.index])
+            for i in range[1, n]:
+                if i == self.index:
+                    s:fill_rect(dx, dy, 7, 2, WHITE)
+                    dx += 9
+                else:
+                    s:fill_rect(dx, dy, 2, 2, col(hu, 1, 3))
+                    dx += 4
+
+    def handle(self, ev):
+        rec = self.items[self.index]
+        if ev.name == "scroll" and len(self.items) > 1:
+            self:go(self.index + ev.dir, ev.dir)
+            return true
+        if ev.name == "click" and rec != nil:
+            p = self.pill
+            if p != nil and ev.x >= self.x + p[1] and ev.x < self.x + p[1] + p[3] and ev.y >= self.y + p[2] - 1 and ev.y < self.y + p[2] + p[4] + 1:
+                if self.on_action != nil:
+                    self.on_action(rec)
+            elif self.on_open != nil:
+                self.on_open(rec)
+            return true
+        return ev.name == "down" or ev.name == "up"
+
+# ------------------------------------------------------------ package tile and row
+
+# card with an app-style tile, name, one line of text and a state pill; progress (fn -> 0..1 or nil) draws a thin bar at the bottom
+export class PkgTile(widget.Widget):
+    def init(self, rec, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "pkgtile"
+        self.rec = rec
+        self.sub = o.sub
+        self.state = o.state
+        self.on_open = o.on_open
+        self.on_action = o.on_action
+        self.progress = o.progress
+        self.row = o.row ?? false
+        self.extra = o.extra
+        self.pressed = nil
+
+    def measure(self, st):
+        return 120, self.row and 25 or 29
+
+    def _pill_x(self, st):
+        return self.x + self.w - state_w(st, self.state) - (self.row and 4 or 5)
+
+    def draw_tree(self, s, st):
+        if _hidden(self, s):
+            return
+        self:draw(s, st)
+
+    def draw(self, s, st):
+        rec = self.rec
+        hu = info.hue(rec)
+        x = self.x
+        y = self.y
+        if self.row:
+            if self.pressed == "card":
+                st:round_fill(s, x, y, self.w, self.h, st.sel, 3)
+            ts = 19
+            tile(s, x + 3, y + 3, ts, hu, info.icon(rec, icons.has))
+        else:
+            st:round_fill(s, x, y, self.w, self.h, self.pressed == "card" and st.sel or st.ctrl, st.radius + 1)
+            s:hline(x + 3, y, self.w - 6, st.hi)
+            ts = 21
+            tile(s, x + 4, y + 4, ts, hu, info.icon(rec, icons.has))
+        tx = x + ts + (self.row and 8 or 9)
+        pill_x = self:_pill_x(st)
+        right = self.state != nil and pill_x - 4 or x + self.w - 4
+        # extra badges on rows (source, CraftOS program), right-aligned before the pill
+        if self.extra != nil:
+            bx = right
+            for b in self.extra:
+                bw = badge_w(st, b.text, b.icon)
+                if bx - bw < tx + 50:
+                    break
+                bx -= bw
+                badge(s, st, bx, y + math.floor((self.h - st.fh - 2) / 2), b.text, b.bg, b.fg, b.icon)
+                bx -= 3
+            right = bx
+        title = tostring(rec.name ?? rec.id)
+        ny = y + (self.row and 3 or 5)
+        s:text(st.font, tx, ny, ellip(st, title, right - tx), st.text)
+        sub = self.sub ?? rec.description ?? ""
+        s:text(st.font, tx, ny + st.fh + 2, ellip(st, sub, right - tx), st.dim)
+        if self.state != nil:
+            state_pill(s, st, pill_x, y + math.floor((self.h - st.fh - 2) / 2), self.state, self.pressed == "pill")
+        p = self.progress != nil and self.progress(rec) or nil
+        if p != nil:
+            by = y + self.h - 3
+            s:hline(tx, by, right - tx, st.track)
+            s:hline(tx, by, math.max(1, math.floor((right - tx) * p)), st.accent)
+
+    def _where(self, ev):
+        st = self.ui.style
+        if self.state != nil and self.state != "installed" and ev.x >= self:_pill_x(st) - 2:
+            return "pill"
+        return "card"
+
+    def handle(self, ev):
+        if ev.name == "down":
+            self.pressed = self:_where(ev)
+            self:invalidate()
+            return true
+        if ev.name == "up":
+            self.pressed = nil
+            self:invalidate()
+            return true
+        if ev.name == "click":
+            if self:_where(ev) == "pill" and self.on_action != nil:
+                self.on_action(self.rec)
+            elif self.on_open != nil:
+                self.on_open(self.rec)
+            return true
+        return false
+
+export def pkg_tile(rec, opts=nil):
+    return PkgTile(rec, opts)
+
+export def pkg_row(rec, opts=nil):
+    o = opts ?? {}
+    o.row = true
+    return PkgTile(rec, o)
+
+# ------------------------------------------------------------ chips
+
+# category chip: dark tint of the category colour, icon and name, count on the right
+export class Chip(widget.Widget):
+    def init(self, cat, count, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "chip"
+        self.cat = cat
+        self.count = count
+        self.on_click = o.on_click
+        self.pressed = false
+
+    def measure(self, st):
+        return st:text_w(self.cat.name) + 30, 15
+
+    def draw(self, s, st):
+        hu = self.cat.hue
+        round_grad(s, self.x, self.y, self.w, self.h, [col(hu, 2, self.pressed and 0 or 2), col(hu, 2, self.pressed and 0 or 1)], 4)
+        icons.draw(s, self.cat.icon, self.x + 4, self.y + 3, col(hu, 0, 4), col(hu, 1, 3))
+        cnt = tostring(self.count ?? "")
+        cw = st:text_w(cnt)
+        s:text(st.font, self.x + 16, self.y + 3, ellip(st, self.cat.name, self.w - 22 - cw), WHITE)
+        s:text(st.font, self.x + self.w - cw - 4, self.y + 3, cnt, col(hu, 1, 4))
+
+    def handle(self, ev):
+        if ev.name == "down" or ev.name == "up":
+            self.pressed = ev.name == "down"
+            self:invalidate()
+            return true
+        if ev.name == "click":
+            if self.on_click != nil:
+                self.on_click(self.cat)
+            return true
+        return false
+
+# filter chip: pill that is on (accent) or off
+export class FilterChip(widget.Widget):
+    def init(self, text, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "filterchip"
+        self.text = text
+        self.on = o.on ?? false
+        self.icon = o.icon
+        self.on_click = o.on_click
+
+    def measure(self, st):
+        return st:text_w(self.text) + 10 + (self.icon != nil and 10 or 0), st.fh + 4
+
+    def draw(self, s, st):
+        bg = self.on and st.accent or st.ctrl
+        fg = self.on and st.on_accent or st.text
+        st:round_fill(s, self.x, self.y, self.w, self.h, bg, 5)
+        tx = self.x + 5
+        if self.icon != nil:
+            icons.draw(s, self.icon, tx - 1, self.y + math.floor((self.h - 9) / 2), fg)
+            tx += 10
+        s:text(st.font, tx, self.y + 2, self.text, fg)
+
+    def set_on(self, on):
+        if on != self.on:
+            self.on = on
+            self:invalidate()
+
+    def handle(self, ev):
+        if ev.name == "click":
+            if self.on_click != nil:
+                self.on_click(self)
+            return true
+        return ev.name == "down" or ev.name == "up"
+
+# ------------------------------------------------------------ package page header
+
+# big tile, name (double size when it fits), author / version / category, badges
+export class PageHeader(widget.Widget):
+    def init(self, rec, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "pageheader"
+        self.rec = rec
+        self.meta = o.meta ?? ""
+        self.badges = o.badges ?? []
+
+    def measure(self, st):
+        return 160, 42
+
+    def draw(self, s, st):
+        rec = self.rec
+        hu = info.hue(rec)
+        x = self.x
+        y = self.y
+        round_grad(s, x + 2, y + 4, 36, 36, [st:darker(st.bg)], 4)
+        round_grad(s, x + 1, y + 2, 36, 36, [col(hu, 1, 4), col(hu, 2, 3), col(hu, 2, 2), col(hu, 2, 1)], 4)
+        big_icon(s, info.icon(rec, icons.has), x + 6, y + 7, 3, WHITE, col(hu, 0, 4))
+        tx = x + 44
+        avail = self.w - 46
+        name = tostring(rec.name ?? rec.id)
+        if st:text_w(name) * 2 <= avail:
+            s:text(st.font, tx, y, name, st.text, {scale: 2})
+            my = y + 20
+        else:
+            s:text(st.font, tx, y + 4, ellip(st, name, avail), st.text)
+            my = y + 16
+        s:text(st.font, tx, my, ellip(st, self.meta, avail), st.dim)
+        bx = tx
+        by = my + st.fh + 2
+        for b in self.badges:
+            bw = badge_w(st, b.text, b.icon)
+            if bx + bw > x + self.w:
+                break
+            badge(s, st, bx, by, b.text, b.bg, b.fg, b.icon)
+            bx += bw + 3
+
+export def trust_badge_spec(level):
+    t = info.trust(level)
+    return {text: t.name, icon: t.icon, bg: col(t.hue, 2, 1), fg: col(t.hue, 0, 4)}
+
+export def badge_spec(text, hue, icon=nil):
+    return {text: text, icon: icon, bg: col(hue, 2, 1), fg: col(hue, 0, 4)}
+
+# ------------------------------------------------------------ button that becomes a progress bar
+
+# primary button; while its package is in the queue it turns into a bar with a moving shine and the stage text.
+# progress: fn() -> nil (idle) or {value 0..1, text}
+export class ProgressButton(controls.Button):
+    def init(self, text, opts=nil):
+        o = opts ?? {}
+        o.variant = o.variant ?? "primary"
+        super.init(self, text, o)
+        self.kind = "progressbutton"
+        self.progress = o.progress
+        self.phase = 0
+        self.min_w = o.min_w ?? 92
+
+    def draw(self, s, st):
+        p = self.progress != nil and self.progress() or nil
+        if p == nil:
+            super.draw(self, s, st)
+            return
+        x = self.x
+        y = self.y
+        w = self.w
+        h = self.h
+        st:round_fill(s, x, y, w, h, st.track, 5)
+        fw = math.floor(w * math.max(0, math.min(1, p.value ?? 0)) + 0.5)
+        if fw >= 3:
+            round_grad(s, x, y, fw, h, [st.accent_hi, st.accent, st.accent_lo], 4)
+            # shine: a light diagonal band running over the filled part
+            band = math.floor((self.phase % 1) * (fw + 24)) - 12
+            for j in range[1, h - 2]:
+                for d in range[0, 3]:
+                    xx = x + band + d - j / 2
+                    if xx >= x + 2 and xx < x + fw - 2:
+                        s:set(math.floor(xx), y + j, st.accent_hi)
+        text = p.text ?? ""
+        tw = st:text_w(text)
+        tx = x + math.floor((w - tw) / 2)
+        ty = y + math.floor((h - st.fh) / 2)
+        # text over the bar: light on the filled part, normal on the rest
+        s:push_clip(x, y, fw, h)
+        s:text(st.font, tx, ty, text, st.on_accent)
+        s:pop_clip()
+        s:push_clip(x + fw, y, w - fw, h)
+        s:text(st.font, tx, ty, text, st.text)
+        s:pop_clip()
+
+    def click(self):
+        if self.progress != nil and self.progress() != nil:
+            return
+        super.click(self)
+
+# ------------------------------------------------------------ queue card
+
+# task: {name, rec, op_text, state ("waiting", "running", "done", "failed"), stage_text, frac}
+export class QueueCard(widget.Widget):
+    def init(self, task, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "queuecard"
+        self.task = task
+        self.shown = task.frac ?? 0
+        self.phase = 0
+        self.on_click = o.on_click
+
+    def measure(self, st):
+        return 160, 33
+
+    def draw_tree(self, s, st):
+        if _hidden(self, s):
+            return
+        self:draw(s, st)
+
+    def draw(self, s, st):
+        t = self.task
+        x = self.x
+        y = self.y
+        st:round_fill(s, x, y, self.w, self.h, st.ctrl, st.radius + 1)
+        hu = t.rec != nil and info.hue(t.rec) or 7
+        tile(s, x + 4, y + 6, 21, hu, t.rec != nil and info.icon(t.rec, icons.has) or "box")
+        tx = x + 31
+        right = x + self.w - 6
+        op = t.op_text ?? ""
+        ow = st:text_w(op)
+        s:text(st.font, tx, y + 3, ellip(st, t.name ?? "", right - tx - ow - 6), st.text)
+        s:text(st.font, right - ow, y + 3, op, st.dim)
+        by = y + 15
+        bw = right - tx
+        if t.state == "done":
+            icons.draw(s, "check", tx, by + 3, st.ok)
+            s:text(st.font, tx + 12, by + 3, ellip(st, t.stage_text ?? "Done", bw - 12), st.ok)
+            return
+        if t.state == "failed":
+            icons.draw(s, "warn", tx, by + 3, st.danger)
+            s:text(st.font, tx + 12, by + 3, ellip(st, t.stage_text ?? "Failed", bw - 12), st.danger)
+            return
+        stage = t.stage_text ?? (t.state == "waiting" and "Waiting" or "Starting")
+        pct = t.state == "running" and (math.floor((self.shown ?? 0) * 100 + 0.5) .. "%") or ""
+        pw = st:text_w(pct)
+        s:text(st.font, tx, by, ellip(st, stage, bw - pw - 4), t.state == "waiting" and st.dim or st.text)
+        s:text(st.font, right - pw, by, pct, st.accent)
+        ly = by + st.fh + 2
+        st:round_fill(s, tx, ly, bw, 4, st.track, 2)
+        if t.state == "waiting":
+            # dotted: not started yet
+            for i in range[0, bw - 1] step 4:
+                s:set(tx + i + 1, ly + 1, st.hi)
+            return
+        fw = math.floor(bw * math.max(0, math.min(1, self.shown ?? 0)) + 0.5)
+        if fw >= 2:
+            st:round_fill(s, tx, ly, fw, 4, st.accent, 2)
+            s:hline(tx + 1, ly, math.max(0, fw - 2), st.accent_hi)
+            # running light
+            band = tx + math.floor((self.phase % 1) * (fw + 10)) - 5
+            for d in range[0, 4]:
+                xx = band + d
+                if xx >= tx and xx < tx + fw:
+                    s:set(xx, ly + 1, WHITE)
+                    s:set(xx, ly + 2, st.accent_hi)
+
+    def handle(self, ev):
+        if ev.name == "click":
+            if self.on_click != nil:
+                self.on_click(self.task)
+            return true
+        return ev.name == "down" or ev.name == "up"
+
+# ------------------------------------------------------------ storage
+
+# segmented bar: packed, unpacked, other used, free; legend under it. parts: [{label, size, color}], total
+export class StorageBar(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "storagebar"
+        self.parts = []
+        self.total = 1
+        self.title = ""
+        self.k = 1
+
+    def measure(self, st):
+        return 160, 34
+
+    def set(self, title, parts, total):
+        self.title = title
+        self.parts = parts
+        self.total = math.max(1, total)
+        if self.ui != nil:
+            self.k = 0
+            self.ui:tween(self, "k", 1, 0.6, "out_cubic")
+        self:invalidate()
+
+    def draw(self, s, st):
+        x = self.x
+        y = self.y
+        icons.draw(s, "drive", x + 1, y, st.accent)
+        s:text(st.font, x + 13, y, ellip(st, self.title, self.w - 14), st.text)
+        by = y + st.fh + 3
+        bw = self.w - 2
+        st:round_fill(s, x + 1, by, bw, 8, st.track, 3)
+        px = x + 1
+        for p in self.parts:
+            if p.color != nil:
+                pw = math.floor(bw * p.size / self.total * self.k + 0.5)
+                pw = math.min(pw, x + 1 + bw - px)
+                if pw > 0:
+                    s:fill_rect(px, by + 1, pw, 6, p.color)
+                    if p.hi != nil:
+                        s:hline(px, by + 1, pw, p.hi)
+                    px += pw
+        # round the ends again over the segments
+        st:round_line(s, x + 1, by, bw, 8, st.track, 3)
+        lx = x + 1
+        ly = by + 11
+        for p in self.parts:
+            text = p.label .. " " .. p.text
+            tw = st:text_w(text) + 9
+            if lx + tw > x + self.w:
+                break
+            s:fill_rect(lx, ly + 2, 5, 5, p.color ?? st.track)
+            s:text(st.font, lx + 7, ly, text, st.dim)
+            lx += tw + 6
+
+# two-state toggle (Packed / Unpacked): the knob slides; locked shows a lock and does not change
+export class SegToggle(widget.Widget):
+    def init(self, a, b, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "segtoggle"
+        self.a = a
+        self.b = b
+        self.value = o.value ?? 1
+        self.pos = self.value
+        self.on_change = o.on_change
+        self.locked = o.locked ?? false
+        self.busy = false
+
+    def measure(self, st):
+        return st:text_w(self.a) + st:text_w(self.b) + 16, st.fh + 4
+
+    def draw_tree(self, s, st):
+        if _hidden(self, s):
+            return
+        self:draw(s, st)
+
+    def draw(self, s, st):
+        x = self.x
+        y = self.y
+        aw = st:text_w(self.a) + 8
+        bw = self.w - aw
+        st:round_fill(s, x, y, self.w, self.h, st.well, 5)
+        k = math.max(0, math.min(1, (self.pos ?? 1) - 1))
+        kx = math.floor(_lerp(x, x + aw, k) + 0.5)
+        kw = math.floor(_lerp(aw, bw, k) + 0.5)
+        knob = self.locked and st.hi or (self.busy and st.accent_lo or st.accent)
+        st:round_fill(s, kx, y, kw, self.h, knob, 5)
+        on1 = k < 0.5
+        s:text(st.font, x + 4, y + 2, self.a, on1 and st.on_accent or st.dim)
+        s:text(st.font, x + aw + 4, y + 2, self.b, on1 and st.dim or st.on_accent)
+        if self.locked:
+            icons.draw(s, "lock", x + self.w - 10, y + math.floor((self.h - 9) / 2), st.dim)
+
+    def set_value(self, v, animate=true):
+        self.value = v
+        if animate and self.ui != nil:
+            self.ui:tween(self, "pos", v, 0.22, "out_cubic")
+        else:
+            self.pos = v
+            self:invalidate()
+
+    def handle(self, ev):
+        if ev.name == "click":
+            if self.locked or self.busy:
+                return true
+            v = self.value == 1 and 2 or 1
+            self:set_value(v)
+            if self.on_change != nil:
+                self.on_change(v)
+            return true
+        return ev.name == "down" or ev.name == "up"
+
+# ------------------------------------------------------------ loading and empty states
+
+# grey placeholder of a tile or row with a light band running over it (while the catalog loads)
+export class Skeleton(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "skeleton"
+        self.phase = 0
+        self.hgt = o.hgt ?? 29
+
+    def measure(self, st):
+        return 120, self.hgt
+
+    def draw(self, s, st):
+        x = self.x
+        y = self.y
+        st:round_fill(s, x, y, self.w, self.h, st.ctrl, st.radius + 1)
+        st:round_fill(s, x + 4, y + 4, 21, 21, st.hi, 4)
+        st:round_fill(s, x + 31, y + 6, math.floor(self.w * 0.35), 6, st.hi, 3)
+        st:round_fill(s, x + 31, y + 16, math.floor(self.w * 0.55), 5, st:darker(st.hi), 2)
+        band = x + math.floor((self.phase % 1.3) * (self.w + 40)) - 30
+        for j in range[1, self.h - 2]:
+            for d in range[0, 7]:
+                xx = band + d + math.floor(j / 2)
+                if xx > x + 1 and xx < x + self.w - 2:
+                    c = s:get(xx, y + j)
+                    if c == st.hi or c == st.ctrl:
+                        s:set(xx, y + j, c == st.hi and st.text or st.hi)
+
+# centred big faded icon, title and a line of text
+export class Empty(widget.Widget):
+    def init(self, icon, title, text, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "empty"
+        self.icon = icon
+        self.title = title
+        self.text = text
+
+    def measure(self, st):
+        return 120, 62
+
+    def draw(self, s, st):
+        cx = self.x + math.floor(self.w / 2)
+        y = self.y + 4
+        g = surface_mod.new(9, 9, -1)
+        icons.draw(g, self.icon, 0, 0, 1, 2)
+        for j in range[0, 26]:
+            for i in range[0, 26]:
+                v = g.px[math.floor(j / 3) * 9 + math.floor(i / 3) + 1]
+                if v != nil and v >= 1 and (i + j) % 2 == 0:
+                    s:set(cx - 13 + i, y + j, v == 1 and st.hi or st.ctrl)
+        tw = st:text_w(self.title)
+        s:text(st.font, cx - math.floor(tw / 2), y + 32, self.title, st.text)
+        line = ellip(st, self.text, self.w - 8)
+        lw = st:text_w(line)
+        s:text(st.font, cx - math.floor(lw / 2), y + 32 + st.fh + 3, line, st.dim)
+
+# ------------------------------------------------------------ pages with slide transitions
+
+# shows one child; switching slides the new page in from the side and fades it in through a dither pattern
+export class PageHost(widget.Widget):
+    def init(self, opts=nil):
+        o = opts ?? {}
+        super.init(self, o)
+        self.kind = "pagehost"
+        self.current = nil
+        self.dx = 0
+        self.fade = 1
+
+    def measure(self, st):
+        return 100, 60
+
+    def add_page(self, w):
+        w.visible = false
+        self:add(w)
+        return w
+
+    def show(self, w, dir=0):
+        for c in self.children:
+            c.visible = c == w
+        self.current = w
+        self:relayout()
+        if dir != 0 and self.ui != nil:
+            let me = self
+            self.dx = dir * 26
+            self.fade = 0
+            self.ui:tween(self, "dx", 0, 0.24, "out_cubic", () => me:invalidate())
+            self.ui:tween(self, "fade", 1, 0.2, "linear", () => me:invalidate())
+
+    def layout_children(self):
+        for c in self.children:
+            if c.visible:
+                c:layout(self.x, self.y, self.w, self.h)
+
+    def draw_tree(self, s, st):
+        c = self.current
+        if c == nil or not c.visible:
+            return
+        s:push_clip(self.x, self.y, self.w, self.h)
+        off = math.floor(self.dx + 0.5)
+        s:push_origin(off, 0)
+        c:draw_tree(s, st)
+        s:pop_origin()
+        if self.fade < 1:
+            lvl = self.fade * 16
+            bg = self.ui != nil and self.ui:_bg_of(self) or st.bg
+            for j in range[self.y, self.y + self.h - 1]:
+                row = (j % 4) * 4 + 1
+                for i in range[self.x, self.x + self.w - 1]:
+                    if BAYER[row + i % 4] >= lvl:
+                        s:set(i, j, bg)
+        s:pop_clip()
+
+    def hit(self, px, py):
+        if not self.visible or not self:contains(px, py):
+            return nil
+        if self.current != nil and self.current.visible:
+            return self.current:hit(px, py) ?? self
+        return self

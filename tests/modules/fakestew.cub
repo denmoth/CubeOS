@@ -1,0 +1,260 @@
+# fakestew: a stand-in for the stew object (docs/packages/09-stew-api.md) with canned data: installed packages, a catalog with
+# Cobble, PineStore and a custom source, plan and apply that call on_progress through every stage. For the Store test and shots.
+#
+#   s = fakestew.new({pause: 0})          pause: seconds between stages (inside the worker process)
+#   s.hold_at = "place"; s.hold = true    apply stops after that stage until s.hold = false (screenshots of a running install)
+#   s.fail_id = "bob.beats"               apply of a plan with this package fails and rolls back
+#   s.log                                 calls in order ("refresh", "plan", "apply", "set_storage ...")
+
+import kernel.sys as ksys
+
+def v(size, isize, extra=nil):
+    e = extra ?? {}
+    e.size = size
+    e.installed_size = isize
+    e.depends = e.depends ?? {"cubeos.cdk": "^0.5"}
+    e.permissions = e.permissions ?? {need: ["gfx"], want: []}
+    return e
+
+def catalog_data():
+    return [
+        {id: "denmoth.snake", name: "Snake", author: "Denmoth", description: "Classic snake with neon trails and a high score table",
+            kind: "app", category: "games", priority: "optional", source: "cobble", trust: "official", latest: "1.2.0", downloads: 1500,
+            versions: {"1.2.0": v(18432, 41200, {permissions: {need: ["gfx", "fs.appdata"], want: ["audio"]},
+                options: [{id: "theme", type: "choice", label: "Colours", choices: ["neon", "classic", "mono"], default: "neon"},
+                    {id: "sound", type: "bool", label: "Sound effects", default: true}]}),
+                "1.1.0": v(17900, 40100), "1.0.0": v(15000, 36000)}},
+        {id: "denmoth.chess", name: "Chess", author: "Denmoth", description: "Play chess against the computer or a friend over rednet",
+            kind: "app", category: "games", priority: "optional", source: "cobble", trust: "official", latest: "1.1.0", downloads: 610,
+            versions: {"1.1.0": v(30210, 70400, {permissions: {need: ["gfx"], want: ["net.rednet"]}}), "1.0.0": v(29000, 68000)}},
+        {id: "ann.redstone", name: "Redstone Studio", author: "Ann", description: "Design redstone timers and logic visually",
+            kind: "app", category: "automation", priority: "optional", source: "cobble", trust: "official", latest: "0.9.1", downloads: 380,
+            versions: {"0.9.1": v(25000, 52000, {permissions: {need: ["gfx", "redstone"], want: []}})}},
+        {id: "ann.miner", name: "Turtle Miner", author: "Ann", description: "Strip mining for turtles with a live map",
+            kind: "app", category: "automation", priority: "optional", source: "cobble", trust: "official", latest: "2.3.0", downloads: 720,
+            versions: {"2.3.0": v(14000, 30000, {permissions: {need: ["turtle", "inv.read"], want: ["net.rednet"]}})}},
+        {id: "denmoth.weather", name: "Weather", author: "Denmoth", description: "Desktop widget with the in-game weather and time",
+            kind: "app", category: "desktop", priority: "optional", source: "cobble", trust: "official", latest: "2.0.0", downloads: 300,
+            versions: {"2.0.0": v(9000, 20000)}},
+        {id: "bob.chat", name: "Rednet Chat", author: "Bob", description: "Chat with every computer on your network",
+            kind: "app", category: "network", priority: "optional", source: "cobble", trust: "official", latest: "1.4.2", downloads: 510,
+            versions: {"1.4.2": v(12000, 26000, {depends: {"cubeos.cdk": "^0.5", "bob.netlib": "^1.0"}, permissions: {need: ["gfx", "net.rednet"], want: ["chat.send"]}})}},
+        {id: "bob.netlib", name: "Netlib", author: "Bob", description: "Networking helpers for Rednet Chat and friends",
+            kind: "lib", category: "dev", priority: "optional", source: "cobble", trust: "official", latest: "1.0.3",
+            versions: {"1.0.3": v(6000, 12000, {depends: {}, permissions: {need: [], want: []}})}},
+        {id: "bob.beats", name: "Beat Box", author: "Bob", description: "Drum machine for the speaker with eight tracks",
+            kind: "app", category: "media", priority: "optional", source: "cobble", trust: "official", latest: "0.4.0", downloads: 290,
+            versions: {"0.4.0": v(16000, 33000, {permissions: {need: ["gfx", "audio"], want: []}})}},
+        {id: "ann.lualab", name: "Lua Lab", author: "Ann", description: "Interactive Lua console with autocompletion",
+            kind: "app", category: "dev", priority: "optional", source: "cobble", trust: "official", latest: "1.0.0", downloads: 205,
+            versions: {"1.0.0": v(11000, 24000)}},
+        {id: "sky.retro", name: "Retro Themes", author: "Sky", description: "Six window themes in the style of old desktops",
+            kind: "theme", category: "assets", priority: "optional", source: "cobble", trust: "official", latest: "1.0.0", downloads: 400,
+            versions: {"1.0.0": v(8000, 19000, {permissions: {need: [], want: []}})}},
+        {id: "pinestore.112", name: "Tetrimino", author: "pine_dev", description: "Falling blocks for any CraftOS computer",
+            kind: "legacy", category: "games", priority: "optional", source: "pinestore", trust: "community", latest: "0.0.0+2026.09.30", downloads: 1200,
+            versions: {"0.0.0+2026.09.30": {}}},
+        {id: "pinestore.57", name: "Mine Sweeper", author: "oldtimer", description: "The classic minesweeper, mouse and keyboard",
+            kind: "legacy", category: "games", priority: "optional", source: "pinestore", trust: "community", latest: "0.0.0+2025.12.01", downloads: 800,
+            versions: {"0.0.0+2025.12.01": {}}},
+        {id: "friend.tools", name: "Friendly Tools", author: "Friend", description: "Handy shell commands from a friend's catalog",
+            kind: "tool", category: "dev", priority: "optional", source: "friend", trust: "user", latest: "0.2.0",
+            versions: {"0.2.0": v(5000, 10000, {permissions: {need: ["fs.read"], want: ["net.http"]}})}},
+    ]
+
+def installed_data():
+    def rec(id, version, storage, size, kind, apps=nil):
+        return {id: id, version: version, source: "cobble", storage: storage, priority: "optional", kind: kind, depends: {}, want: {},
+            modules: {}, contributes: {apps: apps ?? []}, options: {}, files: [], auto: false, pinned: false, size: size}
+    return {
+        "cubeos.boot": rec("cubeos.boot", "0.5.0", "unpacked", 48000, "lib"),
+        "cubeos.cdk": rec("cubeos.cdk", "0.5.0", "unpacked", 96000, "lib"),
+        "cubeos.cgl": rec("cubeos.cgl", "0.5.0", "packed", 41000, "lib"),
+        "cubeos.axo": rec("cubeos.axo", "0.5.0", "packed", 52000, "app", [{id: "axo", name: "Axo", entry: "apps.axo"}]),
+        "denmoth.chess": rec("denmoth.chess", "1.0.0", "packed", 29000, "app", [{id: "chess", name: "Chess", entry: "chess"}]),
+        "denmoth.weather": rec("denmoth.weather", "2.0.0", "unpacked", 20000, "app", [{id: "weather", name: "Weather", entry: "weather"}]),
+    }
+
+def newer(a, b):
+    pa = []
+    for n in string.gmatch(tostring(a), "%d+"):
+        pa[len(pa) + 1] = tonumber(n)
+    pb = []
+    for n in string.gmatch(tostring(b), "%d+"):
+        pb[len(pb) + 1] = tonumber(n)
+    for i in range[1, math.max(len(pa), len(pb))]:
+        if (pa[i] ?? 0) != (pb[i] ?? 0):
+            return (pa[i] ?? 0) > (pb[i] ?? 0)
+    return false
+
+export class FakeStew:
+    def init(self, opts=nil):
+        o = opts ?? {}
+        self.log = []
+        self.cat = catalog_data()
+        self.inst = installed_data()
+        self.pause = o.pause ?? 0
+        self.hold = false
+        self.hold_at = nil
+        self.fail_id = nil
+        self.progress = []
+        self.last_plan_req = nil
+
+    def _note(self, text):
+        self.log[len(self.log) + 1] = text
+
+    def _rec(self, id):
+        for r in self.cat:
+            if r.id == id:
+                return r
+        return nil
+
+    def _entry(self, r):
+        e = {}
+        for k, x in r:
+            e[k] = x
+        have = self.inst[r.id]
+        e.installed = have != nil and have.version or nil
+        e.update = (have != nil and newer(r.latest, have.version)) and r.latest or nil
+        return e
+
+    def installed(self):
+        return self.inst
+
+    def sources(self):
+        return [{name: "cobble", kind: "cobble", url: "OWNER/cobble", trust: "official"},
+            {name: "pinestore", kind: "pinestore", url: "https://pinestore.cc", trust: "community"},
+            {name: "friend", kind: "http", url: "https://example.com/index.json5", trust: "user"}]
+
+    def refresh(self, name=nil, on_progress=nil):
+        self:_note("refresh")
+        return {ok: ["cobble", "pinestore", "friend"], failed: []}
+
+    def catalog(self):
+        out = []
+        for r in self.cat:
+            out[len(out) + 1] = self:_entry(r)
+        return out
+
+    def search(self, text, filter=nil):
+        self:_note("search " .. tostring(text))
+        q = string.lower(text ?? "")
+        f = filter ?? {}
+        out = []
+        for r in self.cat:
+            hay = string.lower(r.id .. " " .. r.name .. " " .. r.description)
+            if (q == "" or string.find(hay, q, 1, true) != nil) and (f.source == nil or f.source == r.source) and (f.category == nil or f.category == r.category) and (f.kind == nil or f.kind == r.kind):
+                out[len(out) + 1] = self:_entry(r)
+        return out
+
+    def info(self, id):
+        r = self:_rec(id)
+        e = r != nil and self:_entry(r) or {id: id, name: id}
+        e.installed_rec = self.inst[id]
+        if self.inst[id] != nil:
+            e.manifest = {id: id, author: r != nil and r.author or nil, permissions: {need: ["gfx"], want: []}}
+        return e
+
+    def _size(self, id):
+        r = self:_rec(id)
+        if r == nil:
+            return 0, 0
+        e = r.versions[r.latest] ?? {}
+        return e.size ?? 0, e.installed_size ?? 0
+
+    def plan(self, req):
+        self:_note("plan")
+        self.last_plan_req = req
+        steps = []
+        down = 0
+        delta = 0
+        def add(op, id, auto):
+            outer down, delta
+            r = self:_rec(id)
+            sz, isz = self:_size(id)
+            have = self.inst[id]
+            steps[len(steps) + 1] = {op: op, id: id, version: r != nil and r.latest or nil, "from": have != nil and have.version or nil,
+                size: sz, installed_size: isz, source: r != nil and r.source or "cobble", trust: r != nil and r.trust or "official", auto: auto}
+            if op != "remove":
+                down += sz
+                delta += isz - (have != nil and (have.size ?? 0) or 0)
+            else:
+                delta -= have != nil and (have.size ?? 0) or 0
+        perms = {}
+        for id in req.install ?? []:
+            r = self:_rec(id)
+            if r != nil:
+                e = r.versions[r.latest] ?? {}
+                for d, rng in e.depends ?? {}:
+                    if self.inst[d] == nil:
+                        add("install", d, true)
+                add("install", id, false)
+                if e.permissions != nil and len(e.permissions.need ?? []) > 0:
+                    perms[id] = e.permissions.need
+        for id in req.update ?? []:
+            add("update", id, false)
+        for id in req.remove ?? []:
+            add("remove", id, false)
+        return {ok: true, steps: steps, download: down, installed_delta: delta, peak: down + math.max(0, delta), free: 400000, reserve: 16384,
+            fits: true, missing: [], conflicts: [], warnings: [], new_permissions: perms, runs_setup: []}
+
+    def _wait(self, stage):
+        if self.pause > 0:
+            ksys.sleep(self.pause)
+        if self.hold_at == stage:
+            while self.hold:
+                ksys.sleep(0.05)
+
+    def apply(self, p, opts=nil):
+        self:_note("apply")
+        o = opts ?? {}
+        n = len(p.steps)
+        fail = false
+        for st in p.steps:
+            if st.id == self.fail_id:
+                fail = true
+        for stage in ["download", "verify", "place", "setup", "commit"]:
+            if fail and stage == "place":
+                if o.on_progress != nil:
+                    o.on_progress("rollback", p.steps[1].id, 1, n)
+                return {ok: false, error: "sha256 mismatch in " .. p.steps[1].id}
+            for i, st in p.steps:
+                self.progress[len(self.progress) + 1] = stage
+                if o.on_progress != nil:
+                    o.on_progress(stage, st.id, i, n)
+            self:_wait(stage)
+        for st in p.steps:
+            if st.op == "remove":
+                self.inst[st.id] = nil
+            else:
+                apps = []
+                r = self:_rec(st.id)
+                if r != nil and r.kind == "app":
+                    apps = [{id: string.match(st.id, "[^%.]+$"), name: r.name, entry: st.id}]
+                self.inst[st.id] = {id: st.id, version: st.version, source: st.source, storage: "packed", priority: "optional",
+                    kind: r != nil and r.kind or "app", depends: {}, want: {}, modules: {}, contributes: {apps: apps},
+                    options: (self.last_plan_req != nil and self.last_plan_req.options != nil and self.last_plan_req.options[st.id]) or {},
+                    files: [], auto: st.auto, pinned: false, size: st.installed_size}
+        return {ok: true}
+
+    def install(self, ids, opts=nil):
+        return self:apply(self:plan({install: ids}), opts)
+
+    def remove(self, ids, opts=nil):
+        return self:apply(self:plan({remove: ids}), opts)
+
+    def update(self, ids=nil, opts=nil):
+        return self:apply(self:plan({update: ids ?? []}), opts)
+
+    def set_storage(self, id, mode):
+        self:_note("set_storage " .. id .. " " .. mode)
+        if self.inst[id] == nil:
+            return {ok: false, error: "not installed"}
+        self.inst[id].storage = mode
+        return {ok: true}
+
+    def options(self, id):
+        return self.inst[id] != nil and self.inst[id].options or nil
+
+export def new(opts=nil):
+    return FakeStew(opts)

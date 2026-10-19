@@ -13,6 +13,7 @@ import apps.notes as notes
 import apps.clock as clock
 import apps.pulse as pulse
 import apps.settings as settings
+import apps.store as store
 
 export const CATALOG = [
     {id: "settings", name: "Settings", icon: "sliders", detail: "System", main: settings.main,
@@ -31,6 +32,8 @@ export const CATALOG = [
         keywords: ["time", "timer", "alarm", "stopwatch", "world", "часы", "таймер", "будильник", "секундомер", "годинник"]},
     {id: "pulse", name: "Pulse", icon: "gauge", detail: "Task manager", main: pulse.main,
         keywords: ["tasks", "processes", "monitor", "performance", "kill", "диспетчер", "задачи", "процессы", "нагрузка"]},
+    {id: "store", name: store.NAME, icon: "store", detail: "Packages", main: store.main,
+        keywords: ["packages", "apps", "install", "update", "stew", "cobble", "pinestore", "магазин", "пакеты", "установить", "обновить", "крамниця"]},
 ]
 
 def entry_of(id):

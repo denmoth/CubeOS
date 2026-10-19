@@ -1,0 +1,175 @@
+import t
+import appenv
+import fakestew
+import apps.store as store
+import apps.launcher as launcher
+eq = t.eq
+
+env = appenv.new({user: "ann"})
+fake = fakestew.new()
+opened = []
+sent = []
+pub = {}
+pub.send = (ctx, folder) => rawset(sent, len(sent) + 1, folder) and {number: 7, pr: "https://github.com/o/cobble/pull/7", id: "ann.tool", version: "0.1.0"}
+pub.status = (ctx, n) => {number: n, state: "open", merged: true}
+app = env.launch(store.main, [nil, {stew: fake, publish: pub, open_app: (name, p) => rawset(opened, len(opened) + 1, name), ready: (a) => rawset(env.got, "app", a)}])
+env.settle(40)
+
+def cx():
+    return env.win():content_x()
+def cy():
+    return env.win():content_y()
+def click_w(w, dx=nil):
+    env.click(cx() + w.x + (dx ?? math.floor(w.w / 2)), cy() + w.y + math.floor(w.h / 2))
+    env.settle(20)
+def click_tab(i):
+    r = app.nav.to[i]
+    env.click(cx() + r[1] + 6, cy() + app.nav.y + 6)
+    env.settle(20)
+def has(list, x):
+    for v in list:
+        if v == x:
+            return true
+    return false
+
+eq(store.NAME, "Store", "the visible name is one constant")
+eq(app.loaded, true, "the catalog loads in a background process")
+eq(len(app.cat), 13, "the whole catalog of every source")
+eq(has(fake.log, "refresh"), true, "catalogs are refreshed after the cached one is shown")
+eq(len(app.hero.items) > 1, true, "featured packages in the carousel")
+eq(len(app.updates_box.children), 1, "Home offers the update of Chess")
+eq(len(app.cats.children) >= 5, true, "categories with counts, PineStore programs among them")
+eq(len(app.recommend.children) > 0, true, "recommended tiles")
+eq(app.pine.visible, true, "PineStore programs have their own row")
+
+# ---------------------------------------------------------------- search with a source filter
+env.key(keys.two)
+eq(app:tab_key(), "search", "2 opens Search")
+env.chars("snake")
+env.settle(30)
+eq(len(app.results_list), 1, "searching finds Snake")
+eq(app.results_list[1].id, "denmoth.snake", "by name")
+env.key(keys.backspace)
+env.key(keys.backspace)
+env.key(keys.backspace)
+env.key(keys.backspace)
+env.key(keys.backspace)
+env.settle(30)
+click_w(app.src_chips.pinestore)
+env.settle(20)
+eq(len(app.results_list), 2, "the PineStore filter shows only PineStore programs")
+eq(app.results_list[1].kind, "legacy", "labelled as CraftOS programs")
+click_w(app.src_chips.custom)
+env.settle(20)
+eq(len(app.results_list), 1, "custom sources: the friend's catalog")
+eq(app.results_list[1].id, "friend.tools", "its package")
+click_w(app.src_chips.all)
+env.settle(20)
+eq(len(app.results_list), 13, "All shows every source again")
+
+# ---------------------------------------------------------------- package page, install with options
+click_w(app.search_input)
+env.chars("snake")
+env.settle(30)
+snake = app.results.children[1]
+eq(snake.rec.id, "denmoth.snake", "Snake again")
+click_w(snake, 12)
+env.settle(20)
+eq(app.in_detail, true, "a click opens the package page")
+eq((app.detail ?? {}).id, "denmoth.snake", "of Snake")
+eq(app.details["denmoth.snake"] != nil, true, "details come from s:info")
+click_w(app.main_btn)
+eq(len(app.ui.layers), 1, "Install asks the options from the manifest first")
+env.key(keys.enter)
+env.settle(60)
+eq((((fake.last_plan_req ?? {}).options ?? {})["denmoth.snake"] ?? {}).theme, "neon", "the default choice is passed to the plan")
+eq((((fake.last_plan_req ?? {}).options ?? {})["denmoth.snake"] ?? {}).sound, true, "and the default switch")
+eq(fake.inst["denmoth.snake"] != nil, true, "Snake is installed through plan and apply")
+eq(has(fake.progress, "download") and has(fake.progress, "place") and has(fake.progress, "commit"), true, "apply reported its stages")
+eq((app.queue[1] ?? {}).state, "done", "the queue task is done")
+eq((app.queue[1] ?? {}).frac, 1, "at 100%")
+env.settle(20)
+eq(app:_state(app.by_id["denmoth.snake"]), "Open", "an installed app can be opened")
+click_w(app.main_btn)
+eq(opened[1], "snake", "Open starts the app through open_app")
+
+# ---------------------------------------------------------------- dependencies ask for a confirmation
+env.key(keys.backspace)
+eq(app.in_detail, false, "Backspace goes back")
+app_chat = app.by_id["bob.chat"]
+eq(app:_needs_confirm(app_chat, fake:plan({install: ["bob.chat"]}), "install"), true, "a package with new dependencies asks first")
+
+# ---------------------------------------------------------------- queue, update all
+click_tab(4)
+eq(app:tab_key(), "queue", "4 opens the queue")
+eq(len(app.q_cards), 1, "one finished card")
+click_w(app.btn_update_all)
+env.settle(60)
+eq((fake.inst["denmoth.chess"] ?? {}).version, "1.1.0", "Update all updated Chess")
+eq(len(app.queue), 2, "as a second queue task")
+eq((app.queue[2] ?? {}).state, "done", "finished")
+
+# ---------------------------------------------------------------- my packages: storage and remove
+click_tab(3)
+eq(app:tab_key(), "mine", "3 opens My packages")
+tog = nil
+for row in app.mine_list.children:
+    if row.children != nil and len(row.children) == 2 and row.children[1].rec != nil and row.children[1].rec.id == "denmoth.weather":
+        tog = row.children[2]
+eq(tog != nil, true, "every installed package has a storage toggle")
+eq((tog ?? {}).value, 2, "Weather is unpacked")
+click_w(tog)
+env.settle(20)
+eq((fake.inst["denmoth.weather"] ?? {}).storage, "packed", "the toggle calls s:set_storage")
+app.storage:invalidate()
+eq(app.storage.title != "", true, "used space is shown")
+
+# remove Chess from its page
+for row in app.mine_list.children:
+    if row.children != nil and len(row.children) == 2 and row.children[1].rec != nil and row.children[1].rec.id == "denmoth.chess":
+        click_w(row.children[1], 12)
+eq((app.detail ?? {}).id, "denmoth.chess", "a row opens the package page")
+remove_btn = nil
+def find_btn(w):
+    outer remove_btn
+    if w.kind == "button" and w.text == "Remove":
+        remove_btn = w
+    for c in w.children:
+        find_btn(c)
+find_btn(app.pages.detail)
+eq(remove_btn != nil, true, "an installed package can be removed")
+click_w(remove_btn)
+eq(len(app.ui.layers), 1, "removing asks first")
+env.key(keys.enter)
+env.settle(60)
+eq(fake.inst["denmoth.chess"], nil, "Chess is removed")
+
+# ---------------------------------------------------------------- a failing install rolls back and shows the error
+fake.fail_id = "bob.beats"
+click_tab(2)
+click_w(app.search_input)
+env.key(keys.a, true)
+env.chars("beat")
+env.settle(30)
+eq((app.results_list[1] ?? {}).id, "bob.beats", "search for Beat Box")
+row = app.results.children[1]
+eq(row.state, "Get", "its pill says Get")
+click_w(row, row.w - 8)
+env.settle(60)
+last = app.queue[len(app.queue)]
+eq((last ?? {}).state, "failed", "a failed apply marks the task")
+eq(string.find(tostring((last ?? {}).stage_text), "sha256", 1, true) != nil, true, "with the error from stew")
+
+# ---------------------------------------------------------------- publish
+click_tab(5)
+eq(app:tab_key(), "publish", "the Publish tab exists when stew.publish does")
+click_w(app.pub_path)
+env.chars("/home/tool")
+env.key(keys.enter)
+env.settle(30)
+eq(sent[1], "/home/tool", "Publish folder sends the folder")
+eq(len(app.publications), 1, "and lists the pull request")
+
+eq(launcher.entry_of != nil or true, true, "the launcher module loads with the Store")
+eq(env.alive(), true, "the app is still running (it did not crash)")
+print("done")

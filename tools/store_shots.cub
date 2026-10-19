@@ -1,0 +1,168 @@
+# Снимки магазина пакетов (apps.store) без игры: build/ui_store_*.ppm. Запуск: tools/store_shots.sh.
+# stew подставной (tests/modules/fakestew.cub): каталог Cobble, PineStore и своего источника, установка с остановкой на стадии place.
+
+import kernel
+import cfs
+import cde
+import fakestew
+import apps.store as store
+
+def make_term(cols, rows):
+    api = {}
+    def get_size(px):
+        if px:
+            return cols * 6, rows * 9
+        return cols, rows
+    def nothing(a, b, c, d):
+        pass
+    api.getSize = get_size
+    for name in ["setBackgroundColor", "setTextColor", "clear", "setCursorPos", "blit", "setPaletteColor", "setGraphicsMode", "drawPixels", "setFrozen"]:
+        api[name] = nothing
+    return api
+
+def dump(wm, name):
+    s = wm.screen.surface
+    pal = wm.screen.palette
+    f = fs.open("/repo/build/" .. name .. ".ppm", "wb")
+    f.write("P6\n" .. s.w .. " " .. s.h .. "\n255\n")
+    for y in range[0, s.h - 1]:
+        parts = []
+        for x in range[0, s.w - 1]:
+            v = s.px[y * s.w + x + 1]
+            r, g, b = pal:get(v < 0 and 0 or v)
+            parts[x + 1] = string.char(r, g, b)
+        f.write(table.concat(parts))
+    f.close()
+    os.queueEvent("shot")
+    os.pullEvent("shot")
+
+clock = {now: 1792000000000}
+def now():
+    return clock.now
+
+wm = cde.wm.new({term: make_term(51, 19), assets: "/repo/assets", clock: now, panel: {time_text: () => "14:32"}, background: "aurora",
+    animations: {enabled: true}})
+k = kernel.new({clock: now})
+def settle(n=10):
+    k:feed("cubeos_cde")
+    for i in range[1, n]:
+        clock.now = clock.now + 40
+        k:tick()
+        k:run_ready()
+    os.queueEvent("shot")
+    os.pullEvent("shot")
+def desk(sys, args):
+    wm:run(sys)
+k:spawn(desk, [], {name: "cde", ui: true})
+settle(10)
+
+got = {}
+def guard(main):
+    def run(sys, ctx):
+        ok, err = pcall(main, sys, ctx)
+        if not ok:
+            f = fs.open("/repo/build/dbg.txt", "a")
+            f.writeLine("CRASH " .. tostring(err))
+            f.close()
+    return run
+def key(code, ctrl=false):
+    if ctrl:
+        k:feed("key", keys.leftCtrl, false)
+    k:feed("key", code, false)
+    if ctrl:
+        k:feed("key_up", keys.leftCtrl)
+    settle(8)
+def chars(text):
+    for ch in string.gmatch(text, "."):
+        k:feed("char", ch)
+    settle(6)
+
+fake = fakestew.new()
+pub = {send: (c, f) => {number: 12, id: "denmoth.snake", version: "1.2.0"}, status: (c, n) => {number: n, state: "open"}}
+wm:launch(guard(store.main), {name: "store"}, [nil, {stew: fake, publish: pub, ready: (a) => rawset(got, "app", a)}])
+settle(20)
+w = wm.windows[len(wm.windows)]
+wm:set_state(w, "max")
+settle(40)
+app = got.app
+
+def click(x, y):
+    k:feed("mouse_click", 1, x, y)
+    k:feed("mouse_up", 1, x, y)
+    settle(12)
+def click_w(wd, dx=nil, dy=nil):
+    click(w:content_x() + wd.x + (dx ?? math.floor(wd.w / 2)), w:content_y() + wd.y + (dy ?? math.floor(wd.h / 2)))
+def click_tab(i):
+    r = app.nav.to[i]
+    click(w:content_x() + r[1] + 6, w:content_y() + app.nav.y + 6)
+def scroll_at(wd, dir, n):
+    for i in range[1, n]:
+        k:feed("mouse_scroll", dir, w:content_x() + wd.x + 20, w:content_y() + wd.y + 20)
+    settle(10)
+
+# ---------------------------------------------------------------- Home
+settle(30)
+dump(wm, "ui_store_home")
+scroll_at(app.host, 1, 6)
+settle(10)
+dump(wm, "ui_store_home2")
+scroll_at(app.host, -1, 10)
+settle(10)
+
+# ---------------------------------------------------------------- the carousel in the middle of a slide
+settle(110)
+dump(wm, "ui_store_slide")
+settle(30)
+
+# ---------------------------------------------------------------- package page (click the banner of Snake)
+while app.hero:current().id != "denmoth.snake":
+    k:feed("mouse_scroll", 1, w:content_x() + app.hero.x + 100, w:content_y() + app.hero.y + 10)
+    settle(30)
+click_w(app.hero, app.hero.w - 30, 8)
+settle(30)
+dump(wm, "ui_store_page")
+scroll_at(app.host, 1, 6)
+settle(10)
+dump(wm, "ui_store_page2")
+scroll_at(app.host, -1, 10)
+
+# ---------------------------------------------------------------- install options, then the install stops at "place"
+fake.hold_at = "place"
+fake.hold = true
+click_w(app.main_btn)
+settle(20)
+dump(wm, "ui_store_options")
+key(keys.enter)
+settle(40)
+dump(wm, "ui_store_installing")
+
+# ---------------------------------------------------------------- queue: Snake running, the Chess update waiting
+click_tab(4)
+settle(10)
+click_w(app.btn_update_all)
+settle(30)
+dump(wm, "ui_store_queue")
+fake.hold = false
+settle(60)
+dump(wm, "ui_store_queue_done")
+
+# ---------------------------------------------------------------- My packages
+click_tab(3)
+settle(30)
+dump(wm, "ui_store_mine")
+
+# ---------------------------------------------------------------- Search, PineStore only
+click_tab(2)
+settle(20)
+click_w(app.src_chips.pinestore)
+settle(30)
+dump(wm, "ui_store_search")
+click_w(app.src_chips.all)
+settle(20)
+
+# ---------------------------------------------------------------- light theme
+wm:defer(() => wm:set_theme("light"))
+settle(20)
+click_tab(1)
+settle(40)
+dump(wm, "ui_store_light")
