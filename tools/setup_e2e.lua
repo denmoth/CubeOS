@@ -41,7 +41,18 @@ ev.write("return _G.SETUP_E2E_EVENTS")
 ev.close()
 local oldprint = print
 print = function(...) local t = {} for i = 1, select("#", ...) do t[i] = tostring((select(i, ...))) end if #t > 0 and t[1] ~= "" then say("print: " .. table.concat(t, " ")) end end
-local ok, err = pcall(loadfile("/repo/game/install.lua", nil, _ENV), "--from", "/repo/build/packages", "--events", "/setup_events.lua", "--text")
+-- NET=1 (tools/setup_e2e.sh): install.lua from GitHub and the real Cobble catalog instead of the local folder
+local net = fs.exists("/repo/build/e2e-net")
+local ok, err
+if net then
+  local h = http.get("https://raw.githubusercontent.com/denmoth/cobble/main/install.lua")
+  say("downloaded install.lua: " .. tostring(h ~= nil))
+  local code = h and h.readAll() or ""
+  if h then h.close() end
+  ok, err = pcall(load(code, "=install.lua", "t", _ENV), "--events", "/setup_events.lua", "--text")
+else
+  ok, err = pcall(loadfile("/repo/game/install.lua", nil, _ENV), "--from", "/repo/build/packages", "--events", "/setup_events.lua", "--text")
+end
 say("installer finished: ok=" .. tostring(ok) .. " " .. tostring(err or "") .. " rebooted=" .. tostring(rebooted) ..
   " in " .. (os.epoch("utc") - t0) .. " ms")
 say("temp folder left: " .. tostring(fs.exists("/.cubeos-setup")))

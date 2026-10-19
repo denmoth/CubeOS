@@ -434,6 +434,18 @@ export class Setup:
                         s:source_remove(src.name)
             if not have:
                 s:source_add({name: src.name, kind: src.kind, url: src.url, trust: src.trust ?? "official"})
+                # the installer's own (official) catalog goes first: the order of the sources is their priority
+                if s.save_sources != nil:
+                    first = []
+                    rest = []
+                    for x in s:sources() ?? []:
+                        if x.name == src.name:
+                            first[len(first) + 1] = x
+                        else:
+                            rest[len(rest) + 1] = x
+                    for x in rest:
+                        first[len(first) + 1] = x
+                    s:save_sources(first)
             name = src.name
         r = s:refresh(name) ?? {}
         if r.failed != nil and len(r.failed) > 0 and (r.ok == nil or len(r.ok) == 0):

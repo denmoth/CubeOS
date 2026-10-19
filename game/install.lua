@@ -1,9 +1,9 @@
 -- CubeOS installer bootstrap (docs/packages/08-setup-and-store.md), plain Lua for a bare CraftOS computer:
---   wget run https://raw.githubusercontent.com/OWNER/cobble/main/install.lua
+--   wget run https://raw.githubusercontent.com/denmoth/cobble/main/install.lua
 --   install.lua [catalog url] [--from <folder with index.json5 and .cpk>] [--root <dir>] [--keep] [--events <file>] [--text]
 -- Downloads cubeos.setup and its dependencies, checks sha256, unpacks them with its own inflate into a temp folder and runs
 -- the installer screens (lib/setup), which install the system through stew.
-local BASE = "https://raw.githubusercontent.com/OWNER/cobble/main/"
+local BASE = "https://raw.githubusercontent.com/denmoth/cobble/main/"
 local START = "cubeos.setup"
 local MIN_CC = 1.100
 
