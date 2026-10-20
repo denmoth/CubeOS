@@ -1,46 +1,38 @@
-# CubeOS 2.0
+# CubeOS
 
-An operating system for **CC: Tweaked** computers in Minecraft, running on top of CraftOS.
+An operating system for CC: Tweaked computers in Minecraft. It runs on top of CraftOS.
 
-> "2.0" is the name of the system, like Windows 7 or XP. Releases are versioned separately with SemVer.
-
-**Status: alpha (0.1.0).** It installs from the internet and runs; it has not been checked much in real game worlds yet.
+This is version 0.1.0. It installs and boots, but it hasn't seen much use in real worlds yet, so expect rough edges.
 
 ## Install
 
-On a clean ComputerCraft computer with HTTP enabled:
+On a clean computer with HTTP enabled:
 
 ```
 wget run https://raw.githubusercontent.com/denmoth/cobble/main/install.lua
 ```
 
-Packages come from [Cobble](https://github.com/denmoth/cobble), the official catalog. The minimal text system takes about
-500 KB, the desktop about 880 KB, so both fit the default 1 MB of a computer. A second computer can hold packages that do
-not fit (`pkghost.lua` in Cobble).
+The packages come from [Cobble](https://github.com/denmoth/cobble). The text-only system takes about 500 KB of disk and
+the desktop about 880 KB, so both fit on a default computer. If you want more than fits, a second computer connected by a
+modem can hold some of the packages (run `pkghost.lua` from Cobble on it).
 
-## What is inside
+## What's in it
 
-- A kernel with processes, services (log, time, input, fonts, sound, network, permissions...), users and sudo.
-- CFS: a virtual file system with mounts, rules, a trash, extenders (more storage from a floppy or another computer).
-- **Cush**, a shell with pipes, jobs, completion, help in English, Russian and Ukrainian, a text editor.
-- **CDE**, a desktop for CC: Graphics: windows, a taskbar, the Start menu, themes, wallpapers, widgets, a login screen.
-- Apps: Axo (files), Settings, Pulse (tasks), Notes, Pixel, Brush, Jukebox, Calc, Clock, Store.
-- **Cubic** (`.cub`), its own language: Python-like syntax with indents, compiled to Lua. Apps may also be plain Lua.
-- **stew**, the package manager: `.cpk` packages (compressed, loaded lazily), whole-or-nothing installs with rollback,
-  sources Cobble, PineStore, http and folders, publishing from inside the game.
-- CubeNet: pairing, shared folders and remote folders between computers over modems.
+The kernel runs processes and system services (logging, time, input, fonts, sound, network, permissions) and has user
+accounts with sudo. Files go through CFS, a virtual file system with mounts, access rules and a trash.
 
-The system itself is split into about a hundred small packages (`packages/system/`).
+Cush is the shell. It has pipes, background jobs, tab completion, a text editor and built-in help in English, Russian and
+Ukrainian. On a computer with CC: Graphics you also get CDE, a desktop with windows, a taskbar, a Start menu, themes and
+wallpapers. It comes with a file manager (Axo), Settings, Notes, Pixel, Brush, Jukebox, Calc, Clock, a task manager
+(Pulse) and the Store.
 
-## Development
+Most of the code is written in Cubic, a small Python-like language that compiles to Lua. Apps can also be plain Lua.
 
-- `bash tools/test.sh [filter]` runs the tests in CraftOS-PC (headless).
-- `bash tools/build_packages.sh` builds every system package into `build/packages/`.
-- `bash tools/e2e_stew.sh <set> <storage>` installs a set on a clean emulated computer and boots the installed loader.
-- `game/install_dev.lua` installs the boot chain from a copy of this repository inside the game.
+Packages are handled by `stew`. A package is a single compressed `.cpk` file, an install either finishes or is rolled
+back, and besides Cobble it can install CraftOS programs from PineStore. The system itself is split into about a hundred
+small packages, so you only keep what you use.
 
-The design documents are in [docs/](docs/) (written in Russian); the package system is described in
-[docs/packages/](docs/packages/README.md).
+Design notes are in [docs/](docs/), written in Russian.
 
 ## License
 
