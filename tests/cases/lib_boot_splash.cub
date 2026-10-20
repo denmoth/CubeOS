@@ -41,7 +41,7 @@ def tick_clock():
     return clock.now
 
 def new_pixel(extra):
-    o = {caps: {pixel: true}, term: fake({pixel: true}), clock: tick_clock, assets: "/repo/assets", title: "CubeOS 0.3.0"}
+    o = {caps: {pixel: true}, term: fake({pixel: true}), clock: tick_clock, assets: "/repo/assets", title: "CubeOS 0.1.0"}
     if extra != nil:
         for k, v in extra:
             o[k] = v

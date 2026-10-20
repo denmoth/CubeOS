@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.rpc",
   name: "Service RPC",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Message passing between services, and the stub service.",
   author: "CubeOS",
   license: "MIT",

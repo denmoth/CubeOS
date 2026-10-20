@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.avatars",
   name: "Avatars",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Avatar pictures for user accounts.",
   author: "CubeOS",
   license: "MIT",

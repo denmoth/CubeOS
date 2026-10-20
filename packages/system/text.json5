@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.text",
   name: "Text tools",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Unicode, text wrapping and command line argument parsing.",
   author: "CubeOS",
   license: "MIT",

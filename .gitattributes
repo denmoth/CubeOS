@@ -8,3 +8,9 @@
 *.fnt binary
 *.img binary
 *.txt text eol=lf
+
+# GitHub language statistics: only the system counts. tools/ holds developer tools (builders, test runners), not part of
+# CubeOS; .cuh are Cubic headers (not CUDA), .csc are note scores (not GSC)
+tools/** linguist-vendored
+*.cuh linguist-detectable=false
+*.csc linguist-detectable=false

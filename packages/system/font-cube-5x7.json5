@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.font-cube-5x7",
   name: "Font cube-5x7",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "The cube-5x7 bitmap font.",
   author: "CubeOS",
   license: "MIT",

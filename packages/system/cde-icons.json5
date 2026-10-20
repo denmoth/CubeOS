@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.cde-icons",
   name: "CDE icons",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Built-in icon set of the desktop.",
   author: "CubeOS",
   license: "MIT",

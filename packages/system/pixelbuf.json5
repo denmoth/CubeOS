@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.pixelbuf",
   name: "Pixel buffer",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Pixel buffer used by the font renderer.",
   author: "CubeOS",
   license: "MIT",

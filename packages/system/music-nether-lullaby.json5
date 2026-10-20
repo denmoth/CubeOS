@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.music-nether-lullaby",
   name: "Music nether-lullaby",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Jukebox track nether lullaby.",
   author: "CubeOS",
   license: "MIT",

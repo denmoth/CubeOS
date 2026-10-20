@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.cde-startmenu",
   name: "CDE start menu",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Start menu and the application registry.",
   author: "CubeOS",
   license: "MIT",
@@ -12,8 +12,8 @@
   category: "desktop",
   priority: "recommended",
   depends: {
-    "cubeos.cdk": "^0.5",
-    "cubeos.text": "^0.5",
+    "cubeos.cdk": "^0.1",
+    "cubeos.text": "^0.1",
   },
   files: ["lib/cde/startmenu.cub", "lib/cde/apps.cub"],
 }

@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.time",
   name: "Time",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Clock and the time zone database.",
   author: "CubeOS",
   license: "MIT",
@@ -12,8 +12,8 @@
   category: "system",
   priority: "essential",
   depends: {
-    "cubeos.json": "^0.5",
-    "cubeos.std": "^0.5",
+    "cubeos.json": "^0.1",
+    "cubeos.std": "^0.1",
   },
   files: ["lib/clock.cub", "lib/tzdata.cub"],
 }

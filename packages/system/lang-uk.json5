@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.lang-uk",
   name: "Language Ukrainian",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Ukrainian translation and keyboard layout.",
   author: "CubeOS",
   license: "MIT",

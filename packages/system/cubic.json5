@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.cubic",
   name: "Cubic compiler",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Cubic language compiler (not needed on an installed system).",
   author: "CubeOS",
   license: "MIT",

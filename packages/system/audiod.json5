@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.audiod",
   name: "Audio service",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Sound and music playback service (note speakers).",
   author: "CubeOS",
   license: "MIT",
@@ -12,8 +12,8 @@
   category: "media",
   priority: "recommended",
   depends: {
-    "cubeos.json": "^0.5",
-    "cubeos.rpc": "^0.5",
+    "cubeos.json": "^0.1",
+    "cubeos.rpc": "^0.1",
   },
   files: [
     "lib/svc/audiod.cub",

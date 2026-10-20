@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.music-neon-drive",
   name: "Music neon-drive",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Jukebox track neon drive.",
   author: "CubeOS",
   license: "MIT",

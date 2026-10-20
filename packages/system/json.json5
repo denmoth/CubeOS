@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.json",
   name: "JSON and JSON5",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "JSON and JSON5 parsers and writers.",
   author: "CubeOS",
   license: "MIT",

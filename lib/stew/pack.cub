@@ -283,7 +283,7 @@ export def build(fsys, base, opts=nil):
         depends: m.depends ?? {}, want: m.want ?? {}, conflicts: m.conflicts ?? _arr(),
         provides: m.provides ?? _arr(),
         permissions: m.permissions ?? {need: _arr(), want: _arr()},
-        cubeos: m.cubeos ?? {min: "0.5.0"},
+        cubeos: m.cubeos ?? {min: "0.1.0"},
     }
     r = {data: data, manifest: m, entry: entry, name: m.id .. "-" .. m.version}
     if o.maps == "separate" and len(maps) > 0:

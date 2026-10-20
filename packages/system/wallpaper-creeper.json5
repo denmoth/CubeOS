@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.wallpaper-creeper",
   name: "Wallpaper creeper",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "The creeper wallpaper.",
   author: "CubeOS",
   license: "MIT",

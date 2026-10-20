@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.lang-ru",
   name: "Language Russian",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Russian translation and keyboard layout.",
   author: "CubeOS",
   license: "MIT",

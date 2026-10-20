@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.theme-dark",
   name: "Theme Dark",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Dark desktop theme.",
   author: "CubeOS",
   license: "MIT",

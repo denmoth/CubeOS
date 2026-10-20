@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.font-cube-mono-6x9",
   name: "Font cube-mono-6x9",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "The cube-mono-6x9 bitmap font.",
   author: "CubeOS",
   license: "MIT",

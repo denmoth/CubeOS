@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.cde-crashbox",
   name: "CDE crash box",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Window with the reason and a Restart button when an app crashes.",
   author: "CubeOS",
   license: "MIT",
@@ -12,8 +12,8 @@
   category: "desktop",
   priority: "recommended",
   depends: {
-    "cubeos.cdk": "^0.5",
-    "cubeos.cgl": "^0.5",
+    "cubeos.cdk": "^0.1",
+    "cubeos.cgl": "^0.1",
   },
   files: ["lib/cde/crashbox.cub"],
 }

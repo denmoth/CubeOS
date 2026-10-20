@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.powerd",
   name: "Power service",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Shutdown, reboot and power events.",
   author: "CubeOS",
   license: "MIT",
@@ -12,7 +12,7 @@
   category: "system",
   priority: "essential",
   depends: {
-    "cubeos.rpc": "^0.5",
+    "cubeos.rpc": "^0.1",
   },
   files: ["lib/svc/powerd.cub", "sys/services/powerd.conf"],
   contributes: {

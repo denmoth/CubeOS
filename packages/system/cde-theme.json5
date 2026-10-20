@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.cde-theme",
   name: "CDE themes (code)",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Theme engine of the desktop. The themes themselves are separate packages.",
   author: "CubeOS",
   license: "MIT",
@@ -12,8 +12,8 @@
   category: "desktop",
   priority: "recommended",
   depends: {
-    "cubeos.cgl": "^0.5",
-    "cubeos.json": "^0.5",
+    "cubeos.cgl": "^0.1",
+    "cubeos.json": "^0.1",
   },
   files: ["lib/cde/theme.cub"],
 }

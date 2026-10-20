@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.music-pixel-parade",
   name: "Music pixel-parade",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Jukebox track pixel parade.",
   author: "CubeOS",
   license: "MIT",

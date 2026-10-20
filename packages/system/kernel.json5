@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.kernel",
   name: "Kernel",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "The CubeOS kernel: processes, system calls, CC glue.",
   author: "CubeOS",
   license: "MIT",
@@ -12,7 +12,7 @@
   category: "system",
   priority: "essential",
   depends: {
-    "cubeos.cfs": "^0.5",
+    "cubeos.cfs": "^0.1",
   },
   files: ["lib/kernel/*"],
 }

@@ -1,6 +1,6 @@
 # boot.splash: экран загрузки (D204, D245; контракт boot_screen из docs/16-kernel-integration.md); потом его может подменить экран DE
 #
-#   splash = splash.new({caps: {pixel: true}, term: term, assets: "/repo/assets", clock: ..., title: "CubeOS 0.3.0"})
+#   splash = splash.new({caps: {pixel: true}, term: term, assets: "/repo/assets", clock: ..., title: "CubeOS 0.1.0"})
 #   splash:open()
 #   splash:progress(0.35, "Loading the kernel")    доля 0..1 и подпись этапа
 #   splash:message("Service timed is ready")       строка пояснения под подписью

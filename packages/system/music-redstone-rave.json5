@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.music-redstone-rave",
   name: "Music redstone-rave",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Jukebox track redstone rave.",
   author: "CubeOS",
   license: "MIT",

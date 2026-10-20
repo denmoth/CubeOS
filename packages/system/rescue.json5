@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.rescue",
   name: "Rescue",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Rescue mode and boot from a disk.",
   author: "CubeOS",
   license: "MIT",
@@ -12,7 +12,7 @@
   category: "system",
   priority: "essential",
   depends: {
-    "cubeos.crypto": "^0.5",
+    "cubeos.crypto": "^0.1",
   },
   files: ["sys/boot/rescue.lua", "sys/boot/diskboot.lua"],
 }

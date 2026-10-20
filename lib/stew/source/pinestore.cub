@@ -82,7 +82,7 @@ def _record(p):
     }
     rec.versions[_version(p)] = {
         url: "pinestore:" .. pid, depends: {}, want: {}, conflicts: _arr(), provides: _arr(),
-        permissions: {need: _arr(), want: ["net.http"]}, cubeos: {min: "0.5.0"},
+        permissions: {need: _arr(), want: ["net.http"]}, cubeos: {min: "0.1.0"},
     }
     return rec
 

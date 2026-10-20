@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.cde-widgets",
   name: "CDE widgets",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Desktop widgets.",
   author: "CubeOS",
   license: "MIT",
@@ -12,9 +12,9 @@
   category: "desktop",
   priority: "recommended",
   depends: {
-    "cubeos.cde": "^0.5",
-    "cubeos.cde-theme": "^0.5",
-    "cubeos.cgl": "^0.5",
+    "cubeos.cde": "^0.1",
+    "cubeos.cde-theme": "^0.1",
+    "cubeos.cgl": "^0.1",
   },
   files: ["lib/cde/widgets.cub"],
 }

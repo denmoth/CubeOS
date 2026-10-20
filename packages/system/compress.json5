@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.compress",
   name: "Compression",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Deflate, LZ and CRC32. The unpacker is always kept unpacked.",
   author: "CubeOS",
   license: "MIT",

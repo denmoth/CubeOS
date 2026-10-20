@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.logd",
   name: "Log service",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "System log service.",
   author: "CubeOS",
   license: "MIT",
@@ -12,10 +12,10 @@
   category: "system",
   priority: "essential",
   depends: {
-    "cubeos.json": "^0.5",
-    "cubeos.rpc": "^0.5",
-    "cubeos.std": "^0.5",
-    "cubeos.time": "^0.5",
+    "cubeos.json": "^0.1",
+    "cubeos.rpc": "^0.1",
+    "cubeos.std": "^0.1",
+    "cubeos.time": "^0.1",
   },
   files: ["lib/svc/logd.cub", "sys/services/logd.conf", "sys/cfg/log.conf"],
   contributes: {

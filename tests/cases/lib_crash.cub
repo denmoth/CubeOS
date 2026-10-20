@@ -19,7 +19,7 @@ r = crash.build({kind: "process", process: {pid: 7, name: "my app", how: "crashe
 eq([r.kind, r.error, r.time, r.time_text], ["process", "boom", ms, "2026-10-15T12:30:45Z"], "the report has the kind, error and time")
 eq(len(r.log), 20, "only the last 20 log lines are kept")
 eq([r.log[1], r.log[20]], ["line 11", "line 30"], "the newest lines")
-eq(r.version, "CubeOS 0.3.0", "the version is recorded")
+eq(r.version, "CubeOS 0.1.0", "the version is recorded")
 eq(r.code, crash.code("boom"), "the code comes from the error")
 eq(crash.build({error: nil}, {clock: () => ms}).error, "", "a missing error is an empty text")
 

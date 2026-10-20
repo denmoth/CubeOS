@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.wallpaper-sunset",
   name: "Wallpaper sunset",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "The sunset wallpaper.",
   author: "CubeOS",
   license: "MIT",

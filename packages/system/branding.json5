@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.branding",
   name: "Branding",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "CubeOS logos and system icons.",
   author: "CubeOS",
   license: "MIT",

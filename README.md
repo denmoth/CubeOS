@@ -4,7 +4,7 @@ An operating system for **CC: Tweaked** computers in Minecraft, running on top o
 
 > "2.0" is the name of the system, like Windows 7 or XP. Releases are versioned separately with SemVer.
 
-**Status: alpha (0.5.0).** It installs from the internet and runs; it has not been checked much in real game worlds yet.
+**Status: alpha (0.1.0).** It installs from the internet and runs; it has not been checked much in real game worlds yet.
 
 ## Install
 

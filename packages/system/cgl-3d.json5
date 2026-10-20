@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.cgl-3d",
   name: "CGL 3D",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Simple 3D rendering.",
   author: "CubeOS",
   license: "MIT",

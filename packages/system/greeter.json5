@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.greeter",
   name: "Text greeter",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Text mode login.",
   author: "CubeOS",
   license: "MIT",
@@ -12,7 +12,7 @@
   category: "system",
   priority: "essential",
   depends: {
-    "cubeos.auth": "^0.5",
+    "cubeos.auth": "^0.1",
   },
   files: ["lib/boot/greeter.cub"],
 }

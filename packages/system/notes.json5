@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.notes",
   name: "Notes",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Text editor.",
   author: "CubeOS",
   license: "MIT",
@@ -12,9 +12,9 @@
   category: "apps",
   priority: "recommended",
   depends: {
-    "cubeos.cdk": "^0.5",
-    "cubeos.cfs-base": "^0.5",
-    "cubeos.text": "^0.5",
+    "cubeos.cdk": "^0.1",
+    "cubeos.cfs-base": "^0.1",
+    "cubeos.text": "^0.1",
   },
   files: ["lib/apps/notes/*"],
   contributes: {

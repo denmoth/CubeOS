@@ -45,7 +45,7 @@ export def refresh(src, ctx):
         rec.versions[m.version] = {
             url: name, sha256: a:sha256_hex(), size: fsys.getSize(full), installed_size: m.installed_size ?? 0,
             depends: m.depends ?? {}, want: m.want ?? {}, conflicts: m.conflicts ?? _arr(), provides: m.provides ?? _arr(),
-            permissions: m.permissions ?? {need: _arr(), want: _arr()}, cubeos: m.cubeos ?? {min: "0.5.0"},
+            permissions: m.permissions ?? {need: _arr(), want: _arr()}, cubeos: m.cubeos ?? {min: "0.1.0"},
         }
         # имя и описание берутся у самой новой версии
         if latest[m.id] == nil or semver.gt(m.version, latest[m.id]):

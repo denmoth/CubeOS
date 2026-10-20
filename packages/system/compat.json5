@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.compat",
   name: "CraftOS compatibility",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Runs ordinary CraftOS programs: bios, env, proc, varargs.",
   author: "CubeOS",
   license: "MIT",
@@ -12,8 +12,8 @@
   category: "system",
   priority: "essential",
   depends: {
-    "cubeos.term-chars": "^0.5",
-    "cubeos.version": "^0.5",
+    "cubeos.term-chars": "^0.1",
+    "cubeos.version": "^0.1",
   },
   files: ["lib/compat/*"],
 }

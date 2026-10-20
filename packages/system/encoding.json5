@@ -3,7 +3,7 @@
   format: 1,
   id: "cubeos.encoding",
   name: "Encodings",
-  version: "0.5.0",
+  version: "0.1.0",
   description: "Base64, Base85 and URL encoding.",
   author: "CubeOS",
   license: "MIT",
