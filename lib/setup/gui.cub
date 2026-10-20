@@ -60,8 +60,8 @@ export class Gui:
         self.W = self.s.w
         self.H = self.s.h
         self.pal = self.screen.palette
-        path = self:asset("fonts/cube-6x9.font")
-        self.font = path != nil and font_lib.from_file(path) or font_lib.default(ui.env.assets ?? "/repo/assets")
+        data = self:read_asset("fonts/cube-6x9.font")
+        self.font = data != nil and font_lib.parse(data) or font_lib.default(ui.env.assets ?? "/repo/assets")
         self.c = {text: self:near(240, 242, 250), soft: self:near(190, 196, 220), dim: self:near(128, 136, 168),
             faint: self:near(78, 84, 112), accent: theme.ACCENT, accent2: self:near(122, 162, 247), ok: self:near(140, 230, 150),
             danger: self:near(255, 110, 120), warn: self:near(240, 190, 110), field: self:near(14, 16, 30), edge: self:near(86, 94, 130),
@@ -74,6 +74,14 @@ export class Gui:
         self.faces = {}
 
     # ------------------------------------------------------------ resources
+
+    # contents of an asset: from the installer's packages in memory (env.asset), else a file
+    def read_asset(self, rel):
+        if self.ui.env.asset != nil:
+            data = self.ui.env.asset(rel)
+            if data != nil:
+                return data
+        return _read(self:asset(rel))
 
     # a file of the CubeOS assets: the packages the bootstrap unpacked, the installed system or the repository
     def asset(self, rel):
@@ -104,7 +112,7 @@ export class Gui:
 
     def _wallpaper(self):
         let me = self
-        ctx = {palette: self.pal, theme: () => me.th, read: (name) => _read(me:asset("wallpapers/" .. name .. ".cimg")), now: () => 0,
+        ctx = {palette: self.pal, theme: () => me.th, read: (name) => me:read_asset("wallpapers/" .. name .. ".cimg"), now: () => 0,
             animated: false, alloc: (n) => nil, alloc_wide: (n) => nil, set_colors: (list) => me.screen:set_colors(list), damage: (x, y, w, h) => nil}
         ok, surf = pcall(() => wallpaper_mod.make("aurora", me.W, me.H, ctx))
         if ok and surf != nil:
@@ -123,7 +131,7 @@ export class Gui:
             return self.faces[key]
         f = nil
         if name != "letter":
-            data = _read(self:asset("avatars/" .. name .. ".cimg"))
+            data = self:read_asset("avatars/" .. name .. ".cimg")
             if data != nil:
                 ok, src, spal = pcall(cimg.decode, data)
                 if ok:
