@@ -343,11 +343,11 @@ add((s) => find_or_fail(s, "It does not fit", "warning"))
 add((s) => find_or_fail(s, "Second computer", "later option shown"))
 # the second computer: a wrong code, then the right one
 add(["char", "4"])
-add((s) => find_or_fail(s, "6-digit code", "the pairing dialog explains what to do"))
+add((s) => find_or_fail(s, "Type the code", "the pairing dialog explains what to do"))
 add(["char", "9"], ["char", "9"], ["char", "9"], ["char", "9"], ["char", "9"], ["char", "9"], K(keys.enter))
 add((s) => find_or_fail(s, "wrong code", "a wrong code is reported"))
 add(K(keys.enter))
-add((s) => find_or_fail(s, "6-digit code", "and the dialog asks again"))
+add((s) => find_or_fail(s, "Type the code", "and the dialog asks again"))
 for ch in ["1", "2", "3", "4", "5", "6"]:
     add(["char", ch])
 add(K(keys.enter))

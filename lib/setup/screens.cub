@@ -665,7 +665,13 @@ def _fit_actions(ui):
 
 # The second computer: explains what to do there, takes its pairing code, pairs through stew (the key goes to hosts.json5 of the
 # new system) and re-plans: stew then moves optional packages to it when they do not fit here.
-const PAIR_TEXT = "1. On the other computer run pkghost.lua (wget run <url>/pkghost.lua).\n2. Connect it to this one with a modem, wired or wireless.\n3. Type the 6-digit code it shows."
+# where pkghost.lua is: next to the catalog the installer came from
+export def pkghost_url(ui):
+    src = ui.env.source
+    url = src != nil and src.url or nil
+    if type(url) == "string" and string.match(url, "^https?://") != nil:
+        return (string.gsub(url, "[^/]*$", "")) .. "pkghost.lua"
+    return "https://raw.githubusercontent.com/denmoth/cobble/main/pkghost.lua"
 
 def _fit_remote(ui):
     have = ui.s:hosts()[1]
@@ -674,7 +680,9 @@ def _fit_remote(ui):
         ui.plans = {}
         return
     while true:
-        ans = ui:dialog({title: "Second computer", text: PAIR_TEXT, input: {value: ""}, width: 48,
+        cmd = "wget run " .. pkghost_url(ui)
+        text = "1. On the other computer type:\n" .. cmd .. "\n2. Put a modem on both computers. Wired: a cable between them, then click both modems so they turn red.\n3. Type the code it shows."
+        ans = ui:dialog({title: "Second computer", text: text, input: {value: "", digits: 6}, width: 50, pair: {command: cmd},
             buttons: [{label: "Cancel", value: false}, {label: "Pair", value: true, style: "ok"}], focus: 2})
         code = type(ans) == "string" and string.match(ans, "^%s*(%d%d%d%d%d%d)%s*$") or nil
         if code == nil:

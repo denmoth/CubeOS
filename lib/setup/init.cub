@@ -321,7 +321,8 @@ export class Setup:
                 b = spec.buttons[spec.focus]
                 self:modal_answer(spec, spec.input != nil and b.value != false and spec.input.value or b.value)
         elif ev == "char" and spec.input != nil:
-            spec.input.value = spec.input.value .. a
+            if spec.input.digits == nil or (string.match(a, "^%d$") != nil and len(spec.input.value) < spec.input.digits):
+                spec.input.value = spec.input.value .. a
         elif ev == "mouse_scroll" and spec.scroll:
             spec.top = math.max(0, math.min(spec.max_top ?? 0, spec.top + a))
 

@@ -386,7 +386,76 @@ export class Gui:
 
     # ------------------------------------------------------------ dialogs
 
+    # the second computer: the command to type there in its own box, what to do with the modems, six cells for the code
+    def pair_modal(self, spec):
+        ui = self.ui
+        W = self.W
+        H = self.H
+        self:glass(0, 0, W, H, 0, self.m_dark, false)
+        bw = W - 16
+        bx = 8
+        tw = bw - 20
+        cmd_lines = []
+        rest = spec.pair.command
+        while len(rest) > 0:
+            n = len(rest)
+            while n > 1 and self:width(string.sub(rest, 1, n)) > tw - 8:
+                n -= 1
+            cmd_lines[len(cmd_lines) + 1] = string.sub(rest, 1, n)
+            rest = string.sub(rest, n + 1)
+        modem = self:wrap(self:tr("Put a modem on both computers. Wired: a cable between them, then click both modems so they turn red."), tw - 14)
+        bh = 22 + 12 + len(cmd_lines) * 10 + 8 + len(modem) * 10 + 8 + 12 + 22 + 22
+        by = math.max(2, math.floor((H - bh) / 2))
+        self:glass(bx, by, bw, bh, 6)
+        self.s:round_rect(bx + 1, by + 1, bw - 2, 3, 1, self.c.accent2, true)
+        icons.draw(self.s, "netfolder", bx + 8, by + 7, self.c.accent2)
+        self:text(bx + 21, by + 8, self:tr("Second computer"), self.c.text)
+        y = by + 22
+        x = bx + 10
+        def step(n, col):
+            self.s:circle(x + 4, y + 4, 4, col, true)
+            self:text(x + 2, y + 1, tostring(n), self.c.field)
+        step(1, self.c.accent)
+        self:text(x + 14, y + 1, self:tr("On the other computer type:"), self.c.soft)
+        y += 12
+        self.s:round_rect(x + 14, y - 2, tw - 4, len(cmd_lines) * 10 + 3, 3, self.c.field, true)
+        for line in cmd_lines:
+            self:text(x + 18, y, line, self.c.ok)
+            y += 10
+        y += 8
+        step(2, self.c.accent)
+        for line in modem:
+            self:text(x + 14, y + 1, line, self.c.soft)
+            y += 10
+        y += 8
+        step(3, self.c.accent)
+        self:text(x + 14, y + 1, self:tr("Type the code it shows:"), self.c.soft)
+        y += 13
+        value = spec.input.value
+        cw = 16
+        cx = x + 14
+        for i in range[1, 6]:
+            filled = i <= len(value)
+            cur = i == len(value) + 1 and ui.phase % 6 < 3
+            self.s:round_rect(cx, y, cw, 18, 3, self.c.field, true)
+            self.s:round_rect(cx, y, cw, 18, 3, (filled or cur) and self.c.accent or self.c.edge, false)
+            if filled:
+                d = string.sub(value, i, i)
+                self:text(cx + math.floor((cw - self:width(d, 2)) / 2) + 1, y + 1, d, self.c.text, 2)
+            cx += cw + 4
+        x2 = bx + bw - 8
+        for i in range[len(spec.buttons), 1] step -1:
+            b = spec.buttons[i]
+            lab = self:tr(b.label)
+            x2 -= self:width(lab) + 14
+            let value2 = b.value
+            style = i == spec.focus and (b.style ?? "main") or "plain"
+            self:button(x2, by + bh - 17, lab, style, () => ui:modal_answer(spec, value2 != false and spec.input.value or false), false)
+            x2 -= 5
+
     def modal(self, spec):
+        if spec.pair != nil:
+            return self:pair_modal(spec)
         ui = self.ui
         W = self.W
         H = self.H

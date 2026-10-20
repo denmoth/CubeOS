@@ -537,9 +537,14 @@ export class Stew:
                     p.new_permissions[id] = fresh
         # the real cost on a CC disk (catalog field disk, 500 bytes a file at least) plus the package's lines in the database and
         # the module index; old catalogs without disk: a rough guess on top of the sizes
+        # a package on the second computer still puts its placed files (fonts, pictures, music, boot files) on this disk
+        def placed(s):
+            if s.disk == nil:
+                return 0
+            return math.max(0, s.disk.packed - math.max(MIN_FILE, s.size ?? 0))
         def cost(s):
             if s.storage == "remote":
-                return DB_PER_PACKAGE
+                return placed(s) + DB_PER_PACKAGE
             if s.disk != nil:
                 return (s.storage == "packed" and s.disk.packed or s.disk.unpacked) + DB_PER_PACKAGE
             if s.storage == "packed":
@@ -594,9 +599,12 @@ export class Stew:
                     for prio in ["optional", "recommended"]:
                         cands = []
                         for s in steps:
+                            # only packages whose move really frees this disk (code, not pictures that stay here anyway)
                             if s.op != "remove" and s.storage != "remote" and s.priority == prio and not keep_home[s.id] and (s.size ?? 0) > 0:
-                                cands[len(cands) + 1] = s
-                        table.sort(cands, (a, b) => (a.size ?? 0) > (b.size ?? 0))
+                                s.saving = cost(s) - placed(s) - DB_PER_PACKAGE
+                                if s.saving >= 2048:
+                                    cands[len(cands) + 1] = s
+                        table.sort(cands, (a, b) => a.saving > b.saving)
                         for s in cands:
                             if not (delta + reserve <= free and peak + reserve <= free) and (s.size ?? 0) + 4096 <= hfree:
                                 s.storage = "remote"

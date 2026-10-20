@@ -28,7 +28,22 @@ local rt
 if fs.exists(IDX) and not conf:match("[%s{,\"']dev[\"']?%s*:%s*true") then
   local idx = dofile(IDX)
   local loader = dofile("/cubeos/sys/boot/pkgload.lua").new(idx)
-  local cubic = idx.cubic and loadfile(idx.cubic .. "/init.lua")(idx.cubic) or nil
+  -- компилятор (пакет cubeos.cubic, необязательный) читается прямо из пакета, файлы ищутся и в cubeos.cubic-tools и рядом с rt.lua
+  local cubic = nil
+  if idx.cubic_pkgs then
+    local function own(rel)
+      for _, p in ipairs(idx.cubic_pkgs) do
+        local ok, t = pcall(loader.read, p, "src/cubic/" .. rel)
+        if ok and t then return t end
+      end
+      return read("/cubeos/sys/cubic/" .. rel)
+    end
+    local text = own("init.lua")
+    if text then
+      local ok, c = pcall(function() return load(text, "=cubic/init.lua", "t", _G)(nil, own) end)
+      if ok then cubic = c end
+    end
+  end
   rt = { source = idx.share or "/cubeos/share", cubic = cubic or { rt = loader.rt }, loader = loader, import = loader.import,
     installed = true, map_error = loader.map_error, has_compiler = cubic ~= nil }
 else

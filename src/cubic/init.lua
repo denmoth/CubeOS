@@ -1,12 +1,20 @@
 -- Cubic: точка входа компилятора.
 -- Использование:
 --   local cubic = loadfile("/путь/к/src/cubic/init.lua")("/путь/к/src/cubic")
+--   local cubic = load(text_of_init)(nil, read)   read("lexer.lua") -> текст: компилятор прямо из пакета (установленная система)
 --   local lua_code, linemap = cubic.compile(source, "имя.cub", { minify = false, keep_comments = false })
 --   local exports = cubic.run(source, "имя.cub", { env = ..., import = ... })
-local root = ...
+local root, reader = ...
 
 local function load_module(name, ...)
-  local chunk, err = loadfile(root .. "/" .. name .. ".lua")
+  local chunk, err
+  if reader then
+    local text = reader(name .. ".lua")
+    if not text then error("cubic: " .. name .. ".lua is not installed", 0) end
+    chunk, err = load(text, "=cubic/" .. name .. ".lua", "t", _G)
+  else
+    chunk, err = loadfile(root .. "/" .. name .. ".lua")
+  end
   if not chunk then error(err, 0) end
   return chunk(...)
 end
@@ -39,6 +47,12 @@ C.VERSION = "1.0.0"
 C.rt = rt
 C.util = U
 
+-- файлы самого компилятора (заголовки): из пакета, если он читается через reader
+local function read_own(rel)
+  if reader then return reader(rel) end
+  return read_file(root .. "/" .. rel)
+end
+
 local function path_dirname(p)
   return (p:match("^(.*)/[^/]*$")) or ""
 end
@@ -50,7 +64,7 @@ local env_cache = {}
 local function build_env(extra)
   local env = checker.new_env()
   for _, name in ipairs({ "lua", "cc" }) do
-    local src = read_file(root .. "/headers/" .. name .. ".cuh")
+    local src = read_own("headers/" .. name .. ".cuh")
     if src then
       local hast = parser.parse_header(src, name .. ".cuh")
       checker.check(hast, name .. ".cuh", env, true)
@@ -68,7 +82,7 @@ end
 local function type_env(opts)
   local extra = {}
   for _, mod in ipairs(opts.mods or {}) do
-    local src = read_file(root .. "/headers/mods/" .. mod .. ".cuh")
+    local src = read_own("headers/mods/" .. mod .. ".cuh")
     if not src then
       error("unknown mod for type headers: " .. tostring(mod) .. " (no headers/mods/" .. tostring(mod) .. ".cuh)", 0)
     end
@@ -379,9 +393,11 @@ function C.new_loader(cfg)
 end
 
 -- Данные для редакторов: подсветка, символы, диагностика, автодополнение (см. tooling.lua)
-C.tooling = load_module("tooling", {
+-- данные для редакторов (пакет cubeos.cubic-tools; без него компилятор работает, tooling нет)
+local ok_tooling, tooling = pcall(load_module, "tooling", {
   U = U, lexer = lexer, parser = parser, checker = checker, codegen = codegen, B = B,
   modtypes = modtypes, type_env = type_env, version = C.VERSION,
 })
+C.tooling = ok_tooling and tooling or nil
 
 return C
