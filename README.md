@@ -1,46 +1,47 @@
 # CubeOS 2.0
 
-Операционная система для **CC: Tweaked** (Minecraft), работающая поверх CraftOS.
+An operating system for **CC: Tweaked** computers in Minecraft, running on top of CraftOS.
 
-> "2.0" это название системы, как у Windows 7 или XP. Версии выпусков считаются отдельно по SemVer (`MAJOR.MINOR.PATCH`, плюс `-alpha`, `-beta`, `-rc.N`).
+> "2.0" is the name of the system, like Windows 7 or XP. Releases are versioned separately with SemVer.
 
-**Статус: планирование.** Кода пока нет, только документация.
+**Status: alpha (0.5.0).** It installs from the internet and runs; it has not been checked much in real game worlds yet.
 
-## Что это
+## Install
 
-- Своя ОС-надстройка: ядро, VFS с симлинками, оконный и текстовый режимы.
-- Свой язык **Cubic** (`.cub`): питоноподобный синтаксис с отступами, компилируется в Lua.
-- Пакеты `.cpk`, установщики `.stp`, онлайн-магазин на GitHub, облачные хранилища.
-- Работает с аддонами (CC: Graphics, High Quality Speaker, ...) и без них.
-- Встроенные игры: шахматы, Wordle, змейка, тетрис, понг, морской бой.
+On a clean ComputerCraft computer with HTTP enabled:
 
-## Документация
+```
+wget run https://raw.githubusercontent.com/denmoth/cobble/main/install.lua
+```
 
-| Файл | Тема |
-|---|---|
-| [docs/00-overview.md](docs/00-overview.md) | Цели, принципы, версионность, глоссарий |
-| [docs/01-architecture.md](docs/01-architecture.md) | Слои, загрузка, ядро, HAL, песочница |
-| [docs/02-filesystem.md](docs/02-filesystem.md) | VFS, симлинки, шорткаты `$`, структура каталогов |
-| [docs/03-file-formats.md](docs/03-file-formats.md) | Расширения, JSON5, `.cpk`, `.stp` |
-| [docs/spec/language-cubic.md](docs/spec/language-cubic.md) | Замысел языка Cubic |
-| [docs/spec/grammar.md](docs/spec/grammar.md) | Грамматика и семантика Cubic 0.3.0 (реализовано) |
-| [docs/spec/types.md](docs/spec/types.md) | Типы, режим strict, заголовки `.cuh` |
-| [docs/spec/stdlib.md](docs/spec/stdlib.md) | Стандартные и базовые библиотеки (`lib/`), загрузчик модулей |
-| [docs/spec/toolchain.md](docs/spec/toolchain.md) | Компилятор, флаги, модули, минификация |
-| [docs/04-ui-graphics-fonts.md](docs/04-ui-graphics-fonts.md) | Режимы UI, графика, шрифты, темы, i18n |
-| [docs/05-packages-store-cloud.md](docs/05-packages-store-cloud.md) | Пакеты, магазин, облако, Pastebin/Gist/rednet |
-| [docs/06-system-services.md](docs/06-system-services.md) | Буфер обмена, undo/redo, корзина, разрешения |
-| [docs/07-apps-games.md](docs/07-apps-games.md) | Встроенные приложения и игры |
-| [docs/08-decisions-log.md](docs/08-decisions-log.md) | Журнал принятых решений |
-| [docs/09-open-questions.md](docs/09-open-questions.md) | Нерешённые вопросы |
-| [docs/10-roadmap.md](docs/10-roadmap.md) | Этапы разработки |
-| [docs/11-platform.md](docs/11-platform.md) | Дистрибутивы, DE, версии ОС, режим совместимости |
-| [docs/12-permissions-capabilities.md](docs/12-permissions-capabilities.md) | Права, безопасность, возможности (caps) |
-| [docs/dev/git-workflow.md](docs/dev/git-workflow.md) | Ветки, коммиты, релизы |
-| [docs/dev/environment.md](docs/dev/environment.md) | Тестовый инстанс Minecraft, эмулятор CraftOS-PC |
+Packages come from [Cobble](https://github.com/denmoth/cobble), the official catalog. The minimal text system takes about
+500 KB, the desktop about 880 KB, so both fit the default 1 MB of a computer. A second computer can hold packages that do
+not fit (`pkghost.lua` in Cobble).
 
-Документы помечают непроверенные факты как **(проверить)**.
+## What is inside
 
-## Лицензия
+- A kernel with processes, services (log, time, input, fonts, sound, network, permissions...), users and sudo.
+- CFS: a virtual file system with mounts, rules, a trash, extenders (more storage from a floppy or another computer).
+- **Cush**, a shell with pipes, jobs, completion, help in English, Russian and Ukrainian, a text editor.
+- **CDE**, a desktop for CC: Graphics: windows, a taskbar, the Start menu, themes, wallpapers, widgets, a login screen.
+- Apps: Axo (files), Settings, Pulse (tasks), Notes, Pixel, Brush, Jukebox, Calc, Clock, Store.
+- **Cubic** (`.cub`), its own language: Python-like syntax with indents, compiled to Lua. Apps may also be plain Lua.
+- **stew**, the package manager: `.cpk` packages (compressed, loaded lazily), whole-or-nothing installs with rollback,
+  sources Cobble, PineStore, http and folders, publishing from inside the game.
+- CubeNet: pairing, shared folders and remote folders between computers over modems.
 
-MIT, см. [LICENSE](LICENSE).
+The system itself is split into about a hundred small packages (`packages/system/`).
+
+## Development
+
+- `bash tools/test.sh [filter]` runs the tests in CraftOS-PC (headless).
+- `bash tools/build_packages.sh` builds every system package into `build/packages/`.
+- `bash tools/e2e_stew.sh <set> <storage>` installs a set on a clean emulated computer and boots the installed loader.
+- `game/install_dev.lua` installs the boot chain from a copy of this repository inside the game.
+
+The design documents are in [docs/](docs/) (written in Russian); the package system is described in
+[docs/packages/](docs/packages/README.md).
+
+## License
+
+MIT, see [LICENSE](LICENSE).
