@@ -87,8 +87,22 @@ export def index_url(src):
         return url .. "index.json5"
     return url
 
+# raw.githubusercontent.com serves a branch from a cache for minutes after a push, so the index could be older than the
+# packages; the same file at the newest commit (asked from the GitHub API) is always current. Any failure keeps the url.
+export def pin_github(url, ctx):
+    o, r, b, rest = string.match(url, "^https://raw%.githubusercontent%.com/([^/]+)/([^/]+)/([^/]+)/(.+)$")
+    if o == nil or len(b) == 40:
+        return url
+    ok, body = pcall(ctx.http, "https://api.github.com/repos/" .. o .. "/" .. r .. "/commits/" .. b, false)
+    sha = nil
+    if ok and type(body) == "string":
+        sha = string.match(body, '"sha"%s*:%s*"(%x+)"')
+    if sha == nil or len(sha) != 40:
+        return url
+    return "https://raw.githubusercontent.com/" .. o .. "/" .. r .. "/" .. sha .. "/" .. rest
+
 export def refresh_url(url, ctx):
-    body, err = ctx.http(url, false)
+    body, err = ctx.http(pin_github(url, ctx), false)
     if body == nil:
         error("cannot download " .. url .. ": " .. tostring(err ?? "no answer"), 0)
     return parse_index(body, url)
