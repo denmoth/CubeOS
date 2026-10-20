@@ -143,10 +143,14 @@ export class Canvas:
         if not self.colour or t.setPaletteColour == nil:
             return
         if self.saved == nil and t.getPaletteColour != nil:
-            self.saved = {}
+            # all 16 colours or none: a terminal that refuses one (graphics mode) keeps its palette
+            saved = {}
             for i in range[0, 15]:
-                r, g, b = t.getPaletteColour(2 ** i)
-                self.saved[i] = [r, g, b]
+                ok, r, g, b = pcall(t.getPaletteColour, 2 ** i)
+                if not ok or r == nil:
+                    return
+                saved[i] = [r, g, b]
+            self.saved = saved
         for i in range[0, 15]:
             rgb = NIGHT[string.sub(HEX, i + 1, i + 1)]
             r = math.floor(rgb / 65536) / 255
@@ -160,7 +164,8 @@ export class Canvas:
             return
         for i in range[0, 15]:
             s = self.saved[i]
-            t.setPaletteColour(2 ** i, s[1], s[2], s[3])
+            if s != nil:
+                pcall(t.setPaletteColour, 2 ** i, s[1], s[2], s[3])
         self.saved = nil
 
 export def new(t, opts=nil):

@@ -518,7 +518,9 @@ export class Setup:
 
     def run(self):
         self:open_gui()
-        self.c:palette(0)
+        # the night palette belongs to the text look; the pixel look has its own colours
+        if self.gui == nil:
+            self.c:palette(0)
         self.cur = "loading"
         self.loading = "Starting"
         self:redraw()
@@ -569,8 +571,9 @@ export def main(env):
         env.stew = stew_mod.new({fs: env.fs ?? fs, root: env.root ?? "/", http: env.http, remote: env.remote})
     s = Setup(env)
     ok, res = pcall(() => s:run())
-    s:close_gui()
-    s.c:restore()
+    # cleaning up must not hide why the setup stopped
+    pcall(() => s:close_gui())
+    pcall(() => s.c:restore())
     t = s.t
     if t.setBackgroundColour != nil:
         t.setBackgroundColour(colours.black)
