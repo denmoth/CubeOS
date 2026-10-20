@@ -116,6 +116,20 @@ export class Stew:
         self.db:save_hosts(list)
         return h
 
+    # "always on": the second computer is never switched off, so important packages may live there too (not the few this
+    # computer needs to reach it), and the plan leaves much more free space here
+    def host_trust(self, id, on=true):
+        list = []
+        found = false
+        for x in self.db:hosts():
+            if x.id == tonumber(id):
+                x.always_on = on == true
+                found = true
+            list[len(list) + 1] = x
+        if not found:
+            error("stew: no second computer #" .. tostring(id) .. " is paired", 0)
+        self.db:save_hosts(list)
+
     # unpairs; packages kept there must come home first (force: forget anyway, they stay unreachable)
     def host_forget(self, id, force=false):
         h = self:host(id)
@@ -596,7 +610,13 @@ export class Stew:
                     hfree = (info.free ?? 0) - 4096
                     moved = 0
                     moved_bytes = 0
-                    for prio in ["optional", "recommended"]:
+                    # always on: important packages may go too, and the plan aims at 40% of this disk left free, not just "fits"
+                    trusted = hrec.always_on == true
+                    margin = trusted and math.floor((cap ?? free) * 0.4) or 0
+                    def short():
+                        return not (delta + reserve + margin <= free and peak + reserve <= free)
+                    prios = trusted and ["optional", "recommended", "essential"] or ["optional", "recommended"]
+                    for prio in prios:
                         cands = []
                         for s in steps:
                             # only packages whose move really frees this disk (code, not pictures that stay here anyway)
@@ -606,7 +626,7 @@ export class Stew:
                                     cands[len(cands) + 1] = s
                         table.sort(cands, (a, b) => a.saving > b.saving)
                         for s in cands:
-                            if not (delta + reserve <= free and peak + reserve <= free) and (s.size ?? 0) + 4096 <= hfree:
+                            if short() and (s.size ?? 0) + 4096 <= hfree:
                                 s.storage = "remote"
                                 s.host = hrec.id
                                 hfree -= s.size
@@ -614,7 +634,7 @@ export class Stew:
                                 moved_bytes += s.size
                                 delta, dl, peak = totals()
                     if moved > 0:
-                        p.remote = {host: hrec.id, label: hrec.label, free: info.free, left: hfree + 4096, count: moved, bytes: moved_bytes}
+                        p.remote = {host: hrec.id, label: hrec.label, free: info.free, left: hfree + 4096, count: moved, bytes: moved_bytes, always_on: trusted}
         for s in steps:
             p.steps[len(p.steps) + 1] = s
         p.download = dl

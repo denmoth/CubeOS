@@ -692,6 +692,12 @@ def _fit_remote(ui):
         ok, h, err = pcall(ui.s.host_pair, ui.s, code)
         if ok and h != nil:
             ui.st.remote = h.id
+            # a computer that is never switched off can keep the important packages too: much more room here
+            on = ui:dialog({title: "Is it always on?", accent: "3", width: 48,
+                text: "If the second computer is never switched off, CubeOS keeps important packages there too and leaves a lot more free space here. If it is switched off, the system may not start until it is back.",
+                buttons: [{label: "Only extras", value: false}, {label: "Always on", value: true, style: "ok"}], focus: 2})
+            if ui.s.host_trust != nil:
+                pcall(ui.s.host_trust, ui.s, h.id, on == true)
             ui.plans = {}
             return
         why = ok and err or h

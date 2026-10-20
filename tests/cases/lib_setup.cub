@@ -66,6 +66,10 @@ class FakeStew:
             return nil, "wrong code"
         self.paired = [{id: 7, key: "00", label: "store"}]
         return {id: 7, key: "00", label: "store", free: 900000}
+    def host_trust(self, id, on=true):
+        for h in self.paired:
+            if h.id == id:
+                h.always_on = on
 
     def source_remove(self, name):
         self.log[len(self.log) + 1] = "source_remove " .. name
@@ -351,6 +355,9 @@ add((s) => find_or_fail(s, "Type the code", "and the dialog asks again"))
 for ch in ["1", "2", "3", "4", "5", "6"]:
     add(["char", ch])
 add(K(keys.enter))
+add((s) => find_or_fail(s, "always on", "after pairing it asks whether the computer is always on"))
+add(K(keys.enter))
+add((s) => eq(s.s.paired[1].always_on, true, "the answer is kept on the paired computer"))
 add((s) => eq(s.st.remote, 7, "paired with the second computer"))
 add((s) => find_or_fail(s, "Now it fits", "it fits with the second computer"))
 add((s) => find_or_fail(s, "paired with #7", "the option says where the packages go"))

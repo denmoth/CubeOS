@@ -114,7 +114,7 @@ export def b_stew(sh, args):
     if cmd == nil or cmd == "help" or cmd == "--help":
         sh:println("usage: stew list | search TEXT | info ID | install ID... | remove ID... | update [ID...] | plan ID... | refresh")
         sh:println("       stew source list|add NAME KIND URL|remove NAME | pin ID | unpin ID | storage ID packed|unpacked|remote [HOST]")
-        sh:println("       stew host pair CODE [HOST] | host list | host info ID | host clean ID | host forget ID  (second computer, pkghost.lua)")
+        sh:println("       stew host pair CODE [HOST] | host list | host info ID | host trust ID [off] | host clean ID | host forget ID  (second computer, pkghost.lua)")
         sh:println("       stew verify [ID] | clean | recover | maps [ID...] | pack FOLDER | login | logout | publish FOLDER | publish --status")
         return cmd == nil and 2 or 0
     rest = []
@@ -278,6 +278,11 @@ def host_cmd(sh, s, r):
             sh:eprint("stew: " .. tostring(err))
             return 1
         sh:println("Paired with computer #" .. h.id .. " (" .. h.label .. "), " .. kb(h.free) .. " free. Packages that do not fit here can go there.")
+        return 0
+    if sub == "trust":
+        on = r[3] != "off"
+        s:host_trust(tonumber(r[2]) ?? -1, on)
+        sh:println(on and ("#" .. r[2] .. " is always on: important packages may go there too (stew update moves them when space is short).") or ("#" .. r[2] .. " keeps only extras."))
         return 0
     if sub == "forget":
         s:host_forget(tonumber(r[2]) ?? -1, r[3] == "--force")
