@@ -23,6 +23,10 @@ export const DEFAULT_SOURCES = [
     {name: "pinestore", kind: "pinestore", url: "https://pinestore.cc", trust: "community"},
 ]
 const MIN_FILE = 500
+# a package's record in installed.json5 and its lines in boot.idx, on average
+const DB_PER_PACKAGE = 600
+# the database files of a fresh system (installed.json5, boot.idx, contrib.json5, sources.json5, folders)
+const DB_BASE = 6000
 
 def _arr(t=nil):
     return setmetatable(t ?? {}, json5.array_mt)
@@ -79,6 +83,7 @@ export class Stew:
         self.yield = o.yield ?? _default_yield
         self.adapters = o.adapters
         self.free_space = o.free_space
+        self.memory_cache = o.memory_cache == true
         self.remote_ctx = o.remote
 
     # ---------------------------------------------------------------- второй компьютер (docs/packages/10-second-computer.md)
@@ -221,7 +226,9 @@ export class Stew:
                     on_progress(src.name, i, len(list))
                 ok, data = pcall(() => self:adapter(src.kind).refresh(src, self:ctx()))
                 if ok and type(data) == "table":
-                    self.db:write_json(dbm.VAR .. "/cache/" .. src.name .. ".json5", {fetched: os.epoch("utc"), packages: data.packages ?? {}})
+                    # memory_cache (the system installer): the catalog stays in memory, the disk is left for the packages
+                    if not self.memory_cache:
+                        self.db:write_json(dbm.VAR .. "/cache/" .. src.name .. ".json5", {fetched: os.epoch("utc"), packages: data.packages ?? {}})
                     self.memo = self.memo ?? {}
                     self.memo[src.name] = data.packages ?? {}
                     res.ok[len(res.ok) + 1] = src.name
@@ -512,7 +519,8 @@ export class Stew:
                 storage = "unpacked"
             elif mode == "auto":
                 storage = "unpacked"
-            step = {op: c.op, id: id, version: c.version, from: c.from, size: size, installed_size: isz, source: c.source, trust: c.trust,
+            disk = c.vrec != nil and c.vrec.disk or nil
+            step = {op: c.op, id: id, version: c.version, from: c.from, size: size, installed_size: isz, disk: disk, source: c.source, trust: c.trust,
                 auto: c.auto, storage: storage, host: keep_host, file: c.file, auto_storage: mode == "auto" and not boot[id], priority: c.meta != nil and c.meta.priority or nil}
             if size == nil:
                 p.warnings[len(p.warnings) + 1] = id .. ": size is unknown until download"
@@ -527,18 +535,24 @@ export class Stew:
                             fresh[len(fresh) + 1] = name
                 if len(fresh) > 0:
                     p.new_permissions[id] = fresh
+        # the real cost on a CC disk (catalog field disk, 500 bytes a file at least) plus the package's lines in the database and
+        # the module index; old catalogs without disk: a rough guess on top of the sizes
         def cost(s):
             if s.storage == "remote":
-                return 0
+                return DB_PER_PACKAGE
+            if s.disk != nil:
+                return (s.storage == "packed" and s.disk.packed or s.disk.unpacked) + DB_PER_PACKAGE
             if s.storage == "packed":
-                return s.size ?? 0
-            return s.installed_size ?? s.size ?? 0
+                return math.floor((s.size ?? 0) * 1.25) + 1000 + DB_PER_PACKAGE
+            return math.floor((s.installed_size ?? s.size ?? 0) * 1.25) + 1000 + DB_PER_PACKAGE
         def totals():
             delta = 0
             dl = 0
             unpacked_new = 0
             remote_sum = 0
             remote_max = 0
+            if next(st.packages) == nil and len(steps) > 0:
+                delta += DB_BASE
             for s in steps:
                 delta += cost(s)
                 dl += s.size ?? 0

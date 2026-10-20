@@ -383,10 +383,13 @@ export def install(ui):
         if r.ok:
             if ui.s.clean != nil:
                 pcall(() => ui.s:clean())
+            ui:forget_state()
             break
         ui.prog.rollback = true
+        ui:save_state()
         ans = ui:dialog({title: "The installation failed", accent: "e", width: 46,
-            text: "Nothing was changed: stew rolled everything back.\n\n" .. tostring(r.error),
+            text: ui:tr("Nothing was changed: stew rolled everything back.") .. "\n\n" .. tostring(r.error) .. "\n\n" ..
+                ui:tr("Your choices are kept: the next run of the installer starts with them."),
             buttons: [{label: "Quit", value: "quit"}, {label: "Back", value: "back"}, {label: "Retry", value: "retry", style: "ok"}],
             focus: 3})
         if ans != "retry":

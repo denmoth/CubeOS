@@ -284,12 +284,12 @@ class Txn:
                 for f in files:
                     size += size_of(self.fs, self:p(f))
                 st_db.packages[step.id] = {
-                    id: step.id, version: m.version, name: m.name, description: m.description, source: step.source, trust: step.trust,
+                    id: step.id, version: m.version, name: m.name, source: step.source, trust: step.trust,
                     storage: storage, priority: m.priority ?? "optional", kind: m.kind, category: m.category, depends: m.depends ?? {},
-                    want: m.want ?? {}, modules: pack.modules_of(self.arch[step.id].a, m), contributes: m.contributes ?? {}, permissions: m.permissions ?? {},
+                    want: m.want ?? {}, lib: dbm.pack_modules(pack.modules_of(self.arch[step.id].a, m)), modules: dbm.extra_modules(pack.modules_of(self.arch[step.id].a, m)),
+                    contributes: m.contributes ?? {}, permissions: m.permissions ?? {},
                     options: self.plan.options[step.id] ?? (old != nil and old.options or {}), files: files,
                     auto: old != nil and old.auto or step.auto, pinned: old != nil and old.pinned or false, size: size,
-                    installed_at: os.epoch("utc"),
                 }
                 if storage == "remote":
                     r = self.arch[step.id].remote

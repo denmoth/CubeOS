@@ -37,6 +37,32 @@ export def placement(id, path):
         return {to: SHARE .. "/assets/" .. rest}
     return nil
 
+# modules in the database: the ones under lib/ as one string of paths ("cfs/core cdk/init"), the rest as a table
+export def pack_modules(mods):
+    out = []
+    for name, path in mods:
+        r = string.match(path, "^lib/(.+)%.lua$")
+        if r != nil:
+            out[len(out) + 1] = r
+    table.sort(out)
+    return table.concat(out, " ")
+
+export def extra_modules(mods):
+    out = {}
+    for name, path in mods:
+        if string.match(path, "^lib/(.+)%.lua$") == nil:
+            out[name] = path
+    return next(out) != nil and out or nil
+
+export def modules_of(rec):
+    out = {}
+    for r in string.gmatch(rec.lib ?? "", "%S+"):
+        name = string.gsub(string.gsub(r, "/init$", ""), "/", ".")
+        out[name] = "lib/" .. r .. ".lua"
+    for name, path in rec.modules ?? {}:
+        out[name] = path
+    return out
+
 def _arr(t=nil):
     return setmetatable(t ?? {}, json5.array_mt)
 
@@ -146,7 +172,7 @@ export class Db:
         lines[len(lines) + 1] = "  },"
         lines[len(lines) + 1] = "  modules = {"
         for id in ids:
-            mods = st.packages[id].modules ?? {}
+            mods = modules_of(st.packages[id])
             names = []
             for name, _ in mods:
                 names[len(names) + 1] = name

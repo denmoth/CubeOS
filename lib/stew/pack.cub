@@ -15,6 +15,7 @@ import cpk
 import json5
 import semver
 import crc32 as crc
+import stew.db as dbm
 
 export const FORMAT = 1
 export const VERSION = "1.0.0"
@@ -285,6 +286,7 @@ export def build(fsys, base, opts=nil):
         permissions: m.permissions ?? {need: _arr(), want: _arr()},
         cubeos: m.cubeos ?? {min: "0.1.0"},
     }
+    entry.disk = disk_use(m.id, len(data), len(mtext), files)
     r = {data: data, manifest: m, entry: entry, name: m.id .. "-" .. m.version}
     if o.maps == "separate" and len(maps) > 0:
         if o.on_step != nil:
@@ -294,6 +296,44 @@ export def build(fsys, base, opts=nil):
             o.on_step("maps")
         entry.maps = {size: len(r.maps_data), sha256: cpk.open(r.maps_data):sha256_hex()}
     return r
+
+# what a package really takes on a CC disk: every file and folder costs at least 500 bytes (CC:Tweaked WritableFileMount).
+# {packed: the .cpk plus the files placed outside the package, unpacked: every file of the package plus the placed ones}
+const MIN_FILE = 500
+def _cc(n):
+    return math.max(MIN_FILE, n)
+
+def _dirs_of(paths):
+    seen = {}
+    n = 0
+    for p in paths:
+        d = string.match(p, "^(.*)/[^/]*$")
+        while d != nil and d != "" and not seen[d]:
+            seen[d] = true
+            n += 1
+            d = string.match(d, "^(.*)/[^/]*$")
+    return n
+
+export def disk_use(id, cpk_size, manifest_size, files):
+    placed = 0
+    placed_paths = []
+    inside = 0
+    inside_paths = []
+    count = 0
+    for f in files:
+        if not cpk.has_flag(f.flags, cpk.F_MAP):
+            pl = dbm.placement(id, f.path)
+            if pl != nil:
+                placed += _cc(len(f.data))
+                placed_paths[len(placed_paths) + 1] = pl.to
+            else:
+                inside += _cc(len(f.data))
+                inside_paths[len(inside_paths) + 1] = f.path
+                count += 1
+    placed += _dirs_of(placed_paths) * MIN_FILE
+    # unpacked: its own folder, its subfolders, package.json5 and listing.json5 (about 40 bytes a file)
+    unpacked = inside + (1 + _dirs_of(inside_paths)) * MIN_FILE + _cc(manifest_size) + _cc(count * 40)
+    return {packed: _cc(cpk_size) + placed, unpacked: unpacked + placed}
 
 export def modules_of(a, m=nil):
     out = {}

@@ -2,6 +2,7 @@ import t
 import json5
 import cpk
 import stew
+import stew.db as dbm
 import stew.pack as pack
 import stew.remote as remote
 eq = t.eq
@@ -246,7 +247,7 @@ eq(fs.exists(HOSTDIR .. "/" .. inst["demo.opt1"].rname), true, "the package file
 eq(fs.exists(ROOT .. "/cubeos/pkg/demo.opt1") or fs.exists(ROOT .. "/cubeos/pkg/demo.opt1.cpk"), false, "nothing of it is local")
 eq(fs.exists(ROOT .. "/cubeos/var/stew/journal.json5"), false, "no journal after success")
 eq(len(fs.list(ROOT .. "/cubeos/var/stew/staging")), 0, "staging is clean")
-eq(inst["demo.opt1"].modules["demo.opt1"] != nil, true, "modules are known from the file list")
+eq(dbm.modules_of(inst["demo.opt1"])["demo.opt1"] != nil, true, "modules are known from the file list")
 idx = loadfile(ROOT .. "/cubeos/var/stew/boot.idx")()
 eq(idx.packages["demo.opt1"].remote.host, 7, "boot.idx has the remote package")
 eq(idx.packages["demo.opt1"].remote.name, inst["demo.opt1"].rname, "with its name")

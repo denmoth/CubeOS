@@ -325,10 +325,59 @@ export class Setup:
         elif ev == "mouse_scroll" and spec.scroll:
             spec.top = math.max(0, math.min(spec.max_top ?? 0, spec.top + a))
 
+    # ------------------------------------------------------------ choices kept between runs
+
+    # what was chosen survives a failed or cancelled installation (not the password or the PIN): /.cubeos-setup.state
+    def state_path(self):
+        return self.fs.combine(self.root, ".cubeos-setup.state")
+
+    def save_state(self):
+        let me = self
+        pcall(() => me:_save_state())
+
+    def _save_state(self):
+        u = self.st.user
+        keep = {lang: self.st.lang, license: self.st.license, profile: self.st.profile, explicit: self.st.explicit, storage: self.st.storage,
+            options: self.st.options, prefs_touched: self.st.prefs_touched, prefs: {}, user: {display: u.display, name: u.name, avatar: u.avatar,
+            name_edited: u.name_edited}}
+        for k, v in self.st.prefs:
+            if k != "pin":
+                keep.prefs[k] = v
+        h = self.fs.open(self:state_path(), "w")
+        if h != nil:
+            h.write(textutils.serialize(keep))
+            h.close()
+
+    def load_state(self):
+        path = self:state_path()
+        if not self.fs.exists(path):
+            return false
+        h = self.fs.open(path, "r")
+        if h == nil:
+            return false
+        ok, t = pcall(textutils.unserialize, h.readAll())
+        h.close()
+        if not ok or type(t) != "table":
+            return false
+        for k in ["lang", "license", "profile", "explicit", "storage", "options", "prefs_touched"]:
+            if t[k] != nil:
+                self.st[k] = t[k]
+        for k, v in t.prefs ?? {}:
+            self.st.prefs[k] = v
+        for k, v in t.user ?? {}:
+            self.st.user[k] = v
+        return true
+
+    def forget_state(self):
+        path = self:state_path()
+        if self.fs.exists(path):
+            self.fs.delete(path)
+
     def confirm_quit(self):
         ans = self:dialog({title: "Quit setup?", text: "Nothing has been installed yet. You can run the installer again any time.",
             buttons: [{label: "Stay", value: false}, {label: "Quit", value: true, style: "danger"}], accent: "4"})
         if ans:
+            self:save_state()
             self.result = "quit"
             self.quitting = true
 
@@ -494,6 +543,9 @@ export class Setup:
         self.result = nil
         self.ffocus = nil
         self.msg = nil
+        if self.restored:
+            self.restored = false
+            self:say("Your previous choices are back. Only the password needs typing again.", "5")
         scr = self.screens[name]
         if scr.enter != nil:
             scr.enter(self)
@@ -530,6 +582,8 @@ export class Setup:
             self.st.prefs.label = self.hw.label
         if not self:load_catalog():
             return "quit"
+        if self:load_state():
+            self.restored = true
         i = 1
         dir = 1
         while true:
@@ -568,7 +622,7 @@ export def new(env):
 export def main(env):
     if env.stew == nil:
         stew_mod = env.import("stew")
-        env.stew = stew_mod.new({fs: env.fs ?? fs, root: env.root ?? "/", http: env.http, remote: env.remote})
+        env.stew = stew_mod.new({fs: env.fs ?? fs, root: env.root ?? "/", http: env.http, remote: env.remote, memory_cache: true})
     s = Setup(env)
     ok, res = pcall(() => s:run())
     # cleaning up must not hide why the setup stopped
